@@ -57,14 +57,13 @@ Designed as an alternative to Python-based Bumble for simulation environments, S
 use simble::devices::HeartRateMonitor;
 use simble::types::{Address, AddressType};
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let addr = Address::from_be_bytes([0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6]);
     let mut hrm = HeartRateMonitor::new("MyHeartRateMonitor", addr);
 
     // Update heart rate to 78 bpm and emit a notification
-    let notification_pdu = hrm.update_heart_rate(78, None);
-    println!("Emitted notification PDU: {:02X?}", notification_pdu);
+    let notification_pdu = hrm.send_heart_rate(78);
+    println!("Emitted notification PDU: {notification_pdu:02X?}");
 }
 ```
 
