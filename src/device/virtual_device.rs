@@ -238,7 +238,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let (_, payload1) = L2capHeader::parse(&resp1).unwrap();
-        assert_eq!(payload1[0], opcode::PREPARE_WRITE_REQ);
+        assert_eq!(payload1[0], opcode::PREPARE_WRITE_RSP);
 
         // Prepare chunk 2: offset 3, bytes [4, 5, 6]
         let mut prep2 = vec![opcode::PREPARE_WRITE_REQ];

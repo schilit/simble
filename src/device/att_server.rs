@@ -1,39 +1,73 @@
 // Copyright 2026 The Android Open Source Project
 // SPDX-License-Identifier: Apache-2.0
 
-//! ATT Server protocol handler for dispatching incoming requests to the GATT Database.
+//! ATT Server protocol engine processing incoming requests and generating responses.
 
 use zerocopy::IntoBytes;
 
-use crate::att::{
-    AttErrorRsp, AttExchangeMtuRsp, AttExecuteWriteReq, AttPdu, AttPrepareWriteReqHeader,
-    error_code, opcode,
-};
+use crate::att::{AttErrorRsp, AttExchangeMtuRsp, AttPdu, error_code, opcode};
 use crate::device::VirtualDevice;
 use crate::device::connection::PrepareWriteChunk;
 use crate::types::{SimbleError, Uuid};
+
+#[inline]
+fn att_error(req_opcode: u8, handle: u16, code: u8) -> Vec<u8> {
+    AttErrorRsp::new(req_opcode, handle, code)
+        .as_bytes()
+        .to_vec()
+}
 
 impl VirtualDevice {
     /// Processes an incoming ATT PDU parsed via `simble::packets`.
     pub(crate) fn process_att_packet(
         &mut self,
         connection_handle: u16,
-        payload: &[u8],
+        att_pdu: &[u8],
     ) -> Result<Option<Vec<u8>>, SimbleError> {
-        let pdu = AttPdu::parse(payload)
-            .ok_or_else(|| SimbleError::PacketParseError("Invalid ATT PDU".into()))?;
+        let Some(parsed) = AttPdu::parse(att_pdu) else {
+            return Ok(Some(att_error(
+                if !att_pdu.is_empty() { att_pdu[0] } else { 0 },
+                0x0000,
+                error_code::INVALID_PDU,
+            )));
+        };
 
-        match pdu {
+        match parsed {
             AttPdu::ExchangeMtuReq(req) => {
-                let client_mtu = req.client_rx_mtu.get();
-                let server_mtu = 512u16;
-                let negotiated_mtu = client_mtu.min(server_mtu).max(23);
-
+                let client_rx_mtu = req.client_rx_mtu.get();
+                let server_rx_mtu = 512u16;
+                let negotiated_mtu = client_rx_mtu.min(server_rx_mtu).max(23);
                 if let Some(conn) = self.connections.get_mut(&connection_handle) {
                     conn.mtu = negotiated_mtu;
                 }
+                let resp = AttExchangeMtuRsp::new(server_rx_mtu);
+                Ok(Some(resp.as_bytes().to_vec()))
+            }
+            AttPdu::FindInformationReq(req) => {
+                let start_handle = req.start_handle.get();
+                let end_handle = req.end_handle.get();
+                let info = self.gatt_db.find_information(start_handle, end_handle);
+                if info.is_empty() {
+                    return Ok(Some(att_error(
+                        opcode::FIND_INFORMATION_REQ,
+                        start_handle,
+                        error_code::ATTRIBUTE_NOT_FOUND,
+                    )));
+                }
 
-                Ok(Some(AttExchangeMtuRsp::new(server_mtu).as_bytes().to_vec()))
+                let mut resp = Vec::new();
+                resp.push(opcode::FIND_INFORMATION_RSP);
+                let format = if info[0].1.len() == 2 { 0x01 } else { 0x02 };
+                resp.push(format);
+
+                for (handle, uuid) in info {
+                    if (format == 0x01 && uuid.len() == 2) || (format == 0x02 && uuid.len() == 16) {
+                        resp.extend_from_slice(&handle.to_le_bytes());
+                        resp.extend_from_slice(&uuid.to_128_bit_bytes()[..uuid.len()]);
+                    }
+                }
+
+                Ok(Some(resp))
             }
             AttPdu::ReadReq(req) => {
                 let handle = req.handle.get();
@@ -44,39 +78,27 @@ impl VirtualDevice {
                         resp.extend_from_slice(val);
                         Ok(Some(resp))
                     }
-                    Err(err) => Ok(Some(
-                        AttErrorRsp::new(opcode::READ_REQ, handle, err)
-                            .as_bytes()
-                            .to_vec(),
-                    )),
+                    Err(code) => Ok(Some(att_error(opcode::READ_REQ, handle, code))),
                 }
             }
             AttPdu::ReadBlobReq(req) => {
                 let handle = req.handle.get();
-                let offset = req.offset.get() as usize;
-                match self.gatt_db.read(handle, offset) {
+                let offset = req.offset.get();
+                match self.gatt_db.read(handle, offset as usize) {
                     Ok(val) => {
                         let mut resp = Vec::with_capacity(1 + val.len());
                         resp.push(opcode::READ_BLOB_RSP);
                         resp.extend_from_slice(val);
                         Ok(Some(resp))
                     }
-                    Err(err) => Ok(Some(
-                        AttErrorRsp::new(opcode::READ_BLOB_REQ, handle, err)
-                            .as_bytes()
-                            .to_vec(),
-                    )),
+                    Err(code) => Ok(Some(att_error(opcode::READ_BLOB_REQ, handle, code))),
                 }
             }
             AttPdu::WriteReq { header, value } => {
                 let handle = header.handle.get();
                 match self.gatt_db.write(handle, value) {
                     Ok(()) => Ok(Some(vec![opcode::WRITE_RSP])),
-                    Err(err) => Ok(Some(
-                        AttErrorRsp::new(opcode::WRITE_REQ, handle, err)
-                            .as_bytes()
-                            .to_vec(),
-                    )),
+                    Err(code) => Ok(Some(att_error(opcode::WRITE_REQ, handle, code))),
                 }
             }
             AttPdu::WriteCmd { header, value } => {
@@ -95,26 +117,28 @@ impl VirtualDevice {
                     });
                 }
 
-                // Prepare write response is an echo of the request
                 let mut resp = Vec::with_capacity(5 + part_value.len());
-                let rsp_hdr = AttPrepareWriteReqHeader::new(handle, offset);
-                resp.extend_from_slice(rsp_hdr.as_bytes());
+                resp.push(opcode::PREPARE_WRITE_RSP);
+                resp.extend_from_slice(&handle.to_le_bytes());
+                resp.extend_from_slice(&offset.to_le_bytes());
                 resp.extend_from_slice(part_value);
                 Ok(Some(resp))
             }
             AttPdu::ExecuteWriteReq(req) => {
+                let flags = req.flags;
                 if let Some(conn) = self.connections.get_mut(&connection_handle) {
-                    if req.flags == AttExecuteWriteReq::WRITE {
-                        let queue = std::mem::take(&mut conn.prepare_write_queue);
+                    let queue = std::mem::take(&mut conn.prepare_write_queue);
+                    if flags == 0x01 {
                         for chunk in queue {
-                            let _ = self.gatt_db.write_offset(
-                                chunk.handle,
-                                chunk.offset as usize,
-                                &chunk.data,
-                            );
+                            if let Some(attr) = self.gatt_db.attributes.get_mut(&chunk.handle) {
+                                let start = chunk.offset as usize;
+                                if start + chunk.data.len() > attr.value.len() {
+                                    attr.value.resize(start + chunk.data.len(), 0);
+                                }
+                                attr.value[start..start + chunk.data.len()]
+                                    .copy_from_slice(&chunk.data);
+                            }
                         }
-                    } else {
-                        conn.prepare_write_queue.clear();
                     }
                 }
                 Ok(Some(vec![opcode::EXECUTE_WRITE_RSP]))
@@ -131,38 +155,21 @@ impl VirtualDevice {
             } => {
                 let start_handle = header.start_handle.get();
                 let end_handle = header.end_handle.get();
-                let uuid = if group_type_bytes.len() == 2 {
-                    Uuid::from_u16(u16::from_le_bytes([
-                        group_type_bytes[0],
-                        group_type_bytes[1],
-                    ]))
-                } else if group_type_bytes.len() == 16 {
-                    let mut b = [0u8; 16];
-                    b.copy_from_slice(group_type_bytes);
-                    Uuid::from_u128_bytes(b)
-                } else {
-                    return Ok(Some(
-                        AttErrorRsp::new(
-                            opcode::READ_BY_GROUP_TYPE_REQ,
-                            start_handle,
-                            error_code::INVALID_PDU,
-                        )
-                        .as_bytes()
-                        .to_vec(),
-                    ));
+                let Some(uuid) = Uuid::from_bytes(group_type_bytes) else {
+                    return Ok(Some(att_error(
+                        opcode::READ_BY_GROUP_TYPE_REQ,
+                        start_handle,
+                        error_code::INVALID_PDU,
+                    )));
                 };
 
                 let matches = self.gatt_db.read_by_type(start_handle, end_handle, uuid);
                 if matches.is_empty() {
-                    return Ok(Some(
-                        AttErrorRsp::new(
-                            opcode::READ_BY_GROUP_TYPE_REQ,
-                            start_handle,
-                            error_code::ATTRIBUTE_NOT_FOUND,
-                        )
-                        .as_bytes()
-                        .to_vec(),
-                    ));
+                    return Ok(Some(att_error(
+                        opcode::READ_BY_GROUP_TYPE_REQ,
+                        start_handle,
+                        error_code::ATTRIBUTE_NOT_FOUND,
+                    )));
                 }
 
                 let mut resp = Vec::new();
@@ -181,35 +188,21 @@ impl VirtualDevice {
             AttPdu::ReadByTypeReq { header, uuid_bytes } => {
                 let start_handle = header.start_handle.get();
                 let end_handle = header.end_handle.get();
-                let uuid = if uuid_bytes.len() == 2 {
-                    Uuid::from_u16(u16::from_le_bytes([uuid_bytes[0], uuid_bytes[1]]))
-                } else if uuid_bytes.len() == 16 {
-                    let mut b = [0u8; 16];
-                    b.copy_from_slice(uuid_bytes);
-                    Uuid::from_u128_bytes(b)
-                } else {
-                    return Ok(Some(
-                        AttErrorRsp::new(
-                            opcode::READ_BY_TYPE_REQ,
-                            start_handle,
-                            error_code::INVALID_PDU,
-                        )
-                        .as_bytes()
-                        .to_vec(),
-                    ));
+                let Some(uuid) = Uuid::from_bytes(uuid_bytes) else {
+                    return Ok(Some(att_error(
+                        opcode::READ_BY_TYPE_REQ,
+                        start_handle,
+                        error_code::INVALID_PDU,
+                    )));
                 };
 
                 let matches = self.gatt_db.read_by_type(start_handle, end_handle, uuid);
                 if matches.is_empty() {
-                    return Ok(Some(
-                        AttErrorRsp::new(
-                            opcode::READ_BY_TYPE_REQ,
-                            start_handle,
-                            error_code::ATTRIBUTE_NOT_FOUND,
-                        )
-                        .as_bytes()
-                        .to_vec(),
-                    ));
+                    return Ok(Some(att_error(
+                        opcode::READ_BY_TYPE_REQ,
+                        start_handle,
+                        error_code::ATTRIBUTE_NOT_FOUND,
+                    )));
                 }
 
                 let mut resp = Vec::new();
@@ -224,14 +217,11 @@ impl VirtualDevice {
 
                 Ok(Some(resp))
             }
-            _ => {
-                let op = payload[0];
-                Ok(Some(
-                    AttErrorRsp::new(op, 0, error_code::REQUEST_NOT_SUPPORTED)
-                        .as_bytes()
-                        .to_vec(),
-                ))
-            }
+            _ => Ok(Some(att_error(
+                att_pdu[0],
+                0x0000,
+                error_code::REQUEST_NOT_SUPPORTED,
+            ))),
         }
     }
 }

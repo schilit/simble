@@ -83,6 +83,14 @@ pub mod modifier {
     pub const RMETA: u8 = 0x80;
 }
 
+/// Standard USB HID Mouse Buttons bitmask.
+pub mod mouse_button {
+    pub const NONE: u8 = 0x00;
+    pub const LEFT: u8 = 0x01;
+    pub const RIGHT: u8 = 0x02;
+    pub const MIDDLE: u8 = 0x04;
+}
+
 /// Standard USB HID Keycodes.
 pub mod keycode {
     pub const KEY_NONE: u8 = 0x00;

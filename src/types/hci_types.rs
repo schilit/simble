@@ -260,6 +260,19 @@ impl Uuid {
         Self::Uuid128(bytes)
     }
 
+    /// Parses a 16-bit or 128-bit UUID from a little-endian byte slice.
+    pub fn from_bytes(slice: &[u8]) -> Option<Self> {
+        if slice.len() == 2 {
+            Some(Self::Uuid16(u16::from_le_bytes([slice[0], slice[1]])))
+        } else if slice.len() == 16 {
+            let mut b = [0u8; 16];
+            b.copy_from_slice(slice);
+            Some(Self::Uuid128(b))
+        } else {
+            None
+        }
+    }
+
     /// Converts this UUID to a 128-bit little-endian byte array.
     pub fn to_128_bit_bytes(&self) -> [u8; 16] {
         match self {

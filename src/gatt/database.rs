@@ -46,6 +46,20 @@ pub struct AttributePermissions {
     pub encrypt_write: bool,
 }
 
+impl AttributePermissions {
+    /// Read-only attribute permissions without authentication/encryption.
+    pub const fn read_only() -> Self {
+        Self {
+            read: true,
+            write: false,
+            read_auth: false,
+            write_auth: false,
+            encrypt_read: false,
+            encrypt_write: false,
+        }
+    }
+}
+
 impl Default for AttributePermissions {
     fn default() -> Self {
         Self {
@@ -112,14 +126,7 @@ impl GattDatabase {
                 handle,
                 uuid: decl_uuid,
                 value: val,
-                permissions: AttributePermissions {
-                    read: true,
-                    write: false,
-                    read_auth: false,
-                    write_auth: false,
-                    encrypt_read: false,
-                    encrypt_write: false,
-                },
+                permissions: AttributePermissions::read_only(),
             },
         );
 
@@ -153,14 +160,7 @@ impl GattDatabase {
                 handle: decl_handle,
                 uuid: Uuid::from_u16(service_uuid::CHARACTERISTIC),
                 value: decl_val,
-                permissions: AttributePermissions {
-                    read: true,
-                    write: false,
-                    read_auth: false,
-                    write_auth: false,
-                    encrypt_read: false,
-                    encrypt_write: false,
-                },
+                permissions: AttributePermissions::read_only(),
             },
         );
 
@@ -200,17 +200,7 @@ impl GattDatabase {
         value: Vec<u8>,
         permissions: AttributePermissions,
     ) -> u16 {
-        let handle = self.allocate_handle();
-        self.attributes.insert(
-            handle,
-            Attribute {
-                handle,
-                uuid,
-                value,
-                permissions,
-            },
-        );
-        handle
+        self.add_attribute(uuid, permissions, value)
     }
 
     /// Adds a raw attribute directly with custom permissions and value.
