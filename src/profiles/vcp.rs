@@ -48,11 +48,7 @@ impl VolumeControlService {
             vcp_uuid::VOLUME_CONTROL_POINT,
             CharacteristicProperties(CharacteristicProperties::WRITE),
             vec![],
-            AttributePermissions {
-                read: false,
-                write: true,
-                ..Default::default()
-            },
+            AttributePermissions::write_only(),
         );
 
         // 3. Volume Flags (0x2B7F) - Read | Notify

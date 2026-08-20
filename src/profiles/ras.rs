@@ -60,11 +60,7 @@ impl RangingService {
                 CharacteristicProperties::WRITE | CharacteristicProperties::INDICATE,
             ),
             vec![],
-            AttributePermissions {
-                read: false,
-                write: true,
-                ..Default::default()
-            },
+            AttributePermissions::write_only(),
         );
 
         Self {

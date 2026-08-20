@@ -190,24 +190,30 @@ impl FromStr for Address {
     }
 }
 
-impl Serialize for Address {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&self.to_string())
-    }
+macro_rules! impl_display_fromstr_serde {
+    ($t:ident) => {
+        impl Serialize for $t {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: Serializer,
+            {
+                serializer.serialize_str(&self.to_string())
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $t {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                let s = String::deserialize(deserializer)?;
+                $t::from_str(&s).map_err(serde::de::Error::custom)
+            }
+        }
+    };
 }
 
-impl<'de> Deserialize<'de> for Address {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        Address::from_str(&s).map_err(serde::de::Error::custom)
-    }
-}
+impl_display_fromstr_serde!(Address);
 
 /// Address type for LE advertising and connections.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -363,24 +369,7 @@ impl FromStr for Uuid {
     }
 }
 
-impl Serialize for Uuid {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&self.to_string())
-    }
-}
-
-impl<'de> Deserialize<'de> for Uuid {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        Uuid::from_str(&s).map_err(serde::de::Error::custom)
-    }
-}
+impl_display_fromstr_serde!(Uuid);
 
 /// Event Type for LE Advertising Report.
 #[derive(

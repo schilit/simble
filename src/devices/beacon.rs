@@ -26,7 +26,6 @@ impl EddystoneUidBeacon {
         tx_power: i8,
     ) -> Self {
         let name_str = name.into();
-        let mut dev = VirtualDevice::new(&name_str, address, AddressType::Random);
 
         // Eddystone-UID frame:
         // Byte 0: Frame Type = 0x00 (UID)
@@ -46,10 +45,9 @@ impl EddystoneUidBeacon {
             .with_service_uuid_16(EDDYSTONE_SERVICE_UUID)
             .with_service_data_16(EDDYSTONE_SERVICE_UUID, &uid_frame);
 
-        dev.advertising_data = Some(ad);
-        dev.is_advertising = true;
-
-        Self { device: dev }
+        Self {
+            device: create_beacon_device(&name_str, address, ad),
+        }
     }
 }
 
@@ -70,7 +68,6 @@ impl IBeacon {
         measured_power: i8,
     ) -> Self {
         let name_str = name.into();
-        let mut dev = VirtualDevice::new(&name_str, address, AddressType::Random);
 
         // Apple iBeacon Manufacturer Specific Payload:
         // Byte 0: 0x02 (iBeacon SubType)
@@ -97,11 +94,18 @@ impl IBeacon {
             .with_flags(flags::LE_GENERAL_DISCOVERABLE | flags::BR_EDR_NOT_SUPPORTED)
             .with_manufacturer_data(0x004C, &mfg_payload);
 
-        dev.advertising_data = Some(ad);
-        dev.is_advertising = true;
-
-        Self { device: dev }
+        Self {
+            device: create_beacon_device(&name_str, address, ad),
+        }
     }
+}
+
+#[inline]
+fn create_beacon_device(name: &str, address: Address, ad: AdvertisingData) -> VirtualDevice {
+    let mut dev = VirtualDevice::new(name, address, AddressType::Random);
+    dev.advertising_data = Some(ad);
+    dev.is_advertising = true;
+    dev
 }
 
 #[cfg(test)]

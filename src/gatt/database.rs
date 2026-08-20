@@ -58,6 +58,18 @@ impl AttributePermissions {
             encrypt_write: false,
         }
     }
+
+    /// Write-only attribute permissions without authentication/encryption.
+    pub const fn write_only() -> Self {
+        Self {
+            read: false,
+            write: true,
+            read_auth: false,
+            write_auth: false,
+            encrypt_read: false,
+            encrypt_write: false,
+        }
+    }
 }
 
 impl Default for AttributePermissions {
@@ -238,8 +250,7 @@ impl GattDatabase {
         Ok(&attr.value[offset..])
     }
 
-    /// Writes a value to an attribute.
-    pub fn write(&mut self, handle: u16, value: &[u8]) -> Result<(), u8> {
+    fn check_write_permitted(&mut self, handle: u16) -> Result<&mut Attribute, u8> {
         let attr = self
             .attributes
             .get_mut(&handle)
@@ -247,6 +258,12 @@ impl GattDatabase {
         if !attr.permissions.write {
             return Err(error_code::WRITE_NOT_PERMITTED);
         }
+        Ok(attr)
+    }
+
+    /// Writes a value to an attribute.
+    pub fn write(&mut self, handle: u16, value: &[u8]) -> Result<(), u8> {
+        let attr = self.check_write_permitted(handle)?;
         attr.value = value.to_vec();
         Ok(())
     }
@@ -263,13 +280,7 @@ impl GattDatabase {
 
     /// Writes a value to an attribute starting at a specific byte offset.
     pub fn write_offset(&mut self, handle: u16, offset: usize, value: &[u8]) -> Result<(), u8> {
-        let attr = self
-            .attributes
-            .get_mut(&handle)
-            .ok_or(error_code::INVALID_HANDLE)?;
-        if !attr.permissions.write {
-            return Err(error_code::WRITE_NOT_PERMITTED);
-        }
+        let attr = self.check_write_permitted(handle)?;
         if attr.value.len() < offset + value.len() {
             attr.value.resize(offset + value.len(), 0);
         }
