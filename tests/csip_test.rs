@@ -3,17 +3,9 @@
 
 //! Ported tests from Bumble's csip_test.py validating CSIP crypto primitives and service.
 
+use simble::crypto::smp_crypto::rev;
 use simble::gatt::GattDatabase;
 use simble::profiles::csip::{CoordinatedSetIdentificationService, k1, s1, sih};
-
-#[inline]
-fn rev<const N: usize>(s: &[u8; N]) -> [u8; N] {
-    let mut out = [0u8; N];
-    for i in 0..N {
-        out[i] = s[N - 1 - i];
-    }
-    out
-}
 
 #[test]
 fn test_s1_salt_generation() {

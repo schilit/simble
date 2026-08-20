@@ -7,6 +7,7 @@
 //! to be discovered, bonded, and locked for synchronized audio streaming.
 
 use crate::crypto::aes::{aes_128_encrypt_block, aes_cmac};
+use crate::crypto::smp_crypto::rev;
 use crate::gatt::{AttributePermissions, CharacteristicProperties, GattDatabase};
 
 /// CSIP Service UUIDs.
@@ -18,16 +19,6 @@ pub mod csip_uuid {
     pub const SET_MEMBER_SIZE: Uuid = Uuid::Uuid16(0x2B85);
     pub const SET_MEMBER_LOCK: Uuid = Uuid::Uuid16(0x2B86);
     pub const SET_MEMBER_RANK: Uuid = Uuid::Uuid16(0x2B87);
-}
-
-/// Helper to reverse bytes in fixed array.
-#[inline]
-fn rev<const N: usize>(s: &[u8; N]) -> [u8; N] {
-    let mut out = [0u8; N];
-    for i in 0..N {
-        out[i] = s[N - 1 - i];
-    }
-    out
 }
 
 /// CSIP Crypto Toolbox: s1 SALT generation function.

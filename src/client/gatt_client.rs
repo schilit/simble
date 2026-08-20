@@ -198,22 +198,22 @@ impl GattClient {
         L2capHeader::serialize(cid::ATT, req.as_bytes())
     }
 
-    /// Generates a Write Request L2CAP packet (with response).
-    pub fn create_write_request(&self, handle: u16, value: &[u8]) -> Vec<u8> {
+    fn create_write_pdu(&self, opcode: u8, handle: u16, value: &[u8]) -> Vec<u8> {
         let mut pdu = Vec::with_capacity(3 + value.len());
-        let header = AttWriteReqHeader::new(opcode::WRITE_REQ, handle);
+        let header = AttWriteReqHeader::new(opcode, handle);
         pdu.extend_from_slice(header.as_bytes());
         pdu.extend_from_slice(value);
         L2capHeader::serialize(cid::ATT, &pdu)
     }
 
+    /// Generates a Write Request L2CAP packet (with response).
+    pub fn create_write_request(&self, handle: u16, value: &[u8]) -> Vec<u8> {
+        self.create_write_pdu(opcode::WRITE_REQ, handle, value)
+    }
+
     /// Generates a Write Command L2CAP packet (without response).
     pub fn create_write_command(&self, handle: u16, value: &[u8]) -> Vec<u8> {
-        let mut pdu = Vec::with_capacity(3 + value.len());
-        let header = AttWriteReqHeader::new(opcode::WRITE_CMD, handle);
-        pdu.extend_from_slice(header.as_bytes());
-        pdu.extend_from_slice(value);
-        L2capHeader::serialize(cid::ATT, &pdu)
+        self.create_write_pdu(opcode::WRITE_CMD, handle, value)
     }
 
     /// Finds a discovered characteristic by UUID across all discovered services.

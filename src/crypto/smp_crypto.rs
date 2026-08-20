@@ -20,7 +20,7 @@ pub fn xor16(a: &[u8; 16], b: &[u8; 16]) -> [u8; 16] {
 
 /// Reverse endianness of a slice into a fixed-size array.
 #[inline]
-fn rev<const N: usize>(slice: &[u8; N]) -> [u8; N] {
+pub fn rev<const N: usize>(slice: &[u8; N]) -> [u8; N] {
     let mut out = [0u8; N];
     for i in 0..N {
         out[i] = slice[N - 1 - i];

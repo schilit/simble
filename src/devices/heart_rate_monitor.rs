@@ -57,26 +57,24 @@ impl HeartRateMonitor {
         }
     }
 
-    /// Emits a Heart Rate Measurement notification with standard 8-bit BPM.
-    pub fn send_heart_rate(&mut self, bpm: u8) -> Vec<u8> {
-        let payload = HeartRateService::encode_measurement_8bit(bpm);
+    #[inline]
+    fn notify_heart_rate(&mut self, payload: &[u8]) -> Vec<u8> {
         let _ = self
             .device
             .gatt_db
-            .write(self.hrs.measurement_val_handle, &payload);
+            .write(self.hrs.measurement_val_handle, payload);
         self.device
-            .create_notification(self.hrs.measurement_val_handle, &payload)
+            .create_notification(self.hrs.measurement_val_handle, payload)
+    }
+
+    /// Emits a Heart Rate Measurement notification with standard 8-bit BPM.
+    pub fn send_heart_rate(&mut self, bpm: u8) -> Vec<u8> {
+        self.notify_heart_rate(&HeartRateService::encode_measurement_8bit(bpm))
     }
 
     /// Emits a Heart Rate Measurement notification with 16-bit BPM.
     pub fn send_heart_rate_16bit(&mut self, bpm: u16) -> Vec<u8> {
-        let payload = HeartRateService::encode_measurement_16bit(bpm);
-        let _ = self
-            .device
-            .gatt_db
-            .write(self.hrs.measurement_val_handle, &payload);
-        self.device
-            .create_notification(self.hrs.measurement_val_handle, &payload)
+        self.notify_heart_rate(&HeartRateService::encode_measurement_16bit(bpm))
     }
 
     /// Updates battery percentage and returns an optional notification packet.

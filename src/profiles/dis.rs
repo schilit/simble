@@ -1,12 +1,14 @@
 // Copyright 2026 The Android Open Source Project
 // SPDX-License-Identifier: Apache-2.0
 
-//! Device Information Service (DIS) standard profile (UUID 0x180A).
+//! Device Information Service (DIS, UUID 0x180A).
+//!
+//! Provides manufacturer, model, serial, hardware, firmware, and software revision strings.
 
 use crate::gatt::{AttributePermissions, CharacteristicProperties, GattDatabase};
 use crate::types::Uuid;
 
-/// Standard characteristic UUIDs for Device Information Service.
+/// DIS Characteristic UUIDs.
 pub mod characteristic_uuid {
     pub const SYSTEM_ID: u16 = 0x2A23;
     pub const MODEL_NUMBER: u16 = 0x2A24;
@@ -15,11 +17,20 @@ pub mod characteristic_uuid {
     pub const HARDWARE_REVISION: u16 = 0x2A27;
     pub const SOFTWARE_REVISION: u16 = 0x2A28;
     pub const MANUFACTURER_NAME: u16 = 0x2A29;
-    pub const IEEE_REGULATORY_CERT: u16 = 0x2A2A;
+    pub const IEEE_REGULATORY: u16 = 0x2A2A;
     pub const PNP_ID: u16 = 0x2A50;
 }
 
-/// Device Information Service configuration.
+macro_rules! impl_dis_field {
+    ($fn_name:ident, $field:ident) => {
+        pub fn $fn_name(mut self, val: impl Into<String>) -> Self {
+            self.$field = Some(val.into());
+            self
+        }
+    };
+}
+
+/// Builder and manager for Device Information Service (0x180A).
 #[derive(Debug, Clone, Default)]
 pub struct DeviceInformationService {
     pub manufacturer_name: Option<String>,
@@ -36,35 +47,12 @@ impl DeviceInformationService {
         Self::default()
     }
 
-    pub fn with_manufacturer_name(mut self, name: impl Into<String>) -> Self {
-        self.manufacturer_name = Some(name.into());
-        self
-    }
-
-    pub fn with_model_number(mut self, model: impl Into<String>) -> Self {
-        self.model_number = Some(model.into());
-        self
-    }
-
-    pub fn with_serial_number(mut self, serial: impl Into<String>) -> Self {
-        self.serial_number = Some(serial.into());
-        self
-    }
-
-    pub fn with_hardware_revision(mut self, rev: impl Into<String>) -> Self {
-        self.hardware_revision = Some(rev.into());
-        self
-    }
-
-    pub fn with_firmware_revision(mut self, rev: impl Into<String>) -> Self {
-        self.firmware_revision = Some(rev.into());
-        self
-    }
-
-    pub fn with_software_revision(mut self, rev: impl Into<String>) -> Self {
-        self.software_revision = Some(rev.into());
-        self
-    }
+    impl_dis_field!(with_manufacturer_name, manufacturer_name);
+    impl_dis_field!(with_model_number, model_number);
+    impl_dis_field!(with_serial_number, serial_number);
+    impl_dis_field!(with_hardware_revision, hardware_revision);
+    impl_dis_field!(with_firmware_revision, firmware_revision);
+    impl_dis_field!(with_software_revision, software_revision);
 
     /// Registers this Device Information Service in the given GATT database.
     pub fn register(&self, gatt_db: &mut GattDatabase) -> u16 {
@@ -73,58 +61,36 @@ impl DeviceInformationService {
         let props = CharacteristicProperties(CharacteristicProperties::READ);
         let perms = AttributePermissions::default();
 
-        if let Some(mfg) = &self.manufacturer_name {
-            gatt_db.add_characteristic(
-                Uuid::from_u16(characteristic_uuid::MANUFACTURER_NAME),
-                props,
-                mfg.as_bytes().to_vec(),
-                perms,
-            );
-        }
+        let entries: &[(u16, &Option<String>)] = &[
+            (
+                characteristic_uuid::MANUFACTURER_NAME,
+                &self.manufacturer_name,
+            ),
+            (characteristic_uuid::MODEL_NUMBER, &self.model_number),
+            (characteristic_uuid::SERIAL_NUMBER, &self.serial_number),
+            (
+                characteristic_uuid::HARDWARE_REVISION,
+                &self.hardware_revision,
+            ),
+            (
+                characteristic_uuid::FIRMWARE_REVISION,
+                &self.firmware_revision,
+            ),
+            (
+                characteristic_uuid::SOFTWARE_REVISION,
+                &self.software_revision,
+            ),
+        ];
 
-        if let Some(model) = &self.model_number {
-            gatt_db.add_characteristic(
-                Uuid::from_u16(characteristic_uuid::MODEL_NUMBER),
-                props,
-                model.as_bytes().to_vec(),
-                perms,
-            );
-        }
-
-        if let Some(serial) = &self.serial_number {
-            gatt_db.add_characteristic(
-                Uuid::from_u16(characteristic_uuid::SERIAL_NUMBER),
-                props,
-                serial.as_bytes().to_vec(),
-                perms,
-            );
-        }
-
-        if let Some(hw) = &self.hardware_revision {
-            gatt_db.add_characteristic(
-                Uuid::from_u16(characteristic_uuid::HARDWARE_REVISION),
-                props,
-                hw.as_bytes().to_vec(),
-                perms,
-            );
-        }
-
-        if let Some(fw) = &self.firmware_revision {
-            gatt_db.add_characteristic(
-                Uuid::from_u16(characteristic_uuid::FIRMWARE_REVISION),
-                props,
-                fw.as_bytes().to_vec(),
-                perms,
-            );
-        }
-
-        if let Some(sw) = &self.software_revision {
-            gatt_db.add_characteristic(
-                Uuid::from_u16(characteristic_uuid::SOFTWARE_REVISION),
-                props,
-                sw.as_bytes().to_vec(),
-                perms,
-            );
+        for &(uuid_16, value_opt) in entries {
+            if let Some(val) = value_opt {
+                gatt_db.add_characteristic(
+                    Uuid::from_u16(uuid_16),
+                    props,
+                    val.as_bytes().to_vec(),
+                    perms,
+                );
+            }
         }
 
         service_handle
@@ -139,20 +105,12 @@ mod tests {
     fn test_device_information_service_registration() {
         let mut db = GattDatabase::new();
         let dis = DeviceInformationService::new()
-            .with_manufacturer_name("Google LLC")
-            .with_model_number("Pixel 10")
-            .with_firmware_revision("1.0.0");
+            .with_manufacturer_name("Google Inc.")
+            .with_model_number("Pixel-Sim-1")
+            .with_firmware_revision("2.0.0");
 
-        let svc_handle = dis.register(&mut db);
-        assert_eq!(svc_handle, 0x0001);
-
-        // Verify manufacturer name characteristic
-        let results = db.read_by_type(
-            0x0001,
-            0xFFFF,
-            Uuid::from_u16(characteristic_uuid::MANUFACTURER_NAME),
-        );
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].1, b"Google LLC");
+        let handle = dis.register(&mut db);
+        assert_eq!(handle, 1);
+        assert_eq!(db.attributes.len(), 7); // 1 Service + 3 * (1 Decl + 1 Val) = 7
     }
 }

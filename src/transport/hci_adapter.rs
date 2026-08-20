@@ -44,24 +44,23 @@ impl HciChannel {
         }
     }
 
-    /// Sends an HCI Command packet (prefixed with H4 byte 0x01) to the Controller.
-    pub fn send_command(&self, cmd: &[u8]) -> Result<(), SimbleError> {
-        let mut h4_packet = Vec::with_capacity(1 + cmd.len());
-        h4_packet.push(h4_type::HCI_COMMAND);
-        h4_packet.extend_from_slice(cmd);
+    fn send_h4(&self, h4_type: u8, payload: &[u8]) -> Result<(), SimbleError> {
+        let mut h4_packet = Vec::with_capacity(1 + payload.len());
+        h4_packet.push(h4_type);
+        h4_packet.extend_from_slice(payload);
         self.host_to_ctrl_tx
             .send(h4_packet)
             .map_err(|e| SimbleError::Transport(e.to_string()))
     }
 
+    /// Sends an HCI Command packet (prefixed with H4 byte 0x01) to the Controller.
+    pub fn send_command(&self, cmd: &[u8]) -> Result<(), SimbleError> {
+        self.send_h4(h4_type::HCI_COMMAND, cmd)
+    }
+
     /// Sends an HCI ACL Data packet (prefixed with H4 byte 0x02) to the Controller.
     pub fn send_acl_data(&self, acl: &[u8]) -> Result<(), SimbleError> {
-        let mut h4_packet = Vec::with_capacity(1 + acl.len());
-        h4_packet.push(h4_type::HCI_ACL_DATA);
-        h4_packet.extend_from_slice(acl);
-        self.host_to_ctrl_tx
-            .send(h4_packet)
-            .map_err(|e| SimbleError::Transport(e.to_string()))
+        self.send_h4(h4_type::HCI_ACL_DATA, acl)
     }
 
     /// Polls for the next H4 packet from Host to Controller (non-blocking).
