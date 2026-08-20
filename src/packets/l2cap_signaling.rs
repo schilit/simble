@@ -1,4 +1,4 @@
-// Copyright 2026 The Android Open Source Project
+// Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
 //! L2CAP Signaling and Credit-Based Flow Control packets (Bluetooth Core Vol 3, Part A, Section 4).

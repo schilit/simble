@@ -1,4 +1,4 @@
-// Copyright 2026 The Android Open Source Project
+// Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
 //! Standard USB HID Report Descriptors, Keycodes, and ASCII converters.

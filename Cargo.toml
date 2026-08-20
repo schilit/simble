@@ -1,4 +1,4 @@
-# Copyright 2026 The Android Open Source Project
+# Copyright 2026 Bill Schilit
 # SPDX-License-Identifier: Apache-2.0
 
 [package]
@@ -7,7 +7,7 @@ version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 description = "Native Zero-Copy Virtual Bluetooth Host Stack & Device Simulation Engine in Rust"
-authors = ["Google LLC"]
+authors = ["Bill Schilit <schilit@google.com>"]
 repository = "https://github.com/schilit/simble"
 readme = "README.md"
 keywords = ["bluetooth", "ble", "gatt", "l2cap", "channel-sounding"]

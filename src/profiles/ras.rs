@@ -1,4 +1,4 @@
-// Copyright 2026 The Android Open Source Project
+// Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
 //! Ranging Service (RAS, UUID 0x185B) per Bluetooth SIG Channel Sounding Profile.

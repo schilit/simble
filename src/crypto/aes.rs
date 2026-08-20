@@ -1,4 +1,4 @@
-// Copyright 2026 The Android Open Source Project
+// Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
 //! Self-contained AES-128 and AES-CMAC (RFC 4493 / NIST SP 800-38B) implementation.

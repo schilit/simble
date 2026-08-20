@@ -1,4 +1,4 @@
-// Copyright 2026 The Android Open Source Project
+// Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
 //! Generic Attribute Profile (GATT) Service (0x1801) and Database Hash (0x2B2A) calculation.

@@ -1,4 +1,4 @@
-// Copyright 2026 The Android Open Source Project
+// Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
 //! Integration tests for Bluetooth 6.0 Channel Sounding (CS) and Ranging Service (RAS).
