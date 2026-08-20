@@ -14,7 +14,7 @@ use crate::device::connection::PrepareWriteChunk;
 use crate::types::{SimbleError, Uuid};
 
 impl VirtualDevice {
-    /// Processes an incoming ATT PDU parsed via `netsim-packets`.
+    /// Processes an incoming ATT PDU parsed via `simble::packets`.
     pub(crate) fn process_att_packet(
         &mut self,
         connection_handle: u16,
