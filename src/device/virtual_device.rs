@@ -1,0 +1,268 @@
+// Copyright 2026 The Android Open Source Project
+// SPDX-License-Identifier: Apache-2.0
+
+//! Virtual Bluetooth Device state machine and packet processor.
+
+use std::collections::HashMap;
+use zerocopy::IntoBytes;
+
+use crate::att::{AttHandleValueHeader, opcode};
+use crate::device::connection::ConnectionState;
+use crate::gap::AdvertisingData;
+use crate::gatt::GattDatabase;
+use crate::l2cap::{L2capHeader, cid};
+use crate::types::{Address, AddressType, SimbleError};
+
+/// A simulated virtual Bluetooth device.
+#[derive(Debug, Clone)]
+pub struct VirtualDevice {
+    pub name: String,
+    pub address: Address,
+    pub address_type: AddressType,
+    pub gatt_db: GattDatabase,
+    pub advertising_data: Option<AdvertisingData>,
+    pub is_advertising: bool,
+    pub connections: HashMap<u16, ConnectionState>,
+    pub default_mtu: u16,
+}
+
+impl VirtualDevice {
+    /// Creates a new virtual device.
+    pub fn new(name: impl Into<String>, address: Address, address_type: AddressType) -> Self {
+        Self {
+            name: name.into(),
+            address,
+            address_type,
+            gatt_db: GattDatabase::new(),
+            advertising_data: None,
+            is_advertising: false,
+            connections: HashMap::new(),
+            default_mtu: 23,
+        }
+    }
+
+    /// Handles a new connection event from the controller.
+    pub fn on_connected(&mut self, handle: u16, peer_address: Address) {
+        self.connections.insert(
+            handle,
+            ConnectionState::new(handle, peer_address, self.default_mtu),
+        );
+        self.is_advertising = false;
+    }
+
+    /// Handles a disconnection event.
+    pub fn on_disconnected(&mut self, handle: u16) {
+        self.connections.remove(&handle);
+    }
+
+    /// Processes an incoming L2CAP packet received over an ACL connection.
+    ///
+    /// Returns an optional response L2CAP packet to send back.
+    pub fn process_l2cap_packet(
+        &mut self,
+        connection_handle: u16,
+        raw_l2cap: &[u8],
+    ) -> Result<Option<Vec<u8>>, SimbleError> {
+        let (header, payload) = L2capHeader::parse(raw_l2cap)
+            .ok_or_else(|| SimbleError::PacketParseError("Invalid L2CAP frame".into()))?;
+
+        match header.cid.get() {
+            cid::ATT => {
+                let resp_payload = self.process_att_packet(connection_handle, payload)?;
+                Ok(resp_payload.map(|p| L2capHeader::serialize(cid::ATT, &p)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Creates an ATT Handle Value Notification packet for a characteristic update.
+    pub fn create_notification(&self, handle: u16, value: &[u8]) -> Vec<u8> {
+        let mut pdu = Vec::with_capacity(3 + value.len());
+        let header = AttHandleValueHeader::new(opcode::HANDLE_VALUE_NTF, handle);
+        pdu.extend_from_slice(header.as_bytes());
+        pdu.extend_from_slice(value);
+        L2capHeader::serialize(cid::ATT, &pdu)
+    }
+
+    /// Creates an ATT Handle Value Indication packet (which requires confirmation from central).
+    pub fn create_indication(
+        &mut self,
+        connection_handle: u16,
+        handle: u16,
+        value: &[u8],
+    ) -> Result<Vec<u8>, SimbleError> {
+        let conn = self
+            .connections
+            .get_mut(&connection_handle)
+            .ok_or_else(|| {
+                SimbleError::DeviceError(format!("Connection {connection_handle} not found"))
+            })?;
+
+        if conn.pending_indication {
+            return Err(SimbleError::DeviceError(
+                "Indication already in flight, waiting for confirmation".into(),
+            ));
+        }
+
+        conn.pending_indication = true;
+
+        let mut pdu = Vec::with_capacity(3 + value.len());
+        let header = AttHandleValueHeader::new(opcode::HANDLE_VALUE_IND, handle);
+        pdu.extend_from_slice(header.as_bytes());
+        pdu.extend_from_slice(value);
+        Ok(L2capHeader::serialize(cid::ATT, &pdu))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::att::AttExecuteWriteReq;
+    use crate::gatt::{AttributePermissions, CharacteristicProperties};
+    use crate::types::Uuid;
+
+    #[test]
+    fn test_virtual_device_mtu_and_read_write_flow() {
+        let addr = Address::from_be_bytes([0xF0, 0xDE, 0xF1, 0x22, 0x33, 0x44]);
+        let mut dev = VirtualDevice::new("HRM", addr, AddressType::Random);
+
+        let (_, val_handle) = dev.gatt_db.add_characteristic(
+            Uuid::from_u16(0x2A37),
+            CharacteristicProperties(
+                CharacteristicProperties::READ | CharacteristicProperties::WRITE,
+            ),
+            vec![0x00, 0x40],
+            AttributePermissions::default(),
+        );
+
+        let conn_handle = 0x0040;
+        dev.on_connected(conn_handle, Address::ANY);
+
+        // 1. Exchange MTU
+        let mtu_req = [opcode::EXCHANGE_MTU_REQ, 0x00, 0x02];
+        let l2cap_req = L2capHeader::serialize(cid::ATT, &mtu_req);
+        let resp = dev
+            .process_l2cap_packet(conn_handle, &l2cap_req)
+            .unwrap()
+            .unwrap();
+        let (header, resp_payload) = L2capHeader::parse(&resp).unwrap();
+        assert_eq!(header.cid.get(), cid::ATT);
+        assert_eq!(resp_payload[0], opcode::EXCHANGE_MTU_RSP);
+
+        // 2. Read Characteristic
+        let mut read_req = vec![opcode::READ_REQ];
+        read_req.extend_from_slice(&val_handle.to_le_bytes());
+        let l2cap_read = L2capHeader::serialize(cid::ATT, &read_req);
+        let resp = dev
+            .process_l2cap_packet(conn_handle, &l2cap_read)
+            .unwrap()
+            .unwrap();
+        let (_, read_resp) = L2capHeader::parse(&resp).unwrap();
+        assert_eq!(read_resp[0], opcode::READ_RSP);
+        assert_eq!(&read_resp[1..], &[0x00, 0x40]);
+
+        // 3. Write Characteristic
+        let mut write_req = vec![opcode::WRITE_REQ];
+        write_req.extend_from_slice(&val_handle.to_le_bytes());
+        write_req.extend_from_slice(&[0x00, 0x55]);
+        let l2cap_write = L2capHeader::serialize(cid::ATT, &write_req);
+        let resp = dev
+            .process_l2cap_packet(conn_handle, &l2cap_write)
+            .unwrap()
+            .unwrap();
+        let (_, write_resp) = L2capHeader::parse(&resp).unwrap();
+        assert_eq!(write_resp[0], opcode::WRITE_RSP);
+
+        // 4. Verify new value
+        let val = dev.gatt_db.read(val_handle, 0).unwrap();
+        assert_eq!(val, &[0x00, 0x55]);
+
+        // 5. Generate notification
+        let notif = dev.create_notification(val_handle, &[0x00, 0x60]);
+        let (_, notif_payload) = L2capHeader::parse(&notif).unwrap();
+        assert_eq!(notif_payload[0], opcode::HANDLE_VALUE_NTF);
+        assert_eq!(&notif_payload[3..], &[0x00, 0x60]);
+
+        // 6. Indication & Confirmation flow
+        let ind = dev
+            .create_indication(conn_handle, val_handle, &[0x00, 0x70])
+            .unwrap();
+        let (_, ind_payload) = L2capHeader::parse(&ind).unwrap();
+        assert_eq!(ind_payload[0], opcode::HANDLE_VALUE_IND);
+
+        // Second indication should fail until confirmation is received
+        assert!(
+            dev.create_indication(conn_handle, val_handle, &[0x00, 0x71])
+                .is_err()
+        );
+
+        // Send confirmation
+        let cfm_pdu = [opcode::HANDLE_VALUE_CFM];
+        let cfm_l2cap = L2capHeader::serialize(cid::ATT, &cfm_pdu);
+        assert!(
+            dev.process_l2cap_packet(conn_handle, &cfm_l2cap)
+                .unwrap()
+                .is_none()
+        );
+
+        // Now next indication succeeds
+        assert!(
+            dev.create_indication(conn_handle, val_handle, &[0x00, 0x71])
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_prepare_and_execute_write_flow() {
+        let addr = Address::from_be_bytes([0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC]);
+        let mut dev = VirtualDevice::new("LongWriter", addr, AddressType::Random);
+
+        let (_, val_handle) = dev.gatt_db.add_characteristic(
+            Uuid::from_u16(0x2A00),
+            CharacteristicProperties(CharacteristicProperties::WRITE),
+            vec![0u8; 10],
+            AttributePermissions::default(),
+        );
+
+        let conn_h = 0x0001;
+        dev.on_connected(conn_h, Address::ANY);
+
+        // Prepare chunk 1: offset 0, bytes [1, 2, 3]
+        let mut prep1 = vec![opcode::PREPARE_WRITE_REQ];
+        prep1.extend_from_slice(&val_handle.to_le_bytes());
+        prep1.extend_from_slice(&0u16.to_le_bytes()); // offset 0
+        prep1.extend_from_slice(&[1, 2, 3]);
+        let l2cap_prep1 = L2capHeader::serialize(cid::ATT, &prep1);
+        let resp1 = dev
+            .process_l2cap_packet(conn_h, &l2cap_prep1)
+            .unwrap()
+            .unwrap();
+        let (_, payload1) = L2capHeader::parse(&resp1).unwrap();
+        assert_eq!(payload1[0], opcode::PREPARE_WRITE_REQ);
+
+        // Prepare chunk 2: offset 3, bytes [4, 5, 6]
+        let mut prep2 = vec![opcode::PREPARE_WRITE_REQ];
+        prep2.extend_from_slice(&val_handle.to_le_bytes());
+        prep2.extend_from_slice(&3u16.to_le_bytes()); // offset 3
+        prep2.extend_from_slice(&[4, 5, 6]);
+        let l2cap_prep2 = L2capHeader::serialize(cid::ATT, &prep2);
+        let _ = dev
+            .process_l2cap_packet(conn_h, &l2cap_prep2)
+            .unwrap()
+            .unwrap();
+
+        // Execute Write
+        let exec = [opcode::EXECUTE_WRITE_REQ, AttExecuteWriteReq::WRITE];
+        let l2cap_exec = L2capHeader::serialize(cid::ATT, &exec);
+        let exec_resp = dev
+            .process_l2cap_packet(conn_h, &l2cap_exec)
+            .unwrap()
+            .unwrap();
+        let (_, exec_payload) = L2capHeader::parse(&exec_resp).unwrap();
+        assert_eq!(exec_payload[0], opcode::EXECUTE_WRITE_RSP);
+
+        // Check value in GATT DB
+        let val = dev.gatt_db.read(val_handle, 0).unwrap();
+        assert_eq!(&val[0..6], &[1, 2, 3, 4, 5, 6]);
+    }
+}
