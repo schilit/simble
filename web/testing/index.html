@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimBLE Testing</title>
+<link rel="stylesheet" href="../common/simble.css">
+<link rel="stylesheet" href="../common/nav.css">
+<style>
+  main { max-width: 60rem; margin: 0 auto; padding: 1rem 1.25rem 2.5rem; }
+  .intro { color: var(--dim); font-size: 0.95rem; line-height: 1.6; margin: 0.4rem 0 1.1rem; max-width: 52rem; }
+  .intro strong { color: var(--text); }
+  .intro code { color: var(--good); background: var(--panel); padding: 0.05rem 0.3rem; border-radius: 4px; font-size: 0.85em; }
+  .toolbar { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.7rem; }
+  label.ex { color: var(--dim); font-size: 0.85rem; }
+  select, button {
+    background: #21262d; color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 0.35rem 0.8rem; font-size: 0.85rem; cursor: pointer;
+  }
+  button.primary { background: #1f6feb; border-color: #1f6feb; font-weight: 600; }
+  button:hover, select:hover { border-color: var(--dim); }
+  textarea#script {
+    width: 100%; height: 22rem; resize: vertical; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; padding: 0.7rem; tab-size: 4;
+    font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .result { margin-top: 0.9rem; border-radius: 8px; border: 1px solid var(--border);
+    padding: 0.9rem 1rem; background: var(--panel); display: none; }
+  .result.show { display: block; }
+  .result .head { font-size: 1.05rem; font-weight: 700; display: flex; align-items: center; gap: 0.5rem; }
+  .result.pass { border-color: var(--good); }
+  .result.pass .head { color: var(--good); }
+  .result.fail { border-color: var(--bad); }
+  .result.fail .head { color: var(--bad); }
+  .result .msg { margin-top: 0.5rem; font-family: ui-monospace, Menlo, monospace;
+    font-size: 0.82rem; color: var(--text); white-space: pre-wrap; }
+  .result .took { color: var(--dim); font-size: 0.8rem; font-weight: 400; }
+  h2.sub { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim);
+    margin: 1.6rem 0 0.5rem; }
+  .aside { color: var(--dim); font-size: 0.88rem; line-height: 1.6; }
+  .aside code { color: var(--good); }
+  footer { color: var(--dim); font-size: 0.78rem; padding: 1.4rem 1.25rem 0; max-width: 60rem; margin: 0 auto; }
+</style>
+</head>
+<body>
+<nav class="sitenav">
+  <a class="brand" href="../">Sim<b>BLE</b></a>
+  <div class="tabs">
+    <a href="../playground/">Playground</a>
+    <a href="../explorer/">API Explorer</a>
+    <a href="../scanner/">Scanner</a>
+    <a href="../hrm/">Scripted device</a>
+    <a href="../lightbulb/">Color Bulb</a>
+    <a href="../dual/">Server + Client</a>
+    <a href="../scene/">Scene</a>
+    <a href="../testing/" aria-current="page">Testing</a>
+    <a href="../shared/">Shared</a>
+    <a href="../controllers/">Controllers</a>
+  </div>
+  <span class="spacer"></span>
+  <a class="ext" href="../doc/">Docs</a>
+  <a class="ext" href="https://github.com/schilit/simble">GitHub ↗</a>
+</nav>
+
+<header class="sitenav" style="border-bottom:none;background:transparent;padding-top:0.9rem">
+  <h1 style="font-size:1.2rem;margin:0">Testing</h1>
+  <span style="color:var(--dim);font-size:0.85rem">a script is a device — and a test</span>
+</header>
+
+<main>
+  <p class="intro">A SimBLE device is a Rhai script; add <code>assert(...)</code> and the same script becomes a
+    <strong>test</strong>. It runs <strong>deterministically</strong> — no radio, no timing flakiness — so a
+    failure is reproducible and the AI generate-check-fix loop actually converges. And the validated script is the
+    artifact: it ships into netsim as a CI fixture <em>unchanged</em>. Edit below and press <strong>Run test</strong>.</p>
+
+  <div class="toolbar">
+    <button id="run" class="primary">▶ Run test</button>
+    <label class="ex" for="examples">Examples:</label>
+    <select id="examples">
+      <option value="">Load an example…</option>
+      <option value="structure">Structure &amp; properties (passes)</option>
+      <option value="values">Encoded values (passes)</option>
+      <option value="failing">A failing assertion (fails)</option>
+    </select>
+  </div>
+
+  <textarea id="script" spellcheck="false"></textarea>
+
+  <div id="result" class="result">
+    <div class="head"><span id="result-icon"></span><span id="result-title"></span>
+      <span id="result-took" class="took"></span></div>
+    <div id="result-msg" class="msg"></div>
+  </div>
+
+  <h2 class="sub">Why this matters</h2>
+  <p class="aside">Every assertion runs at <strong>build time</strong> in a fresh engine, against SimBLE's real
+    GATT stack — so it checks the device your app will actually meet, not a mock. Because the run is deterministic,
+    the exact same script an LLM writes, that you check here, and that CI runs against netsim are one file — no
+    hand-translation between "the test" and "the fixture". Behavioural tests (connect, subscribe, assert a
+    notification over time) build on the same primitive with <code>wait_for</code> and the scene APIs.</p>
+</main>
+
+<footer>
+  <code>run_test(script)</code> compiles and runs the script in a fresh SimBLE scripting engine; a failed
+  <code>assert(condition, "message")</code> (or any runtime error) is reported here with its message. No netsim,
+  no connection — pure, repeatable evaluation.
+</footer>
+
+<script type="module" src="./testing.js"></script>
+</body>
+</html>
