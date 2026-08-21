@@ -417,81 +417,139 @@ pub enum Message {
     /// Discover response: the peer's SEP list.
     DiscoverResponse(Vec<SepInfo>),
     /// Get_Capabilities command.
-    GetCapabilitiesCommand { acp_seid: u8 },
+    GetCapabilitiesCommand {
+        /// ACP stream endpoint identifier.
+        acp_seid: u8,
+    },
     /// Get_Capabilities response.
     GetCapabilitiesResponse(Vec<ServiceCapability>),
     /// Get_All_Capabilities command.
-    GetAllCapabilitiesCommand { acp_seid: u8 },
+    GetAllCapabilitiesCommand {
+        /// ACP stream endpoint identifier.
+        acp_seid: u8,
+    },
     /// Get_All_Capabilities response.
     GetAllCapabilitiesResponse(Vec<ServiceCapability>),
     /// Set_Configuration command.
     SetConfigurationCommand {
+        /// Acp seid.
         acp_seid: u8,
+        /// Int seid.
         int_seid: u8,
+        /// Capabilities.
         capabilities: Vec<ServiceCapability>,
     },
     /// Set_Configuration accept.
     SetConfigurationResponse,
     /// Set_Configuration reject (failing category and error code).
     SetConfigurationReject {
+        /// Service category.
         service_category: u8,
+        /// Error code.
         error_code: u8,
     },
     /// Get_Configuration command.
-    GetConfigurationCommand { acp_seid: u8 },
+    GetConfigurationCommand {
+        /// ACP stream endpoint identifier.
+        acp_seid: u8,
+    },
     /// Get_Configuration response.
     GetConfigurationResponse(Vec<ServiceCapability>),
     /// Reconfigure command.
     ReconfigureCommand {
+        /// Acp seid.
         acp_seid: u8,
+        /// Capabilities.
         capabilities: Vec<ServiceCapability>,
     },
     /// Reconfigure accept.
     ReconfigureResponse,
     /// Reconfigure reject (failing category and error code).
     ReconfigureReject {
+        /// Service category.
         service_category: u8,
+        /// Error code.
         error_code: u8,
     },
     /// Open command.
-    OpenCommand { acp_seid: u8 },
+    OpenCommand {
+        /// ACP stream endpoint identifier.
+        acp_seid: u8,
+    },
     /// Open accept.
     OpenResponse,
     /// Start command (one or more SEIDs).
-    StartCommand { acp_seids: Vec<u8> },
+    StartCommand {
+        /// ACP stream endpoint identifiers.
+        acp_seids: Vec<u8>,
+    },
     /// Start accept.
     StartResponse,
     /// Start reject (failing SEID and error code).
-    StartReject { acp_seid: u8, error_code: u8 },
+    StartReject {
+        /// ACP stream endpoint identifier.
+        acp_seid: u8,
+        /// Error code.
+        error_code: u8,
+    },
     /// Suspend command (one or more SEIDs).
-    SuspendCommand { acp_seids: Vec<u8> },
+    SuspendCommand {
+        /// ACP stream endpoint identifiers.
+        acp_seids: Vec<u8>,
+    },
     /// Suspend accept.
     SuspendResponse,
     /// Suspend reject (failing SEID and error code).
-    SuspendReject { acp_seid: u8, error_code: u8 },
+    SuspendReject {
+        /// ACP stream endpoint identifier.
+        acp_seid: u8,
+        /// Error code.
+        error_code: u8,
+    },
     /// Close command.
-    CloseCommand { acp_seid: u8 },
+    CloseCommand {
+        /// ACP stream endpoint identifier.
+        acp_seid: u8,
+    },
     /// Close accept.
     CloseResponse,
     /// Abort command.
-    AbortCommand { acp_seid: u8 },
+    AbortCommand {
+        /// ACP stream endpoint identifier.
+        acp_seid: u8,
+    },
     /// Abort accept.
     AbortResponse,
     /// Security_Control command.
-    SecurityControlCommand { acp_seid: u8, data: Vec<u8> },
+    SecurityControlCommand {
+        /// ACP stream endpoint identifier.
+        acp_seid: u8,
+        /// Payload data.
+        data: Vec<u8>,
+    },
     /// Security_Control accept.
     SecurityControlResponse,
     /// DelayReport command (rendering delay).
-    DelayReportCommand { acp_seid: u8, delay: u16 },
+    DelayReportCommand {
+        /// ACP stream endpoint identifier.
+        acp_seid: u8,
+        /// Delay, in milliseconds.
+        delay: u16,
+    },
     /// DelayReport accept.
     DelayReportResponse,
     /// A reject whose payload is a single error code, for any signal.
     Reject {
+        /// Signal identifier.
         signal_identifier: u8,
+        /// Error code.
         error_code: u8,
     },
     /// General Reject (AVDTP spec 8.18), echoing the offending signal.
-    GeneralReject { signal_identifier: u8 },
+    GeneralReject {
+        /// Signal identifier.
+        signal_identifier: u8,
+    },
 }
 
 // SEIDs travel in the top 6 bits of their byte (AVDTP spec 8.20.5).
@@ -982,36 +1040,73 @@ pub enum AvdtpEvent {
     EndpointsDiscovered(Vec<SepInfo>),
     /// A Get_Capabilities/Get_All_Capabilities response arrived for `seid`.
     CapabilitiesReceived {
+        /// Seid.
         seid: u8,
+        /// Capabilities.
         capabilities: Vec<ServiceCapability>,
     },
     /// A Get_Configuration response arrived for remote endpoint `seid`.
     ConfigurationReceived {
+        /// Seid.
         seid: u8,
+        /// Capabilities.
         capabilities: Vec<ServiceCapability>,
     },
     /// The local endpoint `seid` entered CONFIGURED (either side).
-    StreamConfigured { seid: u8 },
+    StreamConfigured {
+        /// Stream endpoint identifier.
+        seid: u8,
+    },
     /// The local endpoint `seid` was reconfigured while OPEN (either side).
-    StreamReconfigured { seid: u8 },
+    StreamReconfigured {
+        /// Stream endpoint identifier.
+        seid: u8,
+    },
     /// The local endpoint `seid` entered OPEN (either side).
-    StreamOpened { seid: u8 },
+    StreamOpened {
+        /// Stream endpoint identifier.
+        seid: u8,
+    },
     /// The local endpoint `seid` entered STREAMING (either side).
-    StreamStarted { seid: u8 },
+    StreamStarted {
+        /// Stream endpoint identifier.
+        seid: u8,
+    },
     /// The local endpoint `seid` suspended back to OPEN (either side).
-    StreamSuspended { seid: u8 },
+    StreamSuspended {
+        /// Stream endpoint identifier.
+        seid: u8,
+    },
     /// The local endpoint `seid` closed back to IDLE (either side).
-    StreamClosed { seid: u8 },
+    StreamClosed {
+        /// Stream endpoint identifier.
+        seid: u8,
+    },
     /// The local endpoint `seid` aborted back to IDLE (either side).
-    StreamAborted { seid: u8 },
+    StreamAborted {
+        /// Stream endpoint identifier.
+        seid: u8,
+    },
     /// The peer reported its rendering delay for local endpoint `seid`.
-    DelayReport { seid: u8, delay: u16 },
+    DelayReport {
+        /// Stream endpoint identifier.
+        seid: u8,
+        /// Delay, in milliseconds.
+        delay: u16,
+    },
     /// The peer sent content-protection data for local endpoint `seid`.
-    SecurityControl { seid: u8, data: Vec<u8> },
+    SecurityControl {
+        /// Stream endpoint identifier.
+        seid: u8,
+        /// Payload data.
+        data: Vec<u8>,
+    },
     /// A command we sent was rejected. `error_code` is 0 for a General
     /// Reject, which carries none.
     CommandRejected {
+        /// Signal identifier.
         signal_identifier: u8,
+        /// Error code.
         error_code: u8,
     },
 }

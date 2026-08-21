@@ -254,18 +254,29 @@ impl MessageAssembler {
 pub enum AvctpEvent {
     /// A command arrived for a registered PID.
     Command {
+        /// Transaction label.
         transaction_label: u8,
+        /// Pid.
         pid: u16,
+        /// Payload.
         payload: Vec<u8>,
     },
     /// A response arrived for one of our commands.
     Response {
+        /// Transaction label.
         transaction_label: u8,
+        /// Pid.
         pid: u16,
+        /// Payload.
         payload: Vec<u8>,
     },
     /// The peer answered our command with IPID: it does not support `pid`.
-    InvalidPid { transaction_label: u8, pid: u16 },
+    InvalidPid {
+        /// Transaction label.
+        transaction_label: u8,
+        /// Protocol identifier (PID).
+        pid: u16,
+    },
 }
 
 /// The AVCTP state machine for one L2CAP channel: reassembles incoming

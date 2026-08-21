@@ -74,19 +74,33 @@ pub mod error_code {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
 pub enum RemoteCommandId {
+    /// Play.
     Play = 0,
+    /// Pause.
     Pause = 1,
+    /// Toggle play pause.
     TogglePlayPause = 2,
+    /// Next track.
     NextTrack = 3,
+    /// Previous track.
     PreviousTrack = 4,
+    /// Volume up.
     VolumeUp = 5,
+    /// Volume down.
     VolumeDown = 6,
+    /// Advance repeat mode.
     AdvanceRepeatMode = 7,
+    /// Advance shuffle mode.
     AdvanceShuffleMode = 8,
+    /// Skip forward.
     SkipForward = 9,
+    /// Skip backward.
     SkipBackward = 10,
+    /// Like track.
     LikeTrack = 11,
+    /// Dislike track.
     DislikeTrack = 12,
+    /// Bookmark track.
     BookmarkTrack = 13,
 }
 
@@ -135,8 +149,11 @@ pub const ALL_REMOTE_COMMANDS: [RemoteCommandId; 14] = [
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum EntityId {
+    /// Player.
     Player = 0,
+    /// Queue.
     Queue = 1,
+    /// Track.
     Track = 2,
 }
 
@@ -163,8 +180,11 @@ pub mod entity_update_flags {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PlayerAttributeId {
+    /// Name.
     Name = 0,
+    /// Playback info.
     PlaybackInfo = 1,
+    /// Volume.
     Volume = 2,
 }
 
@@ -184,9 +204,13 @@ impl PlayerAttributeId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum QueueAttributeId {
+    /// Index.
     Index = 0,
+    /// Count.
     Count = 1,
+    /// Shuffle mode.
     ShuffleMode = 2,
+    /// Repeat mode.
     RepeatMode = 3,
 }
 
@@ -207,9 +231,13 @@ impl QueueAttributeId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum TrackAttributeId {
+    /// Artist.
     Artist = 0,
+    /// Album.
     Album = 1,
+    /// Title.
     Title = 2,
+    /// Duration.
     Duration = 3,
 }
 
@@ -230,8 +258,11 @@ impl TrackAttributeId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ShuffleMode {
+    /// Off.
     Off = 0,
+    /// One.
     One = 1,
+    /// All.
     All = 2,
 }
 
@@ -259,8 +290,11 @@ impl ShuffleMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum RepeatMode {
+    /// Off.
     Off = 0,
+    /// One.
     One = 1,
+    /// All.
     All = 2,
 }
 
@@ -288,9 +322,13 @@ impl RepeatMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PlaybackState {
+    /// Paused.
     Paused = 0,
+    /// Playing.
     Playing = 1,
+    /// Rewinding.
     Rewinding = 2,
+    /// Fast forwarding.
     FastForwarding = 3,
 }
 

@@ -15,26 +15,37 @@ use crate::types::{Address, SimbleError, Uuid};
 /// Discovered GATT Service on a remote peripheral.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveredService {
+    /// Start handle.
     pub start_handle: u16,
+    /// End handle.
     pub end_handle: u16,
+    /// Uuid.
     pub uuid: Uuid,
+    /// Characteristics.
     pub characteristics: Vec<DiscoveredCharacteristic>,
 }
 
 /// Discovered GATT Characteristic on a remote peripheral.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveredCharacteristic {
+    /// Declaration handle.
     pub declaration_handle: u16,
+    /// Value handle.
     pub value_handle: u16,
+    /// Properties.
     pub properties: u8,
+    /// Uuid.
     pub uuid: Uuid,
+    /// Descriptors.
     pub descriptors: Vec<DiscoveredDescriptor>,
 }
 
 /// Discovered GATT Descriptor on a remote peripheral.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveredDescriptor {
+    /// Handle.
     pub handle: u16,
+    /// Uuid.
     pub uuid: Uuid,
 }
 
@@ -56,9 +67,13 @@ fn create_range_request(opcode: u8, start_handle: u16, end_handle: u16, uuid_16:
 /// A lightweight, zero-copy GATT Client discovery manager.
 #[derive(Debug, Clone)]
 pub struct GattClient {
+    /// Connection handle.
     pub connection_handle: u16,
+    /// Peer address.
     pub peer_address: Address,
+    /// Mtu.
     pub mtu: u16,
+    /// Services.
     pub services: Vec<DiscoveredService>,
 }
 

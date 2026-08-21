@@ -10,12 +10,19 @@ use crate::types::Uuid;
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BodySensorLocation {
+    /// Other.
     Other = 0,
+    /// Chest.
     Chest = 1,
+    /// Wrist.
     Wrist = 2,
+    /// Finger.
     Finger = 3,
+    /// Hand.
     Hand = 4,
+    /// Ear lobe.
     EarLobe = 5,
+    /// Foot.
     Foot = 6,
 }
 

@@ -719,8 +719,11 @@ pub enum HfpEvent {
     /// `AT+CLCC`) finished; `responses` holds every non-status line received
     /// before the final `OK`/error status.
     CommandCompleted {
+        /// Command.
         command: String,
+        /// Ok.
         ok: bool,
+        /// Responses.
         responses: Vec<AtResponse>,
     },
     /// HF-observed: the AG updated an indicator (`+CIEV`).
@@ -751,7 +754,9 @@ pub enum HfpEvent {
     Dial(String),
     /// AG-observed: the HF requested a call-hold operation (`AT+CHLD`).
     CallHold {
+        /// Operation.
         operation: CallHoldOperation,
+        /// Call index.
         call_index: Option<u32>,
     },
 }

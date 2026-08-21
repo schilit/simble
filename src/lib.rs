@@ -17,6 +17,9 @@
 //! hardware through a USB Bluetooth dongle.
 
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
+// Every public item carries a doc comment; combined with CI's `-D warnings`
+// this makes a new undocumented public item fail the build.
+#![warn(missing_docs)]
 
 pub mod android;
 pub mod api;

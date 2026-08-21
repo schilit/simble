@@ -69,8 +69,11 @@ pub const ANY_BIS: u32 = 0xFFFF_FFFF;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PeriodicAdvertisingSyncParams {
+    /// Do not synchronize to pa.
     DoNotSynchronizeToPa = 0x00,
+    /// Synchronize to pa past available.
     SynchronizeToPaPastAvailable = 0x01,
+    /// Synchronize to pa past not available.
     SynchronizeToPaPastNotAvailable = 0x02,
 }
 
@@ -90,10 +93,15 @@ impl PeriodicAdvertisingSyncParams {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum PeriodicAdvertisingSyncState {
+    /// Not synchronized to pa.
     NotSynchronizedToPa = 0x00,
+    /// Sync info request.
     SyncInfoRequest = 0x01,
+    /// Synchronized to pa.
     SynchronizedToPa = 0x02,
+    /// Failed to synchronize to pa.
     FailedToSynchronizeToPa = 0x03,
+    /// No past.
     NoPast = 0x04,
 }
 
@@ -115,9 +123,13 @@ impl PeriodicAdvertisingSyncState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum BigEncryption {
+    /// Not encrypted.
     NotEncrypted = 0x00,
+    /// Broadcast code required.
     BroadcastCodeRequired = 0x01,
+    /// Decrypting.
     Decrypting = 0x02,
+    /// Bad code.
     BadCode = 0x03,
 }
 
@@ -175,28 +187,48 @@ pub(crate) fn decode_subgroups(data: &[u8]) -> Option<Vec<SubgroupInfo>> {
 /// A Broadcast Audio Scan Control Point operation (BASS Section 3.1.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ControlPointOperation {
+    /// Remote scan stopped.
     RemoteScanStopped,
+    /// Remote scan started.
     RemoteScanStarted,
+    /// Add source.
     AddSource {
+        /// Advertiser address type.
         advertiser_address_type: u8,
+        /// Advertiser address.
         advertiser_address: Address,
+        /// Advertising sid.
         advertising_sid: u8,
+        /// Broadcast id.
         broadcast_id: u32,
+        /// Pa sync.
         pa_sync: PeriodicAdvertisingSyncParams,
+        /// Pa interval.
         pa_interval: u16,
+        /// Subgroups.
         subgroups: Vec<SubgroupInfo>,
     },
+    /// Modify source.
     ModifySource {
+        /// Source id.
         source_id: u8,
+        /// Pa sync.
         pa_sync: PeriodicAdvertisingSyncParams,
+        /// Pa interval.
         pa_interval: u16,
+        /// Subgroups.
         subgroups: Vec<SubgroupInfo>,
     },
+    /// Set broadcast code.
     SetBroadcastCode {
+        /// Source id.
         source_id: u8,
+        /// Broadcast code.
         broadcast_code: [u8; 16],
     },
+    /// Remove source.
     RemoveSource {
+        /// Source id.
         source_id: u8,
     },
 }

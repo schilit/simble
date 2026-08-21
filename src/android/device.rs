@@ -13,8 +13,11 @@ use crate::types::{Address, AddressType};
 /// A remote Bluetooth peer, mirroring `android.bluetooth.BluetoothDevice`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BluetoothDevice {
+    /// Address.
     pub address: Address,
+    /// Address type.
     pub address_type: AddressType,
+    /// Name.
     pub name: Option<String>,
 }
 

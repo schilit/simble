@@ -606,49 +606,75 @@ fn encode_attribute_id_list(ids: &[AttributeIdSpec]) -> DataElement {
 pub enum SdpPdu {
     /// SDP_ErrorResponse: an error code for a failed request.
     ErrorResponse {
+        /// Transaction id.
         transaction_id: u16,
+        /// Error code.
         error_code: u16,
     },
     /// SDP_ServiceSearchRequest: search for records matching a UUID pattern.
     ServiceSearchRequest {
+        /// Transaction id.
         transaction_id: u16,
+        /// Service search pattern.
         service_search_pattern: DataElement,
+        /// Maximum service record count.
         maximum_service_record_count: u16,
+        /// Continuation state.
         continuation_state: Vec<u8>,
     },
     /// SDP_ServiceSearchResponse: matching service record handles.
     ServiceSearchResponse {
+        /// Transaction id.
         transaction_id: u16,
+        /// Total service record count.
         total_service_record_count: u16,
+        /// Service record handle list.
         service_record_handle_list: Vec<u32>,
+        /// Continuation state.
         continuation_state: Vec<u8>,
     },
     /// SDP_ServiceAttributeRequest: request attributes of one service record.
     ServiceAttributeRequest {
+        /// Transaction id.
         transaction_id: u16,
+        /// Service record handle.
         service_record_handle: u32,
+        /// Maximum attribute byte count.
         maximum_attribute_byte_count: u16,
+        /// Attribute id list.
         attribute_id_list: DataElement,
+        /// Continuation state.
         continuation_state: Vec<u8>,
     },
     /// SDP_ServiceAttributeResponse: the requested attribute list.
     ServiceAttributeResponse {
+        /// Transaction id.
         transaction_id: u16,
+        /// Attribute list.
         attribute_list: Vec<u8>,
+        /// Continuation state.
         continuation_state: Vec<u8>,
     },
     /// SDP_ServiceSearchAttributeRequest: combined search plus attribute request.
     ServiceSearchAttributeRequest {
+        /// Transaction id.
         transaction_id: u16,
+        /// Service search pattern.
         service_search_pattern: DataElement,
+        /// Maximum attribute byte count.
         maximum_attribute_byte_count: u16,
+        /// Attribute id list.
         attribute_id_list: DataElement,
+        /// Continuation state.
         continuation_state: Vec<u8>,
     },
     /// SDP_ServiceSearchAttributeResponse: attribute lists for all matches.
     ServiceSearchAttributeResponse {
+        /// Transaction id.
         transaction_id: u16,
+        /// Attribute lists.
         attribute_lists: Vec<u8>,
+        /// Continuation state.
         continuation_state: Vec<u8>,
     },
 }

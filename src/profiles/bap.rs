@@ -136,18 +136,31 @@ pub mod context_type {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum SamplingFrequency {
+    /// Freq 8 0 0 0.
     Freq8000 = 0x01,
+    /// Freq 1 1 0 2 5.
     Freq11025 = 0x02,
+    /// Freq 1 6 0 0 0.
     Freq16000 = 0x03,
+    /// Freq 2 2 0 5 0.
     Freq22050 = 0x04,
+    /// Freq 2 4 0 0 0.
     Freq24000 = 0x05,
+    /// Freq 3 2 0 0 0.
     Freq32000 = 0x06,
+    /// Freq 4 4 1 0 0.
     Freq44100 = 0x07,
+    /// Freq 4 8 0 0 0.
     Freq48000 = 0x08,
+    /// Freq 8 8 2 0 0.
     Freq88200 = 0x09,
+    /// Freq 9 6 0 0 0.
     Freq96000 = 0x0A,
+    /// Freq 1 7 6 4 0 0.
     Freq176400 = 0x0B,
+    /// Freq 1 9 2 0 0 0.
     Freq192000 = 0x0C,
+    /// Freq 3 8 4 0 0 0.
     Freq384000 = 0x0D,
 }
 
@@ -249,7 +262,9 @@ pub mod supported_sampling_frequency {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum FrameDuration {
+    /// Duration 7 5 0 0 us.
     Duration7500Us = 0x00,
+    /// Duration 1 0 0 0 0 us.
     Duration10000Us = 0x01,
 }
 
@@ -284,7 +299,9 @@ pub mod supported_frame_duration {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum AnnouncementType {
+    /// General.
     General = 0x00,
+    /// Targeted.
     Targeted = 0x01,
 }
 

@@ -128,19 +128,28 @@ const PREFERRED_MAX_TRANSPORT_LATENCY: u16 = 100;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum AseState {
+    /// Idle.
     Idle = 0x00,
+    /// Codec configured.
     CodecConfigured = 0x01,
+    /// Qos configured.
     QosConfigured = 0x02,
+    /// Enabling.
     Enabling = 0x03,
+    /// Streaming.
     Streaming = 0x04,
+    /// Disabling.
     Disabling = 0x05,
+    /// Releasing.
     Releasing = 0x06,
 }
 
 /// Direction an Audio Stream Endpoint carries audio in, relative to this device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioRole {
+    /// Sink.
     Sink,
+    /// Source.
     Source,
 }
 

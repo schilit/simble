@@ -32,6 +32,7 @@ pub(crate) mod characteristic_uuid {
 
 macro_rules! impl_dis_field {
     ($fn_name:ident, $field:ident) => {
+        /// Sets this Device Information Service string field.
         pub fn $fn_name(mut self, val: impl Into<String>) -> Self {
             self.$field = Some(val.into());
             self

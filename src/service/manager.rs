@@ -16,15 +16,21 @@ use crate::types::{Address, SimbleError};
 /// Summary representation of a registered Simble Virtual Device.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DeviceSummary {
+    /// Device id.
     pub device_id: String,
+    /// Name.
     pub name: String,
+    /// Address.
     pub address: String,
+    /// Is advertising.
     pub is_advertising: bool,
 }
 
 /// Managed virtual device container holding device state and transport channel.
 pub struct ManagedDevice {
+    /// Device.
     pub device: Arc<Mutex<VirtualDevice>>,
+    /// Hci channel.
     pub hci_channel: Arc<HciChannel>,
 }
 

@@ -93,8 +93,11 @@ const GAIN_SETTINGS_MAX_VALUE: u8 = 255;
 #[repr(u8)]
 pub enum Mute {
     #[default]
+    /// Not muted.
     NotMuted = 0x00,
+    /// Muted.
     Muted = 0x01,
+    /// Disabled.
     Disabled = 0x02,
 }
 
@@ -102,10 +105,14 @@ pub enum Mute {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
 pub enum GainMode {
+    /// Manual only.
     ManualOnly = 0x00,
+    /// Automatic only.
     AutomaticOnly = 0x01,
     #[default]
+    /// Manual.
     Manual = 0x02,
+    /// Automatic.
     Automatic = 0x03,
 }
 
@@ -113,7 +120,9 @@ pub enum GainMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum AudioInputStatus {
+    /// Inactive.
     Inactive = 0x00,
+    /// Active.
     Active = 0x01,
 }
 
@@ -121,13 +130,21 @@ pub enum AudioInputStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum AudioInputType {
+    /// Unspecified.
     Unspecified = 0x00,
+    /// Bluetooth.
     Bluetooth = 0x01,
+    /// Microphone.
     Microphone = 0x02,
+    /// Analog.
     Analog = 0x03,
+    /// Digital.
     Digital = 0x04,
+    /// Radio.
     Radio = 0x05,
+    /// Streaming.
     Streaming = 0x06,
+    /// Ambient.
     Ambient = 0x07,
 }
 

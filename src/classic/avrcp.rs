@@ -982,28 +982,52 @@ impl BrowseableItem {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     /// `GetCapabilities` command PDU (AVRCP spec 6).
-    GetCapabilities { capability_id: u8 },
+    GetCapabilities {
+        /// Capability id.
+        capability_id: u8,
+    },
     /// `ListPlayerApplicationSettingAttributes` command PDU (AVRCP spec 6).
     ListPlayerApplicationSettingAttributes,
     /// `ListPlayerApplicationSettingValues` command PDU (AVRCP spec 6).
-    ListPlayerApplicationSettingValues { attribute_id: u8 },
+    ListPlayerApplicationSettingValues {
+        /// Attribute id.
+        attribute_id: u8,
+    },
     /// `GetCurrentPlayerApplicationSettingValue` command PDU (AVRCP spec 6).
-    GetCurrentPlayerApplicationSettingValue { attribute_ids: Vec<u8> },
+    GetCurrentPlayerApplicationSettingValue {
+        /// Attribute ids.
+        attribute_ids: Vec<u8>,
+    },
     /// `SetPlayerApplicationSettingValue` command PDU (AVRCP spec 6).
-    SetPlayerApplicationSettingValue { settings: Vec<ApplicationSetting> },
+    SetPlayerApplicationSettingValue {
+        /// Settings.
+        settings: Vec<ApplicationSetting>,
+    },
     /// `GetPlayerApplicationSettingAttributeText` command PDU (AVRCP spec 6).
-    GetPlayerApplicationSettingAttributeText { attribute_ids: Vec<u8> },
+    GetPlayerApplicationSettingAttributeText {
+        /// Attribute ids.
+        attribute_ids: Vec<u8>,
+    },
     /// `GetPlayerApplicationSettingValueText` command PDU (AVRCP spec 6).
     GetPlayerApplicationSettingValueText {
+        /// Attribute id.
         attribute_id: u8,
+        /// Value ids.
         value_ids: Vec<u8>,
     },
     /// `InformDisplayableCharacterSet` command PDU (AVRCP spec 6).
-    InformDisplayableCharacterSet { character_set_ids: Vec<u16> },
+    InformDisplayableCharacterSet {
+        /// Character set ids.
+        character_set_ids: Vec<u16>,
+    },
     /// `InformBatteryStatusOfCt` command PDU (AVRCP spec 6).
-    InformBatteryStatusOfCt { battery_status: u8 },
+    InformBatteryStatusOfCt {
+        /// Battery status.
+        battery_status: u8,
+    },
     /// `GetElementAttributes` command PDU (AVRCP spec 6).
     GetElementAttributes {
+        /// Identifier.
         identifier: u64,
         /// Empty means "all attributes" (AVRCP spec 6.6.1).
         attribute_ids: Vec<u32>,
@@ -1012,53 +1036,85 @@ pub enum Command {
     GetPlayStatus,
     /// `RegisterNotification` command PDU (AVRCP spec 6).
     RegisterNotification {
+        /// Event id.
         event_id: u8,
         /// Only meaningful for PLAYBACK_POS_CHANGED (seconds).
         playback_interval: u32,
     },
     /// `SetAbsoluteVolume` command PDU (AVRCP spec 6).
-    SetAbsoluteVolume { volume: u8 },
+    SetAbsoluteVolume {
+        /// Volume.
+        volume: u8,
+    },
     /// `SetAddressedPlayer` command PDU (AVRCP spec 6).
-    SetAddressedPlayer { player_id: u16 },
+    SetAddressedPlayer {
+        /// Player id.
+        player_id: u16,
+    },
     /// `SetBrowsedPlayer` command PDU (AVRCP spec 6).
-    SetBrowsedPlayer { player_id: u16 },
+    SetBrowsedPlayer {
+        /// Player id.
+        player_id: u16,
+    },
     /// `GetFolderItems` command PDU (AVRCP spec 6).
     GetFolderItems {
+        /// Scope.
         scope: u8,
+        /// Start item.
         start_item: u32,
+        /// End item.
         end_item: u32,
+        /// Attribute ids.
         attribute_ids: Vec<u32>,
     },
     /// `ChangePath` command PDU (AVRCP spec 6).
     ChangePath {
+        /// Uid counter.
         uid_counter: u16,
+        /// Direction.
         direction: u8,
+        /// Folder uid.
         folder_uid: u64,
     },
     /// `GetItemAttributes` command PDU (AVRCP spec 6).
     GetItemAttributes {
+        /// Scope.
         scope: u8,
+        /// Uid.
         uid: u64,
+        /// Uid counter.
         uid_counter: u16,
+        /// Attribute ids.
         attribute_ids: Vec<u32>,
     },
     /// `GetTotalNumberOfItems` command PDU (AVRCP spec 6).
-    GetTotalNumberOfItems { scope: u8 },
+    GetTotalNumberOfItems {
+        /// Scope.
+        scope: u8,
+    },
     /// `Search` command PDU (AVRCP spec 6).
     Search {
+        /// Character set id.
         character_set_id: u16,
+        /// Search string.
         search_string: String,
     },
     /// `PlayItem` command PDU (AVRCP spec 6).
     PlayItem {
+        /// Scope.
         scope: u8,
+        /// Uid.
         uid: u64,
+        /// Uid counter.
         uid_counter: u16,
     },
     /// `AddToNowPlaying` command PDU (AVRCP spec 6).
     AddToNowPlaying {
+        /// Scope.
         scope: u8,
+        /// Uid.
         uid: u64,
+        /// Uid counter.
         uid_counter: u16,
     },
 }
@@ -1321,74 +1377,134 @@ impl Command {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Response {
     /// `GetCapabilities` response PDU (AVRCP spec 6).
-    GetCapabilities { capabilities: CapabilityList },
+    GetCapabilities {
+        /// Capabilities.
+        capabilities: CapabilityList,
+    },
     /// `ListPlayerApplicationSettingAttributes` response PDU (AVRCP spec 6).
-    ListPlayerApplicationSettingAttributes { attribute_ids: Vec<u8> },
+    ListPlayerApplicationSettingAttributes {
+        /// Attribute ids.
+        attribute_ids: Vec<u8>,
+    },
     /// `ListPlayerApplicationSettingValues` response PDU (AVRCP spec 6).
-    ListPlayerApplicationSettingValues { value_ids: Vec<u8> },
+    ListPlayerApplicationSettingValues {
+        /// Value ids.
+        value_ids: Vec<u8>,
+    },
     /// `GetCurrentPlayerApplicationSettingValue` response PDU (AVRCP spec 6).
-    GetCurrentPlayerApplicationSettingValue { settings: Vec<ApplicationSetting> },
+    GetCurrentPlayerApplicationSettingValue {
+        /// Settings.
+        settings: Vec<ApplicationSetting>,
+    },
     /// `SetPlayerApplicationSettingValue` response PDU (AVRCP spec 6).
     SetPlayerApplicationSettingValue,
     /// `GetPlayerApplicationSettingAttributeText` response PDU (AVRCP spec 6).
-    GetPlayerApplicationSettingAttributeText { entries: Vec<SettingText> },
+    GetPlayerApplicationSettingAttributeText {
+        /// Entries.
+        entries: Vec<SettingText>,
+    },
     /// `GetPlayerApplicationSettingValueText` response PDU (AVRCP spec 6).
-    GetPlayerApplicationSettingValueText { entries: Vec<SettingText> },
+    GetPlayerApplicationSettingValueText {
+        /// Entries.
+        entries: Vec<SettingText>,
+    },
     /// `InformDisplayableCharacterSet` response PDU (AVRCP spec 6).
     InformDisplayableCharacterSet,
     /// `InformBatteryStatusOfCt` response PDU (AVRCP spec 6).
     InformBatteryStatusOfCt,
     /// `GetElementAttributes` response PDU (AVRCP spec 6).
-    GetElementAttributes { attributes: Vec<MediaAttribute> },
+    GetElementAttributes {
+        /// Attributes.
+        attributes: Vec<MediaAttribute>,
+    },
     /// `GetPlayStatus` response PDU (AVRCP spec 6).
     GetPlayStatus {
+        /// Song length.
         song_length: u32,
+        /// Song position.
         song_position: u32,
+        /// Play status.
         play_status: u8,
     },
     /// `RegisterNotification` response PDU (AVRCP spec 6).
-    RegisterNotification { event: Event },
+    RegisterNotification {
+        /// Event.
+        event: Event,
+    },
     /// `SetAbsoluteVolume` response PDU (AVRCP spec 6).
-    SetAbsoluteVolume { volume: u8 },
+    SetAbsoluteVolume {
+        /// Volume.
+        volume: u8,
+    },
     /// `SetAddressedPlayer` response PDU (AVRCP spec 6).
-    SetAddressedPlayer { status: u8 },
+    SetAddressedPlayer {
+        /// Status.
+        status: u8,
+    },
     /// `SetBrowsedPlayer` response PDU (AVRCP spec 6).
     SetBrowsedPlayer {
+        /// Status.
         status: u8,
+        /// Uid counter.
         uid_counter: u16,
+        /// Number of items.
         number_of_items: u32,
+        /// Character set id.
         character_set_id: u16,
+        /// Folder names.
         folder_names: Vec<String>,
     },
     /// `GetFolderItems` response PDU (AVRCP spec 6).
     GetFolderItems {
+        /// Status.
         status: u8,
+        /// Uid counter.
         uid_counter: u16,
+        /// Items.
         items: Vec<BrowseableItem>,
     },
     /// `ChangePath` response PDU (AVRCP spec 6).
-    ChangePath { status: u8, number_of_items: u32 },
+    ChangePath {
+        /// Status.
+        status: u8,
+        /// Number of items.
+        number_of_items: u32,
+    },
     /// `GetItemAttributes` response PDU (AVRCP spec 6).
     GetItemAttributes {
+        /// Status.
         status: u8,
+        /// Attributes.
         attributes: Vec<MediaAttribute>,
     },
     /// `GetTotalNumberOfItems` response PDU (AVRCP spec 6).
     GetTotalNumberOfItems {
+        /// Status.
         status: u8,
+        /// Uid counter.
         uid_counter: u16,
+        /// Number of items.
         number_of_items: u32,
     },
     /// `Search` response PDU (AVRCP spec 6).
     Search {
+        /// Status.
         status: u8,
+        /// Uid counter.
         uid_counter: u16,
+        /// Number of items.
         number_of_items: u32,
     },
     /// `PlayItem` response PDU (AVRCP spec 6).
-    PlayItem { status: u8 },
+    PlayItem {
+        /// Status.
+        status: u8,
+    },
     /// `AddToNowPlaying` response PDU (AVRCP spec 6).
-    AddToNowPlaying { status: u8 },
+    AddToNowPlaying {
+        /// Status.
+        status: u8,
+    },
 }
 
 impl Response {
@@ -1663,25 +1779,53 @@ impl Response {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     /// `PlaybackStatusChanged` notification event (AVRCP spec 6.7.2).
-    PlaybackStatusChanged { play_status: u8 },
+    PlaybackStatusChanged {
+        /// Play status.
+        play_status: u8,
+    },
     /// `TrackChanged` notification event (AVRCP spec 6.7.2).
-    TrackChanged { uid: u64 },
+    TrackChanged {
+        /// Uid.
+        uid: u64,
+    },
     /// `PlaybackPosChanged` notification event (AVRCP spec 6.7.2).
-    PlaybackPosChanged { playback_position: u32 },
+    PlaybackPosChanged {
+        /// Playback position.
+        playback_position: u32,
+    },
     /// `PlayerApplicationSettingChanged` notification event (AVRCP spec 6.7.2).
-    PlayerApplicationSettingChanged { settings: Vec<ApplicationSetting> },
+    PlayerApplicationSettingChanged {
+        /// Settings.
+        settings: Vec<ApplicationSetting>,
+    },
     /// `NowPlayingContentChanged` notification event (AVRCP spec 6.7.2).
     NowPlayingContentChanged,
     /// `AvailablePlayersChanged` notification event (AVRCP spec 6.7.2).
     AvailablePlayersChanged,
     /// `AddressedPlayerChanged` notification event (AVRCP spec 6.7.2).
-    AddressedPlayerChanged { player_id: u16, uid_counter: u16 },
+    AddressedPlayerChanged {
+        /// Player id.
+        player_id: u16,
+        /// Uid counter.
+        uid_counter: u16,
+    },
     /// `UidsChanged` notification event (AVRCP spec 6.7.2).
-    UidsChanged { uid_counter: u16 },
+    UidsChanged {
+        /// Uid counter.
+        uid_counter: u16,
+    },
     /// `VolumeChanged` notification event (AVRCP spec 6.7.2).
-    VolumeChanged { volume: u8 },
+    VolumeChanged {
+        /// Volume.
+        volume: u8,
+    },
     /// `Generic` notification event (AVRCP spec 6.7.2).
-    Generic { event_id: u8, data: Vec<u8> },
+    Generic {
+        /// Event id.
+        event_id: u8,
+        /// Payload data.
+        data: Vec<u8>,
+    },
 }
 
 impl Event {
@@ -1875,30 +2019,48 @@ pub enum AvrcpEvent {
     // -- Target role --------------------------------------------------------
     /// The controller pressed or released a key (PASS THROUGH).
     KeyEvent {
+        /// Operation id.
         operation_id: u8,
+        /// Pressed.
         pressed: bool,
+        /// Data.
         data: Vec<u8>,
     },
     /// The controller set our absolute volume (already stored in
     /// [`Protocol::volume`]).
-    VolumeSet { volume: u8 },
+    VolumeSet {
+        /// Volume.
+        volume: u8,
+    },
     /// The controller changed player application settings (already stored).
-    PlayerAppSettingsSet { settings: Vec<ApplicationSetting> },
+    PlayerAppSettingsSet {
+        /// Settings.
+        settings: Vec<ApplicationSetting>,
+    },
     /// The controller asked us to play an item.
     PlayItemRequested {
+        /// Scope.
         scope: u8,
+        /// Uid.
         uid: u64,
+        /// Uid counter.
         uid_counter: u16,
     },
     /// The controller registered for a notification; a `notify_*` call for
     /// this event will now produce a CHANGED response.
-    NotificationRegistered { event_id: u8 },
+    NotificationRegistered {
+        /// Event id.
+        event_id: u8,
+    },
 
     // -- Controller role ----------------------------------------------------
     /// The target answered a PASS THROUGH key event.
     PassThroughResponse {
+        /// Response.
         response: ResponseCode,
+        /// Operation id.
         operation_id: u8,
+        /// Pressed.
         pressed: bool,
     },
     /// GetCapabilities(EVENTS_SUPPORTED) response.
@@ -1907,8 +2069,11 @@ pub enum AvrcpEvent {
     SupportedCompanyIdsReceived(Vec<u32>),
     /// Play Status Received event.
     PlayStatusReceived {
+        /// Song length.
         song_length: u32,
+        /// Song position.
         song_position: u32,
+        /// Play status.
         play_status: u8,
     },
     /// Element Attributes Received event.
@@ -1917,7 +2082,9 @@ pub enum AvrcpEvent {
     AppSettingAttributesReceived(Vec<u8>),
     /// ListPlayerApplicationSettingValues response for `attribute_id`.
     AppSettingValuesReceived {
+        /// Attribute id.
         attribute_id: u8,
+        /// Value ids.
         value_ids: Vec<u8>,
     },
     /// GetCurrentPlayerApplicationSettingValue response.
@@ -1925,20 +2092,45 @@ pub enum AvrcpEvent {
     /// SetPlayerApplicationSettingValue was accepted.
     AppSettingsAccepted,
     /// SetAbsoluteVolume response: the effective volume the target applied.
-    VolumeAccepted { volume: u8 },
+    VolumeAccepted {
+        /// Volume.
+        volume: u8,
+    },
     /// PlayItem response.
-    PlayItemCompleted { status: u8 },
+    PlayItemCompleted {
+        /// Status.
+        status: u8,
+    },
     /// A notification arrived: the INTERIM snapshot at registration, or the
     /// CHANGED response that consumed the registration.
-    NotificationReceived { event: Event, interim: bool },
+    NotificationReceived {
+        /// Event.
+        event: Event,
+        /// Interim.
+        interim: bool,
+    },
     /// A response PDU without a dedicated event above.
-    ResponseReceived { response: Response },
+    ResponseReceived {
+        /// Response.
+        response: Response,
+    },
     /// The target rejected our command PDU.
-    CommandRejected { pdu_id: u8, status_code: u8 },
+    CommandRejected {
+        /// Pdu id.
+        pdu_id: u8,
+        /// Status code.
+        status_code: u8,
+    },
     /// The target does not implement our command PDU.
-    CommandNotImplemented { pdu_id: u8 },
+    CommandNotImplemented {
+        /// Pdu id.
+        pdu_id: u8,
+    },
     /// The peer does not support the profile PID at the AVCTP level.
-    InvalidPid { pid: u16 },
+    InvalidPid {
+        /// Protocol identifier (PID).
+        pid: u16,
+    },
 }
 
 #[derive(Debug, Clone)]

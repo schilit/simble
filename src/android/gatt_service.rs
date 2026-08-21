@@ -16,16 +16,27 @@ use crate::types::Uuid;
 pub struct BluetoothGatt;
 
 impl BluetoothGatt {
+    /// Gatt success.
     pub const GATT_SUCCESS: i32 = 0;
+    /// Gatt read not permitted.
     pub const GATT_READ_NOT_PERMITTED: i32 = 2;
+    /// Gatt write not permitted.
     pub const GATT_WRITE_NOT_PERMITTED: i32 = 3;
+    /// Gatt insufficient authentication.
     pub const GATT_INSUFFICIENT_AUTHENTICATION: i32 = 5;
+    /// Gatt request not supported.
     pub const GATT_REQUEST_NOT_SUPPORTED: i32 = 6;
+    /// Gatt invalid offset.
     pub const GATT_INVALID_OFFSET: i32 = 7;
+    /// Gatt insufficient authorization.
     pub const GATT_INSUFFICIENT_AUTHORIZATION: i32 = 8;
+    /// Gatt invalid attribute length.
     pub const GATT_INVALID_ATTRIBUTE_LENGTH: i32 = 13;
+    /// Gatt insufficient encryption.
     pub const GATT_INSUFFICIENT_ENCRYPTION: i32 = 15;
+    /// Gatt connection congested.
     pub const GATT_CONNECTION_CONGESTED: i32 = 143;
+    /// Gatt failure.
     pub const GATT_FAILURE: i32 = 257;
 }
 
@@ -33,14 +44,18 @@ impl BluetoothGatt {
 /// `android.bluetooth.BluetoothGattService`.
 #[derive(Debug, Clone)]
 pub struct BluetoothGattService {
+    /// Uuid.
     pub uuid: Uuid,
+    /// Service type.
     pub service_type: i32,
+    /// Characteristics.
     pub characteristics: Vec<BluetoothGattCharacteristic>,
 }
 
 impl BluetoothGattService {
     /// Verified via developer.android.com/reference/android/bluetooth/BluetoothGattService.
     pub const SERVICE_TYPE_PRIMARY: i32 = 0;
+    /// Service type secondary.
     pub const SERVICE_TYPE_SECONDARY: i32 = 1;
 
     /// Creates a service of the given type. Mirrors the
@@ -65,10 +80,15 @@ impl BluetoothGattService {
 /// `android.bluetooth.BluetoothGattCharacteristic`.
 #[derive(Debug, Clone)]
 pub struct BluetoothGattCharacteristic {
+    /// Uuid.
     pub uuid: Uuid,
+    /// Properties.
     pub properties: i32,
+    /// Permissions.
     pub permissions: i32,
+    /// Value.
     pub value: Vec<u8>,
+    /// Descriptors.
     pub descriptors: Vec<BluetoothGattDescriptor>,
     /// Populated once this characteristic has been registered via
     /// `BluetoothGattServer::add_service`.
@@ -78,23 +98,39 @@ pub struct BluetoothGattCharacteristic {
 impl BluetoothGattCharacteristic {
     // PROPERTY_* values verified against
     // developer.android.com/reference/android/bluetooth/BluetoothGattCharacteristic.
+    /// Property broadcast.
     pub const PROPERTY_BROADCAST: i32 = 0x01;
+    /// Property read.
     pub const PROPERTY_READ: i32 = 0x02;
+    /// Property write no response.
     pub const PROPERTY_WRITE_NO_RESPONSE: i32 = 0x04;
+    /// Property write.
     pub const PROPERTY_WRITE: i32 = 0x08;
+    /// Property notify.
     pub const PROPERTY_NOTIFY: i32 = 0x10;
+    /// Property indicate.
     pub const PROPERTY_INDICATE: i32 = 0x20;
+    /// Property signed write.
     pub const PROPERTY_SIGNED_WRITE: i32 = 0x40;
+    /// Property extended props.
     pub const PROPERTY_EXTENDED_PROPS: i32 = 0x80;
 
     // PERMISSION_* values, same source.
+    /// Permission read.
     pub const PERMISSION_READ: i32 = 0x01;
+    /// Permission read encrypted.
     pub const PERMISSION_READ_ENCRYPTED: i32 = 0x02;
+    /// Permission read encrypted mitm.
     pub const PERMISSION_READ_ENCRYPTED_MITM: i32 = 0x04;
+    /// Permission write.
     pub const PERMISSION_WRITE: i32 = 0x10;
+    /// Permission write encrypted.
     pub const PERMISSION_WRITE_ENCRYPTED: i32 = 0x20;
+    /// Permission write encrypted mitm.
     pub const PERMISSION_WRITE_ENCRYPTED_MITM: i32 = 0x40;
+    /// Permission write signed.
     pub const PERMISSION_WRITE_SIGNED: i32 = 0x80;
+    /// Permission write signed mitm.
     pub const PERMISSION_WRITE_SIGNED_MITM: i32 = 0x100;
 
     /// Creates a characteristic with the given properties and permissions.
@@ -139,8 +175,11 @@ impl BluetoothGattCharacteristic {
 /// `android.bluetooth.BluetoothGattDescriptor`.
 #[derive(Debug, Clone)]
 pub struct BluetoothGattDescriptor {
+    /// Uuid.
     pub uuid: Uuid,
+    /// Permissions.
     pub permissions: i32,
+    /// Value.
     pub value: Vec<u8>,
     /// Populated once this descriptor has been registered via
     /// `BluetoothGattServer::add_service`.

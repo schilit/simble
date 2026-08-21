@@ -58,9 +58,13 @@ pub const TRACK_LENGTH_UNKNOWN: i32 = -1;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum MediaState {
+    /// Inactive.
     Inactive = 0x00,
+    /// Playing.
     Playing = 0x01,
+    /// Paused.
     Paused = 0x02,
+    /// Seeking.
     Seeking = 0x03,
 }
 
@@ -81,26 +85,47 @@ impl MediaState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum MediaControlPointOpcode {
+    /// Play.
     Play = 0x01,
+    /// Pause.
     Pause = 0x02,
+    /// Fast rewind.
     FastRewind = 0x03,
+    /// Fast forward.
     FastForward = 0x04,
+    /// Stop.
     Stop = 0x05,
+    /// Move relative.
     MoveRelative = 0x10,
+    /// Previous segment.
     PreviousSegment = 0x20,
+    /// Next segment.
     NextSegment = 0x21,
+    /// First segment.
     FirstSegment = 0x22,
+    /// Last segment.
     LastSegment = 0x23,
+    /// Goto segment.
     GotoSegment = 0x24,
+    /// Previous track.
     PreviousTrack = 0x30,
+    /// Next track.
     NextTrack = 0x31,
+    /// First track.
     FirstTrack = 0x32,
+    /// Last track.
     LastTrack = 0x33,
+    /// Goto track.
     GotoTrack = 0x34,
+    /// Previous group.
     PreviousGroup = 0x40,
+    /// Next group.
     NextGroup = 0x41,
+    /// First group.
     FirstGroup = 0x42,
+    /// Last group.
     LastGroup = 0x43,
+    /// Goto group.
     GotoGroup = 0x44,
 }
 

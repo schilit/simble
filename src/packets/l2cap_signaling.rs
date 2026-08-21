@@ -9,19 +9,33 @@ use zerocopy::{
 
 /// Standard L2CAP Signaling Command Codes.
 pub mod signaling_code {
+    /// Command reject.
     pub const COMMAND_REJECT: u8 = 0x01;
+    /// Connection request.
     pub const CONNECTION_REQUEST: u8 = 0x02;
+    /// Connection response.
     pub const CONNECTION_RESPONSE: u8 = 0x03;
+    /// Configuration request.
     pub const CONFIGURATION_REQUEST: u8 = 0x04;
+    /// Configuration response.
     pub const CONFIGURATION_RESPONSE: u8 = 0x05;
+    /// Disconnection request.
     pub const DISCONNECTION_REQUEST: u8 = 0x06;
+    /// Disconnection response.
     pub const DISCONNECTION_RESPONSE: u8 = 0x07;
+    /// Le credit based connection request.
     pub const LE_CREDIT_BASED_CONNECTION_REQUEST: u8 = 0x14;
+    /// Le credit based connection response.
     pub const LE_CREDIT_BASED_CONNECTION_RESPONSE: u8 = 0x15;
+    /// Le flow control credit.
     pub const LE_FLOW_CONTROL_CREDIT: u8 = 0x16;
+    /// Credit based connection request.
     pub const CREDIT_BASED_CONNECTION_REQUEST: u8 = 0x17;
+    /// Credit based connection response.
     pub const CREDIT_BASED_CONNECTION_RESPONSE: u8 = 0x18;
+    /// Credit based reconfigure request.
     pub const CREDIT_BASED_RECONFIGURE_REQUEST: u8 = 0x19;
+    /// Credit based reconfigure response.
     pub const CREDIT_BASED_RECONFIGURE_RESPONSE: u8 = 0x1A;
 }
 
@@ -29,27 +43,41 @@ pub mod signaling_code {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct L2capSignalingHeader {
+    /// Code.
     pub code: u8,
+    /// Identifier.
     pub identifier: u8,
+    /// Length.
     pub length: U16<LittleEndian>,
 }
 
 /// L2CAP Connection Request Result codes (Basic Mode, OpCode 0x02/0x03).
 pub mod connection_result {
+    /// Successful.
     pub const SUCCESSFUL: u16 = 0x0000;
+    /// Pending.
     pub const PENDING: u16 = 0x0001;
+    /// Refused psm not supported.
     pub const REFUSED_PSM_NOT_SUPPORTED: u16 = 0x0002;
+    /// Refused security block.
     pub const REFUSED_SECURITY_BLOCK: u16 = 0x0003;
+    /// Refused no resources available.
     pub const REFUSED_NO_RESOURCES_AVAILABLE: u16 = 0x0004;
+    /// Refused invalid source cid.
     pub const REFUSED_INVALID_SOURCE_CID: u16 = 0x0006;
+    /// Refused source cid already allocated.
     pub const REFUSED_SOURCE_CID_ALREADY_ALLOCATED: u16 = 0x0007;
 }
 
 /// L2CAP Configuration Response Result codes (OpCode 0x05).
 pub mod configuration_result {
+    /// Success.
     pub const SUCCESS: u16 = 0x0000;
+    /// Unacceptable parameters.
     pub const UNACCEPTABLE_PARAMETERS: u16 = 0x0001;
+    /// Rejected.
     pub const REJECTED: u16 = 0x0002;
+    /// Unknown options.
     pub const UNKNOWN_OPTIONS: u16 = 0x0003;
 }
 
@@ -62,7 +90,9 @@ pub(crate) mod configuration_option {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct ConnectionRequestHeader {
+    /// Psm.
     pub psm: U16<LittleEndian>,
+    /// Source cid.
     pub source_cid: U16<LittleEndian>,
 }
 
@@ -70,9 +100,13 @@ pub struct ConnectionRequestHeader {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct ConnectionResponseHeader {
+    /// Destination cid.
     pub destination_cid: U16<LittleEndian>,
+    /// Source cid.
     pub source_cid: U16<LittleEndian>,
+    /// Result.
     pub result: U16<LittleEndian>,
+    /// Status.
     pub status: U16<LittleEndian>,
 }
 
@@ -81,7 +115,9 @@ pub struct ConnectionResponseHeader {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct ConfigurationRequestHeader {
+    /// Destination cid.
     pub destination_cid: U16<LittleEndian>,
+    /// Flags.
     pub flags: U16<LittleEndian>,
 }
 
@@ -90,8 +126,11 @@ pub struct ConfigurationRequestHeader {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct ConfigurationResponseHeader {
+    /// Source cid.
     pub source_cid: U16<LittleEndian>,
+    /// Flags.
     pub flags: U16<LittleEndian>,
+    /// Result.
     pub result: U16<LittleEndian>,
 }
 
@@ -130,9 +169,13 @@ pub(crate) fn parse_mtu_option(options: &[u8]) -> Option<u16> {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeCreditBasedConnectionRequestHeader {
+    /// Spsm.
     pub spsm: U16<LittleEndian>,
+    /// Mtu.
     pub mtu: U16<LittleEndian>,
+    /// Mps.
     pub mps: U16<LittleEndian>,
+    /// Initial credits.
     pub initial_credits: U16<LittleEndian>,
 }
 
@@ -140,9 +183,13 @@ pub struct LeCreditBasedConnectionRequestHeader {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeCreditBasedConnectionResponseHeader {
+    /// Mtu.
     pub mtu: U16<LittleEndian>,
+    /// Mps.
     pub mps: U16<LittleEndian>,
+    /// Initial credits.
     pub initial_credits: U16<LittleEndian>,
+    /// Result.
     pub result: U16<LittleEndian>,
 }
 
@@ -150,7 +197,9 @@ pub struct LeCreditBasedConnectionResponseHeader {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeFlowControlCredit {
+    /// Cid.
     pub cid: U16<LittleEndian>,
+    /// Credits.
     pub credits: U16<LittleEndian>,
 }
 
@@ -158,7 +207,9 @@ pub struct LeFlowControlCredit {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct DisconnectionRequest {
+    /// Destination cid.
     pub destination_cid: U16<LittleEndian>,
+    /// Source cid.
     pub source_cid: U16<LittleEndian>,
 }
 
@@ -166,7 +217,9 @@ pub struct DisconnectionRequest {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct DisconnectionResponse {
+    /// Destination cid.
     pub destination_cid: U16<LittleEndian>,
+    /// Source cid.
     pub source_cid: U16<LittleEndian>,
 }
 

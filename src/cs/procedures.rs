@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum CsRole {
+    /// Initiator.
     Initiator = 0,
+    /// Reflector.
     Reflector = 1,
 }
 
@@ -17,19 +19,28 @@ pub enum CsRole {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum CsMainMode {
+    /// Rtt.
     Rtt = 1,
+    /// Pbr.
     Pbr = 2,
+    /// Rtt and pbr.
     RttAndPbr = 3,
 }
 
 /// Channel Sounding configuration parameters for a connection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CsConfig {
+    /// Config id.
     pub config_id: u8,
+    /// Role.
     pub role: CsRole,
+    /// Main mode.
     pub main_mode: CsMainMode,
+    /// Min steps.
     pub min_steps: u8,
+    /// Max steps.
     pub max_steps: u8,
+    /// Channel map.
     pub channel_map: [u8; 10],
 }
 
@@ -49,18 +60,26 @@ impl Default for CsConfig {
 /// A single step result reported during a CS subevent.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CsStepResult {
+    /// Step mode.
     pub step_mode: u8,
+    /// Antenna path.
     pub antenna_path: u8,
+    /// Phase measurement (radians or degrees).
     pub phase_measurement: f32, // Radians or degrees
+    /// Packet rssi.
     pub packet_rssi: i8,
 }
 
 /// High-level distance measurement outcome calculated from CS subevents.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CsDistanceEstimate {
+    /// Connection handle.
     pub connection_handle: u16,
+    /// Distance meters.
     pub distance_meters: f32,
+    /// Confidence score (0.0 - 1.0).
     pub confidence_score: f32, // 0.0 - 1.0
+    /// Num steps.
     pub num_steps: usize,
 }
 

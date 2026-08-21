@@ -1,6 +1,10 @@
 // Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
+//! Shared HCI enumerations and typed values used across the packet and device
+//! layers (address types, advertising and scanning parameters, filter policies,
+//! and GAP AD types).
+
 use std::fmt;
 
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
@@ -13,7 +17,9 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
 pub struct Enable(pub(crate) u8);
 
 impl Enable {
+    /// Disabled.
     pub const DISABLED: Self = Self(0x00);
+    /// Enabled.
     pub const ENABLED: Self = Self(0x01);
 }
 
@@ -25,10 +31,15 @@ impl Enable {
 pub struct AdvertisingType(pub(crate) u8);
 
 impl AdvertisingType {
+    /// Adv ind.
     pub const ADV_IND: Self = Self(0x00);
+    /// Adv direct ind high.
     pub const ADV_DIRECT_IND_HIGH: Self = Self(0x01);
+    /// Adv scan ind.
     pub const ADV_SCAN_IND: Self = Self(0x02);
+    /// Adv nonconn ind.
     pub const ADV_NONCONN_IND: Self = Self(0x03);
+    /// Adv direct ind low.
     pub const ADV_DIRECT_IND_LOW: Self = Self(0x04);
 }
 
@@ -40,9 +51,13 @@ impl AdvertisingType {
 pub struct OwnAddressType(pub(crate) u8);
 
 impl OwnAddressType {
+    /// Public device address.
     pub const PUBLIC_DEVICE_ADDRESS: Self = Self(0x00);
+    /// Random device address.
     pub const RANDOM_DEVICE_ADDRESS: Self = Self(0x01);
+    /// Resolvable or public address.
     pub const RESOLVABLE_OR_PUBLIC_ADDRESS: Self = Self(0x02);
+    /// Resolvable or random address.
     pub const RESOLVABLE_OR_RANDOM_ADDRESS: Self = Self(0x03);
 }
 
@@ -54,7 +69,9 @@ impl OwnAddressType {
 pub struct PeerAddressType(pub(crate) u8);
 
 impl PeerAddressType {
+    /// Public device or identity address.
     pub const PUBLIC_DEVICE_OR_IDENTITY_ADDRESS: Self = Self(0x00);
+    /// Random device or identity address.
     pub const RANDOM_DEVICE_OR_IDENTITY_ADDRESS: Self = Self(0x01);
 }
 
@@ -66,9 +83,13 @@ impl PeerAddressType {
 pub struct AdvertisingFilterPolicy(pub(crate) u8);
 
 impl AdvertisingFilterPolicy {
+    /// All devices.
     pub const ALL_DEVICES: Self = Self(0x00);
+    /// Listed scan.
     pub const LISTED_SCAN: Self = Self(0x01);
+    /// Listed connect.
     pub const LISTED_CONNECT: Self = Self(0x02);
+    /// Listed scan and connect.
     pub const LISTED_SCAN_AND_CONNECT: Self = Self(0x03);
 }
 
@@ -80,7 +101,9 @@ impl AdvertisingFilterPolicy {
 pub struct LeScanType(pub(crate) u8);
 
 impl LeScanType {
+    /// Passive.
     pub const PASSIVE: Self = Self(0x00);
+    /// Active.
     pub const ACTIVE: Self = Self(0x01);
 }
 
@@ -92,9 +115,13 @@ impl LeScanType {
 pub struct LeScanningFilterPolicy(pub(crate) u8);
 
 impl LeScanningFilterPolicy {
+    /// Accept all.
     pub const ACCEPT_ALL: Self = Self(0x00);
+    /// Filter accept list only.
     pub const FILTER_ACCEPT_LIST_ONLY: Self = Self(0x01);
+    /// Check initiators identity.
     pub const CHECK_INITIATORS_IDENTITY: Self = Self(0x02);
+    /// Filter accept list and initiators identity.
     pub const FILTER_ACCEPT_LIST_AND_INITIATORS_IDENTITY: Self = Self(0x03);
 }
 
@@ -119,6 +146,7 @@ use std::str::FromStr;
 )]
 #[repr(C)]
 pub struct Address {
+    /// Bytes.
     pub bytes: [u8; 6],
 }
 
@@ -396,10 +424,15 @@ impl_display_fromstr_serde!(Uuid);
 pub struct LeAdvertisingEventType(pub(crate) u8);
 
 impl LeAdvertisingEventType {
+    /// Adv ind.
     pub const ADV_IND: Self = Self(0x00);
+    /// Adv direct ind.
     pub const ADV_DIRECT_IND: Self = Self(0x01);
+    /// Adv scan ind.
     pub const ADV_SCAN_IND: Self = Self(0x02);
+    /// Adv nonconn ind.
     pub const ADV_NONCONN_IND: Self = Self(0x03);
+    /// Scan rsp.
     pub const SCAN_RSP: Self = Self(0x04);
 }
 
@@ -425,20 +458,35 @@ impl fmt::Display for LeAdvertisingEventType {
 pub struct GapDataType(pub(crate) u8);
 
 impl GapDataType {
+    /// Flags.
     pub const FLAGS: Self = Self(0x01);
+    /// Incomplete 16bit uuids.
     pub const INCOMPLETE_16BIT_UUIDS: Self = Self(0x02);
+    /// Complete 16bit uuids.
     pub const COMPLETE_16BIT_UUIDS: Self = Self(0x03);
+    /// Incomplete 32bit uuids.
     pub const INCOMPLETE_32BIT_UUIDS: Self = Self(0x04);
+    /// Complete 32bit uuids.
     pub const COMPLETE_32BIT_UUIDS: Self = Self(0x05);
+    /// Incomplete 128bit uuids.
     pub const INCOMPLETE_128BIT_UUIDS: Self = Self(0x06);
+    /// Complete 128bit uuids.
     pub const COMPLETE_128BIT_UUIDS: Self = Self(0x07);
+    /// Shortened local name.
     pub const SHORTENED_LOCAL_NAME: Self = Self(0x08);
+    /// Complete local name.
     pub const COMPLETE_LOCAL_NAME: Self = Self(0x09);
+    /// Tx power level.
     pub const TX_POWER_LEVEL: Self = Self(0x0A);
+    /// Service data 16bit.
     pub const SERVICE_DATA_16BIT: Self = Self(0x16);
+    /// Appearance.
     pub const APPEARANCE: Self = Self(0x19);
+    /// Service data 32bit.
     pub const SERVICE_DATA_32BIT: Self = Self(0x20);
+    /// Service data 128bit.
     pub const SERVICE_DATA_128BIT: Self = Self(0x21);
+    /// Manufacturer specific.
     pub const MANUFACTURER_SPECIFIC: Self = Self(0xFF);
 }
 

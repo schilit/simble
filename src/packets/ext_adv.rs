@@ -78,42 +78,67 @@ pub mod ext_adv_subevent_code {
 
 /// Advertising_Event_Properties bits (7.8.53).
 pub mod adv_event_properties {
+    /// Advertise as connectable.
     pub const CONNECTABLE: u16 = 1 << 0;
+    /// Advertise as scannable.
     pub const SCANNABLE: u16 = 1 << 1;
+    /// Use directed advertising.
     pub const DIRECTED: u16 = 1 << 2;
+    /// High-duty-cycle directed connectable advertising.
     pub const HIGH_DUTY_CYCLE_DIRECTED_CONNECTABLE: u16 = 1 << 3;
+    /// Use legacy advertising PDUs.
     pub const USE_LEGACY_PDUS: u16 = 1 << 4;
+    /// Omit the advertiser's address (anonymous advertising).
     pub const ANONYMOUS: u16 = 1 << 5;
+    /// Include the TX power level in the advertisement.
     pub const INCLUDE_TX_POWER: u16 = 1 << 6;
 }
 
 /// Operation field for the Set Extended Advertising / Scan Response /
 /// Periodic Advertising Data commands (7.8.54).
 pub mod data_operation {
+    /// An intermediate fragment of fragmented data.
     pub const INTERMEDIATE_FRAGMENT: u8 = 0x00;
+    /// The first fragment of fragmented data.
     pub const FIRST_FRAGMENT: u8 = 0x01;
+    /// The last fragment of fragmented data.
     pub const LAST_FRAGMENT: u8 = 0x02;
+    /// The complete data in a single operation.
     pub const COMPLETE: u8 = 0x03;
+    /// Keep the current data, refreshing only the Advertising DID.
     pub const UNCHANGED: u8 = 0x04;
 }
 
 /// Advertising PHY values (7.8.53: Primary/Secondary_Advertising_PHY).
 pub mod adv_phy {
+    /// LE 1M PHY.
     pub const LE_1M: u8 = 0x01;
+    /// LE 2M PHY.
     pub const LE_2M: u8 = 0x02;
+    /// LE Coded PHY.
     pub const LE_CODED: u8 = 0x03;
 }
 
 /// Event_Type bits of the LE Extended Advertising Report (7.7.65.13).
 pub mod ext_adv_report_event_type {
+    /// Report is for a connectable advertisement.
+    /// Advertise as connectable.
     pub const CONNECTABLE: u16 = 1 << 0;
+    /// Report is for a scannable advertisement.
+    /// Advertise as scannable.
     pub const SCANNABLE: u16 = 1 << 1;
+    /// Report is for a directed advertisement.
+    /// Use directed advertising.
     pub const DIRECTED: u16 = 1 << 2;
+    /// Report is a scan response.
     pub const SCAN_RESPONSE: u16 = 1 << 3;
+    /// Report is from a legacy advertising PDU.
     pub const LEGACY_PDU: u16 = 1 << 4;
     /// Bits 5-6: 0 = complete, 1 = incomplete (more to come), 2 = truncated.
     pub const DATA_STATUS_MASK: u16 = 0b11 << 5;
+    /// Data status bits 5-6 = incomplete (more to come).
     pub const DATA_STATUS_INCOMPLETE: u16 = 0b01 << 5;
+    /// Data status bits 5-6 = truncated (no more data will be sent).
     pub const DATA_STATUS_TRUNCATED: u16 = 0b10 << 5;
 }
 
@@ -129,11 +154,13 @@ pub mod ext_adv_report_event_type {
 pub struct U24([u8; 3]);
 
 impl U24 {
+    /// Builds a 3-octet integer from the low 3 bytes of `value`.
     pub const fn new(value: u32) -> Self {
         let b = value.to_le_bytes();
         Self([b[0], b[1], b[2]])
     }
 
+    /// Returns the value as a `u32`.
     pub fn get(&self) -> u32 {
         u32::from_le_bytes([self.0[0], self.0[1], self.0[2], 0])
     }
@@ -155,20 +182,35 @@ impl HciCommand for LeSetAdvertisingSetRandomAddress {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeSetExtendedAdvertisingParameters {
+    /// Identifier of the advertising set.
     pub advertising_handle: u8,
+    /// Advertising event properties bitfield (see `adv_event_properties`).
     pub advertising_event_properties: U16<LittleEndian>,
+    /// Minimum primary advertising interval (units of 0.625 ms).
     pub primary_advertising_interval_min: U24, // Units of 0.625 ms.
+    /// Maximum primary advertising interval (units of 0.625 ms).
     pub primary_advertising_interval_max: U24, // Units of 0.625 ms.
-    pub primary_advertising_channel_map: u8,   // Bitmask: bit0 ch37, bit1 ch38, bit2 ch39.
+    /// Primary advertising channel map bitmask (bitmask: bit0 ch37, bit1 ch38, bit2 ch39).
+    pub primary_advertising_channel_map: u8, // Bitmask: bit0 ch37, bit1 ch38, bit2 ch39.
+    /// Own device address type.
     pub own_address_type: u8,
+    /// Peer device address type.
     pub peer_address_type: u8,
+    /// Peer device address.
     pub peer_address: [u8; 6],
+    /// Advertising filter policy.
     pub advertising_filter_policy: u8,
+    /// Requested advertising TX power in dBm (0x7F = no preference).
     pub advertising_tx_power: i8, // dBm; 0x7F = no preference.
+    /// Primary advertising PHY.
     pub primary_advertising_phy: u8,
+    /// Maximum advertising events skipped on the secondary channel.
     pub secondary_advertising_max_skip: u8,
+    /// Secondary advertising PHY.
     pub secondary_advertising_phy: u8,
+    /// Advertising Set ID (SID).
     pub advertising_sid: u8,
+    /// Enable scan-request notifications.
     pub scan_request_notification_enable: u8,
 }
 
@@ -191,9 +233,13 @@ pub struct LeSetExtendedAdvertisingParametersResponse {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeSetExtendedAdvertisingDataHeader {
+    /// Identifier of the advertising set.
     pub advertising_handle: u8,
+    /// Data operation (see `data_operation`).
     pub operation: u8, // See `data_operation`.
+    /// Controller fragmentation preference.
     pub fragment_preference: u8,
+    /// Length in octets of the advertising data that follows.
     pub advertising_data_length: u8,
 }
 
@@ -202,6 +248,7 @@ impl HciCommand for LeSetExtendedAdvertisingDataHeader {
 }
 
 impl LeSetExtendedAdvertisingDataHeader {
+    /// Parses the fixed header and returns it with the trailing data bytes.
     pub fn parse(bytes: &[u8]) -> Option<(Ref<&[u8], Self>, &[u8])> {
         let (header, rest) = Ref::<&[u8], Self>::from_prefix(bytes).ok()?;
         let expected = header.advertising_data_length as usize;
@@ -248,6 +295,7 @@ impl HciCommand for LeSetExtendedScanResponseDataHeader {
 }
 
 impl LeSetExtendedScanResponseDataHeader {
+    /// Parses the fixed header and returns it with the trailing data bytes.
     pub fn parse(bytes: &[u8]) -> Option<(Ref<&[u8], Self>, &[u8])> {
         let (header, rest) = Ref::<&[u8], Self>::from_prefix(bytes).ok()?;
         let expected = header.scan_response_data_length as usize;
@@ -281,8 +329,11 @@ impl LeSetExtendedScanResponseDataHeader {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct AdvertisingEnableEntry {
+    /// Identifier of the advertising set.
     pub advertising_handle: u8,
+    /// Advertising duration (units of 10 ms; 0 = no limit).
     pub duration: U16<LittleEndian>, // Units of 10 ms; 0 = no limit.
+    /// Maximum number of extended advertising events (0 = no limit).
     pub max_extended_advertising_events: u8, // 0 = no limit.
 }
 
@@ -292,7 +343,9 @@ pub struct AdvertisingEnableEntry {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeSetExtendedAdvertisingEnableHeader {
+    /// Enable (nonzero) or disable (zero).
     pub enable: u8,
+    /// Number of advertising-set entries that follow.
     pub num_sets: u8,
 }
 
@@ -301,6 +354,7 @@ impl HciCommand for LeSetExtendedAdvertisingEnableHeader {
 }
 
 impl LeSetExtendedAdvertisingEnableHeader {
+    /// Parses the fixed header and the trailing per-set enable entries.
     pub fn parse(bytes: &[u8]) -> Option<(Ref<&[u8], Self>, &[AdvertisingEnableEntry])> {
         let (header, rest) = Ref::<&[u8], Self>::from_prefix(bytes).ok()?;
         let expected = header.num_sets as usize * size_of::<AdvertisingEnableEntry>();
@@ -366,10 +420,14 @@ impl HciCommand for LeClearAdvertisingSets {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeSetPeriodicAdvertisingParameters {
+    /// Identifier of the advertising set.
     pub advertising_handle: u8,
+    /// Minimum periodic advertising interval (units of 1.25 ms).
     pub periodic_advertising_interval_min: U16<LittleEndian>, // Units of 1.25 ms.
+    /// Maximum periodic advertising interval (units of 1.25 ms).
     pub periodic_advertising_interval_max: U16<LittleEndian>, // Units of 1.25 ms.
-    pub periodic_advertising_properties: U16<LittleEndian>,   // Bit 6: include TX power.
+    /// Periodic advertising properties bitfield (bit 6: include TX power).
+    pub periodic_advertising_properties: U16<LittleEndian>, // Bit 6: include TX power.
 }
 
 impl HciCommand for LeSetPeriodicAdvertisingParameters {
@@ -382,8 +440,11 @@ impl HciCommand for LeSetPeriodicAdvertisingParameters {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeSetPeriodicAdvertisingDataHeader {
+    /// Identifier of the advertising set.
     pub advertising_handle: u8,
+    /// Data operation (see `data_operation`).
     pub operation: u8, // See `data_operation` (0x04 Unchanged added in 5.2).
+    /// Length in octets of the advertising data that follows.
     pub advertising_data_length: u8,
 }
 
@@ -392,6 +453,7 @@ impl HciCommand for LeSetPeriodicAdvertisingDataHeader {
 }
 
 impl LeSetPeriodicAdvertisingDataHeader {
+    /// Parses the fixed header and the trailing per-report data.
     pub fn parse(bytes: &[u8]) -> Option<(Ref<&[u8], Self>, &[u8])> {
         let (header, rest) = Ref::<&[u8], Self>::from_prefix(bytes).ok()?;
         let expected = header.advertising_data_length as usize;
@@ -431,9 +493,12 @@ impl HciCommand for LeSetPeriodicAdvertisingEnable {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct ScanPhyParameters {
-    pub scan_type: u8,                    // 0 = passive, 1 = active.
+    /// Scan type (0 = passive, 1 = active).
+    pub scan_type: u8, // 0 = passive, 1 = active.
+    /// Scan interval (units of 0.625 ms).
     pub scan_interval: U16<LittleEndian>, // Units of 0.625 ms.
-    pub scan_window: U16<LittleEndian>,   // Units of 0.625 ms.
+    /// Scan window (units of 0.625 ms).
+    pub scan_window: U16<LittleEndian>, // Units of 0.625 ms.
 }
 
 /// LE Set Extended Scan Parameters Command Header (7.8.64).
@@ -443,8 +508,11 @@ pub struct ScanPhyParameters {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeSetExtendedScanParametersHeader {
+    /// Own device address type.
     pub own_address_type: u8,
+    /// Scanning filter policy.
     pub scanning_filter_policy: u8,
+    /// Bitmask of PHYs to scan on.
     pub scanning_phys: u8,
 }
 
@@ -453,6 +521,7 @@ impl HciCommand for LeSetExtendedScanParametersHeader {
 }
 
 impl LeSetExtendedScanParametersHeader {
+    /// Parses the fixed header and the trailing per-PHY scan parameters.
     pub fn parse(bytes: &[u8]) -> Option<(Ref<&[u8], Self>, &[ScanPhyParameters])> {
         let (header, rest) = Ref::<&[u8], Self>::from_prefix(bytes).ok()?;
         let expected = header.scanning_phys.count_ones() as usize * size_of::<ScanPhyParameters>();
@@ -502,12 +571,19 @@ impl HciCommand for LeSetExtendedScanEnable {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LePeriodicAdvertisingCreateSync {
+    /// Create-sync options bitfield (bit 0: use Periodic Advertiser List).
     pub options: u8, // Bit 0: use Periodic Advertiser List.
+    /// Advertising Set ID (SID).
     pub advertising_sid: u8,
+    /// Advertiser address type.
     pub advertiser_address_type: u8,
+    /// Advertiser device address.
     pub advertiser_address: [u8; 6],
+    /// Number of periodic advertising events that may be skipped.
     pub skip: U16<LittleEndian>,
+    /// Synchronization timeout (units of 10 ms).
     pub sync_timeout: U16<LittleEndian>, // Units of 10 ms.
+    /// CTE type constraint for synchronization.
     pub sync_cte_type: u8,
 }
 
@@ -540,17 +616,29 @@ impl HciCommand for LePeriodicAdvertisingTerminateSync {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct ExtendedAdvertisingReportHeader {
+    /// Event type bitfield (see `ext_adv_report_event_type`).
     pub event_type: U16<LittleEndian>, // See `ext_adv_report_event_type`.
+    /// Advertiser address type.
     pub address_type: u8,
+    /// Advertiser device address.
     pub address: [u8; 6],
+    /// Primary advertising PHY.
     pub primary_phy: u8,
-    pub secondary_phy: u8,   // 0 = no packets on secondary channel.
+    /// Secondary advertising PHY (0 = no packets on secondary channel).
+    pub secondary_phy: u8, // 0 = no packets on secondary channel.
+    /// Advertising Set ID (SID).
     pub advertising_sid: u8, // 0xFF = no ADI field provided.
-    pub tx_power: i8,        // dBm; 0x7F = not available.
-    pub rssi: i8,            // dBm; 0x7F = not available.
+    /// TX power in dBm (dBm; 0x7F = not available).
+    pub tx_power: i8, // dBm; 0x7F = not available.
+    /// Received signal strength in dBm (dBm; 0x7F = not available).
+    pub rssi: i8, // dBm; 0x7F = not available.
+    /// Periodic advertising interval (0 = none).
     pub periodic_advertising_interval: U16<LittleEndian>, // Units of 1.25 ms; 0 = none.
+    /// Target (directed) address type.
     pub direct_address_type: u8,
+    /// Target (directed) device address.
     pub direct_address: [u8; 6],
+    /// Length in octets of the data that follows.
     pub data_length: u8,
 }
 
@@ -603,13 +691,21 @@ impl LeExtendedAdvertisingReportEvent {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LePeriodicAdvertisingSyncEstablishedEvent {
+    /// HCI status code.
     pub status: u8,
+    /// Sync handle identifying the periodic advertising train.
     pub sync_handle: U16<LittleEndian>,
+    /// Advertising Set ID (SID).
     pub advertising_sid: u8,
+    /// Advertiser address type.
     pub advertiser_address_type: u8,
+    /// Advertiser device address.
     pub advertiser_address: [u8; 6],
+    /// Advertiser PHY.
     pub advertiser_phy: u8,
+    /// Periodic advertising interval (0 = none).
     pub periodic_advertising_interval: U16<LittleEndian>, // Units of 1.25 ms.
+    /// Advertiser clock accuracy.
     pub advertiser_clock_accuracy: u8,
 }
 
@@ -619,15 +715,22 @@ pub struct LePeriodicAdvertisingSyncEstablishedEvent {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LePeriodicAdvertisingReportEventHeader {
+    /// Sync handle identifying the periodic advertising train.
     pub sync_handle: U16<LittleEndian>,
-    pub tx_power: i8,    // dBm; 0x7F = not available.
-    pub rssi: i8,        // dBm; 0x7F = not available.
-    pub cte_type: u8,    // 0xFF = no CTE.
+    /// TX power in dBm (dBm; 0x7F = not available).
+    pub tx_power: i8, // dBm; 0x7F = not available.
+    /// Received signal strength in dBm (dBm; 0x7F = not available).
+    pub rssi: i8, // dBm; 0x7F = not available.
+    /// Constant Tone Extension type (0xFF = no CTE).
+    pub cte_type: u8, // 0xFF = no CTE.
+    /// Data completeness status (0 = complete, 1 = more to come, 2 = truncated).
     pub data_status: u8, // 0 = complete, 1 = more to come, 2 = truncated.
+    /// Length in octets of the data that follows.
     pub data_length: u8,
 }
 
 impl LePeriodicAdvertisingReportEventHeader {
+    /// Parses the fixed header and returns it with the trailing data bytes.
     pub fn parse(bytes: &[u8]) -> Option<(Ref<&[u8], Self>, &[u8])> {
         let (header, rest) = Ref::<&[u8], Self>::from_prefix(bytes).ok()?;
         let expected = header.data_length as usize;
@@ -665,6 +768,7 @@ impl LePeriodicAdvertisingReportEventHeader {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LePeriodicAdvertisingSyncLostEvent {
+    /// Sync handle identifying the periodic advertising train.
     pub sync_handle: U16<LittleEndian>,
 }
 
@@ -672,9 +776,13 @@ pub struct LePeriodicAdvertisingSyncLostEvent {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeAdvertisingSetTerminatedEvent {
+    /// HCI status code.
     pub status: u8,
+    /// Identifier of the advertising set.
     pub advertising_handle: u8,
+    /// Connection handle (valid only if a connection was created).
     pub connection_handle: U16<LittleEndian>, // Valid only if a connection was created.
+    /// Number of completed extended advertising events.
     pub num_completed_extended_advertising_events: u8,
 }
 
@@ -682,8 +790,11 @@ pub struct LeAdvertisingSetTerminatedEvent {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeScanRequestReceivedEvent {
+    /// Identifier of the advertising set.
     pub advertising_handle: u8,
+    /// Scanner address type.
     pub scanner_address_type: u8,
+    /// Scanner device address.
     pub scanner_address: [u8; 6],
 }
 
@@ -708,16 +819,27 @@ pub enum AdvSetError {
 /// across fragmented Set-Data operations.
 #[derive(Debug, Clone, Default)]
 pub struct AdvertisingSet {
+    /// Advertising set handle.
     pub handle: u8,
+    /// Random device address assigned to the set, if any.
     pub random_address: Option<[u8; 6]>,
+    /// Extended advertising parameters, once set.
     pub params: Option<LeSetExtendedAdvertisingParameters>,
+    /// Assembled advertising data.
     pub advertising_data: Vec<u8>,
+    /// Assembled scan response data.
     pub scan_response_data: Vec<u8>,
+    /// Periodic advertising parameters, once set.
     pub periodic_params: Option<LeSetPeriodicAdvertisingParameters>,
+    /// Assembled periodic advertising data.
     pub periodic_data: Vec<u8>,
+    /// Whether extended advertising is currently enabled.
     pub enabled: bool,
+    /// Whether periodic advertising is currently enabled.
     pub periodic_enabled: bool,
+    /// Advertising duration.
     pub duration: u16,
+    /// Maximum number of extended advertising events (0 = no limit).
     pub max_extended_advertising_events: u8,
     // In-progress fragment reassembly buffers (First..Last not yet committed).
     adv_fragments: Option<Vec<u8>>,
@@ -786,6 +908,7 @@ fn apply_data_operation(
 #[derive(Debug, Clone)]
 pub struct AdvertisingSets {
     sets: BTreeMap<u8, AdvertisingSet>,
+    /// Maximum total advertising data length per set, in octets.
     pub max_data_length: usize,
 }
 
@@ -796,6 +919,7 @@ impl Default for AdvertisingSets {
 }
 
 impl AdvertisingSets {
+    /// Creates an empty advertising-set table with the default max data length.
     pub fn new() -> Self {
         Self {
             sets: BTreeMap::new(),
@@ -803,14 +927,17 @@ impl AdvertisingSets {
         }
     }
 
+    /// Returns the advertising set with the given handle, if present.
     pub fn get(&self, handle: u8) -> Option<&AdvertisingSet> {
         self.sets.get(&handle)
     }
 
+    /// Number of advertising sets currently tracked.
     pub fn len(&self) -> usize {
         self.sets.len()
     }
 
+    /// Whether no advertising sets are tracked.
     pub fn is_empty(&self) -> bool {
         self.sets.is_empty()
     }

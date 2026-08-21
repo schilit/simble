@@ -78,8 +78,11 @@ pub mod error_code {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum EventId {
+    /// Notification added.
     NotificationAdded = 0,
+    /// Notification modified.
     NotificationModified = 1,
+    /// Notification removed.
     NotificationRemoved = 2,
 }
 
@@ -114,17 +117,29 @@ pub mod event_flags {
 #[repr(u8)]
 pub enum CategoryId {
     #[default]
+    /// Other.
     Other = 0,
+    /// Incoming call.
     IncomingCall = 1,
+    /// Missed call.
     MissedCall = 2,
+    /// Voicemail.
     Voicemail = 3,
+    /// Social.
     Social = 4,
+    /// Schedule.
     Schedule = 5,
+    /// Email.
     Email = 6,
+    /// News.
     News = 7,
+    /// Health and fitness.
     HealthAndFitness = 8,
+    /// Business and finance.
     BusinessAndFinance = 9,
+    /// Location.
     Location = 10,
+    /// Entertainment.
     Entertainment = 11,
 }
 
@@ -153,8 +168,11 @@ impl CategoryId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum CommandId {
+    /// Get notification attributes.
     GetNotificationAttributes = 0,
+    /// Get app attributes.
     GetAppAttributes = 1,
+    /// Perform notification action.
     PerformNotificationAction = 2,
 }
 
@@ -174,13 +192,21 @@ impl CommandId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum NotificationAttributeId {
+    /// App identifier.
     AppIdentifier = 0,
+    /// Title.
     Title = 1,
+    /// Subtitle.
     Subtitle = 2,
+    /// Message.
     Message = 3,
+    /// Message size.
     MessageSize = 4,
+    /// Date.
     Date = 5,
+    /// Positive action label.
     PositiveActionLabel = 6,
+    /// Negative action label.
     NegativeActionLabel = 7,
 }
 
@@ -211,6 +237,7 @@ impl NotificationAttributeId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum AppAttributeId {
+    /// Display name.
     DisplayName = 0,
 }
 
@@ -228,7 +255,9 @@ impl AppAttributeId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ActionId {
+    /// Positive.
     Positive = 0,
+    /// Negative.
     Negative = 1,
 }
 
@@ -738,12 +767,18 @@ impl NotificationAttributeRequest {
 /// A fully reassembled Data Source response.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DataSourceResponse {
+    /// Notification attributes.
     NotificationAttributes {
+        /// Notification uid.
         notification_uid: u32,
+        /// Attributes.
         attributes: Vec<(NotificationAttributeId, String)>,
     },
+    /// App attributes.
     AppAttributes {
+        /// App identifier.
         app_identifier: String,
+        /// Attributes.
         attributes: Vec<(AppAttributeId, String)>,
     },
 }

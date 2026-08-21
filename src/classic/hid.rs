@@ -144,12 +144,20 @@ pub mod attribute_id {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HidMessage {
     /// HANDSHAKE: result code for a preceding transaction.
-    Handshake { result_code: u8 },
+    Handshake {
+        /// Result code.
+        result_code: u8,
+    },
     /// HID_CONTROL: a control operation such as suspend or unplug.
-    Control { operation: u8 },
+    Control {
+        /// Operation.
+        operation: u8,
+    },
     /// GET_REPORT: request a stored report.
     GetReport {
+        /// Report type.
         report_type: u8,
+        /// Report id.
         report_id: u8,
         /// When set, the header's buffer-size flag (bit 3 of the parameter)
         /// is raised and a 2-byte little-endian size field follows the
@@ -157,15 +165,28 @@ pub enum HidMessage {
         buffer_size: Option<u16>,
     },
     /// `payload` is the report ID followed by the report data.
-    SetReport { report_type: u8, payload: Vec<u8> },
+    SetReport {
+        /// Report type.
+        report_type: u8,
+        /// Payload.
+        payload: Vec<u8>,
+    },
     /// GET_PROTOCOL: query the current protocol mode.
     GetProtocol,
     /// SET_PROTOCOL: switch between Boot and Report protocol modes.
-    SetProtocol { mode: u8 },
+    SetProtocol {
+        /// Mode.
+        mode: u8,
+    },
     /// On the control channel: a GET_REPORT or GET_PROTOCOL response. On the
     /// interrupt channel: an input (device-to-host) or output (host-to-device)
     /// report transfer.
-    Data { report_type: u8, payload: Vec<u8> },
+    Data {
+        /// Report type.
+        report_type: u8,
+        /// Payload.
+        payload: Vec<u8>,
+    },
 }
 
 impl HidMessage {
@@ -306,11 +327,19 @@ pub enum HidDeviceEvent {
     /// The host requested VIRTUAL_CABLE_UNPLUG.
     VirtualCableUnplug,
     /// DATA arrived on the control channel (host-initiated report transfer).
-    ControlData { report_type: u8, payload: Vec<u8> },
+    ControlData {
+        /// Report type.
+        report_type: u8,
+        /// Payload.
+        payload: Vec<u8>,
+    },
     /// A SET_REPORT was accepted and stored.
     ReportSet {
+        /// Report type.
         report_type: u8,
+        /// Report id.
         report_id: u8,
+        /// Data.
         data: Vec<u8>,
     },
     /// A SET_PROTOCOL was accepted.
@@ -484,7 +513,12 @@ pub enum HidHostEvent {
     Handshake(u8),
     /// DATA arrived on the control channel: a GET_REPORT response (payload
     /// is report ID + data) or a GET_PROTOCOL response (payload is the mode).
-    ControlData { report_type: u8, payload: Vec<u8> },
+    ControlData {
+        /// Report type.
+        report_type: u8,
+        /// Payload.
+        payload: Vec<u8>,
+    },
     /// The device requested VIRTUAL_CABLE_UNPLUG.
     VirtualCableUnplug,
 }

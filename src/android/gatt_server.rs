@@ -26,9 +26,13 @@ use super::gatt_service::{
 pub struct BluetoothProfile;
 
 impl BluetoothProfile {
+    /// State disconnected.
     pub const STATE_DISCONNECTED: i32 = 0;
+    /// State connecting.
     pub const STATE_CONNECTING: i32 = 1;
+    /// State connected.
     pub const STATE_CONNECTED: i32 = 2;
+    /// State disconnecting.
     pub const STATE_DISCONNECTING: i32 = 3;
 }
 

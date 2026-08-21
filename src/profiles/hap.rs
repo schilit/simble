@@ -111,8 +111,11 @@ pub(crate) const MAX_PRESET_NAME_LENGTH: usize = 40;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum HearingAidType {
+    /// Binaural.
     Binaural = 0b00,
+    /// Monaural.
     Monaural = 0b01,
+    /// Banded.
     Banded = 0b10,
 }
 

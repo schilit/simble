@@ -55,6 +55,7 @@ pub struct HciAclHeader {
 }
 
 impl HciAclHeader {
+    /// Creates a new instance.
     pub fn new(handle: u16, pb: AclPacketBoundary, data_len: u16) -> Self {
         let h_flags = (handle & 0x0FFF) | (((pb as u8) as u16 & 0x03) << 12);
         Self {
@@ -63,10 +64,12 @@ impl HciAclHeader {
         }
     }
 
+    /// Handle.
     pub fn handle(&self) -> u16 {
         self.handle_and_flags.get() & 0x0FFF
     }
 
+    /// Packet boundary.
     pub fn packet_boundary(&self) -> AclPacketBoundary {
         match (self.handle_and_flags.get() >> 12) & 0x03 {
             0b00 => AclPacketBoundary::FirstNonFlushable,
@@ -76,6 +79,7 @@ impl HciAclHeader {
         }
     }
 
+    /// Whether first fragment.
     pub fn is_first_fragment(&self) -> bool {
         matches!(
             self.packet_boundary(),
@@ -83,6 +87,7 @@ impl HciAclHeader {
         )
     }
 
+    /// Parses this value from its byte representation.
     pub fn parse(bytes: &[u8]) -> Option<(Ref<&[u8], Self>, &[u8])> {
         let (header_ref, payload) = Ref::<&[u8], Self>::from_prefix(bytes).ok()?;
         let expected_len = header_ref.data_length.get() as usize;
