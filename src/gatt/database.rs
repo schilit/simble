@@ -85,14 +85,71 @@ impl Default for AttributePermissions {
     }
 }
 
+/// A handler owning a specific attribute's write behavior, attached at
+/// registration time via [`GattDatabase::set_handler`]. Mirrors how
+/// embedded BLE stacks (e.g. NimBLE's per-characteristic `access_cb`) let a
+/// characteristic own its own behavior instead of a central dispatcher
+/// special-casing it: a profile with control-point-style validation (ASCS,
+/// AICS, VOCS) registers one of these instead of exposing a bespoke
+/// `write_control_point`-shaped method that callers must know to invoke
+/// outside the normal ATT write path — any write to a handled attribute
+/// flows through the same [`GattDatabase::write`] every other attribute
+/// uses.
+///
+/// Requires `Send + Sync` for the same reason `AttServerObserver`
+/// (`crate::device::observer`) does: `GattDatabase` ends up behind
+/// `Arc<Mutex<_>>` via `VirtualDevice` in `service::manager`.
+pub trait AttributeHandler: std::fmt::Debug + Send + Sync {
+    /// Called instead of overwriting the stored value directly. `db` is the
+    /// *rest* of the database (this attribute has already been removed from
+    /// it for the duration of the call, so there's no self-referential
+    /// borrow) — a handler that affects other handles (e.g. ASCS's control
+    /// point updating several ASE characteristics) writes to them via `db`
+    /// directly. If the handled attribute's own stored value should change
+    /// too, the handler must call `db.set_value(own_handle, ...)` itself;
+    /// [`GattDatabase::write`] does not overwrite it automatically once a
+    /// handler is present.
+    fn on_write(&mut self, db: &mut GattDatabase, value: &[u8]) -> Result<(), u8>;
+}
+
 /// A GATT attribute stored in the database.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct Attribute {
     pub handle: u16,
     pub uuid: Uuid,
     pub value: Vec<u8>,
     pub permissions: AttributePermissions,
+    /// Optional owner of this attribute's write behavior. See
+    /// [`AttributeHandler`].
+    pub handler: Option<Box<dyn AttributeHandler>>,
 }
+
+impl Clone for Attribute {
+    fn clone(&self) -> Self {
+        Self {
+            handle: self.handle,
+            uuid: self.uuid,
+            value: self.value.clone(),
+            permissions: self.permissions,
+            // Trait objects aren't `Clone`; a cloned attribute starts unhandled,
+            // same tradeoff `VirtualDevice`'s `observer` field already makes.
+            handler: None,
+        }
+    }
+}
+
+impl PartialEq for Attribute {
+    /// Ignores `handler` — trait objects have no meaningful equality, and
+    /// every other field fully identifies an attribute's observable state.
+    fn eq(&self, other: &Self) -> bool {
+        self.handle == other.handle
+            && self.uuid == other.uuid
+            && self.value == other.value
+            && self.permissions == other.permissions
+    }
+}
+
+impl Eq for Attribute {}
 
 /// The local GATT Database representing all registered services, characteristics,
 /// and descriptors on the device.
@@ -119,12 +176,13 @@ impl GattDatabase {
     }
 
     /// Adds a Primary or Secondary Service declaration.
-    pub fn add_service(&mut self, uuid: Uuid, primary: bool) -> u16 {
+    pub fn add_service(&mut self, uuid: impl Into<Uuid>, primary: bool) -> u16 {
+        let uuid = uuid.into();
         let handle = self.allocate_handle();
         let decl_uuid = if primary {
-            Uuid::from_u16(service_uuid::PRIMARY_SERVICE)
+            Uuid::from(service_uuid::PRIMARY_SERVICE)
         } else {
-            Uuid::from_u16(service_uuid::SECONDARY_SERVICE)
+            Uuid::from(service_uuid::SECONDARY_SERVICE)
         };
 
         let val = match uuid {
@@ -139,6 +197,7 @@ impl GattDatabase {
                 uuid: decl_uuid,
                 value: val,
                 permissions: AttributePermissions::read_only(),
+                handler: None,
             },
         );
 
@@ -148,11 +207,12 @@ impl GattDatabase {
     /// Adds a Characteristic declaration followed by its Value attribute.
     pub fn add_characteristic(
         &mut self,
-        uuid: Uuid,
+        uuid: impl Into<Uuid>,
         properties: CharacteristicProperties,
         initial_value: Vec<u8>,
         permissions: AttributePermissions,
     ) -> (u16, u16) {
+        let uuid = uuid.into();
         let decl_handle = self.allocate_handle();
         let val_handle = self.allocate_handle();
 
@@ -170,9 +230,10 @@ impl GattDatabase {
             decl_handle,
             Attribute {
                 handle: decl_handle,
-                uuid: Uuid::from_u16(service_uuid::CHARACTERISTIC),
+                uuid: Uuid::from(service_uuid::CHARACTERISTIC),
                 value: decl_val,
                 permissions: AttributePermissions::read_only(),
+                handler: None,
             },
         );
 
@@ -184,6 +245,7 @@ impl GattDatabase {
                 uuid,
                 value: initial_value,
                 permissions,
+                handler: None,
             },
         );
 
@@ -200,6 +262,7 @@ impl GattDatabase {
                 uuid: Uuid::from_u16(desc_uuid::CLIENT_CHARACTERISTIC_CONFIGURATION),
                 value: vec![0x00, 0x00],
                 permissions: AttributePermissions::default(),
+                handler: None,
             },
         );
         handle
@@ -208,7 +271,7 @@ impl GattDatabase {
     /// Adds a custom descriptor.
     pub fn add_descriptor(
         &mut self,
-        uuid: Uuid,
+        uuid: impl Into<Uuid>,
         value: Vec<u8>,
         permissions: AttributePermissions,
     ) -> u16 {
@@ -218,7 +281,7 @@ impl GattDatabase {
     /// Adds a raw attribute directly with custom permissions and value.
     pub fn add_attribute(
         &mut self,
-        uuid: Uuid,
+        uuid: impl Into<Uuid>,
         permissions: AttributePermissions,
         value: Vec<u8>,
     ) -> u16 {
@@ -227,9 +290,10 @@ impl GattDatabase {
             handle,
             Attribute {
                 handle,
-                uuid,
+                uuid: uuid.into(),
                 value,
                 permissions,
+                handler: None,
             },
         );
         handle
@@ -261,10 +325,46 @@ impl GattDatabase {
         Ok(attr)
     }
 
-    /// Writes a value to an attribute.
+    /// Writes a value to an attribute. If a handler is attached (see
+    /// [`Self::set_handler`]), the write is delegated to it instead of
+    /// overwriting the stored value directly — the attribute is removed
+    /// from `self` for the duration of the call so the handler can take
+    /// `&mut GattDatabase` without a self-referential borrow, then
+    /// reinserted afterward.
     pub fn write(&mut self, handle: u16, value: &[u8]) -> Result<(), u8> {
         let attr = self.check_write_permitted(handle)?;
-        attr.value = value.to_vec();
+        if attr.handler.is_none() {
+            attr.value = value.to_vec();
+            return Ok(());
+        }
+
+        // Handler attached: remove the attribute for the duration of the
+        // call so the handler can take `&mut GattDatabase` without a
+        // self-referential borrow, then reinsert it afterward.
+        let mut attr = self
+            .attributes
+            .remove(&handle)
+            .ok_or(error_code::INVALID_HANDLE)?;
+        let mut handler = attr.handler.take().expect("handler checked above");
+        let result = handler.on_write(self, value);
+        attr.handler = Some(handler);
+        self.attributes.insert(handle, attr);
+        result
+    }
+
+    /// Attaches an [`AttributeHandler`] to `handle`, so future writes to it
+    /// (via [`Self::write`]) dispatch to the handler instead of overwriting
+    /// the stored value directly.
+    pub fn set_handler(
+        &mut self,
+        handle: u16,
+        handler: Box<dyn AttributeHandler>,
+    ) -> Result<(), u8> {
+        let attr = self
+            .attributes
+            .get_mut(&handle)
+            .ok_or(error_code::INVALID_HANDLE)?;
+        attr.handler = Some(handler);
         Ok(())
     }
 

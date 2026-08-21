@@ -8,13 +8,14 @@ use zerocopy::IntoBytes;
 
 use crate::att::{AttHandleValueHeader, opcode};
 use crate::device::connection::ConnectionState;
+use crate::device::observer::AttServerObserver;
 use crate::gap::AdvertisingData;
 use crate::gatt::GattDatabase;
 use crate::l2cap::{L2capHeader, cid};
+use crate::smp::{PairingConfig, PairingSession, Role as SmpRole, opcode as smp_opcode};
 use crate::types::{Address, AddressType, SimbleError};
 
 /// A simulated virtual Bluetooth device.
-#[derive(Debug, Clone)]
 pub struct VirtualDevice {
     pub name: String,
     pub address: Address,
@@ -24,6 +25,43 @@ pub struct VirtualDevice {
     pub is_advertising: bool,
     pub connections: HashMap<u16, ConnectionState>,
     pub default_mtu: u16,
+    /// Optional hook for real ATT-server events (reads, writes, connection
+    /// state changes, MTU changes, notifications/indications sent). Used by
+    /// `crate::android` to make its callback types real, not cosmetic.
+    pub observer: Option<Box<dyn AttServerObserver>>,
+}
+
+impl std::fmt::Debug for VirtualDevice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VirtualDevice")
+            .field("name", &self.name)
+            .field("address", &self.address)
+            .field("address_type", &self.address_type)
+            .field("gatt_db", &self.gatt_db)
+            .field("advertising_data", &self.advertising_data)
+            .field("is_advertising", &self.is_advertising)
+            .field("connections", &self.connections)
+            .field("default_mtu", &self.default_mtu)
+            .field("observer", &self.observer.is_some())
+            .finish()
+    }
+}
+
+impl Clone for VirtualDevice {
+    fn clone(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            address: self.address,
+            address_type: self.address_type,
+            gatt_db: self.gatt_db.clone(),
+            advertising_data: self.advertising_data.clone(),
+            is_advertising: self.is_advertising,
+            connections: self.connections.clone(),
+            default_mtu: self.default_mtu,
+            // Trait objects aren't `Clone`; a cloned device starts unobserved.
+            observer: None,
+        }
+    }
 }
 
 impl VirtualDevice {
@@ -38,6 +76,7 @@ impl VirtualDevice {
             is_advertising: false,
             connections: HashMap::new(),
             default_mtu: 23,
+            observer: None,
         }
     }
 
@@ -48,11 +87,21 @@ impl VirtualDevice {
             ConnectionState::new(handle, peer_address, self.default_mtu),
         );
         self.is_advertising = false;
+        if let Some(observer) = self.observer.as_deref_mut() {
+            observer.on_connection_state_changed(handle, peer_address, true);
+        }
     }
 
     /// Handles a disconnection event.
     pub fn on_disconnected(&mut self, handle: u16) {
-        self.connections.remove(&handle);
+        let peer_address = self.connections.remove(&handle).map(|c| c.peer_address);
+        if let Some(observer) = self.observer.as_deref_mut() {
+            observer.on_connection_state_changed(
+                handle,
+                peer_address.unwrap_or(Address::ANY),
+                false,
+            );
+        }
     }
 
     /// Processes an incoming L2CAP packet received over an ACL connection.
@@ -71,16 +120,122 @@ impl VirtualDevice {
                 let resp_payload = self.process_att_packet(connection_handle, payload)?;
                 Ok(resp_payload.map(|p| L2capHeader::serialize(cid::ATT, &p)))
             }
+            cid::SMP => {
+                let resp_payload = self.process_smp_packet(connection_handle, payload)?;
+                Ok(resp_payload.map(|p| L2capHeader::serialize(cid::SMP, &p)))
+            }
             _ => Ok(None),
         }
     }
 
+    /// Dispatches an incoming SMP PDU to the connection's [`PairingSession`],
+    /// creating a responder-role session on the fly if a Pairing Request
+    /// arrives on a connection with none yet (mirroring how a real peripheral
+    /// accepts pairing initiated by the peer).
+    fn process_smp_packet(
+        &mut self,
+        connection_handle: u16,
+        pdu: &[u8],
+    ) -> Result<Option<Vec<u8>>, SimbleError> {
+        let conn = self
+            .connections
+            .get_mut(&connection_handle)
+            .ok_or_else(|| {
+                SimbleError::DeviceError(format!("Connection {connection_handle} not found"))
+            })?;
+
+        if conn.pairing_session.is_none() {
+            if pdu.first().copied() != Some(smp_opcode::PAIRING_REQUEST) {
+                return Ok(None);
+            }
+            conn.pairing_session = Some(PairingSession::new(
+                SmpRole::Responder,
+                PairingConfig::default(),
+                self.address,
+                self.address_type,
+                conn.peer_address,
+                AddressType::Random,
+            ));
+        }
+
+        let session = conn.pairing_session.as_mut().expect("just ensured Some");
+        let reply = session.handle_pdu(pdu)?;
+        conn.is_encrypted = session.is_encrypted();
+        conn.ltk = session.ltk();
+        Ok(reply)
+    }
+
+    /// Starts SMP pairing as the initiator on an existing connection,
+    /// returning the L2CAP-framed Pairing Request to send.
+    pub fn start_pairing(&mut self, connection_handle: u16) -> Result<Vec<u8>, SimbleError> {
+        self.start_pairing_with_config(connection_handle, PairingConfig::default())
+    }
+
+    /// Same as [`Self::start_pairing`], but with an explicit [`PairingConfig`]
+    /// (e.g. to force LE Legacy pairing by setting `sc: false`, or to enable
+    /// `debug_mode`).
+    pub fn start_pairing_with_config(
+        &mut self,
+        connection_handle: u16,
+        config: PairingConfig,
+    ) -> Result<Vec<u8>, SimbleError> {
+        let conn = self
+            .connections
+            .get_mut(&connection_handle)
+            .ok_or_else(|| {
+                SimbleError::DeviceError(format!("Connection {connection_handle} not found"))
+            })?;
+        let mut session = PairingSession::new(
+            SmpRole::Initiator,
+            config,
+            self.address,
+            self.address_type,
+            conn.peer_address,
+            AddressType::Random,
+        );
+        let request = session.start();
+        conn.pairing_session = Some(session);
+        Ok(L2capHeader::serialize(cid::SMP, &request))
+    }
+
+    /// Drains one more queued outgoing SMP PDU from the connection's
+    /// [`PairingSession`] (e.g. the follow-on PDUs of a multi-PDU key
+    /// distribution phase), framed for L2CAP. Returns `None` once drained.
+    pub fn poll_smp_pdu(&mut self, connection_handle: u16) -> Option<Vec<u8>> {
+        let conn = self.connections.get_mut(&connection_handle)?;
+        let session = conn.pairing_session.as_mut()?;
+        let pdu = session.poll_pending()?;
+        conn.is_encrypted = session.is_encrypted();
+        conn.ltk = session.ltk();
+        Some(L2capHeader::serialize(cid::SMP, &pdu))
+    }
+
     /// Creates an ATT Handle Value Notification packet for a characteristic update.
-    pub fn create_notification(&self, handle: u16, value: &[u8]) -> Vec<u8> {
+    ///
+    /// This helper has no connection context of its own (the resulting PDU is
+    /// meant to be broadcast to whichever connections have notifications
+    /// enabled), so the observer sees a sentinel `0x0000` connection handle.
+    /// Callers that know the target connection should use
+    /// [`Self::create_notification_for`] instead.
+    pub fn create_notification(&mut self, handle: u16, value: &[u8]) -> Vec<u8> {
+        self.create_notification_for(0x0000, handle, value)
+    }
+
+    /// Same as [`Self::create_notification`], but tags the completion event
+    /// with a real connection handle.
+    pub fn create_notification_for(
+        &mut self,
+        connection_handle: u16,
+        handle: u16,
+        value: &[u8],
+    ) -> Vec<u8> {
         let mut pdu = Vec::with_capacity(3 + value.len());
         let header = AttHandleValueHeader::new(opcode::HANDLE_VALUE_NTF, handle);
         pdu.extend_from_slice(header.as_bytes());
         pdu.extend_from_slice(value);
+        if let Some(observer) = self.observer.as_deref_mut() {
+            observer.on_notification_sent(connection_handle, handle, false);
+        }
         L2capHeader::serialize(cid::ATT, &pdu)
     }
 
@@ -110,6 +265,9 @@ impl VirtualDevice {
         let header = AttHandleValueHeader::new(opcode::HANDLE_VALUE_IND, handle);
         pdu.extend_from_slice(header.as_bytes());
         pdu.extend_from_slice(value);
+        if let Some(observer) = self.observer.as_deref_mut() {
+            observer.on_notification_sent(connection_handle, handle, true);
+        }
         Ok(L2capHeader::serialize(cid::ATT, &pdu))
     }
 }

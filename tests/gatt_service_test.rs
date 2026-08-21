@@ -1,8 +1,6 @@
 // Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
-//! Port of Bumble's `gatt_service_test.py`.
-//!
 //! Tests Generic Attribute Profile Service (0x1801), Database Hash (0x2B2A)
 //! computation & verification, and Service Changed (0x2A05) indications.
 

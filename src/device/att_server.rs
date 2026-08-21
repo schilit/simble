@@ -40,6 +40,9 @@ impl VirtualDevice {
                 if let Some(conn) = self.connections.get_mut(&connection_handle) {
                     conn.mtu = negotiated_mtu;
                 }
+                if let Some(observer) = self.observer.as_deref_mut() {
+                    observer.on_mtu_changed(connection_handle, negotiated_mtu);
+                }
                 let resp = AttExchangeMtuRsp::new(server_rx_mtu);
                 Ok(Some(resp.as_bytes().to_vec()))
             }
@@ -71,6 +74,9 @@ impl VirtualDevice {
             }
             AttPdu::ReadReq(req) => {
                 let handle = req.handle.get();
+                if let Some(observer) = self.observer.as_deref_mut() {
+                    observer.on_characteristic_read(connection_handle, handle, 0);
+                }
                 match self.gatt_db.read(handle, 0) {
                     Ok(val) => {
                         let mut resp = Vec::with_capacity(1 + val.len());
@@ -84,6 +90,9 @@ impl VirtualDevice {
             AttPdu::ReadBlobReq(req) => {
                 let handle = req.handle.get();
                 let offset = req.offset.get();
+                if let Some(observer) = self.observer.as_deref_mut() {
+                    observer.on_characteristic_read(connection_handle, handle, offset);
+                }
                 match self.gatt_db.read(handle, offset as usize) {
                     Ok(val) => {
                         let mut resp = Vec::with_capacity(1 + val.len());
@@ -96,6 +105,9 @@ impl VirtualDevice {
             }
             AttPdu::WriteReq { header, value } => {
                 let handle = header.handle.get();
+                if let Some(observer) = self.observer.as_deref_mut() {
+                    observer.on_characteristic_write(connection_handle, handle, value, true);
+                }
                 match self.gatt_db.write(handle, value) {
                     Ok(()) => Ok(Some(vec![opcode::WRITE_RSP])),
                     Err(code) => Ok(Some(att_error(opcode::WRITE_REQ, handle, code))),
@@ -103,6 +115,9 @@ impl VirtualDevice {
             }
             AttPdu::WriteCmd { header, value } => {
                 let handle = header.handle.get();
+                if let Some(observer) = self.observer.as_deref_mut() {
+                    observer.on_characteristic_write(connection_handle, handle, value, false);
+                }
                 let _ = self.gatt_db.write(handle, value);
                 Ok(None)
             }
@@ -130,14 +145,11 @@ impl VirtualDevice {
                     let queue = std::mem::take(&mut conn.prepare_write_queue);
                     if flags == 0x01 {
                         for chunk in queue {
-                            if let Some(attr) = self.gatt_db.attributes.get_mut(&chunk.handle) {
-                                let start = chunk.offset as usize;
-                                if start + chunk.data.len() > attr.value.len() {
-                                    attr.value.resize(start + chunk.data.len(), 0);
-                                }
-                                attr.value[start..start + chunk.data.len()]
-                                    .copy_from_slice(&chunk.data);
-                            }
+                            let _ = self.gatt_db.write_offset(
+                                chunk.handle,
+                                chunk.offset as usize,
+                                &chunk.data,
+                            );
                         }
                     }
                 }

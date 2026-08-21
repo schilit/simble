@@ -1,11 +1,18 @@
 // Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
-//! Port of Bumble's smp_test.py test suite.
-//!
-//! Validates SMP pairing requests, responses, IO capabilities, and failure PDUs.
+//! Validates SMP pairing requests, responses, IO capabilities, failure PDUs,
+//! LTK<->link-key conversion, identity address resolution, debug mode, and
+//! the `PairingSession` state machine end to end (LE Legacy and LE Secure
+//! Connections) driven through a real `VirtualDevice`.
 
-use simble::smp::{SmpPairingFailed, SmpPairingPacket, io_capability, opcode};
+use simble::VirtualDevice;
+use simble::smp::{
+    IdentityAddressPreference, KeyStore, PairingConfig, PairingSession, Role,
+    SMP_DEBUG_KEY_PUBLIC_X, SMP_DEBUG_KEY_PUBLIC_Y, SmpPairingFailed, SmpPairingPacket,
+    io_capability, opcode, resolve_identity_address,
+};
+use simble::types::{Address, AddressType};
 use zerocopy::IntoBytes;
 
 #[test]
@@ -43,4 +50,264 @@ fn test_smp_pairing_failed_pdu() {
 
     assert_eq!(parsed.opcode, opcode::PAIRING_FAILED);
     assert_eq!(parsed.reason, 0x05);
+}
+
+/// Bluetooth Core Spec Vol 3, Part H, Section 2.4.2.4 cross-transport key
+/// derivation test vectors, matching Bumble's `test_ltk_to_link_key`.
+#[test]
+fn test_ltk_to_link_key() {
+    let ltk = [
+        0x64, 0xBF, 0x4F, 0x33, 0x33, 0x6C, 0x06, 0xBD, 0x58, 0x4B, 0x26, 0xE3, 0xBC, 0xF9, 0x8D,
+        0x36,
+    ];
+    assert_eq!(
+        PairingSession::derive_link_key(&ltk, false),
+        [
+            0xB0, 0x8F, 0x38, 0xEE, 0xAF, 0x30, 0x82, 0x0D, 0xBD, 0xC1, 0x3F, 0x63, 0xEF, 0xA4,
+            0x1C, 0xBC,
+        ]
+    );
+    assert_eq!(
+        PairingSession::derive_link_key(&ltk, true),
+        [
+            0x35, 0xB8, 0x47, 0x30, 0xF4, 0xF1, 0x39, 0x0A, 0x53, 0x02, 0xA4, 0xDC, 0x79, 0xD3,
+            0x7A, 0x28,
+        ]
+    );
+}
+
+/// Matching Bumble's `test_link_key_to_ltk`.
+#[test]
+fn test_link_key_to_ltk() {
+    let link_key = [
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x00, 0x01, 0x02, 0x03, 0x04,
+        0x05,
+    ];
+    assert_eq!(
+        PairingSession::derive_ltk(&link_key, false),
+        [
+            0x30, 0x0A, 0x0D, 0xF1, 0x43, 0x9A, 0x2C, 0x8A, 0xA1, 0xDF, 0xA3, 0xF1, 0x72, 0xFB,
+            0x13, 0xA8,
+        ]
+    );
+    assert_eq!(
+        PairingSession::derive_ltk(&link_key, true),
+        [
+            0x79, 0xBC, 0x11, 0x32, 0x13, 0x8A, 0x41, 0x69, 0xE2, 0xB3, 0xCC, 0x5E, 0xEB, 0x09,
+            0x5E, 0xE8,
+        ]
+    );
+}
+
+/// Matching Bumble's `test_send_identity_address_command` parametrized cases.
+#[test]
+fn test_send_identity_address_command() {
+    let public = Address::from_be_bytes([0x00, 0x11, 0x22, 0x33, 0x44, 0x55]);
+    let random = Address::from_be_bytes([0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE]);
+
+    // No preference, a public address is available: prefer it.
+    assert_eq!(resolve_identity_address(None, public, random), (0, public));
+    // No preference, no public address: fall back to the random static one.
+    assert_eq!(
+        resolve_identity_address(None, Address::ANY, random),
+        (1, random)
+    );
+    // Explicit preference always wins.
+    assert_eq!(
+        resolve_identity_address(Some(IdentityAddressPreference::Public), public, random),
+        (0, public)
+    );
+    assert_eq!(
+        resolve_identity_address(Some(IdentityAddressPreference::Random), public, random),
+        (1, random)
+    );
+}
+
+/// Matching Bumble's `test_smp_debug_mode`: debug mode uses the fixed,
+/// publicly-known key pair from the spec so pairing traces are reproducible.
+#[test]
+fn test_smp_debug_mode() {
+    let debug_session = PairingSession::new(
+        Role::Initiator,
+        PairingConfig {
+            debug_mode: true,
+            ..PairingConfig::default()
+        },
+        Address::ANY,
+        AddressType::Random,
+        Address::ANY,
+        AddressType::Random,
+    );
+    assert_eq!(
+        debug_session.local_public_key(),
+        (SMP_DEBUG_KEY_PUBLIC_X, SMP_DEBUG_KEY_PUBLIC_Y)
+    );
+
+    let normal_session = PairingSession::new(
+        Role::Initiator,
+        PairingConfig {
+            debug_mode: false,
+            ..PairingConfig::default()
+        },
+        Address::ANY,
+        AddressType::Random,
+        Address::ANY,
+        AddressType::Random,
+    );
+    assert_ne!(
+        normal_session.local_public_key(),
+        (SMP_DEBUG_KEY_PUBLIC_X, SMP_DEBUG_KEY_PUBLIC_Y)
+    );
+}
+
+/// Shuttles PDUs between two `VirtualDevice`s over real `process_l2cap_packet`
+/// calls (cid::SMP), draining each side's multi-PDU key-distribution queue
+/// via `poll_smp_pdu`, until pairing converges or the round budget runs out.
+/// Returns the two devices and their connection handles for the caller to
+/// assert against.
+fn run_virtual_device_pairing(sc: bool) -> (VirtualDevice, u16, VirtualDevice, u16) {
+    let central_addr = Address::from_be_bytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+    let peripheral_addr = Address::from_be_bytes([0x66, 0x55, 0x44, 0x33, 0x22, 0x11]);
+    let mut central = VirtualDevice::new("central", central_addr, AddressType::Random);
+    let mut peripheral = VirtualDevice::new("peripheral", peripheral_addr, AddressType::Random);
+
+    let conn_c = 0x0001;
+    let conn_p = 0x0002;
+    central.on_connected(conn_c, peripheral_addr);
+    peripheral.on_connected(conn_p, central_addr);
+
+    let config = PairingConfig {
+        sc,
+        ..PairingConfig::default()
+    };
+    let request = central
+        .start_pairing_with_config(conn_c, config)
+        .expect("central can start pairing");
+
+    let mut to_peripheral = vec![request];
+    let mut to_central: Vec<Vec<u8>> = Vec::new();
+
+    for _ in 0..32 {
+        if to_peripheral.is_empty() && to_central.is_empty() {
+            break;
+        }
+        let mut next_to_central = Vec::new();
+        for pdu in to_peripheral.drain(..) {
+            if let Some(reply) = peripheral
+                .process_l2cap_packet(conn_p, &pdu)
+                .expect("peripheral accepts SMP PDU")
+            {
+                next_to_central.push(reply);
+            }
+            while let Some(more) = peripheral.poll_smp_pdu(conn_p) {
+                next_to_central.push(more);
+            }
+        }
+        let mut next_to_peripheral = Vec::new();
+        for pdu in to_central.drain(..) {
+            if let Some(reply) = central
+                .process_l2cap_packet(conn_c, &pdu)
+                .expect("central accepts SMP PDU")
+            {
+                next_to_peripheral.push(reply);
+            }
+            while let Some(more) = central.poll_smp_pdu(conn_c) {
+                next_to_peripheral.push(more);
+            }
+        }
+        to_central = next_to_central;
+        to_peripheral = next_to_peripheral;
+    }
+
+    (central, conn_c, peripheral, conn_p)
+}
+
+/// Full pairing-session integration test: two `VirtualDevice`s exchange real
+/// SMP PDUs over `process_l2cap_packet`, exactly as two connected peers
+/// would, all the way through LE Legacy Confirm/Random (`c1`/`s1`) and key
+/// distribution.
+#[test]
+fn test_virtual_device_le_legacy_pairing_end_to_end() {
+    let (central, conn_c, peripheral, conn_p) = run_virtual_device_pairing(false);
+
+    let central_conn = central
+        .connections
+        .get(&conn_c)
+        .expect("central connection still tracked");
+    let peripheral_conn = peripheral
+        .connections
+        .get(&conn_p)
+        .expect("peripheral connection still tracked");
+
+    assert!(
+        central_conn.is_encrypted,
+        "central must reach encrypted state"
+    );
+    assert!(
+        peripheral_conn.is_encrypted,
+        "peripheral must reach encrypted state"
+    );
+    let central_session = central_conn
+        .pairing_session
+        .as_ref()
+        .expect("central has a pairing session");
+    let peripheral_session = peripheral_conn
+        .pairing_session
+        .as_ref()
+        .expect("peripheral has a pairing session");
+    assert!(central_session.is_complete());
+    assert!(peripheral_session.is_complete());
+    assert!(!central_session.is_failed());
+    assert!(!peripheral_session.is_failed());
+
+    // LE Legacy pairing derives the link's STK identically on both sides.
+    assert_eq!(central_conn.ltk, peripheral_conn.ltk);
+    assert!(central_conn.ltk.is_some());
+
+    // The session's negotiated bonding keys are ready to hand to a
+    // Bumble-`JsonKeyStore`-compatible `KeyStore`.
+    let keystore = KeyStore::new(None);
+    keystore.update("peripheral", peripheral_session.pairing_keys());
+    let stored = keystore.get("peripheral").expect("keys were stored");
+    assert!(stored.ltk_central.is_some() || stored.ltk_peripheral.is_some());
+}
+
+/// Same end-to-end drive as above, but negotiating LE Secure Connections:
+/// exercises Public Key exchange, Confirm/Random via `f4`, and DHKey Check
+/// via `f5`/`f6` through the real `VirtualDevice` wiring.
+#[test]
+fn test_virtual_device_le_secure_connections_pairing_end_to_end() {
+    let (central, conn_c, peripheral, conn_p) = run_virtual_device_pairing(true);
+
+    let central_conn = central
+        .connections
+        .get(&conn_c)
+        .expect("central connection still tracked");
+    let peripheral_conn = peripheral
+        .connections
+        .get(&conn_p)
+        .expect("peripheral connection still tracked");
+
+    let central_session = central_conn
+        .pairing_session
+        .as_ref()
+        .expect("central has a pairing session");
+    let peripheral_session = peripheral_conn
+        .pairing_session
+        .as_ref()
+        .expect("peripheral has a pairing session");
+    assert!(central_session.is_complete());
+    assert!(peripheral_session.is_complete());
+    assert!(!central_session.is_failed());
+    assert!(!peripheral_session.is_failed());
+
+    // LE Secure Connections derives a single shared LTK (via f5) rather than
+    // per-role legacy keys.
+    assert_eq!(central_conn.ltk, peripheral_conn.ltk);
+    assert!(central_conn.ltk.is_some());
+
+    let keystore = KeyStore::new(None);
+    keystore.update("peripheral", peripheral_session.pairing_keys());
+    let stored = keystore.get("peripheral").expect("keys were stored");
+    assert!(stored.ltk.is_some());
 }

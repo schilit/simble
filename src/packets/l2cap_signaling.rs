@@ -34,6 +34,98 @@ pub struct L2capSignalingHeader {
     pub length: U16<LittleEndian>,
 }
 
+/// L2CAP Connection Request Result codes (Basic Mode, OpCode 0x02/0x03).
+pub mod connection_result {
+    pub const SUCCESSFUL: u16 = 0x0000;
+    pub const PENDING: u16 = 0x0001;
+    pub const REFUSED_PSM_NOT_SUPPORTED: u16 = 0x0002;
+    pub const REFUSED_SECURITY_BLOCK: u16 = 0x0003;
+    pub const REFUSED_NO_RESOURCES_AVAILABLE: u16 = 0x0004;
+    pub const REFUSED_INVALID_SOURCE_CID: u16 = 0x0006;
+    pub const REFUSED_SOURCE_CID_ALREADY_ALLOCATED: u16 = 0x0007;
+}
+
+/// L2CAP Configuration Response Result codes (OpCode 0x05).
+pub mod configuration_result {
+    pub const SUCCESS: u16 = 0x0000;
+    pub const UNACCEPTABLE_PARAMETERS: u16 = 0x0001;
+    pub const REJECTED: u16 = 0x0002;
+    pub const UNKNOWN_OPTIONS: u16 = 0x0003;
+}
+
+/// L2CAP Configuration Option types (Bluetooth Core Vol 3, Part A, 5).
+pub mod configuration_option {
+    pub const MTU: u8 = 0x01;
+}
+
+/// Connection Request (OpCode 0x02) — Classic (BR/EDR) Basic Mode channel setup.
+#[repr(C)]
+#[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
+pub struct ConnectionRequestHeader {
+    pub psm: U16<LittleEndian>,
+    pub source_cid: U16<LittleEndian>,
+}
+
+/// Connection Response (OpCode 0x03) — Classic (BR/EDR) Basic Mode channel setup.
+#[repr(C)]
+#[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
+pub struct ConnectionResponseHeader {
+    pub destination_cid: U16<LittleEndian>,
+    pub source_cid: U16<LittleEndian>,
+    pub result: U16<LittleEndian>,
+    pub status: U16<LittleEndian>,
+}
+
+/// Configuration Request (OpCode 0x04) fixed header; variable-length TLV
+/// options follow (see `configuration_option`, `encode_mtu_option`).
+#[repr(C)]
+#[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
+pub struct ConfigurationRequestHeader {
+    pub destination_cid: U16<LittleEndian>,
+    pub flags: U16<LittleEndian>,
+}
+
+/// Configuration Response (OpCode 0x05) fixed header; variable-length TLV
+/// options follow.
+#[repr(C)]
+#[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
+pub struct ConfigurationResponseHeader {
+    pub source_cid: U16<LittleEndian>,
+    pub flags: U16<LittleEndian>,
+    pub result: U16<LittleEndian>,
+}
+
+/// Encodes an MTU configuration option TLV (type 0x01, length 2).
+pub fn encode_mtu_option(mtu: u16) -> [u8; 4] {
+    let mut buf = [0u8; 4];
+    buf[0] = configuration_option::MTU;
+    buf[1] = 2;
+    buf[2..4].copy_from_slice(&mtu.to_le_bytes());
+    buf
+}
+
+/// Scans a configuration options TLV list for an MTU option.
+pub fn parse_mtu_option(options: &[u8]) -> Option<u16> {
+    let mut i = 0;
+    while i + 2 <= options.len() {
+        let option_type = options[i];
+        let len = options[i + 1] as usize;
+        let value_start = i + 2;
+        let value_end = value_start.checked_add(len)?;
+        if value_end > options.len() {
+            return None;
+        }
+        if option_type == configuration_option::MTU && len == 2 {
+            return Some(u16::from_le_bytes([
+                options[value_start],
+                options[value_start + 1],
+            ]));
+        }
+        i = value_end;
+    }
+    None
+}
+
 /// LE Credit Based Connection Request Header (OpCode 0x14).
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]

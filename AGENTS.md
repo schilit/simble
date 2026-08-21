@@ -1,0 +1,89 @@
+# AGENTS.md — Guide for coding agents working on Simble
+
+Simble is a zero-copy, memory-safe virtual Bluetooth (BLE + Classic) host stack
+and device simulation engine in pure Rust. Its primary client is Android's
+netsim. It is inspired by Google's Python [Bumble](https://github.com/google/bumble),
+credited once in README.md's Acknowledgments — **never** add per-file
+"Port of Bumble's X" attribution comments in source; that convention was
+explicitly retired.
+
+## Module conventions
+
+- Flat `pub mod` tree in `src/lib.rs` with hand-picked re-exports.
+  Never `pub use module::*`.
+- **Packet layer** (`src/packets/`, packet definitions elsewhere):
+  - Structs are `#[repr(C)]` with the full six zerocopy derives:
+    `FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout` plus
+    `Copy, Clone, Debug, PartialEq, Eq`.
+  - Parsing shape: `parse(bytes) -> Option<(Ref<...>, &[u8])>` via
+    `Ref::from_prefix`.
+  - Opcode/constant tables live in nested `pub mod` blocks.
+- **Error handling**: `Option`-based parsing at the packet layer;
+  `SimbleError` (thiserror) only at the device/manager layers.
+- **GATT profiles**: structs of `u16` handles with
+  `register(db: &mut GattDatabase, ...) -> Self`.
+- **State machines**: plain synchronous structs with explicit state enums and
+  `receive(...) -> (outgoing, events)` shapes.
+  **No async anywhere. No tokio.**
+
+## Layering rule
+
+Host-stack code (`src/classic/`, `src/gatt/`, `src/smp/`, `src/l2cap/`,
+`src/profiles/`) and controller-layer code (`src/controller/` — e.g. LMP) are
+deliberately separate. Before placing new work, check which layer it belongs
+to.
+
+## Comments
+
+- No WHAT comments — code says what it does.
+- Only non-obvious WHY, with Bluetooth spec citations (Vol/Part/Section) where
+  relevant.
+
+## Dependencies
+
+Keep near-zero. Currently: `serde`, `serde_json`, `thiserror`, `zerocopy`,
+`rhai` — all pure Rust.
+
+- New dependencies need explicit justification.
+- No C/FFI-backed crates. No async runtimes.
+
+## Testing
+
+- Integration tests in `tests/*.rs`, against the public API only.
+- Each test file is declared in `tests/mod.rs`.
+- Each file starts with a module doc comment describing what it covers
+  functionally.
+
+## Verification loop (every change must pass)
+
+```sh
+cargo build --all-targets --all-features    # zero warnings
+cargo test --all-targets --all-features
+cargo clippy --all-targets --all-features -- -D warnings
+cargo fmt --all -- --check
+cargo dupes report --exclude-tests          # see DRY tooling below
+```
+
+## DRY tooling
+
+Run at the end of any multi-file work:
+
+```sh
+cargo dupes report --exclude-tests   # install: cargo install cargo-dupes
+similarity-rs ./src --skip-test      # install: cargo install similarity-rs
+```
+
+- Fix real duplicates, or `cargo dupes ignore` with a documented reason.
+- Structurally-identical-but-semantically-distinct protocol code
+  (per-opcode packet types, per-state enums) is expected and fine.
+
+## Concurrent-agent etiquette
+
+This repo is often worked by several agents at once:
+
+- Stay strictly within your assigned files.
+- Module declarations (`mod.rs`, `lib.rs`, `tests/mod.rs`) are wired by the
+  coordinator, not by task agents.
+- Expect transiently broken full-crate builds from concurrent work; verify
+  with targeted `cargo build --lib` / `cargo test --test <name>` instead of
+  full-crate commands.

@@ -7,4 +7,4 @@ pub mod aes;
 pub mod smp_crypto;
 
 pub use aes::{aes_128_encrypt_block, aes_cmac};
-pub use smp_crypto::{ah, c1, f4, g2, s1, xor16};
+pub use smp_crypto::{ah, c1, f4, f5, f6, g2, h6, h7, s1, xor16};

@@ -1,8 +1,6 @@
 // Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
-//! Port of Bumble's device_test.py / host_test.py test suite.
-//!
 //! Tests virtual device lifecycle, multi-device connections, MTU negotiations,
 //! GATT read/write operations, and notification generation over L2CAP.
 

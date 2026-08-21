@@ -1,8 +1,6 @@
 // Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
-//! Port of Bumble's l2cap_test.py test suite.
-//!
 //! Validates L2CAP B-frame encapsulation, fixed channel multiplexing, and Credit-Based CoC.
 
 use simble::l2cap::{CoCManager, L2capHeader, cid};

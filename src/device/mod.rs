@@ -5,7 +5,9 @@
 
 pub mod att_server;
 pub mod connection;
+pub mod observer;
 pub mod virtual_device;
 
 pub use connection::{ConnectionState, PrepareWriteChunk};
+pub use observer::AttServerObserver;
 pub use virtual_device::VirtualDevice;

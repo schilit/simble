@@ -1,7 +1,7 @@
 // Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
-//! Ported tests from Bumble's keystore_test.py validating JsonKeyStore parsing and namespace handling.
+//! Tests validating JsonKeyStore parsing and namespace handling.
 
 use simble::smp::{KeyStore, PairingKey, PairingKeys};
 

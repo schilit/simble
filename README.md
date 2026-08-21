@@ -16,7 +16,7 @@ Designed as an alternative to Python-based Bumble for simulation environments, S
 - **Bluetooth 6.0 Channel Sounding (CS)**: High-accuracy Phase-Based Ranging (PBR) distance estimation ($\Delta d = \frac{c \cdot \Delta \phi}{4\pi \cdot \Delta f}$) and Ranging Service (`0x185B`).
 - **Complete Profile Ecosystem**:
   - **Health & Device**: Heart Rate (`0x180D`), Battery (`0x180F`), Device Information (`0x180A`), Generic Attribute (`0x1801` with database hash).
-  - **LE Audio**: Coordinated Set Identification (CSIP `0x1846`), Published Audio Capabilities (PACS `0x184E`), Volume Control (VCP `0x1844`).
+  - **LE Audio**: Coordinated Set Identification (CSIP `0x1846`), Published Audio Capabilities (PACS `0x1850`), Volume Control (VCP `0x1844`).
   - **HID over GATT (HOGP)**: Virtual Keyboards and Mice with automated ASCII-to-HID report conversion.
 - **REST & Web Management**: Built-in HTTP router for declarative multi-device provisioning and real-time attribute mutation.
 - **Zero External Dependencies**: Compiles in milliseconds with standard `cargo build` and `cargo test` across Linux, macOS, and Windows.
@@ -95,6 +95,43 @@ cargo test --all-targets --all-features
 ```
 
 ---
+
+## Testing Against netsim
+
+Simble's primary client is Android's [netsim](https://android.googlesource.com/platform/tools/netsim)
+virtual Bluetooth controller. `simble::transport::NetsimTransport` (`src/transport/netsim.rs`)
+connects to netsim's native WebSocket HCI endpoint, carrying H4-framed packets and passing the
+virtual device's name straight through the connection URI &mdash; no separate handshake message,
+no gRPC dependency:
+
+```
+ws://localhost:7681/v1/websocket/bt?name=<device-name>&address=<mac-address>
+```
+
+**Requires Android Studio Canary**, not Stable. `netsimd`'s WebSocket frontend (and the separate
+`netsim` CLI for inspecting live connections) is missing from the emulator package bundled with
+Stable-channel Android Studio &mdash; confirmed by testing against a Stable install, where
+`netsimd` opens only its gRPC (device-management) and raw HCI-socket ports, with no log line for
+the WebSocket frontend server at all. Canary has the fix.
+
+```bash
+# Install Android Studio Canary (installs alongside an existing Stable install)
+brew install --cask android-studio-preview@canary
+
+# Launch the emulator's netsimd (path may vary by install location)
+~/Library/Android/sdk/emulator/netsimd --logtostderr
+```
+
+`netsimd` logs its actual gRPC and HCI-socket ports on startup; the WebSocket frontend defaults
+to port `7681`. Point `NetsimTransport::connect(...)` at the URL above once `netsimd` is running.
+
+---
+
+## Acknowledgments
+
+Simble is inspired by, and ports test coverage from, [Bumble](https://github.com/google/bumble),
+Google's Python Bluetooth stack. Where a Simble test suite is a direct port of a Bumble test
+file, that provenance is noted in this README rather than repeated per-file in the source.
 
 ## License
 

@@ -238,6 +238,23 @@ pub enum Uuid {
     Uuid128([u8; 16]),
 }
 
+/// Lets every one of the ~25 `Uuid::from_u16(0x____)` call sites across
+/// profile modules shrink to a bare literal wherever the target accepts
+/// `impl Into<Uuid>` (see `GattDatabase::add_service`, etc.) — and lets a
+/// bare `u16` be passed directly, not just written as `Uuid::from_u16(...)`.
+impl From<u16> for Uuid {
+    fn from(value: u16) -> Self {
+        Self::Uuid16(value)
+    }
+}
+
+/// Same reasoning as `From<u16>`, for the 128-bit case.
+impl From<[u8; 16]> for Uuid {
+    fn from(value: [u8; 16]) -> Self {
+        Self::Uuid128(value)
+    }
+}
+
 impl Uuid {
     /// Bluetooth SIG base UUID: 00000000-0000-1000-8000-00805F9B34FB
     pub const BASE_UUID: [u8; 16] = [

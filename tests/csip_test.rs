@@ -1,7 +1,7 @@
 // Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
-//! Ported tests from Bumble's csip_test.py validating CSIP crypto primitives and service.
+//! CSIP crypto primitive and service tests.
 
 use simble::crypto::smp_crypto::rev;
 use simble::gatt::GattDatabase;

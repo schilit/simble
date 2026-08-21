@@ -192,7 +192,7 @@ pub fn aes_cmac(key: &[u8; 16], data: &[u8]) -> [u8; 16] {
     } else {
         data.len().div_ceil(16)
     };
-    let flag = !data.is_empty() && (data.len() % 16 == 0);
+    let flag = !data.is_empty() && data.len().is_multiple_of(16);
 
     let mut m_last = [0u8; 16];
     if flag {

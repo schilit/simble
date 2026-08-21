@@ -1,9 +1,8 @@
 // Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
-//! Port of Bumble's core_test.py test suite.
-//!
-//! Tests UUID parsing/formatting, Address handling, and GAP Advertising Data payloads.
+//! Core type tests: UUID parsing/formatting, Address handling, and GAP
+//! Advertising Data payloads.
 
 use simble::gap::{AdvertisingData, flags};
 use simble::types::{Address, Uuid};
@@ -58,7 +57,7 @@ fn test_address_formatting_and_parsing() {
 fn test_advertising_data_payload_structure() {
     let ad = AdvertisingData::new()
         .with_flags(flags::LE_GENERAL_DISCOVERABLE | flags::BR_EDR_NOT_SUPPORTED)
-        .with_name("BumbleDevice")
+        .with_name("MyTestDevice")
         .with_service_uuid_16(0x180F) // Battery Service
         .with_manufacturer_data(0x00E0, &[0x01, 0x02, 0x03]); // Google Company ID
 
@@ -67,10 +66,10 @@ fn test_advertising_data_payload_structure() {
     // 1. Flags: Len=2, Type=0x01, Value=0x06
     assert_eq!(&encoded[0..3], &[0x02, 0x01, 0x06]);
 
-    // 2. Name: Len=13, Type=0x09, Value="BumbleDevice"
+    // 2. Name: Len=13, Type=0x09, Value="MyTestDevice"
     assert_eq!(encoded[3], 13);
     assert_eq!(encoded[4], 0x09);
-    assert_eq!(&encoded[5..17], b"BumbleDevice");
+    assert_eq!(&encoded[5..17], b"MyTestDevice");
 
     // 3. Service UUIDs: Len=3, Type=0x03, Value=0x0F, 0x18
     assert_eq!(encoded[17], 3);

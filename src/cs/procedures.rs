@@ -68,7 +68,7 @@ pub struct CsDistanceEstimate {
 ///
 /// Implements standard phase slope distance calculation: $\Delta d = \frac{c \cdot \Delta \phi}{4\pi \cdot \Delta f}$
 pub fn compute_pbr_distance(freq_delta_hz: f32, phase_delta_rad: f32) -> f32 {
-    const SPEED_OF_LIGHT: f32 = 299_792_458.0; // m/s
+    const SPEED_OF_LIGHT: f32 = crate::types::SPEED_OF_LIGHT_M_PER_S as f32;
     (SPEED_OF_LIGHT * phase_delta_rad.abs())
         / (4.0 * std::f32::consts::PI * freq_delta_hz.abs().max(1.0))
 }

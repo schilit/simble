@@ -1,7 +1,7 @@
 // Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
-//! Published Audio Capabilities Service (PACS, UUID 0x184E).
+//! Published Audio Capabilities Service (PACS, UUID 0x1850).
 //!
 //! Exposes audio capabilities (LC3 codec records, sample rates, channel allocations)
 //! for LE Audio unicast (BAP) and broadcast (Auracast) audio endpoints.
@@ -12,7 +12,7 @@ use crate::gatt::{AttributePermissions, CharacteristicProperties, GattDatabase};
 pub mod pacs_uuid {
     use crate::types::Uuid;
 
-    pub const PACS_SERVICE: Uuid = Uuid::Uuid16(0x184E);
+    pub const PACS_SERVICE: Uuid = Uuid::Uuid16(0x1850);
     pub const SINK_PAC: Uuid = Uuid::Uuid16(0x2BC9);
     pub const SINK_AUDIO_LOCATIONS: Uuid = Uuid::Uuid16(0x2BCA);
     pub const SOURCE_PAC: Uuid = Uuid::Uuid16(0x2BCB);
@@ -21,13 +21,9 @@ pub mod pacs_uuid {
     pub const SUPPORTED_AUDIO_CONTEXTS: Uuid = Uuid::Uuid16(0x2BCE);
 }
 
-/// Standard Audio Location bitmask flags (BAP Section 4.3).
-pub mod audio_location {
-    pub const FRONT_LEFT: u32 = 0x00000001;
-    pub const FRONT_RIGHT: u32 = 0x00000002;
-    pub const FRONT_CENTER: u32 = 0x00000004;
-    pub const STEREO: u32 = FRONT_LEFT | FRONT_RIGHT;
-}
+/// Standard Audio Location bitmask flags (BAP Section 4.3) — the complete
+/// set lives in [`crate::profiles::bap`], re-exported here for PACS callers.
+pub use crate::profiles::bap::audio_location;
 
 /// Published Audio Capabilities Service GATT container.
 #[derive(Debug, Clone)]

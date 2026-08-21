@@ -1,8 +1,6 @@
 // Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
-//! Port of Bumble's gatt_test.py test suite.
-//!
 //! Tests ATT wire protocols, GATT database handle allocations, discovery procedures,
 //! characteristic read/write operations, and notification generation.
 

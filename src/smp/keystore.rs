@@ -9,7 +9,8 @@ use std::sync::{Arc, RwLock};
 
 use crate::types::SimbleError;
 
-/// Hex-serialized key representation matching Bumble's JsonKeyStore.
+/// Hex-serialized key representation for a JSON-backed keystore (see
+/// [`KeyStore`]'s `to_json`/`from_json`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PairingKey {
     #[serde(
@@ -97,7 +98,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 
 fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
     let clean = s.trim();
-    if clean.len() % 2 != 0 {
+    if !clean.len().is_multiple_of(2) {
         return Err("Odd length hex string".into());
     }
     (0..clean.len())
@@ -167,10 +168,10 @@ impl KeyStore {
     pub fn get(&self, name: &str) -> Option<PairingKeys> {
         let store = self.store.read().unwrap();
         // 1. Try default namespace
-        if let Some(ns_map) = store.get(&self.default_namespace) {
-            if let Some(keys) = ns_map.get(name) {
-                return Some(keys.clone());
-            }
+        if let Some(ns_map) = store.get(&self.default_namespace)
+            && let Some(keys) = ns_map.get(name)
+        {
+            return Some(keys.clone());
         }
         // 2. Search all namespaces
         for ns_map in store.values() {

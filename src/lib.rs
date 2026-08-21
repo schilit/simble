@@ -10,18 +10,23 @@
 
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
+pub mod android;
 pub mod api;
 pub mod att;
+pub mod classic;
 pub mod client;
+pub mod controller;
 pub mod crypto;
 pub mod cs;
 pub mod device;
 pub mod devices;
+pub mod df;
 pub mod gap;
 pub mod gatt;
 pub mod l2cap;
 pub mod packets;
 pub mod profiles;
+pub mod scripting;
 pub mod service;
 pub mod smp;
 pub mod transport;
@@ -45,7 +50,7 @@ pub use profiles::{
     PublishedAudioCapabilitiesService, RangingService, VolumeControlService,
 };
 pub use service::{DeviceSummary, ManagedDevice, SimbleManager};
-pub use smp::{KeyStore, PairingKey, PairingKeys};
+pub use smp::{KeyStore, PairingConfig, PairingKey, PairingKeys, PairingSession, Role as SmpRole};
 pub use transport::{HciChannel, h4_type};
 pub use types::{Address, AddressType, SimbleError, Uuid};
 

@@ -3,6 +3,7 @@
 
 //! LE Connection state tracking and write buffer queue.
 
+use crate::smp::PairingSession;
 use crate::types::Address;
 
 /// Buffered chunk for queued long writes (PrepareWrite / ExecuteWrite).
@@ -21,6 +22,15 @@ pub struct ConnectionState {
     pub mtu: u16,
     pub prepare_write_queue: Vec<PrepareWriteChunk>,
     pub pending_indication: bool,
+    /// The in-progress or completed SMP pairing exchange for this
+    /// connection, if pairing has been initiated by either side.
+    pub pairing_session: Option<PairingSession>,
+    /// Whether the link is currently secured with an LTK/STK (set once a
+    /// pairing session's Confirm/Random or DHKey Check exchange completes).
+    pub is_encrypted: bool,
+    /// The key currently securing the link, mirrored from
+    /// `pairing_session` once encryption is established.
+    pub ltk: Option<[u8; 16]>,
 }
 
 impl ConnectionState {
@@ -32,6 +42,9 @@ impl ConnectionState {
             mtu,
             prepare_write_queue: Vec::new(),
             pending_indication: false,
+            pairing_session: None,
+            is_encrypted: false,
+            ltk: None,
         }
     }
 }
@@ -48,5 +61,8 @@ mod tests {
         assert_eq!(conn.mtu, 23);
         assert!(conn.prepare_write_queue.is_empty());
         assert!(!conn.pending_indication);
+        assert!(conn.pairing_session.is_none());
+        assert!(!conn.is_encrypted);
+        assert!(conn.ltk.is_none());
     }
 }

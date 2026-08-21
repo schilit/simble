@@ -18,10 +18,14 @@ pub use att::{
 pub use hci::*;
 pub use l2cap_frame::{AclPacketBoundary, HciAclHeader, L2capHeader, cid as l2cap_cid};
 pub use l2cap_signaling::{
-    DisconnectionRequest, DisconnectionResponse, L2capSignalingHeader,
+    ConfigurationRequestHeader, ConfigurationResponseHeader, ConnectionRequestHeader,
+    ConnectionResponseHeader, DisconnectionRequest, DisconnectionResponse, L2capSignalingHeader,
     LeCreditBasedConnectionRequestHeader, LeCreditBasedConnectionResponseHeader,
-    LeFlowControlCredit, signaling_code,
+    LeFlowControlCredit, configuration_result, connection_result, encode_mtu_option,
+    parse_mtu_option, signaling_code,
 };
 pub use smp::{
-    SmpPairingFailed, SmpPairingPacket, io_capability as smp_io_capability, opcode as smp_opcode,
+    SmpPairingFailed, SmpPairingPacket, auth_req as smp_auth_req, error_code as smp_error_code,
+    io_capability as smp_io_capability, key_distribution as smp_key_distribution,
+    opcode as smp_opcode,
 };

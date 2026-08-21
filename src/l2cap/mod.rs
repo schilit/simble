@@ -3,6 +3,8 @@
 
 //! L2CAP layer re-exports, reassembly engine, and Connection-Oriented Channels.
 
+pub(crate) mod cid_allocator;
+pub mod classic;
 pub mod coc;
 pub mod reassembler;
 

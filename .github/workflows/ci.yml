@@ -31,3 +31,39 @@ jobs:
 
       - name: Run Tests
         run: cargo test --all-targets --all-features -- --nocapture
+
+  duplication-report:
+    name: Duplication Report (non-blocking)
+    runs-on: ubuntu-latest
+    # Report-only for now: early-phase churn must not fail CI.
+    continue-on-error: true
+    env:
+      # Don't let the global -D warnings break `cargo install` of third-party tools.
+      RUSTFLAGS: ""
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache duplication tools
+        id: cache-dup-tools
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/cargo-dupes
+            ~/.cargo/bin/similarity-rs
+          key: dup-tools-${{ runner.os }}-v1
+
+      - name: Install cargo-dupes and similarity-rs
+        if: steps.cache-dup-tools.outputs.cache-hit != 'true'
+        run: |
+          cargo install cargo-dupes
+          cargo install similarity-rs
+
+      - name: Duplication report (cargo-dupes)
+        run: cargo dupes report --exclude-tests
+
+      - name: Similarity report (similarity-rs)
+        run: similarity-rs ./src --skip-test

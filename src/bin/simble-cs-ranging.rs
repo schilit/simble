@@ -40,7 +40,7 @@ fn main() {
     // Execute Phase-Based Ranging (PBR) estimation at various simulated distance points
     println!("Simulating Phase-Based Ranging across 40 MHz channel hop:");
     let simulated_distances = [0.5, 1.2, 2.5, 5.0, 10.0]; // Target meters
-    const SPEED_OF_LIGHT: f32 = 299_792_458.0;
+    const SPEED_OF_LIGHT: f32 = simble::types::SPEED_OF_LIGHT_M_PER_S as f32;
     let freq_delta_hz = 40_000_000.0; // 40 MHz
 
     for d in simulated_distances {

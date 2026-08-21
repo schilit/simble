@@ -3,8 +3,8 @@
 
 //! L2CAP Connection-Oriented Channels (CoC) and Credit-Based Flow Control.
 
+use crate::l2cap::cid_allocator::CidAllocator;
 use crate::types::SimbleError;
-use std::collections::HashMap;
 
 /// An active L2CAP Connection-Oriented Channel.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,10 +67,15 @@ impl CoCChannel {
 }
 
 /// Dynamic CID allocator and channel manager for L2CAP CoC / EATT bearers.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct CoCManager {
-    next_cid: u16,
-    channels: HashMap<u16, CoCChannel>,
+    channels: CidAllocator<CoCChannel>,
+}
+
+impl Default for CoCManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CoCManager {
@@ -79,8 +84,7 @@ impl CoCManager {
 
     pub fn new() -> Self {
         Self {
-            next_cid: Self::MIN_DYNAMIC_CID,
-            channels: HashMap::new(),
+            channels: CidAllocator::new(Self::MIN_DYNAMIC_CID, Self::MAX_DYNAMIC_CID),
         }
     }
 
@@ -108,33 +112,21 @@ impl CoCManager {
     }
 
     fn allocate_cid(&mut self) -> Result<u16, SimbleError> {
-        for _ in 0..(Self::MAX_DYNAMIC_CID - Self::MIN_DYNAMIC_CID + 1) {
-            let cid = self.next_cid;
-            self.next_cid = if self.next_cid >= Self::MAX_DYNAMIC_CID {
-                Self::MIN_DYNAMIC_CID
-            } else {
-                self.next_cid + 1
-            };
-
-            if !self.channels.contains_key(&cid) {
-                return Ok(cid);
-            }
-        }
-        Err(SimbleError::DeviceError(
-            "L2CAP CoC: All dynamic CIDs exhausted".into(),
-        ))
+        self.channels
+            .allocate()
+            .ok_or_else(|| SimbleError::DeviceError("L2CAP CoC: All dynamic CIDs exhausted".into()))
     }
 
     pub fn get_channel(&self, cid: u16) -> Option<&CoCChannel> {
-        self.channels.get(&cid)
+        self.channels.get(cid)
     }
 
     pub fn get_channel_mut(&mut self, cid: u16) -> Option<&mut CoCChannel> {
-        self.channels.get_mut(&cid)
+        self.channels.get_mut(cid)
     }
 
     pub fn remove_channel(&mut self, cid: u16) -> Option<CoCChannel> {
-        self.channels.remove(&cid)
+        self.channels.remove(cid)
     }
 }
 
