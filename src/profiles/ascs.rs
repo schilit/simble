@@ -24,6 +24,8 @@ use std::sync::{Arc, Mutex};
 use crate::gatt::database::AttributeHandler;
 use crate::gatt::{AttributePermissions, CharacteristicProperties, GattDatabase};
 use crate::profiles::bap::{LC3_CODEC_ID, read_u24_le, write_u24_le};
+use zerocopy::byteorder::little_endian::U16;
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Ref, Unaligned};
 
 /// ASCS Service and characteristic UUIDs.
 pub mod ascs_uuid {
@@ -448,6 +450,24 @@ fn parse_count(data: &[u8]) -> Option<(u8, &[u8])> {
     Some((count, rest))
 }
 
+/// One fixed 16-byte Config QoS record (ASCS 5.2). `sdu_interval` and
+/// `presentation_delay` are 24-bit little-endian values read with
+/// [`read_u24_le`].
+#[repr(C)]
+#[derive(Copy, Clone, Debug, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout)]
+struct ConfigQosRecord {
+    ase_id: u8,
+    cig_id: u8,
+    cis_id: u8,
+    sdu_interval: [u8; 3],
+    framing: u8,
+    phy: u8,
+    max_sdu: U16,
+    retransmission_number: u8,
+    max_transport_latency: U16,
+    presentation_delay: [u8; 3],
+}
+
 impl AudioStreamControlService {
     /// Registers ASCS into a GATT database with one characteristic per requested Sink and
     /// Source ASE ID, plus the shared ASE Control Point.
@@ -737,33 +757,24 @@ impl AscsState {
         };
         let mut out = Vec::with_capacity(count as usize);
         for _ in 0..count {
-            if r.len() < 16 {
+            let Ok((rec, next)) = Ref::<_, ConfigQosRecord>::from_prefix(r) else {
                 out.push((0, response_code::INVALID_LENGTH, reason_code::NONE, None));
                 return out;
-            }
-            let ase_id = r[0];
-            let cig_id = r[1];
-            let cis_id = r[2];
-            let sdu_interval = read_u24_le(&r[3..]);
-            let framing = r[6];
-            let phy = r[7];
-            let max_sdu = u16::from_le_bytes([r[8], r[9]]);
-            let retransmission_number = r[10];
-            let max_transport_latency = u16::from_le_bytes([r[11], r[12]]);
-            let presentation_delay = read_u24_le(&r[13..]);
-            r = &r[16..];
+            };
+            r = next;
+            let ase_id = rec.ase_id;
             out.push(match self.ase_index(ase_id) {
                 Some(index) => {
                     let (code, reason) = self.ases[index].on_config_qos(
-                        cig_id,
-                        cis_id,
-                        sdu_interval,
-                        framing,
-                        phy,
-                        max_sdu,
-                        retransmission_number,
-                        max_transport_latency,
-                        presentation_delay,
+                        rec.cig_id,
+                        rec.cis_id,
+                        read_u24_le(&rec.sdu_interval),
+                        rec.framing,
+                        rec.phy,
+                        rec.max_sdu.get(),
+                        rec.retransmission_number,
+                        rec.max_transport_latency.get(),
+                        read_u24_le(&rec.presentation_delay),
                     );
                     (ase_id, code, reason, Some(index))
                 }
