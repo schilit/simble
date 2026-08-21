@@ -120,7 +120,7 @@
             <td>Minimal — no real PHY, timing, encryption, ISO, or ranging</td>
             <td><span class="yes">Yes</span></td>
             <td><span class="yes">Yes</span> (wasm)</td>
-            <td><span class="part">Same origin</span> — one process; a SharedWorker shares it across tabs</td>
+            <td><span class="part">Same origin</span> — a SharedWorker shares one Link across tabs; nothing off-machine</td>
             <td><span class="no">None</span></td>
             <td>Tests, CI, quick single-page or multi-tab browser scenes</td>
           </tr>
@@ -186,7 +186,7 @@
       <span class="lbl">Limits</span>
       <ul class="reasons limits">
         <li>Models no real PHY — no channel hopping, no timing, no encryption, no ISO, no Channel Sounding.</li>
-        <li>Devices talk to each other, but only <em>within one process</em> — no cross-process or cross-machine reach (a <code class="inl">SharedWorker</code> extends one <code class="inl">Link</code> to same-origin tabs).</li>
+        <li>Confined to <em>one machine</em> — and, in the browser, one origin. A <code class="inl">SharedWorker</code> already shares a <code class="inl">Link</code> across same-origin tabs, but nothing reaches another machine or a separate app; for that, climb to a WebSocket rung.</li>
       </ul>
 
       <span class="lbl">Build &amp; run</span>
