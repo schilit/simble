@@ -56,3 +56,7 @@ path = "examples/ble_keyboard.rs"
 [[example]]
 name = "channel_sounding"
 path = "examples/channel_sounding.rs"
+
+[[example]]
+name = "in_process_scene"
+path = "examples/in_process_scene.rs"

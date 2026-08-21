@@ -10,3 +10,4 @@
 //! controller present at all.
 
 pub mod lmp;
+pub mod sim;
