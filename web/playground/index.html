@@ -55,7 +55,7 @@
     <h2>netsim is not reachable</h2>
     <p>Could not reach netsim at <code>localhost:7681</code> — is <code>netsimd</code> running with its
        WebSocket frontend enabled? This page is served from the cloud, but the Bluetooth scene runs
-       <strong>on your machine</strong>: the wasm build of Simble in this tab connects to a local
+       <strong>on your machine</strong>: the wasm build of SimBLE in this tab connects to a local
        <code>netsimd</code> over <code>ws://localhost:7681</code>. Start it with:</p>
     <pre><code>netsimd --logtostderr --no-shutdown --ws-port 7681</code></pre>
     <p class="hint">Needs the canary-channel emulator (see the README's <em>Testing Against netsim</em>
@@ -120,7 +120,7 @@
 </main>
 
 <footer>
-  Simble compiled to WebAssembly — no server-side interpreter, no backend. The page joins netsim
+  SimBLE compiled to WebAssembly — no server-side interpreter, no backend. The page joins netsim
   as <code>web-playground</code>; the advertised name comes from your script. <strong>Share</strong>
   encodes the editor's script into the URL (deflate + base64url) so a link opens with that exact
   script ready to Run.

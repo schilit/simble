@@ -94,7 +94,7 @@
 </nav>
 <header>
   <h1>SimBLE Scanner</h1>
-  <span class="sub">Simble's real HCI + GAP stack, compiled to WebAssembly, scanning your local netsim scene</span>
+  <span class="sub">SimBLE's real HCI + GAP stack, compiled to WebAssembly, scanning your local netsim scene</span>
   <span id="conn" class="pill">starting…</span>
 </header>
 
@@ -103,7 +103,7 @@
     <h2>netsim is not reachable</h2>
     <p>Could not reach netsim at <code>localhost:7681</code> — is <code>netsimd</code> running with its
        WebSocket frontend enabled? This page is served from the cloud, but the Bluetooth scene runs
-       <strong>on your machine</strong>: the wasm build of Simble in this tab connects to a local
+       <strong>on your machine</strong>: the wasm build of SimBLE in this tab connects to a local
        <code>netsimd</code> over <code>ws://localhost:7681</code>. Start it with:</p>
     <pre><code>netsimd --logtostderr --no-shutdown --ws-port 7681</code></pre>
     <p>Needs the canary-channel emulator (see the README's <em>Testing Against netsim</em> section).
@@ -126,7 +126,7 @@
 <footer>
   The page joins netsim as device <code>web-scanner</code> and runs the real scan bring-up
   (Reset → event masks → scan parameters → enable). Advertising reports are parsed and their AD
-  structures decoded by Simble's Rust code running in this tab.
+  structures decoded by SimBLE's Rust code running in this tab.
 </footer>
 
 <script type="module" src="./scanner.js"></script>

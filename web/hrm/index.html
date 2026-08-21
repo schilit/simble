@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Simble scripted device</title>
+<title>SimBLE scripted device</title>
 <link rel="stylesheet" href="../common/nav.css">
 <style>
   :root {
@@ -149,7 +149,7 @@
 </nav>
 <header>
   <h1>SimBLE scripted device</h1>
-  <span class="sub">this page opened a running Simble — the Rhai script below <em>is</em> the device</span>
+  <span class="sub">this page opened a running SimBLE — the Rhai script below <em>is</em> the device</span>
   <span id="conn" class="pill">starting…</span>
 </header>
 
@@ -158,7 +158,7 @@
     <h2>netsim is not reachable</h2>
     <p>Could not reach netsim at <code>localhost:7681</code> — is <code>netsimd</code> running with its
        WebSocket frontend enabled? This page is served from the cloud, but the Bluetooth scene runs
-       <strong>on your machine</strong>: the wasm build of Simble in this tab connects to a local
+       <strong>on your machine</strong>: the wasm build of SimBLE in this tab connects to a local
        <code>netsimd</code> over <code>ws://localhost:7681</code>. Start it with:</p>
     <pre><code>netsimd --logtostderr --no-shutdown --ws-port 7681</code></pre>
     <p class="hint">Needs the canary-channel emulator (see the README's <em>Testing Against netsim</em>
@@ -218,7 +218,7 @@
 </main>
 
 <footer>
-  Simble compiled to WebAssembly — no server-side interpreter, no backend. The page joins netsim
+  SimBLE compiled to WebAssembly — no server-side interpreter, no backend. The page joins netsim
   as <code>web-device</code>; the advertised name comes from your script.
 </footer>
 

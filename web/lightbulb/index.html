@@ -99,7 +99,7 @@
     <h2>netsim is not reachable</h2>
     <p>Could not reach netsim at <code>localhost:7681</code> — is <code>netsimd</code> running with its
        WebSocket frontend enabled? This page is served from the cloud, but the Bluetooth scene runs
-       <strong>on your machine</strong>: the wasm build of Simble in this tab connects to a local
+       <strong>on your machine</strong>: the wasm build of SimBLE in this tab connects to a local
        <code>netsimd</code> over <code>ws://localhost:7681</code>. Start it with:</p>
     <pre><code>netsimd --logtostderr --no-shutdown --ws-port 7681</code></pre>
     <p class="hint">Needs the canary-channel emulator. The bulb still works offline — the color you
@@ -109,7 +109,7 @@
 </main>
 
 <footer>
-  Simble compiled to WebAssembly. The device is a Rhai-scripted peripheral exposing a writable color
+  SimBLE compiled to WebAssembly. The device is a Rhai-scripted peripheral exposing a writable color
   characteristic; the page joins netsim as <code>web-lightbulb</code>. Custom UUIDs:
   service <code>f0ff0001-1234-5678-90ab-cdef01234567</code>, color characteristic
   <code>f0ff0002-1234-5678-90ab-cdef01234567</code>.
