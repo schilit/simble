@@ -76,6 +76,22 @@
     padding: 0 0.5rem; margin: 0.2rem 0.3rem 0 0; font-size: 0.7rem; color: var(--accent); }
 
   footer { max-width: 82rem; }
+
+  /* netsim setup hint (websocket mode, no connection) */
+  #setup { display: none; border-color: var(--warn); margin-bottom: 1rem; }
+  #setup.visible { display: block; }
+  #setup h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--warn); margin: 0 0 0.6rem; }
+  #setup p { margin: 0.5rem 0; font-size: 0.88rem; }
+  #setup pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.6rem; overflow-x: auto; font-size: 0.8rem; }
+  #setup code { color: var(--good); }
+  #setup a { color: var(--accent); }
+
+  /* per-mode notes under the add bar (shown only in websocket mode) */
+  .mode-note { display: none; color: var(--dim); font-size: 0.76rem; margin: 0 0 0.7rem;
+    line-height: 1.4; }
+  .mode-note a { color: var(--accent); }
 </style>
 </head>
 <body>
@@ -105,8 +121,22 @@
 <main>
   <p class="intro">Build a Bluetooth scene device by device — scripted <strong class="peripheral-role">servers</strong>
     (peripherals), passive <strong class="scanner-role">scanners</strong>, and <strong class="central-role">clients</strong>
-    (centrals) that connect to a server and discover its GATT. Everything runs on a single in-page
-    <a href="../controllers/">controller</a> in this tab — no netsim. Click any device on the left to inspect it.</p>
+    (centrals) that connect to a server and discover its GATT. Pick a <a href="../controllers/">controller</a>:
+    <strong>In-page</strong> hosts the whole scene on one wasm Link in this tab (no netsim), or
+    <strong>WebSocket</strong> spins each device up as its own engine in a real netsim scene. Click any device to inspect it.</p>
+
+  <div id="backend"></div>
+
+  <section id="setup" class="panel">
+    <h2>netsim is not reachable</h2>
+    <p>Could not reach netsim at <code>localhost:7681</code> — is <code>netsimd</code> running with its
+       WebSocket frontend enabled? This page is served from the cloud, but the Bluetooth scene runs
+       <strong>on your machine</strong>: each device in this tab connects to a local <code>netsimd</code>
+       over <code>ws://localhost:7681</code>. Start it with:</p>
+    <pre><code>netsimd --no-shutdown --ws-port 7681</code></pre>
+    <p>In WebSocket mode the devices you add here join the <a href="../emulator/">Android emulator's scene</a>,
+       so the emulator app can scan, connect to, and discover these peripherals.</p>
+  </section>
 
   <div class="two">
     <section class="panel">
@@ -119,6 +149,9 @@
         <button id="add-scanner">+ Scanner</button>
         <button id="add-client">+ Client</button>
       </div>
+      <p class="mode-note" id="client-note">Clients are in-page only — over netsim the
+        <a href="../emulator/">emulator app</a> is the central.</p>
+      <p class="mode-note" id="ws-note">Devices join the <a href="../emulator/">emulator's netsim scene</a>.</p>
       <ul class="dev-list" id="dev-list"></ul>
       <p class="empty" id="scene-empty">No devices yet — add a server to get started.</p>
     </section>

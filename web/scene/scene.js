@@ -1,14 +1,26 @@
 // SimBLE Scene creator. The user assembles a whole BLE scene — scripted
-// peripherals (servers), passive scanners, and centrals (clients) — onto one
-// in-page wasm `Link`, then clicks any device to inspect it. There is no single
-// source of truth inside the Link (and no remove), so this page keeps an array
-// of device *specs* and rebuilds a fresh WebLink from it whenever the scene
-// changes. Rendering helpers are shared with the other pages via viewer.js.
+// peripherals (servers), passive scanners, and centrals (clients) — then clicks
+// any device to inspect it. The page keeps an array of device *specs* (the
+// source of truth: there is no single source inside an engine) and drives them
+// through one of two controller backends chosen with the selector at the top:
+//   • in-page  — one wasm `Link` in this tab hosts every device; any change
+//                rebuilds a fresh Link from the specs. No netsim needed.
+//   • websocket — each device is its own WebSocket engine (WebPeripheral /
+//                WebScanner) joining a real netsim / rootcanal-ws scene over
+//                ws://localhost:7681, alongside the Android emulator. The
+//                central (client) role only exists in the in-page Link, so it
+//                is disabled over netsim (there the emulator app is the central).
+// Rendering helpers are shared with the other pages via viewer.js.
 
-import init, { WebLink } from "../pkg/simble.js";
+import init, { WebLink, WebPeripheral, WebScanner } from "../pkg/simble.js";
 import { renderGatt, nameFor, propChips, escapeHtml } from "../common/viewer.js";
+import { createBackendSelector } from "../common/backend.js";
 
 const $ = (id) => document.getElementById(id);
+
+// netsim WebSocket endpoint (same shape as the scanner page).
+const wsUrl = (node, addr) =>
+  `ws://localhost:7681/v1/websocket/bt?name=${encodeURIComponent(node)}&address=${addr}`;
 
 // --- default scripts for a new server ---------------------------------------
 const HRM_SCRIPT = `// Heart-rate monitor: notifies BPM, plus a battery level.
@@ -43,18 +55,26 @@ fn tick(server, t) {
 `;
 
 // --- scene model ------------------------------------------------------------
-// The source of truth. Each spec: { id, kind, address, target, script, index }
+// The source of truth. Each spec: { id, kind, address, target, script, ... }
 //   kind    : "peripheral" | "scanner" | "central"
 //   address : this device's own BD address (assigned automatically)
 //   target  : central only — address of the peripheral it connects to
 //   script  : peripheral only — its Rhai source
-//   index   : the device's index inside the current WebLink (set on rebuild)
+// Backend-private fields added at runtime:
+//   index   : in-page — the device's index inside the current WebLink
+//   _engine : websocket — this device's own WebPeripheral / WebScanner
+//   _t0     : websocket peripheral — perf clock when its script last (re)ran
+//   _status : websocket peripheral — last status JSON string from tick
+//   _reportsJson : websocket scanner — last reports JSON string from tick
+//   _openedOnce  : websocket — has this engine's socket ever been open
+//   _reports     : per-scanner advertisement aggregation
 const specs = [];
 let nextId = 1;      // stable per-device id (never reused)
 let nextAddr = 1;    // next auto-assigned address suffix
 let openId = null;   // id of the device shown in the inspect panel
 
-let link = null;
+let mode = "in-page";     // controller backend: "in-page" | "websocket"
+let link = null;          // in-page mode: the shared WebLink (null in websocket)
 let t0 = performance.now();
 const prevValues = new Map(); // peripheral GATT value pulse tracking
 
@@ -62,11 +82,19 @@ const fmtAddr = (n) => "AA:BB:CC:00:00:" + n.toString(16).toUpperCase().padStart
 const roleLabel = { peripheral: "Server", scanner: "Scanner", central: "Client" };
 const roleKind = { peripheral: "peripheral · Rhai script", scanner: "scanner · passive", central: "central · connects & discovers" };
 
+// A stable netsim node name for a device (websocket mode).
+const nodeName = (spec) =>
+  spec.kind === "scanner" ? "web-scanner" : `web-peripheral-${spec.id}`;
+
 function setPill(text, cls) {
   const pill = $("conn");
   pill.textContent = text;
   pill.className = "pill" + (cls ? " " + cls : "");
 }
+
+// ===========================================================================
+//  In-page backend (one shared WebLink)
+// ===========================================================================
 
 // Rebuild a fresh WebLink from the current specs. Built into a temp Link first
 // so a bad peripheral script throws before we discard the working Link.
@@ -90,6 +118,78 @@ function rebuild() {
   prevValues.clear();
 }
 
+// ===========================================================================
+//  WebSocket backend (each device is its own netsim engine)
+// ===========================================================================
+
+// (Re)build one device's engine. Constructs the new engine first, then frees
+// any old one, so a throwing constructor (e.g. a bad script) leaves the
+// previous engine untouched. Centrals have no netsim engine.
+function buildEngine(spec) {
+  if (spec.kind === "central") return;
+  let ne = null;
+  if (spec.kind === "peripheral") ne = new WebPeripheral(wsUrl(nodeName(spec), spec.address), spec.script);
+  else if (spec.kind === "scanner") ne = new WebScanner(wsUrl(nodeName(spec), spec.address));
+  if (spec._engine) { try { spec._engine.free(); } catch (_) { /* gone */ } }
+  spec._engine = ne;
+  spec._t0 = performance.now();
+  spec._status = null;
+  spec._reportsJson = null;
+  spec._openedOnce = false;
+  spec._reports = new Map();
+}
+
+function freeEngine(spec) {
+  if (spec._engine) { try { spec._engine.free(); } catch (_) { /* gone */ } spec._engine = null; }
+}
+
+// ===========================================================================
+//  Backend lifecycle (mode switch, add, remove)
+// ===========================================================================
+function teardownBackend() {
+  if (link) { try { link.free(); } catch (_) { /* gone */ } link = null; }
+  for (const s of specs) freeEngine(s);
+}
+
+function buildBackend() {
+  if (mode === "in-page") {
+    rebuild();
+  } else {
+    for (const s of specs) buildEngine(s);
+  }
+}
+
+// Called by the selector: tear the current backend down and rebuild in the new
+// mode from the same specs.
+function setMode(m) {
+  mode = m;
+  try {
+    teardownBackend();
+    buildBackend();
+  } catch (e) {
+    console.error("mode switch:", e);
+    setPill("backend failed — see inspect panel", "bad");
+    renderScene();
+    renderInspect(String(e));
+    return;
+  }
+  $("setup").classList.remove("visible");
+  renderScene();
+  renderInspect();
+}
+
+// Apply the effect of adding `spec` to the live backend.
+function syncAdd(spec) {
+  if (mode === "in-page") rebuild();
+  else buildEngine(spec);
+}
+
+// Apply the effect of removing `removed` from the live backend.
+function syncRemove(removed) {
+  if (mode === "in-page") rebuild();
+  else freeEngine(removed);
+}
+
 // --- scene mutations --------------------------------------------------------
 function peripheralOptions() {
   return specs.filter((s) => s.kind === "peripheral");
@@ -98,16 +198,20 @@ function peripheralOptions() {
 function addServer() {
   const spec = { id: nextId++, kind: "peripheral", address: fmtAddr(nextAddr++), script: HRM_SCRIPT };
   specs.push(spec);
-  commit(() => { rebuild(); openId = spec.id; }, () => { specs.pop(); nextAddr--; });
+  commit(() => { syncAdd(spec); openId = spec.id; }, () => { specs.pop(); nextAddr--; });
 }
 
 function addScanner() {
   const spec = { id: nextId++, kind: "scanner", address: fmtAddr(nextAddr++) };
   specs.push(spec);
-  commit(() => { rebuild(); openId = spec.id; }, () => { specs.pop(); nextAddr--; });
+  commit(() => { syncAdd(spec); openId = spec.id; }, () => { specs.pop(); nextAddr--; });
 }
 
 function addClient() {
+  if (mode === "websocket") {
+    setPill("clients are in-page only — the emulator app is the central over netsim", "bad");
+    return;
+  }
   const servers = peripheralOptions();
   if (!servers.length) {
     setPill("add a server first — a client needs one to connect to", "bad");
@@ -115,7 +219,7 @@ function addClient() {
   }
   const spec = { id: nextId++, kind: "central", address: fmtAddr(nextAddr++), target: servers[0].address };
   specs.push(spec);
-  commit(() => { rebuild(); openId = spec.id; }, () => { specs.pop(); nextAddr--; });
+  commit(() => { syncAdd(spec); openId = spec.id; }, () => { specs.pop(); nextAddr--; });
 }
 
 function removeDevice(id) {
@@ -123,7 +227,7 @@ function removeDevice(id) {
   if (idx < 0) return;
   const removed = specs.splice(idx, 1)[0];
   if (openId === id) openId = null;
-  commit(() => rebuild(), () => specs.splice(idx, 0, removed));
+  commit(() => syncRemove(removed), () => specs.splice(idx, 0, removed));
 }
 
 // Attempt a mutation; on failure run `revert` and surface the error.
@@ -132,8 +236,8 @@ function commit(apply, revert) {
     apply();
   } catch (e) {
     try { revert(); } catch (_) { /* best effort */ }
-    console.error("scene rebuild:", e);
-    setPill("rebuild failed — see inspect panel", "bad");
+    console.error("scene mutation:", e);
+    setPill("update failed — see inspect panel", "bad");
     renderScene();
     renderInspect(String(e));
     return;
@@ -159,7 +263,11 @@ function renderScene() {
   $("scene-empty").style.display = specs.length ? "none" : "block";
   $("scene-count").textContent = specs.length
     ? `${specs.length} device${specs.length === 1 ? "" : "s"}` : "";
-  $("add-client").disabled = !peripheralOptions().length;
+  // Clients (centrals) only exist on the in-page Link.
+  const ws = mode === "websocket";
+  $("add-client").disabled = ws || !peripheralOptions().length;
+  $("client-note").style.display = ws ? "block" : "none";
+  $("ws-note").style.display = ws ? "block" : "none";
 }
 
 // --- inspect panel (right) --------------------------------------------------
@@ -197,6 +305,14 @@ function renderInspect(error) {
        <div id="insp-reports"><p class="empty">Scanning…</p></div>`;
     refreshOpen();
   } else { // central
+    if (mode === "websocket") {
+      el.innerHTML = head +
+        `<div class="phase">Unavailable in netsim mode</div>
+         <p class="empty">The client (central) role only exists on the in-page Link. Over netsim the
+           <a href="../emulator/">Android emulator app</a> is the central that connects to these
+           peripherals — switch the controller to <strong>In-page</strong> to drive a client from this page.</p>`;
+      return;
+    }
     el.innerHTML = head +
       `<div class="phase">Connection: <b id="insp-phase">idle</b> · peer
          <span id="insp-peer">${escapeHtml(spec.target)}</span></div>
@@ -211,12 +327,14 @@ function applyScript(spec) {
   const prev = spec.script;
   spec.script = src;
   try {
-    rebuild();
-    $("insp-apply-state").textContent = "rebuilt";
+    // in-page rebuilds the whole Link; websocket recreates just this engine.
+    if (mode === "in-page") rebuild();
+    else buildEngine(spec);
+    $("insp-apply-state").textContent = mode === "in-page" ? "rebuilt" : "engine restarted";
     setTimeout(() => { const n = $("insp-apply-state"); if (n) n.textContent = ""; }, 2000);
   } catch (e) {
     spec.script = prev;
-    try { rebuild(); } catch (_) { /* keep whatever we have */ }
+    try { if (mode === "in-page") rebuild(); else buildEngine(spec); } catch (_) { /* keep whatever we have */ }
     const n = $("insp-apply-state");
     if (n) n.textContent = "";
     const el = $("inspect");
@@ -284,29 +402,55 @@ function renderReports(el, spec, reports) {
   }).join("");
 }
 
-// Refresh just the open device's inspect view from the live Link.
+// Refresh just the open device's inspect view from the live backend.
 function refreshOpen() {
-  if (!link) return;
   const spec = specs.find((s) => s.id === openId);
   if (!spec) return;
   try {
-    if (spec.kind === "peripheral") {
-      const gatt = $("insp-gatt");
-      if (gatt) renderGatt(gatt, JSON.parse(link.peripheral_status_json(spec.index)), prevValues);
-    } else if (spec.kind === "scanner") {
-      const box = $("insp-reports");
-      if (box) renderReports(box, spec, JSON.parse(link.scanner_reports_json(spec.index)));
-    } else {
-      const box = $("insp-disc");
-      if (box) renderDiscovered(box, JSON.parse(link.central_status_json(spec.index)));
-    }
+    if (mode === "in-page") refreshOpenInPage(spec);
+    else refreshOpenWs(spec);
   } catch (e) {
     console.error("inspect refresh:", e);
   }
 }
 
-// --- tick loop --------------------------------------------------------------
+function refreshOpenInPage(spec) {
+  if (!link) return;
+  if (spec.kind === "peripheral") {
+    const gatt = $("insp-gatt");
+    if (gatt) renderGatt(gatt, JSON.parse(link.peripheral_status_json(spec.index)), prevValues);
+  } else if (spec.kind === "scanner") {
+    const box = $("insp-reports");
+    if (box) renderReports(box, spec, JSON.parse(link.scanner_reports_json(spec.index)));
+  } else {
+    const box = $("insp-disc");
+    if (box) renderDiscovered(box, JSON.parse(link.central_status_json(spec.index)));
+  }
+}
+
+function refreshOpenWs(spec) {
+  if (spec.kind === "peripheral") {
+    const gatt = $("insp-gatt");
+    if (!gatt) return;
+    if (spec._status) renderGatt(gatt, JSON.parse(spec._status), prevValues);
+    else gatt.innerHTML = '<p class="empty">Waiting for netsim…</p>';
+  } else if (spec.kind === "scanner") {
+    const box = $("insp-reports");
+    if (!box) return;
+    if (spec._reportsJson) renderReports(box, spec, JSON.parse(spec._reportsJson));
+  }
+  // central: rendered statically by renderInspect (unavailable in netsim mode).
+}
+
+// ===========================================================================
+//  Tick loop
+// ===========================================================================
 function loop() {
+  if (mode === "in-page") loopInPage();
+  else loopWs();
+}
+
+function loopInPage() {
   if (!link) return;
   try { link.tick((performance.now() - t0) / 1000); } catch (e) { console.error("tick:", e); return; }
   refreshOpen();
@@ -314,8 +458,48 @@ function loop() {
   setPill(n ? `${n} device${n === 1 ? "" : "s"} on one Link` : "empty scene — add a device", n ? "ok" : "");
 }
 
-// --- wiring -----------------------------------------------------------------
+// Pump every device's own netsim socket each frame, storing its latest status /
+// reports for the inspect panel. A single closed-before-open socket surfaces the
+// "netsim not reachable" hint.
+function loopWs() {
+  let openCount = 0, connecting = false, closedBeforeOpen = false;
+  for (const s of specs) {
+    if (!s._engine) continue;
+    let st = 3;
+    try { st = s._engine.ready_state(); } catch (_) { st = 3; }
+    if (st === 1) { s._openedOnce = true; openCount++; }
+    else if (st === 0) connecting = true;
+    else if (st === 3 && !s._openedOnce) closedBeforeOpen = true;
+    if (st === 3) continue; // don't tick a dead socket
+    try {
+      if (s.kind === "peripheral") s._status = s._engine.tick((performance.now() - s._t0) / 1000);
+      else if (s.kind === "scanner") s._reportsJson = s._engine.tick();
+    } catch (e) { console.error("ws tick:", e); }
+  }
+  refreshOpen();
+
+  const anyOpened = specs.some((s) => s._openedOnce);
+  const engineCount = specs.filter((s) => s.kind !== "central").length;
+  if (!engineCount) {
+    $("setup").classList.remove("visible");
+    setPill("empty scene — add a device", "");
+  } else if (!anyOpened && closedBeforeOpen) {
+    $("setup").classList.add("visible");
+    setPill("netsim not reachable", "bad");
+  } else if (openCount) {
+    $("setup").classList.remove("visible");
+    setPill(`${openCount} device${openCount === 1 ? "" : "s"} in netsim scene`, "ok");
+  } else if (connecting) {
+    setPill("connecting to localhost:7681…", "");
+  }
+}
+
+// ===========================================================================
+//  Wiring
+// ===========================================================================
 await init();
+
+mode = createBackendSelector($("backend"), { onChange: setMode });
 
 $("add-server").addEventListener("click", addServer);
 $("add-scanner").addEventListener("click", addScanner);
@@ -329,7 +513,7 @@ $("dev-list").addEventListener("click", (e) => {
 });
 
 // Start with a sensible non-empty scene: a server, a client on it, a scanner.
-rebuild();
+// addClient no-ops in websocket mode (clients are in-page only).
 addServer();
 addClient();
 addScanner();
