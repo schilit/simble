@@ -70,10 +70,12 @@ fn main() {
     cmd(&adv, [0x0A, 0x20], &[0x01]);
 
     // Scanner: passive scan, enable with no dedup.
+    // Active scan (type 0x01): solicit SCAN_REQ so advertisers' scan-response
+    // data is collected too, not just the advertising payload.
     cmd(
         &scan,
         [0x0B, 0x20],
-        &[0x00, 0x10, 0x00, 0x10, 0x00, 0x00, 0x00],
+        &[0x01, 0x10, 0x00, 0x10, 0x00, 0x00, 0x00],
     );
     cmd(&scan, [0x0C, 0x20], &[0x01, 0x00]);
 
