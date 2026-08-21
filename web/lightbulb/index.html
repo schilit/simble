@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimBLE Color Bulb</title>
+<link rel="stylesheet" href="../common/simble.css">
+<style>
+  main { display: grid; grid-template-columns: minmax(20rem, 1fr) minmax(18rem, 1fr);
+    gap: 1.25rem; padding: 1.25rem 1.5rem; max-width: 72rem; margin: 0 auto; }
+  @media (max-width: 56rem) { main { grid-template-columns: 1fr; } }
+  .bulb-stage { display: flex; flex-direction: column; align-items: center;
+    padding: 1rem 0 0.5rem; }
+  #bulbSvg { width: 190px; height: auto; transition: filter 0.25s; }
+  #glass { transition: fill 0.25s; }
+  .swatches { display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: center;
+    margin-top: 0.8rem; }
+  .swatch { width: 2rem; height: 2rem; border-radius: 50%; border: 2px solid var(--border);
+    cursor: pointer; }
+  .swatch:hover { border-color: var(--text); }
+  .picker-row { display: flex; align-items: center; gap: 0.8rem; justify-content: center;
+    margin-top: 0.8rem; flex-wrap: wrap; }
+  input[type=color] { width: 3rem; height: 2rem; border: 1px solid var(--border);
+    border-radius: 6px; background: var(--panel); cursor: pointer; }
+  .rgb-readout { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
+    font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SimBLE Color Bulb</h1>
+  <span class="sub">a PLAYBULB-style smart light — the bulb reflects a writable BLE color characteristic</span>
+  <span id="conn" class="pill">starting…</span>
+  <div class="links">
+    <a href="../">← SimBLE demos</a>
+    <a href="../playground/">Playground ↗</a>
+    <a href="../scanner/">Scanner ↗</a>
+  </div>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>The light</h2>
+    <div class="bulb-stage">
+      <svg id="bulbSvg" viewBox="0 0 120 170" role="img" aria-label="color bulb">
+        <g>
+          <path id="glass" d="M60 10 C25 10 8 38 20 68 C26 84 40 92 42 112 L78 112 C80 92 94 84 100 68 C112 38 95 10 60 10 Z" fill="#33ccff"/>
+          <path d="M40 55 Q50 40 60 55 Q70 70 80 55" stroke="rgba(255,255,255,0.55)" stroke-width="3" fill="none"/>
+        </g>
+        <rect x="44" y="112" width="32" height="10" rx="2" fill="#8b949e"/>
+        <rect x="46" y="124" width="28" height="8" rx="2" fill="#6e7681"/>
+        <rect x="48" y="134" width="24" height="7" rx="2" fill="#57606a"/>
+        <path d="M52 148 Q60 158 68 148" stroke="#444c56" fill="none" stroke-width="3"/>
+      </svg>
+      <div class="picker-row">
+        <label for="picker">Pick a color:</label>
+        <input type="color" id="picker" value="#33ccff">
+        <span class="rgb-readout" id="rgb">RGB 33,204,255</span>
+      </div>
+      <div class="swatches" id="swatches"></div>
+    </div>
+    <p class="hint" style="margin-top:1rem">
+      The bulb color is a writable <code>[R, G, B]</code> characteristic on a custom 128-bit service
+      (Magic-Blue-style). The picker writes the value into the device's live GATT database via the
+      host <code>set_value</code> path — the same one the script's <code>update_value</code> uses — so
+      you see the bulb change here <strong>and</strong> any connected central is notified of the new
+      color. (The script is the peripheral; central-role scripting doesn't exist yet, so the page
+      supplies the "write" a phone app would send.)
+    </p>
+    <div id="script-error" class="error"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Live device</h2>
+    <dl class="kv">
+      <dt>advertising as</dt><dd id="dev-name">—</dd>
+      <dt>connection</dt><dd id="dev-conn">—</dd>
+      <dt>subscription</dt><dd id="dev-sub">—</dd>
+    </dl>
+    <div id="gatt"></div>
+    <details>
+      <summary>view / edit the device script (Rhai)</summary>
+      <textarea id="script" class="code" spellcheck="false" style="height:16rem;margin-top:0.5rem"></textarea>
+      <div class="row"><button id="run" class="primary">▶ Run</button>
+        <span id="run-state" class="hint"></span></div>
+    </details>
+  </section>
+
+  <section id="setup" class="panel setup" style="grid-column:1/-1">
+    <h2>netsim is not reachable</h2>
+    <p>Could not reach netsim at <code>localhost:7681</code> — is <code>netsimd</code> running with its
+       WebSocket frontend enabled? This page is served from the cloud, but the Bluetooth scene runs
+       <strong>on your machine</strong>: the wasm build of Simble in this tab connects to a local
+       <code>netsimd</code> over <code>ws://localhost:7681</code>. Start it with:</p>
+    <pre><code>netsimd --logtostderr --no-shutdown --ws-port 7681</code></pre>
+    <p class="hint">Needs the canary-channel emulator. The bulb still works offline — the color you
+       pick is written into the in-page device; connect netsim to expose it on the scene and notify a
+       real central.</p>
+  </section>
+</main>
+
+<footer>
+  Simble compiled to WebAssembly. The device is a Rhai-scripted peripheral exposing a writable color
+  characteristic; the page joins netsim as <code>web-lightbulb</code>. Custom UUIDs:
+  service <code>f0ff0001-1234-5678-90ab-cdef01234567</code>, color characteristic
+  <code>f0ff0002-1234-5678-90ab-cdef01234567</code>.
+</footer>
+
+<script type="module" src="./lightbulb.js"></script>
+</body>
+</html>

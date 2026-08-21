@@ -24,7 +24,7 @@ use crate::l2cap::{AclPacketBoundary, AclReassembler, HciAclHeader};
 use crate::scripting::bindings::{dynamic_to_bytes, runtime_error};
 use crate::scripting::{ScriptGattServer, new_engine};
 use crate::types::{Address, SimbleError, Uuid};
-use rhai::{AST, Array, CallFnOptions, Dynamic, Engine, EvalAltResult, Scope};
+use rhai::{AST, Array, CallFnOptions, Dynamic, Engine, EvalAltResult, Map, Scope};
 use serde::Serialize;
 use zerocopy::IntoBytes;
 
@@ -66,12 +66,14 @@ fn queue_common_init(channel: &HciChannel) -> Result<(), SimbleError> {
 /// report carries a fresh RSSI, which is what drives the page's live bars).
 pub fn queue_scanner_start(channel: &HciChannel) -> Result<(), SimbleError> {
     queue_common_init(channel)?;
-    // LE Set Scan Parameters: passive, interval/window 0x0010, public own
-    // address, accept all.
+    // LE Set Scan Parameters: active (0x01), interval/window 0x0010, public
+    // own address, accept all. Active scanning solicits SCAN_REQ so advertisers'
+    // scan-response data (names) is collected — passive scanning never would
+    // (rootcanal logs "Not sending LE Scan request ... scanner is passive").
     queue_command(
         channel,
         [0x0B, 0x20],
-        &[0x00, 0x10, 0x00, 0x10, 0x00, 0x00, 0x00],
+        &[0x01, 0x10, 0x00, 0x10, 0x00, 0x00, 0x00],
     )?;
     queue_command(channel, [0x0C, 0x20], &[0x01, 0x00]) // LE Set Scan Enable
 }
@@ -444,6 +446,61 @@ pub struct ScriptedPeripheral {
     last_error: Option<String>,
 }
 
+/// The result of evaluating one REPL line in a [`ScriptedPeripheral`] session
+/// (the API Explorer emits exactly one Rhai statement per Execute): the
+/// statement's return value rendered for display, and any queue events it
+/// produced, already formatted for the Explorer's log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplOutcome {
+    pub value: String,
+    pub events: Vec<String>,
+}
+
+/// The JSON shape returned to the Explorer page per Execute — success carries
+/// the rendered return value and events; failure carries the Rhai error.
+#[derive(Serialize)]
+struct ReplResult {
+    ok: bool,
+    value: String,
+    error: Option<String>,
+    events: Vec<String>,
+}
+
+/// Renders a REPL line's return value for the Explorer log. Unit (the result
+/// of a `let` binding or a void call) shows as `()`; a `Uuid` shows in its
+/// canonical string form; everything else uses Rhai's own `Display`.
+fn display_value(value: &Dynamic) -> String {
+    if value.is_unit() {
+        return "()".to_string();
+    }
+    if let Some(uuid) = value.clone().try_cast::<Uuid>() {
+        return uuid.to_string();
+    }
+    let rendered = value.to_string();
+    if rendered.is_empty() {
+        "()".to_string()
+    } else {
+        rendered
+    }
+}
+
+/// Formats one queued `ScriptEvent` map (as seen by scripts) into a short log
+/// line for the Explorer, e.g. `service_added uuid=180D status=0`.
+fn format_event(map: &Map) -> String {
+    let mut parts = vec![
+        map.get("event")
+            .map(|v| v.clone().into_string().unwrap_or_default())
+            .unwrap_or_default(),
+    ];
+    if let Some(uuid) = map.get("uuid").and_then(|v| v.clone().try_cast::<Uuid>()) {
+        parts.push(format!("uuid={uuid}"));
+    }
+    if let Some(status) = map.get("status").and_then(|v| v.as_int().ok()) {
+        parts.push(format!("status={status}"));
+    }
+    parts.join(" ")
+}
+
 impl ScriptedPeripheral {
     /// Compiles and runs `script` on a fresh engine, collecting every
     /// `android::BluetoothGattServer` the script left in a top-level
@@ -488,6 +545,103 @@ impl ScriptedPeripheral {
         Ok(peripheral)
     }
 
+    /// Creates an empty REPL session for the API Explorer: a fresh engine
+    /// (with the web `update_value` extension), an empty persistent scope, and
+    /// no servers yet. Lines are fed one at a time with [`Self::eval_line`];
+    /// once a line binds an `android::BluetoothGattServer`, the session hosts
+    /// it exactly like a scripted device (advertising, connections,
+    /// notifications), so the Explorer's clicks build a real, hostable device.
+    pub fn new_session() -> Self {
+        let mut engine = new_engine();
+        register_web_extensions(&mut engine);
+        let ast = engine.compile("").expect("empty script compiles");
+        Self {
+            engine,
+            ast,
+            scope: Scope::new(),
+            servers: Vec::new(),
+            reassembler: AclReassembler::new(),
+            connection: None,
+            tick_defined: false,
+            watched: Vec::new(),
+            last_values: HashMap::new(),
+            last_error: None,
+        }
+    }
+
+    /// Evaluates one Rhai statement in the persistent session scope (top-level
+    /// `let` bindings persist across calls, so `let svc1 = ...` stays usable by
+    /// later Executes). Re-collects the servers the scope now holds and
+    /// rebuilds the notify watch-list, so a service or characteristic added by
+    /// this line is immediately hosted. Returns the statement's rendered return
+    /// value and the events it produced, or the Rhai error as a string.
+    pub fn eval_line(&mut self, line: &str) -> Result<ReplOutcome, String> {
+        let value = self
+            .engine
+            .eval_with_scope::<Dynamic>(&mut self.scope, line)
+            .map_err(|e| e.to_string())?;
+        self.servers = self
+            .scope
+            .iter()
+            .filter_map(|(_, _, value)| value.try_cast::<ScriptGattServer>())
+            .collect();
+        self.rebuild_watch_list();
+        let events = self.drain_events_display();
+        Ok(ReplOutcome {
+            value: display_value(&value),
+            events,
+        })
+    }
+
+    /// [`Self::eval_line`] rendered as the JSON the Explorer page consumes.
+    pub fn eval_line_json(&mut self, line: &str) -> String {
+        let result = match self.eval_line(line) {
+            Ok(outcome) => ReplResult {
+                ok: true,
+                value: outcome.value,
+                error: None,
+                events: outcome.events,
+            },
+            Err(error) => ReplResult {
+                ok: false,
+                value: String::new(),
+                error: Some(error),
+                events: Vec::new(),
+            },
+        };
+        serde_json::to_string(&result)
+            .unwrap_or_else(|e| format!("{{\"ok\":false,\"error\":\"{e}\"}}"))
+    }
+
+    /// Drains the session's queued events and formats them for the log.
+    fn drain_events_display(&mut self) -> Vec<String> {
+        match self.engine.eval::<Array>("take_events()") {
+            Ok(events) => events
+                .into_iter()
+                .filter_map(|event| event.try_cast::<Map>())
+                .map(|map| format_event(&map))
+                .collect(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    /// Whether the session/script has produced at least one server to host.
+    pub fn has_server(&self) -> bool {
+        !self.servers.is_empty()
+    }
+
+    /// A signature of what the primary server would advertise (name + sorted
+    /// 16-bit service UUIDs). The Explorer re-issues advertising when this
+    /// changes, so a device gains its new services on the air as it's built.
+    pub fn adv_signature(&self) -> String {
+        if self.servers.is_empty() {
+            return String::new();
+        }
+        let mut uuids = self.primary_service_uuids_16();
+        uuids.sort_unstable();
+        format!("{}|{uuids:?}", self.device_name())
+    }
+
     fn primary(&self) -> &ScriptGattServer {
         &self.servers[0]
     }
@@ -500,6 +654,20 @@ impl ScriptedPeripheral {
     /// Records a non-fatal runtime problem for the page's error pane.
     pub fn record_error(&mut self, message: String) {
         self.last_error = Some(message);
+    }
+
+    /// Host-side write of a characteristic's value by UUID string — the same
+    /// live-database path as the script's `update_value`, exposed to the page
+    /// so UI (the lightbulb's colour picker) can drive a value directly. A
+    /// subscribed central is notified of the change on the next tick. `uuid` is
+    /// the string form (`"FFE9"` or a full 128-bit UUID).
+    pub fn set_characteristic_value(&mut self, uuid: &str, bytes: &[u8]) -> Result<(), String> {
+        let uuid = uuid.parse::<Uuid>().map_err(|e| e.to_string())?;
+        let handle = find_value_handle(self.primary(), uuid)
+            .ok_or_else(|| format!("no characteristic with UUID {uuid}"))?;
+        self.primary()
+            .with_server(|s| s.device.gatt_db.set_value(handle, bytes))
+            .map_err(|status| format!("set_value failed: ATT error {status}"))
     }
 
     /// Queues the peripheral's full HCI bring-up: reset, event masks,
@@ -722,6 +890,21 @@ impl ScriptedPeripheral {
 
     /// The page-facing status snapshot, as JSON.
     pub fn status_json(&self) -> String {
+        // An empty REPL session (no server built yet) reports an empty device
+        // so the Explorer's viewer can render "nothing here yet" cleanly.
+        if self.servers.is_empty() {
+            let empty = PeripheralStatus {
+                name: String::new(),
+                address: String::new(),
+                connected: false,
+                peer: None,
+                tick_defined: false,
+                last_error: self.last_error.clone(),
+                services: Vec::new(),
+            };
+            return serde_json::to_string(&empty)
+                .unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"));
+        }
         // Subscription state is resolved before the server borrow below —
         // `cccd_notify_enabled` borrows the same server, and `with_server`
         // borrows are not reentrant.
@@ -1037,6 +1220,15 @@ mod web {
             self.transport.ready_state()
         }
 
+        /// Writes a characteristic's value from the page (the lightbulb's
+        /// colour picker). `uuid` is the string form; on the next tick a
+        /// subscribed central is notified of the change.
+        pub fn set_value(&mut self, uuid: &str, value: Vec<u8>) -> Result<(), JsValue> {
+            self.peripheral
+                .set_characteristic_value(uuid, &value)
+                .map_err(js_error)
+        }
+
         /// One pump + script tick; `t_seconds` is seconds since the current
         /// script was Run. Returns the peripheral status JSON.
         pub fn tick(&mut self, t_seconds: f64) -> Result<String, JsValue> {
@@ -1060,6 +1252,89 @@ mod web {
         }
     }
 
+    /// The API Explorer's engine: a live [`ScriptedPeripheral`] session built
+    /// one Rhai statement at a time. Each Execute in the page calls
+    /// [`WebSession::eval_line`] with the single generated line; the session
+    /// scope persists across calls (so `svc1`, `chr1`, … stay usable), and the
+    /// device is hosted on netsim as soon as a server exists. netsim is
+    /// optional — building and inspecting a device works fully offline; the
+    /// socket only carries advertising/notifications when it's reachable.
+    #[wasm_bindgen]
+    pub struct WebSession {
+        transport: WasmWsTransport,
+        channel: HciChannel,
+        peripheral: ScriptedPeripheral,
+        started: bool,
+        adv_signature: String,
+    }
+
+    #[wasm_bindgen]
+    impl WebSession {
+        #[wasm_bindgen(constructor)]
+        pub fn new(url: &str) -> Result<WebSession, JsValue> {
+            install_panic_hook();
+            Ok(Self {
+                transport: WasmWsTransport::connect(url)?,
+                channel: HciChannel::new(),
+                peripheral: ScriptedPeripheral::new_session(),
+                started: false,
+                adv_signature: String::new(),
+            })
+        }
+
+        pub fn ready_state(&self) -> u16 {
+            self.transport.ready_state()
+        }
+
+        /// Evaluates one Rhai line in the persistent session scope and returns
+        /// the JSON result (`ok`, `value`, `error`, `events`). Works whether or
+        /// not netsim is connected — this only touches the in-page engine.
+        pub fn eval_line(&mut self, line: &str) -> String {
+            self.peripheral.eval_line_json(line)
+        }
+
+        /// One pump + host tick. Once a server exists it advertises (re-issuing
+        /// the bring-up whenever the built device's name/services change),
+        /// handles connections, and flushes value-change notifications, exactly
+        /// like [`WebPeripheral`]. Returns the peripheral status JSON.
+        pub fn tick(&mut self, t_seconds: f64) -> Result<String, JsValue> {
+            self.transport.pump(&self.channel)?;
+            if self.peripheral.has_server() {
+                let signature = self.peripheral.adv_signature();
+                if signature != self.adv_signature {
+                    // The built device changed — restart advertising so the new
+                    // name/services go on the air (mirrors run_script's reset).
+                    self.adv_signature = signature;
+                    self.channel = HciChannel::new();
+                    self.started = false;
+                }
+                if !self.started && self.transport.is_open() {
+                    self.peripheral
+                        .queue_start(&self.channel)
+                        .map_err(js_error)?;
+                    self.started = true;
+                }
+                while let Some(packet) = self.channel.poll_controller_packet() {
+                    if let Err(e) = self.peripheral.handle_packet(&self.channel, &packet) {
+                        self.peripheral.record_error(e.to_string());
+                    }
+                }
+                if let Err(e) = self.peripheral.tick(&self.channel, t_seconds) {
+                    self.peripheral.record_error(e.to_string());
+                }
+                self.transport.pump(&self.channel)?;
+            }
+            Ok(self.peripheral.status_json())
+        }
+
+        /// The current session's device status JSON (for the live viewer)
+        /// without pumping the socket — used right after an Execute so the
+        /// viewer reflects the new object immediately.
+        pub fn status_json(&self) -> String {
+            self.peripheral.status_json()
+        }
+    }
+
     /// The default HRM script, so the page needs no separate fetch.
     #[wasm_bindgen]
     pub fn default_heart_rate_script() -> String {
@@ -1068,7 +1343,7 @@ mod web {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use web::{WebAdvertiser, WebPeripheral, WebScanner, default_heart_rate_script};
+pub use web::{WebAdvertiser, WebPeripheral, WebScanner, WebSession, default_heart_rate_script};
 
 #[cfg(test)]
 mod tests {
@@ -1099,6 +1374,9 @@ mod tests {
         // Both event masks fully open (LE Meta Events are masked by default).
         assert_eq!(&commands[1][4..12], &[0xFF; 8]);
         assert_eq!(&commands[2][4..12], &[0xFF; 8]);
+        // Active scanning (scan-type byte 0x01) so advertisers' scan-response
+        // data (names) is solicited via SCAN_REQ, not just passively observed.
+        assert_eq!(commands[3][4], 0x01);
         // Scan enable with duplicate filtering off.
         assert_eq!(&commands[4][4..], &[0x01, 0x00]);
     }
@@ -1378,6 +1656,111 @@ mod tests {
             status.contains(&format!("\"properties\":{expected}")),
             "{status}"
         );
+    }
+
+    #[test]
+    fn test_session_builds_device_incrementally() {
+        // The API Explorer's model: one Rhai statement per Execute, with
+        // `let`-bound objects (svc1, chr1, …) persisting in the shared scope
+        // and usable by later Executes.
+        let mut session = ScriptedPeripheral::new_session();
+        assert!(!session.has_server());
+        assert!(session.status_json().contains("\"services\":[]"));
+
+        // A `let` binding returns unit and produces no events.
+        let outcome = session
+            .eval_line(r#"let server = android::BluetoothGattServer("explorer");"#)
+            .unwrap();
+        assert_eq!(outcome.value, "()");
+        assert!(outcome.events.is_empty());
+        assert!(session.has_server());
+        assert_eq!(session.device_name(), "explorer");
+
+        session
+            .eval_line(
+                r#"let svc1 = android::BluetoothGattService(uuid::HEART_RATE_SERVICE, android::SERVICE_TYPE_PRIMARY);"#,
+            )
+            .unwrap();
+        session
+            .eval_line(
+                r#"let chr1 = android::BluetoothGattCharacteristic(uuid::HEART_RATE_MEASUREMENT, android::PROPERTY_READ | android::PROPERTY_NOTIFY, android::PERMISSION_READ);"#,
+            )
+            .unwrap();
+        // svc1 and chr1 survive from earlier Executes in the shared scope.
+        session.eval_line("svc1.add_characteristic(chr1);").unwrap();
+        // add_service fires the on_service_added callback -> a session event.
+        let added = session.eval_line("server.add_service(svc1);").unwrap();
+        assert!(
+            added.events.iter().any(|e| e.contains("service_added")),
+            "events: {:?}",
+            added.events
+        );
+
+        let status = session.status_json();
+        assert!(status.contains("180D"), "{status}"); // Heart Rate service
+        assert!(status.contains("2A37"), "{status}"); // HR Measurement char
+
+        // A returned expression renders its value (get_service -> a service).
+        let got = session
+            .eval_line("server.get_service(uuid::HEART_RATE_SERVICE)")
+            .unwrap();
+        assert!(!got.value.is_empty());
+
+        // The built device is hostable: advertising bring-up carries its name.
+        assert!(session.has_server());
+        let channel = HciChannel::new();
+        session.queue_start(&channel).unwrap();
+        let commands = drain_host_packets(&channel);
+        assert!(commands[4].windows(8).any(|w| w == b"explorer"));
+    }
+
+    #[test]
+    fn test_set_characteristic_value_host_write() {
+        // The lightbulb page's colour picker writes a custom 128-bit "colour"
+        // characteristic from the host side; the write must land in the live
+        // database (and thus be visible to the viewer and notifiable).
+        let script = r#"
+            let server = android::BluetoothGattServer("web-lightbulb");
+            let svc = android::BluetoothGattService(
+                uuid::of("f0ff0001-1234-5678-90ab-cdef01234567"),
+                android::SERVICE_TYPE_PRIMARY,
+            );
+            let color = android::BluetoothGattCharacteristic(
+                uuid::of("f0ff0002-1234-5678-90ab-cdef01234567"),
+                android::PROPERTY_READ | android::PROPERTY_WRITE | android::PROPERTY_NOTIFY,
+                android::PERMISSION_READ | android::PERMISSION_WRITE,
+            );
+            color.set_value([0x33, 0xcc, 0xff]);
+            let cccd = android::BluetoothGattDescriptor(
+                uuid::CLIENT_CHARACTERISTIC_CONFIGURATION,
+                android::PERMISSION_READ | android::PERMISSION_WRITE,
+            );
+            color.add_descriptor(cccd);
+            svc.add_characteristic(color);
+            server.add_service(svc);
+        "#;
+        let mut peripheral = ScriptedPeripheral::run_script(script).unwrap();
+        peripheral
+            .set_characteristic_value("f0ff0002-1234-5678-90ab-cdef01234567", &[0xff, 0x00, 0x00])
+            .unwrap();
+        let status = peripheral.status_json();
+        assert!(status.contains("FF0000"), "{status}");
+        // A bad UUID is a clean error, not a panic.
+        assert!(peripheral.set_characteristic_value("nope", &[0]).is_err());
+        // A UUID with no matching characteristic errors too.
+        assert!(peripheral.set_characteristic_value("2A19", &[0]).is_err());
+    }
+
+    #[test]
+    fn test_session_eval_error_surfaces_as_json() {
+        let mut session = ScriptedPeripheral::new_session();
+        // A runtime error comes back as ok:false with the message, not a panic.
+        let json = session.eval_line_json("nonexistent_function(1, 2)");
+        assert!(json.contains("\"ok\":false"), "{json}");
+        assert!(json.contains("\"error\":"), "{json}");
+        // The session is still usable afterwards.
+        let json = session.eval_line_json(r#"let server = android::BluetoothGattServer("ok");"#);
+        assert!(json.contains("\"ok\":true"), "{json}");
     }
 
     #[test]

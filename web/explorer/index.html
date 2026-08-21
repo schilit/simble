@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimBLE API Explorer</title>
+<link rel="stylesheet" href="../common/simble.css">
+<style>
+  main { display: grid; grid-template-columns: minmax(22rem, 1.1fr) minmax(20rem, 1fr);
+    gap: 1.25rem; padding: 1.25rem 1.5rem; max-width: 82rem; margin: 0 auto; }
+  @media (max-width: 62rem) { main { grid-template-columns: 1fr; } }
+  .group { margin-bottom: 1rem; }
+  .group > h3 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--accent); margin: 0.6rem 0 0.4rem; }
+  .method { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.5rem;
+    overflow: hidden; }
+  .method > summary { cursor: pointer; padding: 0.5rem 0.7rem; font-size: 0.88rem;
+    display: flex; align-items: baseline; gap: 0.5rem; list-style: none; }
+  .method > summary::-webkit-details-marker { display: none; }
+  .method > summary .sig { font-family: ui-monospace, Menlo, monospace; font-weight: 600; }
+  .method > summary .d { color: var(--dim); font-size: 0.78rem; }
+  .method[open] > summary { border-bottom: 1px solid var(--border); background: #1c2230; }
+  .method-body { padding: 0.6rem 0.7rem; }
+  .field { display: grid; grid-template-columns: 8rem 1fr; gap: 0.4rem 0.6rem;
+    align-items: center; margin-bottom: 0.4rem; font-size: 0.82rem; }
+  .field > label { color: var(--dim); }
+  .field .flags { display: flex; flex-wrap: wrap; gap: 0.1rem 0.7rem; }
+  .field .flags label { display: inline-flex; align-items: center; gap: 0.25rem;
+    color: var(--text); }
+  .field input[type=text], .field input[type=number], .field select { width: 100%; }
+  .custom-uuid { margin-top: 0.3rem; }
+  .exec-row { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.5rem; }
+  .preview { font-family: ui-monospace, Menlo, monospace; font-size: 0.76rem;
+    color: var(--good); background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 0.35rem 0.5rem; overflow-x: auto; white-space: pre;
+    flex: 1; }
+  .needs-device { color: var(--warn); font-size: 0.75rem; }
+  .log { background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.6rem; font-size: 0.78rem; max-height: 22rem; overflow: auto;
+    font-family: ui-monospace, Menlo, monospace; }
+  .log .entry { margin-bottom: 0.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.4rem; }
+  .log .rhai { color: var(--good); white-space: pre-wrap; }
+  .log .ret { color: var(--accent); }
+  .log .evt { color: var(--warn); }
+  .log .err { color: var(--bad); white-space: pre-wrap; }
+  .session-strip { position: sticky; top: 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SimBLE API Explorer</h1>
+  <span class="sub">fill in a method, Execute, and watch it emit one line of Rhai against a live session</span>
+  <span id="conn" class="pill">starting…</span>
+  <div class="links">
+    <a href="../">← SimBLE demos</a>
+    <a href="../playground/">Playground ↗</a>
+    <a href="../scanner/">Scanner ↗</a>
+  </div>
+</header>
+
+<main>
+  <section>
+    <div id="methods"></div>
+  </section>
+
+  <section>
+    <div class="panel session-strip">
+      <h2>Live session</h2>
+      <dl class="kv">
+        <dt>device</dt><dd id="dev-name">no server yet</dd>
+        <dt>connection</dt><dd id="dev-conn">—</dd>
+        <dt>bound objects</dt><dd id="registry" class="mono">—</dd>
+      </dl>
+      <div id="gatt"><p class="viewer-empty">Create a server, then add services and characteristics.</p></div>
+      <div class="row">
+        <button id="copy-script">📋 Copy session as script</button>
+        <button id="reset-session">↺ New session</button>
+      </div>
+      <div id="copy-hint" class="hint"></div>
+    </div>
+
+    <div class="panel" style="margin-top:1rem">
+      <h2>Execution log</h2>
+      <div id="log" class="log">Each Execute appends the generated Rhai, its return value, and any events fired.</div>
+    </div>
+
+    <section id="setup" class="panel setup" style="margin-top:1rem">
+      <h2>netsim is not reachable</h2>
+      <p>Could not reach netsim at <code>localhost:7681</code> — is <code>netsimd</code> running with its
+         WebSocket frontend enabled? The API Explorer works fully <strong>offline</strong>: you can build
+         and inspect a device without netsim. Connect to expose it on the scene. Start netsim with:</p>
+      <pre><code>netsimd --logtostderr --no-shutdown --ws-port 7681</code></pre>
+      <p class="hint">Needs the canary-channel emulator. Once connected, the device you assemble here
+         advertises on the scene — open <a href="../scanner/">the scanner</a> in another tab to see it.</p>
+    </section>
+  </section>
+</main>
+
+<footer>
+  Each Execute builds one Rhai statement from the form and evaluates it in the session's shared scope —
+  the same engine the <a href="../playground/">Playground</a> runs as free text. Objects you create
+  (a service, a characteristic) are <code>let</code>-bound (<code>svc1</code>, <code>chr1</code>, …) and
+  become selectable inputs to later calls, so you build a device click by click. The page joins netsim
+  as <code>web-explorer</code> when reachable.
+</footer>
+
+<script type="module" src="./explorer.js"></script>
+</body>
+</html>

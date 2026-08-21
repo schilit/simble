@@ -120,7 +120,15 @@ let peripheral = null;
 let runStart = performance.now();
 let lastConnectAttempt = 0;
 let openedOnce = false;
+let stopped = false; // Stop pressed: hold the device torn down, don't auto-reconnect
 const prevValues = new Map(); // "service/char" -> last value hex, for the pulse
+
+// Flicker guard: the GATT structure is rebuilt only when it actually changes
+// (keyed by this signature); every other tick updates values in place, so the
+// viewer isn't torn down and repainted 10×/second.
+let renderedSig = null;
+const valNodes = new Map(); // "service/char" -> the .chr-val element to update
+let lastBpm = null;         // avoid restarting the heartbeat animation each tick
 
 function setPill(text, cls) {
   connPill.textContent = text;
@@ -143,6 +151,7 @@ function createPeripheral(script) {
 
 function run() {
   showScriptError(null);
+  stopped = false;
   try {
     if (peripheral) {
       peripheral.run_script(editor.value); // same socket, new device
@@ -151,11 +160,39 @@ function run() {
       createPeripheral(editor.value);
     }
     prevValues.clear();
+    setStopEnabled(true);
     $("run-state").textContent = "device rebuilt from script";
     setTimeout(() => ($("run-state").textContent = ""), 2500);
   } catch (e) {
     showScriptError(e); // the previous device keeps running
   }
+}
+
+// Tear the device down and hold it off the air until Run is pressed again.
+function stop() {
+  stopped = true;
+  if (peripheral) {
+    try { peripheral.free(); } catch (_) { /* already gone */ }
+    peripheral = null;
+  }
+  renderedSig = null;
+  valNodes.clear();
+  prevValues.clear();
+  lastBpm = null;
+  $("gatt").innerHTML = "";
+  $("dev-conn").textContent = "stopped";
+  $("dev-sub").textContent = "—";
+  $("hr-box").hidden = true;
+  setupPanel.classList.remove("visible");
+  setPill("stopped", "");
+  setStopEnabled(false);
+  $("run-state").textContent = "device stopped";
+  setTimeout(() => ($("run-state").textContent = ""), 2500);
+}
+
+function setStopEnabled(on) {
+  const btn = $("stop");
+  if (btn) btn.disabled = !on;
 }
 
 // --- decoding helpers ------------------------------------------------------
@@ -242,6 +279,56 @@ function propChips(props, subscribed) {
 }
 
 // --- rendering -------------------------------------------------------------
+// The inner HTML of a characteristic's value cell (decoded + raw hex).
+function valInnerHtml(c) {
+  const decoded = decodeValue(c.uuid, c.value);
+  return c.value
+    ? `${decoded ? `<span class="decoded">${escapeHtml(decoded)}</span>` : ""}<span class="raw">${c.value}</span>`
+    : `<span class="raw">—</span>`;
+}
+
+// A signature of the GATT *structure* (services, characteristics, properties,
+// subscription state) — everything except the fast-changing values. The DOM is
+// rebuilt only when this changes; values update in place otherwise.
+function structureSig(status) {
+  return JSON.stringify(status.services.map((s) => [
+    s.uuid,
+    s.characteristics.map((c) => [c.uuid, c.properties, c.subscribed]),
+  ]));
+}
+
+function buildGatt(status) {
+  const cards = [];
+  for (const service of status.services) {
+    const sName = nameFor(service.uuid);
+    const head = sName
+      ? `${escapeHtml(sName)}<span class="u">0x${service.uuid}</span>`
+      : `<span class="u">Service 0x${service.uuid}</span>`;
+    const rows = [];
+    for (const c of service.characteristics) {
+      const key = `${service.uuid}/${c.uuid}`;
+      const cName = nameFor(c.uuid);
+      const nameHtml = cName
+        ? `<span class="chr-name">${escapeHtml(cName)}</span><span class="chr-uuid">0x${c.uuid}</span>`
+        : `<span class="chr-name chr-uuid">0x${c.uuid}</span>`;
+      const subNote = c.subscribed ? `<span class="sub-note">⚡ subscribed</span>` : "";
+      rows.push(
+        `<div class="chr" data-key="${key}">
+          <div class="chr-top">${nameHtml} ${propChips(c.properties, c.subscribed)}${subNote}</div>
+          <div class="chr-val">${valInnerHtml(c)}</div>
+        </div>`
+      );
+    }
+    cards.push(`<div class="svc"><div class="svc-head">${head}</div>${rows.join("")}</div>`);
+  }
+  $("gatt").innerHTML = cards.join("");
+  // Cache the value cells so later ticks patch text without touching structure.
+  valNodes.clear();
+  for (const el of $("gatt").querySelectorAll(".chr")) {
+    valNodes.set(el.dataset.key, el.querySelector(".chr-val"));
+  }
+}
+
 function render(status) {
   $("dev-name").textContent = `${status.name} (${status.address})`;
   $("dev-conn").textContent = status.connected
@@ -253,44 +340,30 @@ function render(status) {
     ? "central subscribed — notifications flowing"
     : "no subscriber yet";
 
-  // Which characteristic changed most recently this tick? Drives the generic
-  // "value pulse" indicator (the heart animation is the HR special case).
+  // Rebuild the DOM only when the structure changes; a full innerHTML rewrite
+  // every tick is what made the page flicker.
+  const sig = structureSig(status);
+  const rebuilt = sig !== renderedSig;
+  if (rebuilt) {
+    buildGatt(status);
+    renderedSig = sig;
+  }
+
+  // Patch changed values in place, and note the most-recently-changed one for
+  // the generic pulse (the heart animation is the HR special case).
   let changedKey = null;
-  const cards = [];
   for (const service of status.services) {
-    const sName = nameFor(service.uuid);
-    const head = sName
-      ? `${escapeHtml(sName)}<span class="u">0x${service.uuid}</span>`
-      : `<span class="u">Service 0x${service.uuid}</span>`;
-    const rows = [];
     for (const c of service.characteristics) {
       const key = `${service.uuid}/${c.uuid}`;
-      if (prevValues.has(key) && prevValues.get(key) !== c.value) changedKey = key;
+      if (prevValues.has(key) && prevValues.get(key) !== c.value) {
+        changedKey = key;
+        const cell = valNodes.get(key);
+        if (cell) cell.innerHTML = valInnerHtml(c);
+      }
       prevValues.set(key, c.value);
-
-      const cName = nameFor(c.uuid);
-      const nameHtml = cName
-        ? `<span class="chr-name">${escapeHtml(cName)}</span><span class="chr-uuid">0x${c.uuid}</span>`
-        : `<span class="chr-name chr-uuid">0x${c.uuid}</span>`;
-      const decoded = decodeValue(c.uuid, c.value);
-      const valHtml = c.value
-        ? `${decoded ? `<span class="decoded">${escapeHtml(decoded)}</span>` : ""}<span class="raw">${c.value}</span>`
-        : `<span class="raw">—</span>`;
-      const subNote = c.subscribed ? `<span class="sub-note">⚡ subscribed</span>` : "";
-      rows.push(
-        `<div class="chr" data-key="${key}">
-          <div class="chr-top">${nameHtml} ${propChips(c.properties, c.subscribed)}${subNote}</div>
-          <div class="chr-val">${valHtml}</div>
-        </div>`
-      );
     }
-    cards.push(`<div class="svc"><div class="svc-head">${head}</div>${rows.join("")}</div>`);
   }
-  $("gatt").innerHTML = cards.join("");
 
-  // Heart animation is a special case: only when an HR Measurement (0x2A37)
-  // characteristic exists. Otherwise a generic pulse flashes on whichever
-  // characteristic most recently notified.
   const hrChar = status.services
     .flatMap((s) => s.characteristics)
     .find((c) => c.uuid === "2A37");
@@ -302,14 +375,19 @@ function render(status) {
     if (bpm && bpm > 0) {
       $("bpm").textContent = bpm;
       heart.classList.remove("flat");
-      heart.style.animationDuration = `${(60 / bpm).toFixed(3)}s`;
+      // Only reset the animation when the rate actually changes, otherwise the
+      // heartbeat restarts every tick and stutters.
+      if (bpm !== lastBpm) heart.style.animationDuration = `${(60 / bpm).toFixed(3)}s`;
+      lastBpm = bpm;
     } else {
       $("bpm").textContent = "—";
       heart.classList.add("flat");
+      lastBpm = null;
     }
   } else {
     hrBox.hidden = true;
-    if (changedKey) {
+    // Don't pulse on the same tick the row was just created, or it flashes on load.
+    if (changedKey && !rebuilt) {
       const el = document.querySelector(`.chr[data-key="${CSS.escape(changedKey)}"]`);
       if (el) { el.classList.remove("pulse"); void el.offsetWidth; el.classList.add("pulse"); }
     }
@@ -320,6 +398,7 @@ function render(status) {
 
 // --- main loop -------------------------------------------------------------
 function loop() {
+  if (stopped) return; // Stop pressed: stay torn down until Run
   if (!peripheral) {
     const now = performance.now();
     if (now - lastConnectAttempt > 3000) {
@@ -410,6 +489,7 @@ function wireAi() {
 await init();
 editor.value = default_heart_rate_script();
 $("run").addEventListener("click", run);
+$("stop").addEventListener("click", stop);
 wireAi();
 try { createPeripheral(editor.value); } catch (e) { showScriptError(e); }
 setInterval(loop, 100);

@@ -1,0 +1,167 @@
+/* Copyright 2026 Bill Schilit — SPDX-License-Identifier: Apache-2.0
+ *
+ * Shared design tokens and components for the Simble browser tool. The colours,
+ * pills, panels, buttons, connection-setup panel, and the generic GATT viewer
+ * are the same on every page (scanner/hrm keep their own inline copies; the
+ * playground, explorer, and lightbulb pages import this). */
+
+:root {
+  --bg: #0d1117; --panel: #161b22; --border: #30363d; --text: #e6edf3;
+  --dim: #8b949e; --accent: #58a6ff; --good: #3fb950; --bad: #f85149;
+  --warn: #d29922; --heart: #f85149;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Header + connection pill (shared shape across pages) */
+header {
+  display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
+  padding: 1rem 1.5rem; border-bottom: 1px solid var(--border);
+}
+header h1 { font-size: 1.15rem; margin: 0; }
+header .sub { color: var(--dim); font-size: 0.85rem; }
+header .links { margin-left: auto; display: flex; gap: 1rem; }
+header a { color: var(--accent); text-decoration: none; font-size: 0.85rem; }
+.pill {
+  font-size: 0.75rem; padding: 0.1rem 0.6rem; border-radius: 1rem;
+  border: 1px solid var(--border); color: var(--dim); white-space: nowrap;
+}
+.pill.ok { color: var(--good); border-color: var(--good); }
+.pill.bad { color: var(--bad); border-color: var(--bad); }
+
+/* Panels */
+.panel {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 1rem;
+}
+.panel h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--dim); margin: 0 0 0.75rem; }
+
+/* Buttons + rows */
+button, .btn {
+  background: #21262d; color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 0.35rem 0.9rem; font-size: 0.85rem;
+  cursor: pointer; text-decoration: none; display: inline-block;
+}
+button:hover, .btn:hover { border-color: var(--dim); }
+button.primary { background: #1f6feb; border-color: #1f6feb; }
+button:disabled { opacity: 0.5; cursor: default; }
+select {
+  background: #21262d; color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 0.35rem 0.6rem; font-size: 0.85rem; cursor: pointer;
+}
+input[type=text], input[type=number] {
+  background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 0.3rem 0.5rem; font-size: 0.85rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-top: 0.6rem; }
+.hint { color: var(--dim); font-size: 0.8rem; }
+.error {
+  color: var(--bad); font-family: ui-monospace, Menlo, monospace;
+  font-size: 0.8rem; white-space: pre-wrap; margin-top: 0.5rem;
+}
+
+/* Editor / code */
+textarea.code {
+  width: 100%; resize: vertical; background: var(--bg);
+  color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+  font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  padding: 0.6rem; tab-size: 4;
+}
+pre.code, .mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* Rhai syntax highlighting — GitHub-dark family, harmonizing with the theme. */
+:root {
+  --syn-comment: #8b949e; --syn-string: #a5d6ff; --syn-number: #79c0ff;
+  --syn-keyword: #ff7b72; --syn-path: #ffa657; --syn-fn: #d2a8ff;
+  --syn-const: #79c0ff;
+}
+.tok-comment { color: var(--syn-comment); font-style: italic; }
+.tok-string  { color: var(--syn-string); }
+.tok-number  { color: var(--syn-number); }
+.tok-keyword { color: var(--syn-keyword); }
+.tok-path    { color: var(--syn-path); }
+.tok-fn      { color: var(--syn-fn); }
+.tok-const   { color: var(--syn-const); }
+
+/* Highlighted-editor overlay: a syntax-highlighted <pre> behind a transparent,
+   caret-visible <textarea>. Box metrics are copied from the textarea in JS. */
+.hl-editor { position: relative; display: block; }
+.hl-editor .hl-layer {
+  position: absolute; inset: 0; margin: 0; overflow: hidden;
+  background: var(--bg); pointer-events: none; z-index: 0;
+}
+.hl-editor .hl-layer code { font: inherit; white-space: inherit; }
+.hl-editor textarea.hl-input {
+  position: relative; z-index: 1; display: block; overflow: auto;
+  background: transparent;
+}
+
+/* Connection-setup panel (netsim not reachable) — standardized wording */
+.setup { display: none; border-color: var(--warn); }
+.setup.visible { display: block; }
+.setup pre {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 0.6rem; overflow-x: auto; font-size: 0.8rem;
+}
+.setup code { color: var(--good); }
+.setup a { color: var(--accent); }
+
+/* AI suggestion chips */
+.suggest { margin-top: 0.5rem; }
+.suggest .chip {
+  display: inline-block; border: 1px solid var(--border); border-radius: 1rem;
+  padding: 0.15rem 0.7rem; margin: 0.2rem 0.3rem 0 0; font-size: 0.78rem;
+  cursor: pointer; background: #21262d; color: var(--text);
+}
+.suggest .chip:hover { border-color: var(--accent); }
+.suggest .chip.active { border-color: var(--accent); color: var(--accent); }
+#req-echo { margin-top: 0.45rem; font-size: 0.8rem; color: var(--dim); }
+#req-echo b { color: var(--text); font-weight: 500; }
+details { margin-top: 0.75rem; }
+details summary { cursor: pointer; color: var(--dim); font-size: 0.85rem; }
+details pre {
+  max-height: 18rem; overflow: auto; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 6px; padding: 0.6rem; font-size: 11.5px; white-space: pre-wrap;
+}
+
+/* Generic GATT viewer */
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 0.15rem 0.9rem;
+  font-size: 0.85rem; margin-bottom: 0.75rem; }
+.kv dt { color: var(--dim); } .kv dd { margin: 0; }
+.svc { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.7rem;
+  overflow: hidden; }
+.svc-head { background: #1c2230; padding: 0.4rem 0.7rem; font-size: 0.82rem; }
+.svc-head .u { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
+  font-size: 0.76rem; margin-left: 0.4rem; }
+.chr { padding: 0.5rem 0.7rem; border-top: 1px solid var(--border); }
+.chr.pulse { animation: pulse 0.9s ease-out; }
+@keyframes pulse {
+  0% { background: rgba(88,166,255,0.28); }
+  100% { background: transparent; }
+}
+.chr-top { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
+.chr-name { font-weight: 500; }
+.chr-uuid { font-family: ui-monospace, Menlo, monospace; color: var(--dim); font-size: 0.75rem; }
+.prop {
+  display: inline-block; border: 1px solid var(--border); border-radius: 4px;
+  padding: 0 0.3rem; font-size: 0.68rem; color: var(--dim);
+  font-family: ui-monospace, Menlo, monospace;
+}
+.prop.sub { color: var(--good); border-color: var(--good); }
+.chr-val { margin-top: 0.25rem; font-size: 0.9rem; }
+.chr-val .decoded { font-weight: 600; }
+.chr-val .raw { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
+  font-size: 0.76rem; margin-left: 0.4rem; }
+.sub-note { color: var(--good); font-size: 0.72rem; margin-left: 0.4rem; }
+.viewer-empty { color: var(--dim); font-size: 0.85rem; }
+
+footer { color: var(--dim); font-size: 0.78rem; padding: 0 1.5rem 1.5rem;
+  max-width: 75rem; margin: 0 auto; }
+footer code { color: var(--good); }

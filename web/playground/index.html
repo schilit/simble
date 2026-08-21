@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimBLE Playground</title>
+<link rel="stylesheet" href="../common/simble.css">
+<style>
+  main { padding: 1rem 1.5rem 0; max-width: 82rem; margin: 0 auto; }
+  .toolbar {
+    display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;
+    padding: 0.6rem 0.8rem; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px 8px 0 0; border-bottom: none;
+  }
+  .toolbar .spacer { flex: 1; }
+  .toolbar .status { color: var(--dim); font-size: 0.8rem; }
+  textarea#script {
+    width: 100%; height: 24rem; border-radius: 0; border-top: none;
+    display: block;
+  }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem; }
+  @media (max-width: 60rem) { .cols { grid-template-columns: 1fr; } }
+  .output-log {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.6rem; font-size: 0.8rem; min-height: 3rem; max-height: 12rem;
+    overflow: auto; font-family: ui-monospace, Menlo, monospace; white-space: pre-wrap;
+    color: var(--dim);
+  }
+  .ai-panel { margin-top: 1rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>SimBLE Playground</h1>
+  <span class="sub">a free-form Rhai editor — the script <em>is</em> the Bluetooth device</span>
+  <span id="conn" class="pill">starting…</span>
+  <div class="links">
+    <a href="../">← SimBLE demos</a>
+    <a href="../explorer/">API Explorer ↗</a>
+    <a href="../scanner/">Scanner ↗</a>
+  </div>
+</header>
+
+<main>
+  <section id="setup" class="panel setup" style="margin-bottom:1rem">
+    <h2>netsim is not reachable</h2>
+    <p>Could not reach netsim at <code>localhost:7681</code> — is <code>netsimd</code> running with its
+       WebSocket frontend enabled? This page is served from the cloud, but the Bluetooth scene runs
+       <strong>on your machine</strong>: the wasm build of Simble in this tab connects to a local
+       <code>netsimd</code> over <code>ws://localhost:7681</code>. Start it with:</p>
+    <pre><code>netsimd --logtostderr --no-shutdown --ws-port 7681</code></pre>
+    <p class="hint">Needs the canary-channel emulator (see the README's <em>Testing Against netsim</em>
+       section). You can still edit and Run scripts offline — the live viewer works without netsim;
+       the socket only carries advertising and notifications when it's reachable. Tip: open
+       <a href="../scanner/">the scanner</a> in a second tab to watch your device on the air.</p>
+  </section>
+
+  <div class="toolbar">
+    <button id="run" class="primary">▶ Run</button>
+    <button id="share">🔗 Share</button>
+    <label class="status" for="examples">Examples:</label>
+    <select id="examples">
+      <option value="">Load an example…</option>
+    </select>
+    <button id="reset">↺ Reset</button>
+    <span class="spacer"></span>
+    <span id="run-state" class="status"></span>
+  </div>
+  <textarea id="script" class="code" spellcheck="false"></textarea>
+  <div id="script-error" class="error"></div>
+
+  <div class="cols">
+    <section class="panel">
+      <h2>Live device</h2>
+      <dl class="kv">
+        <dt>advertising as</dt><dd id="dev-name">—</dd>
+        <dt>connection</dt><dd id="dev-conn">—</dd>
+        <dt>subscription</dt><dd id="dev-sub">—</dd>
+      </dl>
+      <div id="gatt"><p class="viewer-empty">Press Run to build the device.</p></div>
+    </section>
+
+    <section class="panel">
+      <h2>Output</h2>
+      <div id="log" class="output-log">Ready. Edit the script and press Run.</div>
+      <p class="hint">The viewer renders whatever GATT structure the running script builds — every
+         service and characteristic, with properties, live values, and subscription state from the
+         wasm stack's real attribute database. If the script defines <code>fn tick(server, t)</code>
+         it runs ~10×/sec (<code>t</code> = seconds since Run) so values can animate.</p>
+    </section>
+  </div>
+
+  <section class="panel ai-panel">
+    <h2>Generate a device with AI</h2>
+    <div class="row">
+      <span class="hint">Describe a device, generate the Rhai with an LLM, paste it above, press Run:</span>
+      <a id="ai-claude" class="btn" target="_blank" rel="noopener">Open in Claude</a>
+      <a id="ai-chatgpt" class="btn" target="_blank" rel="noopener">Open in ChatGPT</a>
+      <button id="ai-gemini">Gemini</button>
+      <button id="ai-copy">Copy prompt</button>
+    </div>
+    <div class="suggest" id="suggest"></div>
+    <div id="req-echo"></div>
+    <div id="ai-hint" class="hint"></div>
+    <details>
+      <summary>view the AI prompt</summary>
+      <pre id="ai-prompt-view"></pre>
+    </details>
+  </section>
+</main>
+
+<footer>
+  Simble compiled to WebAssembly — no server-side interpreter, no backend. The page joins netsim
+  as <code>web-playground</code>; the advertised name comes from your script. <strong>Share</strong>
+  encodes the editor's script into the URL (deflate + base64url) so a link opens with that exact
+  script ready to Run.
+</footer>
+
+<script type="module" src="./playground.js"></script>
+</body>
+</html>

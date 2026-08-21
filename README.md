@@ -117,17 +117,25 @@ cargo run --example netsim_two_devices
 ```
 
 **Try it in your browser** — with `netsimd` running locally as above, SimBLE itself runs
-in the page (compiled to WebAssembly) and joins the simulation:
+in the page (compiled to WebAssembly) and joins the simulation. Start at the
+[demo index](https://schilit.github.io/simble/), or jump straight in:
 
-- **Beacon scanner**: https://schilit.github.io/simble/scanner/ — live scan of everything
-  on the simulated air
-- **Scripted heart-rate monitor**: https://schilit.github.io/simble/hrm/ — a running
-  SimBLE whose device is defined by an editable Rhai script in the page; edit, hit Run,
-  and watch it change in the scanner tab
+- **[Playground](https://schilit.github.io/simble/playground/)** — a free-form Rhai editor
+  where the script *is* the device; Run it, watch the live GATT viewer, generate a device
+  with AI, and Share a link that encodes your script in the URL
+- **[API Explorer](https://schilit.github.io/simble/explorer/)** — fill in an `android::*`
+  call, press Execute, and it emits one line of Rhai against a live session, teaching the
+  syntax as you build a device click by click
+- **[Scanner](https://schilit.github.io/simble/scanner/)** — live scan of everything on the
+  simulated air, with decoded advertisements
+- **[Scripted heart-rate monitor](https://schilit.github.io/simble/hrm/)** — a running
+  SimBLE whose device is an editable Rhai script; edit, hit Run, and watch it change in the
+  scanner tab
+- **[Color Bulb](https://schilit.github.io/simble/lightbulb/)** — a PLAYBULB-style light: a
+  Rhai peripheral with a writable RGB characteristic and a glowing bulb that reacts
 
-Open both side by side for the full loop: rename the device in the HRM tab's script and
-see the new name appear in the scanner. (Links go live once GitHub Pages is enabled for
-this repo; until then, build locally and serve `web/` — instructions in that directory.)
+Open the Playground and the Scanner side by side for the full loop: rename the device in the
+Playground script and see the new name appear in the scanner.
 
 Any device you create this way appears in netsim alongside emulator instances — name and
 address come straight from the connection URL:
