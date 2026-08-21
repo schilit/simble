@@ -70,6 +70,16 @@ impl HciChannel {
         self.send_h4(h4_type::HCI_ACL_DATA, acl)
     }
 
+    /// Injects an already-H4-framed packet from Host to Controller — the
+    /// host-side mirror of [`receive_from_controller`](Self::receive_from_controller),
+    /// for callers (e.g. the `usb-ble-ws` bridge) that relay complete H4
+    /// packets rather than building them via [`send_command`](Self::send_command).
+    pub fn inject_host_packet(&self, h4_packet: Vec<u8>) -> Result<(), SimbleError> {
+        self.host_to_ctrl_tx
+            .send(h4_packet)
+            .map_err(|e| SimbleError::Transport(e.to_string()))
+    }
+
     /// Polls for the next H4 packet from Host to Controller (non-blocking).
     pub fn poll_host_packet(&self) -> Option<Vec<u8>> {
         let rx = self.host_to_ctrl_rx.lock().ok()?;

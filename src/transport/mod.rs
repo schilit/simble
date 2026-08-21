@@ -15,6 +15,9 @@ pub(crate) mod rootcanal;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod usb;
 pub mod wasm_ws;
+// Shared hand-rolled RFC 6455 codec + the WebSocket server end (`usb-ble-ws`).
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod ws;
 
 pub use hci_adapter::{HciChannel, h4_type};
 #[cfg(not(target_arch = "wasm32"))]
@@ -23,3 +26,5 @@ pub use netsim::NetsimTransport;
 pub use rootcanal::{H4FrameReader, RootcanalTransport, read_h4_packet, write_h4_packet};
 #[cfg(not(target_arch = "wasm32"))]
 pub use usb::UsbTransport;
+#[cfg(not(target_arch = "wasm32"))]
+pub use ws::WsServerConn;

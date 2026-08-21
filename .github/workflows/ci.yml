@@ -32,18 +32,17 @@ jobs:
       - name: Run Tests
         run: cargo test --all-targets --all-features -- --nocapture
 
-      - name: Run simble-test on the Testing-page examples
+      - name: Run the Testing-page examples through the simble CLI
         # The web Testing page and CI run the *same* .rhai files. Each is named
         # by expectation: *.pass.rhai must exit 0, *.fail.rhai must exit non-zero
         # (a negative test — a failed assertion has to be caught).
         run: |
-          cargo build --release --bin simble-test
-          bin=target/release/simble-test
+          cargo build --release --bin simble
+          bin=target/release/simble
           rc=0
-          for f in web/testing/examples/*.pass.rhai; do
-            echo "== $f (expect PASS) =="
-            "$bin" "$f" || { echo "  UNEXPECTED FAIL: $f"; rc=1; }
-          done
+          # All the passing examples at once — the CLI accepts many files and
+          # exits nonzero if any fail.
+          "$bin" web/testing/examples/*.pass.rhai || { echo "  UNEXPECTED FAIL"; rc=1; }
           for f in web/testing/examples/*.fail.rhai; do
             echo "== $f (expect FAIL) =="
             if "$bin" "$f"; then echo "  UNEXPECTED PASS: $f"; rc=1; fi
