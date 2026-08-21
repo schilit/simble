@@ -14,7 +14,7 @@
   .device { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); overflow: hidden; }
   .device > header {
     display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
-    padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--border); background: #1c2230;
+    padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--border); background: #eaeef2;
   }
   .device > header .role { font-weight: 700; }
   .device > header .kind { color: var(--dim); font-size: 0.8rem; }
@@ -36,7 +36,7 @@
     color: var(--dim); margin: 0.9rem 0 0.5rem; }
   /* Client (discovered) GATT — nRF-Connect-flavoured tree */
   .svc { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.6rem; overflow: hidden; }
-  .svc-head { background: #1c2230; padding: 0.4rem 0.7rem; font-size: 0.85rem; font-weight: 500; }
+  .svc-head { background: #eaeef2; padding: 0.4rem 0.7rem; font-size: 0.85rem; font-weight: 500; }
   .svc-head .u { font-family: ui-monospace, Menlo, monospace; color: var(--dim); font-size: 0.76rem; margin-left: 0.4rem; }
   .chr { padding: 0.45rem 0.7rem; border-top: 1px solid var(--border); }
   .chr-top { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
@@ -52,7 +52,7 @@
     font-size: 0.76rem; margin-left: 0.4rem; }
   .chr-actions { margin-top: 0.35rem; display: flex; gap: 0.35rem; flex-wrap: wrap; }
   .chr-actions button {
-    background: #21262d; color: var(--text); border: 1px solid var(--border); border-radius: 5px;
+    background: #eaeef2; color: var(--text); border: 1px solid var(--border); border-radius: 5px;
     padding: 0.12rem 0.5rem; font-size: 0.74rem; cursor: pointer;
   }
   .chr-actions button:hover { border-color: var(--accent); }
@@ -82,13 +82,13 @@
 </nav>
 <header class="sitenav" style="border-bottom:none;background:transparent;padding-top:0.9rem">
   <h1 style="font-size:1.15rem;margin:0">Server + Client</h1>
-  <span class="kind" style="color:var(--dim);font-size:0.85rem">two devices on one in-page Link</span>
+  <span class="kind" style="color:var(--dim);font-size:0.85rem">two devices on one in-browser Link</span>
   <span id="conn" class="pill spacer" style="margin-left:auto">starting…</span>
 </header>
 
 <main>
   <p class="intro">This page runs <strong>two real SimBLE devices</strong> in the same tab, sharing one in-process
-    <a href="../controllers/">in-page controller</a> — no netsim. On the left, a <strong class="role" style="color:var(--good)">Server</strong>
+    <a href="../controllers/">in-browser controller</a> — no netsim. On the left, a <strong class="role" style="color:var(--good)">Server</strong>
     (peripheral) defined by the editable Rhai script. On the right, a <strong style="color:var(--accent)">Client</strong>
     (central) that connects to it and discovers its GATT, the way nRF Connect shows a connected device. What looks like
     "a device and a UI" is really a peripheral and a central talking to each other.</p>

@@ -121,7 +121,7 @@ function makeInPageBackend() {
       let reports = [];
       try { reports = JSON.parse(link.scanner_reports_json(scannerIndex)); } catch (e) { console.error("tick:", e); }
       const n = link.device_count() - 1;
-      setPill(`in-page · ${n} advertiser${n === 1 ? "" : "s"}`, "ok");
+      setPill(`in browser · ${n} advertiser${n === 1 ? "" : "s"}`, "ok");
       return { reports };
     },
     teardown() { try { link.free(); } catch (_) { /* gone */ } },

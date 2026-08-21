@@ -9,48 +9,48 @@
   gap: 0.2rem 0.4rem;
   flex-wrap: wrap;
   padding: 0.5rem 1rem;
-  border-bottom: 1px solid var(--border, #30363d);
-  background: var(--panel, #161b22);
+  border-bottom: 1px solid var(--border, #d0d7de);
+  background: var(--panel, #f6f8fa);
   font: 500 0.88rem/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 .sitenav .brand {
   font-size: 1rem;
   font-weight: 700;
   letter-spacing: -0.01em;
-  color: var(--text, #e6edf3);
+  color: var(--text, #1f2328);
   text-decoration: none;
   padding: 0.3rem 0.5rem 0.3rem 0.2rem;
   margin-right: 0.4rem;
 }
-.sitenav .brand b { color: var(--accent, #58a6ff); font-weight: 700; }
+.sitenav .brand b { color: var(--accent, #0969da); font-weight: 700; }
 .sitenav .tabs { display: flex; gap: 0.1rem; flex-wrap: wrap; }
 .sitenav .tabs a {
-  color: var(--dim, #8b949e);
+  color: var(--dim, #656d76);
   text-decoration: none;
   padding: 0.32rem 0.65rem;
   border-radius: 6px;
   white-space: nowrap;
   transition: color 0.12s, background 0.12s;
 }
-.sitenav .tabs a:hover { color: var(--text, #e6edf3); background: color-mix(in srgb, var(--text, #e6edf3) 10%, transparent); }
+.sitenav .tabs a:hover { color: var(--text, #1f2328); background: color-mix(in srgb, var(--text, #1f2328) 10%, transparent); }
 .sitenav .tabs a[aria-current="page"] {
-  color: var(--text, #e6edf3);
-  background: color-mix(in srgb, var(--accent, #58a6ff) 18%, transparent);
+  color: var(--text, #1f2328);
+  background: color-mix(in srgb, var(--accent, #0969da) 18%, transparent);
   font-weight: 600;
 }
 .sitenav .spacer { margin-left: auto; }
 .sitenav .ext {
-  color: var(--dim, #8b949e);
+  color: var(--dim, #656d76);
   text-decoration: none;
   padding: 0.32rem 0.5rem;
   white-space: nowrap;
 }
-.sitenav .ext:hover { color: var(--accent, #58a6ff); }
+.sitenav .ext:hover { color: var(--accent, #0969da); }
 
 /* Body links use the accent in both states — never the browser's default
-   visited-purple, which is unreadable on the dark ground. Page-specific and
-   nav links (higher specificity) still win. */
-a:link, a:visited { color: var(--accent, #58a6ff); }
+   visited-purple, which reads as off-brand. Page-specific and nav links
+   (higher specificity) still win. */
+a:link, a:visited { color: var(--accent, #0969da); }
 
 @media (max-width: 40rem) {
   .sitenav { gap: 0.1rem 0.2rem; padding: 0.4rem 0.6rem; }

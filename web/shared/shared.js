@@ -153,7 +153,7 @@ async function makeLocalHub(onStatus) {
     onStatus({ type: "status", t: (performance.now() - t0) / 1000, peripherals, scanners, centrals });
   }, 250);
 
-  setPill("single-tab · in-page Link", "");
+  setPill("single-tab · in-browser Link", "");
   return {
     kind: "local",
     addPeripheral: (address, script) => add("peripheral", () => link.add_peripheral(address, script), address),

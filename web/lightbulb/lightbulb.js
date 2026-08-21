@@ -180,7 +180,7 @@ function loop() {
       link.tick((performance.now() - runStart) / 1000);
       const json = link.peripheral_status_json(linkIndex);
       if (json) {
-        setPill("in-page · advertising", "ok");
+        setPill("in browser · advertising", "ok");
         render(JSON.parse(json));
       }
     } catch (e) { showScriptError(e); }
@@ -254,7 +254,7 @@ if (initial) applyBulb(...initial);
 // a real central (e.g. the emulator) to connect and subscribe.
 function setModeHint() {
   $("mode-hint").textContent = mode === "in-page"
-    ? "In-page controller — no netsim; the bulb runs entirely in this tab."
+    ? "In-browser controller — no netsim; the bulb runs entirely in this tab."
     : "";
 }
 function switchBackend() {

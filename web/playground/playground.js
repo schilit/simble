@@ -268,7 +268,7 @@ function loop() {
       const json = link.peripheral_status_json(linkIndex);
       if (json) {
         const status = JSON.parse(json);
-        setPill("in-page · advertising", "ok");
+        setPill("in browser · advertising", "ok");
         render(status);
       }
     } catch (e) {

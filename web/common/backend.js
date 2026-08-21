@@ -16,14 +16,14 @@ function injectStyles() {
     .backend {
       display: flex; align-items: center; gap: 0.5rem 0.9rem; flex-wrap: wrap;
       padding: 0.5rem 0.9rem; margin: 0 0 0.9rem;
-      border: 1px solid var(--border, #30363d); border-radius: 8px;
-      background: var(--panel, #161b22);
-      font-size: 0.85rem; color: var(--text, #e6edf3);
+      border: 1px solid var(--border, #d0d7de); border-radius: 8px;
+      background: var(--panel, #f6f8fa);
+      font-size: 0.85rem; color: var(--text, #1f2328);
     }
-    .backend .backend-label { color: var(--dim, #8b949e); font-weight: 600; }
+    .backend .backend-label { color: var(--dim, #656d76); font-weight: 600; }
     .backend label { display: inline-flex; align-items: center; gap: 0.35rem; cursor: pointer; }
-    .backend label .hint { color: var(--dim, #8b949e); font-size: 0.8em; }
-    .backend a.backend-help { margin-left: auto; color: var(--accent, #58a6ff); text-decoration: none; font-size: 0.82rem; }
+    .backend label .hint { color: var(--dim, #656d76); font-size: 0.8em; }
+    .backend a.backend-help { margin-left: auto; color: var(--accent, #0969da); text-decoration: none; font-size: 0.82rem; }
     .backend a.backend-help:hover { text-decoration: underline; }
   `;
   document.head.appendChild(style);
@@ -44,7 +44,7 @@ export function createBackendSelector(container, { key = "simble-backend", helpH
   container.innerHTML = `
     <div class="backend">
       <span class="backend-label">Controller</span>
-      <label><input type="radio" name="${key}" value="in-page"> In-page <span class="hint">— no netsim</span></label>
+      <label><input type="radio" name="${key}" value="in-page"> In browser <span class="hint">— built-in wasm controller</span></label>
       <label><input type="radio" name="${key}" value="websocket"> WebSocket <span class="hint">— netsim / rootcanal</span></label>
       <a class="backend-help" href="${helpHref}">which controller? ↗</a>
     </div>`;

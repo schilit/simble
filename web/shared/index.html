@@ -17,7 +17,7 @@
   @media (max-width: 52rem) { .two { grid-template-columns: 1fr; } }
   .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
   .seg button { border: none; border-radius: 0; background: transparent; }
-  .seg button.active { background: #1f6feb; color: #fff; }
+  .seg button.active { background: #0969da; color: #fff; }
   label.fld { display: block; font-size: 0.8rem; color: var(--dim); margin: 0.6rem 0 0.2rem; }
   input.wide, select.wide { width: 100%; }
   .mine-badge { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em;
@@ -68,7 +68,7 @@
 
 <header>
   <h1>SimBLE Shared Scene</h1>
-  <span class="sub">One in-page <code>Link</code> hosted in a SharedWorker — every same-origin tab
+  <span class="sub">One in-browser <code>Link</code> hosted in a SharedWorker — every same-origin tab
     joins the same radio scene. No netsim, no server.</span>
   <span id="conn" class="pill">starting…</span>
 </header>
@@ -85,7 +85,7 @@
   <section id="fallback" class="panel fallback">
     <h2>SharedWorker unavailable — single-tab mode</h2>
     <p class="steps">This browser/context does not support module SharedWorkers (Safari, for example,
-      has no SharedWorker at all). The page has fallen back to a <b>private in-page Link</b> that runs
+      has no SharedWorker at all). The page has fallen back to a <b>private in-browser Link</b> that runs
       only in this tab, so cross-tab sharing is off — but you can still add devices and watch them
       interact here. For the real cross-tab demo, use a Chromium-based browser.</p>
   </section>

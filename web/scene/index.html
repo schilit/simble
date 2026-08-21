@@ -25,7 +25,7 @@
     cursor: pointer; background: var(--bg);
   }
   .dev-item:hover { border-color: var(--dim); }
-  .dev-item.open { border-color: var(--accent); background: #1c2230; }
+  .dev-item.open { border-color: var(--accent); background: #eaeef2; }
   .dev-item .role-dot { font-size: 0.8rem; line-height: 1; }
   .dev-item.peripheral .role-dot { color: var(--good); }
   .dev-item.scanner .role-dot { color: var(--warn); }
@@ -115,7 +115,7 @@
 </nav>
 <header style="border-bottom:none;padding-top:0.9rem">
   <h1>Scene creator</h1>
-  <span class="sub">Assemble a whole BLE scene on one in-page Link and inspect every device</span>
+  <span class="sub">Assemble a whole BLE scene on one in-browser Link and inspect every device</span>
   <span id="conn" class="pill" style="margin-left:auto">starting…</span>
 </header>
 
@@ -123,7 +123,7 @@
   <p class="intro">Build a Bluetooth scene device by device — scripted <strong class="peripheral-role">servers</strong>
     (peripherals), passive <strong class="scanner-role">scanners</strong>, and <strong class="central-role">clients</strong>
     (centrals) that connect to a server and discover its GATT. Pick a <a href="../controllers/">controller</a>:
-    <strong>In-page</strong> hosts the whole scene on one wasm Link in this tab (no netsim), or
+    <strong>In browser</strong> hosts the whole scene on one wasm Link in this tab (no netsim), or
     <strong>WebSocket</strong> spins each device up as its own engine in a real netsim scene. Click any device to inspect it.</p>
 
   <div id="backend"></div>
@@ -150,7 +150,7 @@
         <button id="add-scanner">+ Scanner</button>
         <button id="add-client">+ Client</button>
       </div>
-      <p class="mode-note" id="client-note">Clients are in-page only — over netsim the
+      <p class="mode-note" id="client-note">Clients are in-browser only — over netsim the
         <a href="../emulator/">emulator app</a> is the central.</p>
       <p class="mode-note" id="ws-note">Devices join the <a href="../emulator/">emulator's netsim scene</a>.</p>
       <ul class="dev-list" id="dev-list"></ul>

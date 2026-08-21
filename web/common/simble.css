@@ -6,9 +6,9 @@
  * playground, explorer, and lightbulb pages import this). */
 
 :root {
-  --bg: #0d1117; --panel: #161b22; --border: #30363d; --text: #e6edf3;
-  --dim: #8b949e; --accent: #58a6ff; --good: #3fb950; --bad: #f85149;
-  --warn: #d29922; --heart: #f85149;
+  --bg: #ffffff; --panel: #f6f8fa; --panel2: #eaeef2; --border: #d0d7de;
+  --text: #1f2328; --dim: #656d76; --accent: #0969da; --good: #1a7f37;
+  --bad: #cf222e; --warn: #9a6700; --heart: #cf222e;
 }
 * { box-sizing: border-box; }
 body {
@@ -41,15 +41,15 @@ header a { color: var(--accent); text-decoration: none; font-size: 0.85rem; }
 
 /* Buttons + rows */
 button, .btn {
-  background: #21262d; color: var(--text); border: 1px solid var(--border);
+  background: var(--panel2); color: var(--text); border: 1px solid var(--border);
   border-radius: 6px; padding: 0.35rem 0.9rem; font-size: 0.85rem;
   cursor: pointer; text-decoration: none; display: inline-block;
 }
 button:hover, .btn:hover { border-color: var(--dim); }
-button.primary { background: #1f6feb; border-color: #1f6feb; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 button:disabled { opacity: 0.5; cursor: default; }
 select {
-  background: #21262d; color: var(--text); border: 1px solid var(--border);
+  background: var(--panel2); color: var(--text); border: 1px solid var(--border);
   border-radius: 6px; padding: 0.35rem 0.6rem; font-size: 0.85rem; cursor: pointer;
 }
 input[type=text], input[type=number] {
@@ -75,11 +75,11 @@ pre.code, .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-/* Rhai syntax highlighting — GitHub-dark family, harmonizing with the theme. */
+/* Rhai syntax highlighting — GitHub-light family, harmonizing with the theme. */
 :root {
-  --syn-comment: #8b949e; --syn-string: #a5d6ff; --syn-number: #79c0ff;
-  --syn-keyword: #ff7b72; --syn-path: #ffa657; --syn-fn: #d2a8ff;
-  --syn-const: #79c0ff;
+  --syn-comment: #6e7781; --syn-string: #0a3069; --syn-number: #0550ae;
+  --syn-keyword: #cf222e; --syn-path: #953800; --syn-fn: #8250df;
+  --syn-const: #0550ae;
 }
 .tok-comment { color: var(--syn-comment); font-style: italic; }
 .tok-string  { color: var(--syn-string); }
@@ -117,7 +117,7 @@ pre.code, .mono {
 .suggest .chip {
   display: inline-block; border: 1px solid var(--border); border-radius: 1rem;
   padding: 0.15rem 0.7rem; margin: 0.2rem 0.3rem 0 0; font-size: 0.78rem;
-  cursor: pointer; background: #21262d; color: var(--text);
+  cursor: pointer; background: var(--panel2); color: var(--text);
 }
 .suggest .chip:hover { border-color: var(--accent); }
 .suggest .chip.active { border-color: var(--accent); color: var(--accent); }
@@ -136,13 +136,13 @@ details pre {
 .kv dt { color: var(--dim); } .kv dd { margin: 0; }
 .svc { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.7rem;
   overflow: hidden; }
-.svc-head { background: #1c2230; padding: 0.4rem 0.7rem; font-size: 0.82rem; }
+.svc-head { background: var(--panel2); padding: 0.4rem 0.7rem; font-size: 0.82rem; }
 .svc-head .u { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
   font-size: 0.76rem; margin-left: 0.4rem; }
 .chr { padding: 0.5rem 0.7rem; border-top: 1px solid var(--border); }
 .chr.pulse { animation: pulse 0.9s ease-out; }
 @keyframes pulse {
-  0% { background: rgba(88,166,255,0.28); }
+  0% { background: rgba(9,105,218,0.14); }
   100% { background: transparent; }
 }
 .chr-top { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }

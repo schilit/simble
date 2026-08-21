@@ -209,7 +209,7 @@ function addScanner() {
 
 function addClient() {
   if (mode === "websocket") {
-    setPill("clients are in-page only — the emulator app is the central over netsim", "bad");
+    setPill("clients are in-browser only — the emulator app is the central over netsim", "bad");
     return;
   }
   const servers = peripheralOptions();
@@ -263,7 +263,7 @@ function renderScene() {
   $("scene-empty").style.display = specs.length ? "none" : "block";
   $("scene-count").textContent = specs.length
     ? `${specs.length} device${specs.length === 1 ? "" : "s"}` : "";
-  // Clients (centrals) only exist on the in-page Link.
+  // Clients (centrals) only exist on the in-browser Link.
   const ws = mode === "websocket";
   $("add-client").disabled = ws || !peripheralOptions().length;
   $("client-note").style.display = ws ? "block" : "none";
@@ -308,9 +308,9 @@ function renderInspect(error) {
     if (mode === "websocket") {
       el.innerHTML = head +
         `<div class="phase">Unavailable in netsim mode</div>
-         <p class="empty">The client (central) role only exists on the in-page Link. Over netsim the
+         <p class="empty">The client (central) role only exists on the in-browser Link. Over netsim the
            <a href="../emulator/">Android emulator app</a> is the central that connects to these
-           peripherals — switch the controller to <strong>In-page</strong> to drive a client from this page.</p>`;
+           peripherals — switch the controller to <strong>In browser</strong> to drive a client from this page.</p>`;
       return;
     }
     el.innerHTML = head +
@@ -513,7 +513,7 @@ $("dev-list").addEventListener("click", (e) => {
 });
 
 // Start with a sensible non-empty scene: a server, a client on it, a scanner.
-// addClient no-ops in websocket mode (clients are in-page only).
+// addClient no-ops in websocket mode (clients are in-browser only).
 addServer();
 addClient();
 addScanner();
