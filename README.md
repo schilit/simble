@@ -16,6 +16,9 @@ SimBLE is written in pure Rust, runs everywhere `cargo` does, and is a native co
 [netsim](https://android.googlesource.com/platform/tools/netsim), the Android emulator's
 network simulator.
 
+**▶ Try it now in your browser: the [SimBLE Playground](https://schilit.github.io/simble/playground/)** —
+write a device in Rhai and run it live (compiled to WebAssembly, no install).
+
 ---
 
 ## What can I do with it?

@@ -144,6 +144,10 @@ export function attachHighlightedEditor(textarea) {
     textarea.classList.add("hl-input");
 
     const cs = getComputedStyle(textarea);
+    // getComputedStyle returns a LIVE object, so capture the text color now —
+    // before we blank the textarea's own text below, which would otherwise make
+    // cs.color read back as transparent and hide the highlight layer too.
+    const textColor = cs.color;
     const copy = [
       "fontFamily", "fontSize", "fontWeight", "fontStyle", "lineHeight",
       "letterSpacing", "tabSize", "textIndent",
@@ -162,9 +166,9 @@ export function attachHighlightedEditor(textarea) {
     wrap.style.marginLeft = cs.marginLeft;
     textarea.style.margin = "0";
     textarea.style.background = "transparent";
-    textarea.style.caretColor = cs.color;
+    textarea.style.caretColor = textColor;
     textarea.style.color = "transparent";
-    pre.style.color = cs.color;
+    pre.style.color = textColor;
 
     const refresh = () => {
       codeEl.innerHTML = highlightRhai(textarea.value) + "\n";
