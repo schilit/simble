@@ -279,7 +279,9 @@ impl ScriptGattServer {
     }
 }
 
-fn runtime_error(message: impl Into<String>) -> Box<EvalAltResult> {
+/// Crate-visible so host-side extension registrars (the web runtime's
+/// `update_value` in `transport::wasm_ws`) raise script errors the same way.
+pub(crate) fn runtime_error(message: impl Into<String>) -> Box<EvalAltResult> {
     Box::new(EvalAltResult::ErrorRuntime(
         Dynamic::from(message.into()),
         Position::NONE,
@@ -288,8 +290,8 @@ fn runtime_error(message: impl Into<String>) -> Box<EvalAltResult> {
 
 /// Coerces a script-supplied value (blob, int array, or `()` — the spec's
 /// `send_response(..., ())` example passes unit for "no payload") into
-/// bytes.
-fn dynamic_to_bytes(value: Dynamic) -> Result<Vec<u8>, Box<EvalAltResult>> {
+/// bytes. Crate-visible for the same reason as [`runtime_error`].
+pub(crate) fn dynamic_to_bytes(value: Dynamic) -> Result<Vec<u8>, Box<EvalAltResult>> {
     if value.is_unit() {
         return Ok(Vec::new());
     }

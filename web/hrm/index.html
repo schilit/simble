@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simble Web HRM — a scripted device</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d; --text: #e6edf3;
+    --dim: #8b949e; --accent: #58a6ff; --good: #3fb950; --bad: #f85149;
+    --warn: #d29922; --heart: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
+    padding: 1rem 1.5rem; border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 1.15rem; margin: 0; }
+  header .sub { color: var(--dim); font-size: 0.85rem; }
+  header a { color: var(--accent); text-decoration: none; margin-left: auto; font-size: 0.85rem; }
+  .pill {
+    font-size: 0.75rem; padding: 0.1rem 0.6rem; border-radius: 1rem;
+    border: 1px solid var(--border); color: var(--dim);
+  }
+  .pill.ok { color: var(--good); border-color: var(--good); }
+  .pill.bad { color: var(--bad); border-color: var(--bad); }
+  main {
+    display: grid; grid-template-columns: minmax(24rem, 1fr) minmax(20rem, 1fr);
+    gap: 1.25rem; padding: 1.25rem 1.5rem; max-width: 75rem; margin: 0 auto;
+  }
+  @media (max-width: 56rem) { main { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 1rem;
+  }
+  .panel h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--dim); margin: 0 0 0.75rem; }
+  textarea#script {
+    width: 100%; height: 26rem; resize: vertical; background: var(--bg);
+    color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+    font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    padding: 0.6rem; tab-size: 4;
+  }
+  button, .btn {
+    background: #21262d; color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 0.35rem 0.9rem; font-size: 0.85rem;
+    cursor: pointer; text-decoration: none; display: inline-block;
+  }
+  button:hover, .btn:hover { border-color: var(--dim); }
+  button.primary { background: #1f6feb; border-color: #1f6feb; }
+  .row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-top: 0.6rem; }
+  .hint { color: var(--dim); font-size: 0.8rem; }
+  .error {
+    color: var(--bad); font-family: ui-monospace, Menlo, monospace;
+    font-size: 0.8rem; white-space: pre-wrap; margin-top: 0.5rem;
+  }
+  details { margin-top: 0.75rem; }
+  details summary { cursor: pointer; color: var(--dim); font-size: 0.85rem; }
+  details pre {
+    max-height: 18rem; overflow: auto; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 0.6rem; font-size: 11.5px; white-space: pre-wrap;
+  }
+  /* Heart */
+  .heart-box { text-align: center; padding: 1rem 0 0.5rem; }
+  .heart {
+    display: inline-block; font-size: 5rem; color: var(--heart);
+    transform-origin: center; animation: beat 0.83s ease-in-out infinite;
+  }
+  .heart.flat { animation: none; opacity: 0.3; }
+  @keyframes beat {
+    0%, 100% { transform: scale(1); }
+    12% { transform: scale(1.22); }
+    24% { transform: scale(1); }
+    36% { transform: scale(1.12); }
+    50% { transform: scale(1); }
+  }
+  .bpm { font-size: 2rem; font-weight: 600; }
+  .bpm small { color: var(--dim); font-size: 0.9rem; font-weight: 400; }
+  table.gatt { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+  table.gatt td { padding: 0.25rem 0.4rem; border-top: 1px solid var(--border); }
+  table.gatt td.mono { font-family: ui-monospace, Menlo, monospace; color: var(--dim); }
+  .tag { color: var(--good); }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 0.15rem 0.9rem;
+    font-size: 0.85rem; margin-bottom: 0.75rem; }
+  .kv dt { color: var(--dim); } .kv dd { margin: 0; font-family: ui-monospace, Menlo, monospace; }
+  #setup { display: none; grid-column: 1 / -1; border-color: var(--warn); }
+  #setup.visible { display: block; }
+  #setup pre {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.6rem; overflow-x: auto; font-size: 0.8rem;
+  }
+  #setup code { color: var(--good); }
+  footer { color: var(--dim); font-size: 0.78rem; padding: 0 1.5rem 1.5rem;
+    max-width: 75rem; margin: 0 auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Simble Web HRM</h1>
+  <span class="sub">this page opened a running Simble — the script below <em>is</em> the device</span>
+  <span id="conn" class="pill">starting…</span>
+  <a href="../scanner/">open the scanner ↗</a>
+</header>
+
+<main>
+  <section id="setup" class="panel">
+    <h2>netsimd is not reachable</h2>
+    <p>This page is served from the cloud, but the Bluetooth scene runs <strong>on your machine</strong>:
+       the wasm build of Simble in this tab connects to a local
+       <code>netsimd</code> over <code>ws://localhost:7681</code>. Start it, and this page connects
+       by itself:</p>
+    <pre><code># One-time: install the canary-channel emulator package (stable netsimd has no WebSocket endpoint)
+~/Library/Android/sdk/cmdline-tools/latest/bin/sdkmanager --channel=3 emulator
+
+# Start netsim with the WebSocket endpoint on
+~/Library/Android/sdk/emulator/netsimd --logtostderr --no-shutdown --ws-port 7681 --test-beacons</code></pre>
+    <p class="hint">Tip: open <a href="../scanner/" style="color:var(--accent)">the scanner</a> in a second tab —
+       both tabs join the same netsim scene. Edit the script here, press Run, and watch the
+       scanner tab pick up the change.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Device script (Rhai)</h2>
+    <textarea id="script" spellcheck="false"></textarea>
+    <div class="row">
+      <button id="run" class="primary">▶ Run</button>
+      <span id="run-state" class="hint"></span>
+    </div>
+    <div id="script-error" class="error"></div>
+    <div class="row" style="margin-top:1rem">
+      <span class="hint">Generate a device with AI:</span>
+      <a id="ai-claude" class="btn" target="_blank" rel="noopener">Open in Claude</a>
+      <a id="ai-chatgpt" class="btn" target="_blank" rel="noopener">Open in ChatGPT</a>
+      <button id="ai-gemini">Gemini</button>
+      <button id="ai-copy">Copy prompt</button>
+    </div>
+    <div id="ai-hint" class="hint"></div>
+    <details>
+      <summary>view the AI prompt</summary>
+      <pre id="ai-prompt-view"></pre>
+    </details>
+    <p class="hint" style="margin-bottom:0">
+      Conventions: if the script defines <code>fn tick(server, t)</code> it runs ~10×/sec
+      (<code>t</code> = seconds since Run; functions can't see top-level variables — use the
+      arguments). <code>server.update_value(uuid, [bytes])</code> writes the live GATT database;
+      subscribed centrals are notified on change. Advertising (name + service UUIDs) is issued by
+      this page's host glue for now, pending Rhai advertising bindings.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>Live device</h2>
+    <div class="heart-box">
+      <span id="heart" class="heart flat">❤</span>
+      <div class="bpm"><span id="bpm">—</span> <small>bpm</small></div>
+    </div>
+    <dl class="kv">
+      <dt>advertising as</dt><dd id="dev-name">—</dd>
+      <dt>connection</dt><dd id="dev-conn">—</dd>
+      <dt>subscription</dt><dd id="dev-sub">—</dd>
+    </dl>
+    <table class="gatt"><tbody id="gatt-body"></tbody></table>
+    <p class="hint">A central on the scene can connect and subscribe — e.g. from an emulator, or
+       just watch the advertisement with the scanner tab. GATT values above are read live from
+       the wasm stack's real attribute database.</p>
+  </section>
+</main>
+
+<footer>
+  Simble compiled to WebAssembly — no server-side interpreter, no backend. The page joins netsim
+  as <code>web-hrm</code>; the advertised name comes from your script.
+</footer>
+
+<script type="module" src="./hrm.js"></script>
+</body>
+</html>

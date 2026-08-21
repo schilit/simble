@@ -1,0 +1,1215 @@
+// Copyright 2026 Bill Schilit
+// SPDX-License-Identifier: Apache-2.0
+
+//! Browser (wasm32) transport and demo engines for the GitHub Pages demos in
+//! `web/`: Simble compiled to WebAssembly, talking to the visitor's local
+//! netsimd over the browser's native `WebSocket` (the same
+//! `ws://localhost:7681/v1/websocket/bt?name=<n>&address=<mac>` endpoint as
+//! [`super::netsim`], but with the browser doing all RFC 6455 framing).
+//!
+//! Split in two so the demo logic stays natively testable:
+//! - The pure-Rust engines in this module body ([`queue_scanner_start`],
+//!   [`parse_scan_reports`], [`ScriptedPeripheral`]) compile and unit-test on
+//!   every target — no browser required.
+//! - The `web` submodule (gated `#[cfg(target_arch = "wasm32")]`) wraps
+//!   `web_sys::WebSocket` and exports the page-facing wasm-bindgen types.
+//!   Browser pages drive everything from a JS interval calling `tick()` —
+//!   there are no blocking loops, because wasm shares the page's event loop.
+
+use std::collections::HashMap;
+
+use crate::android::gatt_service::BluetoothGattCharacteristic;
+use crate::gap::{AdvertisingData, ad_type, flags};
+use crate::l2cap::{AclPacketBoundary, AclReassembler, HciAclHeader};
+use crate::scripting::bindings::{dynamic_to_bytes, runtime_error};
+use crate::scripting::{ScriptGattServer, new_engine};
+use crate::types::{Address, SimbleError, Uuid};
+use rhai::{AST, Array, CallFnOptions, Dynamic, Engine, EvalAltResult, Scope};
+use serde::Serialize;
+use zerocopy::IntoBytes;
+
+use super::hci_adapter::{HciChannel, h4_type};
+
+/// The default script served by the HRM demo page — a single source of truth
+/// shared by the page (via `default_heart_rate_script`) and the native unit
+/// tests below, so what ships is what's tested.
+pub const DEFAULT_HEART_RATE_SCRIPT: &str = include_str!("../../web/hrm/heart_rate.rhai");
+
+mod event {
+    pub const DISCONNECTION_COMPLETE: u8 = 0x05;
+    pub const LE_META: u8 = 0x3E;
+    pub const SUB_CONNECTION_COMPLETE: u8 = 0x01;
+    pub const SUB_ADVERTISING_REPORT: u8 = 0x02;
+    pub const SUB_ENHANCED_CONNECTION_COMPLETE: u8 = 0x0A;
+}
+
+fn queue_command(channel: &HciChannel, opcode: [u8; 2], params: &[u8]) -> Result<(), SimbleError> {
+    let mut command = vec![opcode[0], opcode[1], params.len() as u8];
+    command.extend_from_slice(params);
+    channel.send_command(&command)
+}
+
+/// Queues the controller bring-up shared by both demos. The post-Reset
+/// default event mask excludes LE Meta Events (Core Spec Vol 4, Part E,
+/// Section 7.3.1, bit 61), so both masks must be opened before any
+/// advertising report or connection event can arrive.
+fn queue_common_init(channel: &HciChannel) -> Result<(), SimbleError> {
+    queue_command(channel, [0x03, 0x0C], &[])?; // Reset
+    queue_command(channel, [0x01, 0x0C], &[0xFF; 8])?; // Set Event Mask
+    queue_command(channel, [0x01, 0x20], &[0xFF; 8]) // LE Set Event Mask
+}
+
+/// Queues the scanner's full HCI bring-up: reset, event masks, passive scan
+/// parameters, then scan enable with duplicate filtering off (every repeat
+/// report carries a fresh RSSI, which is what drives the page's live bars).
+pub fn queue_scanner_start(channel: &HciChannel) -> Result<(), SimbleError> {
+    queue_common_init(channel)?;
+    // LE Set Scan Parameters: passive, interval/window 0x0010, public own
+    // address, accept all.
+    queue_command(
+        channel,
+        [0x0B, 0x20],
+        &[0x00, 0x10, 0x00, 0x10, 0x00, 0x00, 0x00],
+    )?;
+    queue_command(channel, [0x0C, 0x20], &[0x01, 0x00]) // LE Set Scan Enable
+}
+
+/// A hex-tagged byte payload (manufacturer data with its company id, service
+/// data with its service UUID).
+#[derive(Debug, Serialize, PartialEq, Eq)]
+pub struct TaggedBytes {
+    pub tag: String,
+    pub data: String,
+}
+
+/// One decoded LE Advertising Report, ready to serialize for the page. The
+/// AD-structure decoding happens here in Rust — the page's JS only renders.
+#[derive(Debug, Serialize)]
+pub struct ScanReport {
+    pub address: String,
+    pub address_type: &'static str,
+    pub connectable: bool,
+    pub scan_response: bool,
+    pub rssi: i8,
+    pub name: Option<String>,
+    pub flags: Option<u8>,
+    pub tx_power: Option<i8>,
+    pub service_uuids: Vec<String>,
+    pub service_data: Vec<TaggedBytes>,
+    pub manufacturer_data: Option<TaggedBytes>,
+    pub raw: String,
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02X}")).collect()
+}
+
+fn address_type_name(raw: u8) -> &'static str {
+    match raw {
+        0x00 => "public",
+        0x01 => "random",
+        0x02 => "public identity",
+        0x03 => "random identity",
+        _ => "unknown",
+    }
+}
+
+/// Decodes the AD structures of one advertising payload into `report`
+/// (Core Spec Vol 3, Part C, Section 11: length-type-data triplets).
+fn decode_ad_structures(data: &[u8], report: &mut ScanReport) {
+    let mut rest = data;
+    while let [len, body @ ..] = rest {
+        let len = *len as usize;
+        if len == 0 || body.len() < len {
+            break;
+        }
+        let (structure, remaining) = body.split_at(len);
+        let (ad_kind, payload) = (structure[0], &structure[1..]);
+        match ad_kind {
+            ad_type::FLAGS if !payload.is_empty() => report.flags = Some(payload[0]),
+            ad_type::SHORTENED_LOCAL_NAME | ad_type::COMPLETE_LOCAL_NAME => {
+                report.name = Some(String::from_utf8_lossy(payload).into_owned());
+            }
+            ad_type::INCOMPLETE_16BIT_UUIDS | ad_type::COMPLETE_16BIT_UUIDS => {
+                for pair in payload.as_chunks::<2>().0 {
+                    report
+                        .service_uuids
+                        .push(Uuid::from_u16(u16::from_le_bytes([pair[0], pair[1]])).to_string());
+                }
+            }
+            ad_type::INCOMPLETE_128BIT_UUIDS | ad_type::COMPLETE_128BIT_UUIDS => {
+                for chunk in payload.as_chunks::<16>().0 {
+                    if let Some(uuid) = Uuid::from_bytes(chunk) {
+                        report.service_uuids.push(uuid.to_string());
+                    }
+                }
+            }
+            ad_type::TX_POWER_LEVEL if !payload.is_empty() => {
+                report.tx_power = Some(payload[0] as i8);
+            }
+            ad_type::SERVICE_DATA_16BIT if payload.len() >= 2 => {
+                report.service_data.push(TaggedBytes {
+                    tag: Uuid::from_u16(u16::from_le_bytes([payload[0], payload[1]])).to_string(),
+                    data: hex(&payload[2..]),
+                });
+            }
+            ad_type::MANUFACTURER_SPECIFIC_DATA if payload.len() >= 2 => {
+                report.manufacturer_data = Some(TaggedBytes {
+                    tag: format!("{:04X}", u16::from_le_bytes([payload[0], payload[1]])),
+                    data: hex(&payload[2..]),
+                });
+            }
+            _ => {}
+        }
+        rest = remaining;
+    }
+}
+
+/// Parses an H4 packet into its LE Advertising Reports (LE Meta Event,
+/// subevent 0x02), or an empty vec for any other packet. Reports are laid
+/// out sequentially per report (event type, address type, address, data,
+/// RSSI), the on-air order every real controller and rootcanal emit.
+pub fn parse_scan_reports(packet: &[u8]) -> Vec<ScanReport> {
+    let mut reports = Vec::new();
+    if packet.len() < 5
+        || packet[0] != h4_type::HCI_EVENT
+        || packet[1] != event::LE_META
+        || packet[3] != event::SUB_ADVERTISING_REPORT
+    {
+        return reports;
+    }
+    let mut rest = &packet[5..];
+    for _ in 0..packet[4] {
+        // Fixed part: event type (1), address type (1), address (6),
+        // data length (1); then data and a trailing RSSI byte.
+        let [event_type, address_type, addr @ .., data_len] = rest else {
+            break;
+        };
+        if addr.len() < 6 {
+            break;
+        }
+        let _ = data_len;
+        let (event_type, address_type) = (*event_type, *address_type);
+        let data_len = rest[8] as usize;
+        if rest.len() < 10 + data_len {
+            break;
+        }
+        let address = Address::new(rest[2..8].try_into().expect("6 address bytes"));
+        let data = &rest[9..9 + data_len];
+        let rssi = rest[9 + data_len] as i8;
+
+        let mut report = ScanReport {
+            address: address.to_string(),
+            address_type: address_type_name(address_type),
+            // ADV_IND (0x00) and ADV_DIRECT_IND (0x01) are connectable
+            // (Core Spec Vol 4, Part E, Section 7.7.65.2).
+            connectable: event_type <= 0x01,
+            scan_response: event_type == 0x04,
+            rssi,
+            name: None,
+            flags: None,
+            tx_power: None,
+            service_uuids: Vec::new(),
+            service_data: Vec::new(),
+            manufacturer_data: None,
+            raw: hex(data),
+        };
+        decode_ad_structures(data, &mut report);
+        reports.push(report);
+        rest = &rest[10 + data_len..];
+    }
+    reports
+}
+
+/// Builds an advertising payload (flags + 16-bit service UUIDs + complete
+/// local name) that fits the legacy 31-byte limit, dropping the UUID list
+/// and then trimming the name if needed — the name is the demo's identity,
+/// so it survives longest.
+pub fn build_adv_payload(name: &str, service_uuids: &[u16]) -> Vec<u8> {
+    const MAX_ADV_LEN: usize = 31;
+    let build = |name: &str, uuids: &[u16]| {
+        let mut ad = AdvertisingData::new()
+            .with_flags(flags::LE_GENERAL_DISCOVERABLE | flags::BR_EDR_NOT_SUPPORTED)
+            .with_name(name);
+        for &uuid in uuids {
+            ad = ad.with_service_uuid_16(uuid);
+        }
+        ad.to_bytes()
+    };
+    let mut bytes = build(name, service_uuids);
+    if bytes.len() > MAX_ADV_LEN {
+        bytes = build(name, &[]);
+    }
+    let mut trimmed = name.to_string();
+    while bytes.len() > MAX_ADV_LEN && trimmed.pop().is_some() {
+        bytes = build(&trimmed, &[]);
+    }
+    bytes
+}
+
+/// Pads an advertising payload into the fixed 32-byte HCI parameter block
+/// (significant length byte + 31 data bytes) of LE Set Advertising Data /
+/// LE Set Scan Response Data.
+fn adv_data_param(payload: &[u8]) -> Vec<u8> {
+    let mut param = vec![payload.len() as u8];
+    param.extend_from_slice(payload);
+    param.resize(32, 0x00);
+    param
+}
+
+fn send_acl(channel: &HciChannel, handle: u16, l2cap: &[u8]) -> Result<(), SimbleError> {
+    let header = HciAclHeader::new(
+        handle,
+        AclPacketBoundary::FirstNonFlushable,
+        l2cap.len() as u16,
+    );
+    let mut acl = Vec::with_capacity(4 + l2cap.len());
+    acl.extend_from_slice(header.as_bytes());
+    acl.extend_from_slice(l2cap);
+    channel.send_acl_data(&acl)
+}
+
+fn find_value_handle(server: &ScriptGattServer, uuid: Uuid) -> Option<u16> {
+    server.with_server(|s| {
+        s.get_services()
+            .iter()
+            .flat_map(|service| service.characteristics.clone())
+            .find(|characteristic| characteristic.uuid == uuid)
+            .and_then(|characteristic| characteristic.value_handle)
+    })
+}
+
+/// Registers the web runtime's scripting extension: `server.update_value(
+/// uuid, bytes)` writes a characteristic's value into the live GattDatabase.
+/// This exists because `notify_characteristic_changed` doesn't persist its
+/// value into the database, and the web glue treats the database as the one
+/// source of truth (the page UI reads it, and value changes become wire
+/// notifications) — pending real advertising/notification Rhai bindings.
+fn register_web_extensions(engine: &mut Engine) {
+    engine.register_fn(
+        "update_value",
+        |server: &mut ScriptGattServer,
+         uuid: Uuid,
+         value: Dynamic|
+         -> Result<(), Box<EvalAltResult>> {
+            let bytes = dynamic_to_bytes(value)?;
+            let handle = find_value_handle(server, uuid)
+                .ok_or_else(|| runtime_error(format!("no characteristic with UUID {uuid}")))?;
+            server
+                .with_server(|s| s.device.gatt_db.set_value(handle, &bytes))
+                .map_err(|status| runtime_error(format!("set_value failed: ATT error {status}")))
+        },
+    );
+}
+
+/// A notify-capable characteristic the host glue watches for value changes.
+#[derive(Debug, Clone)]
+struct WatchedCharacteristic {
+    server_index: usize,
+    value_handle: u16,
+    cccd_handle: Option<u16>,
+}
+
+/// Everything the peripheral page reports back to its JS, per tick.
+#[derive(Serialize)]
+struct PeripheralStatus {
+    name: String,
+    address: String,
+    connected: bool,
+    peer: Option<String>,
+    tick_defined: bool,
+    last_error: Option<String>,
+    services: Vec<ServiceStatus>,
+}
+
+#[derive(Serialize)]
+struct ServiceStatus {
+    uuid: String,
+    characteristics: Vec<CharacteristicStatus>,
+}
+
+#[derive(Serialize)]
+struct CharacteristicStatus {
+    uuid: String,
+    value: String,
+    subscribed: bool,
+}
+
+/// A Simble peripheral whose entire behavior comes from a Rhai script — the
+/// web demos' scripted-device engine, host-side. The script builds real
+/// `android::BluetoothGattServer`s over real `VirtualDevice`s; this glue
+/// connects the first one to an [`HciChannel`]:
+///
+/// - **Advertising is host glue for now**: the `android::*` bindings have no
+///   `BluetoothLeAdvertiser` yet, so [`Self::queue_start`] issues the HCI
+///   advertising sequence itself, carrying the script device's name and
+///   16-bit service UUIDs (re-derived on every re-Run, so a renamed device
+///   advertises its new name).
+/// - **Ticking**: if the script defines `fn tick(server, t)`, it's called on
+///   every host tick with seconds-since-start — behavior lives in the
+///   script, not the page.
+/// - **Notifications**: any notify-capable characteristic whose database
+///   value changes (script `update_value`, or a peer write) is notified to
+///   a subscribed central automatically.
+pub struct ScriptedPeripheral {
+    engine: Engine,
+    ast: AST,
+    scope: Scope<'static>,
+    servers: Vec<ScriptGattServer>,
+    reassembler: AclReassembler,
+    connection: Option<(u16, Address)>,
+    tick_defined: bool,
+    watched: Vec<WatchedCharacteristic>,
+    last_values: HashMap<u16, Vec<u8>>,
+    last_error: Option<String>,
+}
+
+impl ScriptedPeripheral {
+    /// Compiles and runs `script` on a fresh engine, collecting every
+    /// `android::BluetoothGattServer` the script left in a top-level
+    /// variable. Compile and runtime errors come back as display strings
+    /// ready for the page's error pane.
+    pub fn run_script(script: &str) -> Result<Self, String> {
+        let mut engine = new_engine();
+        register_web_extensions(&mut engine);
+        let ast = engine.compile(script).map_err(|e| e.to_string())?;
+        let mut scope = Scope::new();
+        engine
+            .run_ast_with_scope(&mut scope, &ast)
+            .map_err(|e| e.to_string())?;
+
+        let servers: Vec<ScriptGattServer> = scope
+            .iter()
+            .filter_map(|(_, _, value)| value.try_cast::<ScriptGattServer>())
+            .collect();
+        if servers.is_empty() {
+            return Err("script must create an android::BluetoothGattServer \
+                 and keep it in a top-level variable"
+                .to_string());
+        }
+
+        let tick_defined = ast
+            .iter_functions()
+            .any(|f| f.name == "tick" && f.params.len() == 2);
+
+        let mut peripheral = Self {
+            engine,
+            ast,
+            scope,
+            servers,
+            reassembler: AclReassembler::new(),
+            connection: None,
+            tick_defined,
+            watched: Vec::new(),
+            last_values: HashMap::new(),
+            last_error: None,
+        };
+        peripheral.rebuild_watch_list();
+        Ok(peripheral)
+    }
+
+    fn primary(&self) -> &ScriptGattServer {
+        &self.servers[0]
+    }
+
+    /// The scripted device's name (also what the page shows in its header).
+    pub fn device_name(&self) -> String {
+        self.primary().with_server(|s| s.device.name.clone())
+    }
+
+    /// Records a non-fatal runtime problem for the page's error pane.
+    pub fn record_error(&mut self, message: String) {
+        self.last_error = Some(message);
+    }
+
+    /// Queues the peripheral's full HCI bring-up: reset, event masks,
+    /// advertising parameters, advertising data + scan response carrying the
+    /// script device's identity, then advertising enable.
+    pub fn queue_start(&self, channel: &HciChannel) -> Result<(), SimbleError> {
+        queue_common_init(channel)?;
+        // LE Set Advertising Parameters: 100ms interval, ADV_IND, public own
+        // address, all channels, no filter.
+        queue_command(
+            channel,
+            [0x06, 0x20],
+            &[
+                0xA0, 0x00, 0xA0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07,
+                0x00,
+            ],
+        )?;
+        let name = self.device_name();
+        let uuids = self.primary_service_uuids_16();
+        queue_command(
+            channel,
+            [0x08, 0x20],
+            &adv_data_param(&build_adv_payload(&name, &uuids)),
+        )?;
+        // Scan response repeats the name for active scanners.
+        let scan_rsp = AdvertisingData::new().with_name(&name).to_bytes();
+        queue_command(channel, [0x09, 0x20], &adv_data_param(&scan_rsp))?;
+        queue_command(channel, [0x0A, 0x20], &[0x01]) // LE Set Advertising Enable
+    }
+
+    fn primary_service_uuids_16(&self) -> Vec<u16> {
+        self.primary().with_server(|s| {
+            s.get_services()
+                .iter()
+                .filter_map(|service| match service.uuid {
+                    Uuid::Uuid16(u) => Some(u),
+                    Uuid::Uuid128(_) => None,
+                })
+                .collect()
+        })
+    }
+
+    /// Indexes every notify/indicate-capable characteristic and its CCCD:
+    /// the descriptor the script attached if present, otherwise the next
+    /// CCCD attribute in the database before the following declaration
+    /// (covering natively-registered profiles like `HeartRateService`).
+    fn rebuild_watch_list(&mut self) {
+        self.watched.clear();
+        self.last_values.clear();
+        for (server_index, server) in self.servers.iter().enumerate() {
+            server.with_server(|s| {
+                for service in s.get_services() {
+                    for characteristic in &service.characteristics {
+                        let notifying = BluetoothGattCharacteristic::PROPERTY_NOTIFY
+                            | BluetoothGattCharacteristic::PROPERTY_INDICATE;
+                        if characteristic.properties & notifying == 0 {
+                            continue;
+                        }
+                        let Some(value_handle) = characteristic.value_handle else {
+                            continue;
+                        };
+                        let cccd_handle = characteristic
+                            .descriptors
+                            .iter()
+                            .find(|d| d.uuid == Uuid::CCCD)
+                            .and_then(|d| d.handle)
+                            .or_else(|| find_cccd_after(&s.device.gatt_db, value_handle));
+                        self.watched.push(WatchedCharacteristic {
+                            server_index,
+                            value_handle,
+                            cccd_handle,
+                        });
+                    }
+                }
+            });
+        }
+        for watch in &self.watched {
+            if let Some(value) = self.attribute_value(watch) {
+                self.last_values.insert(watch.value_handle, value);
+            }
+        }
+    }
+
+    fn attribute_value(&self, watch: &WatchedCharacteristic) -> Option<Vec<u8>> {
+        self.servers[watch.server_index].with_server(|s| {
+            s.device
+                .gatt_db
+                .attributes
+                .get(&watch.value_handle)
+                .map(|attribute| attribute.value.clone())
+        })
+    }
+
+    fn cccd_notify_enabled(&self, watch: &WatchedCharacteristic) -> bool {
+        let Some(cccd) = watch.cccd_handle else {
+            return false;
+        };
+        self.servers[watch.server_index].with_server(|s| s.device.cccd_value(cccd).unwrap_or(0))
+            & 0x0001
+            != 0
+    }
+
+    /// Routes one controller-to-host H4 packet: connection events into the
+    /// scripted device's connection state, ACL data through reassembly into
+    /// the real L2CAP/ATT dispatch, responses back onto the channel.
+    pub fn handle_packet(
+        &mut self,
+        channel: &HciChannel,
+        packet: &[u8],
+    ) -> Result<(), SimbleError> {
+        match packet.first() {
+            Some(&h4_type::HCI_EVENT) => self.handle_event(channel, packet),
+            Some(&h4_type::HCI_ACL_DATA) => self.handle_acl(channel, packet),
+            _ => Ok(()),
+        }
+    }
+
+    fn handle_event(&mut self, channel: &HciChannel, packet: &[u8]) -> Result<(), SimbleError> {
+        match packet.get(1) {
+            Some(&event::LE_META)
+                if packet.len() >= 15
+                    && matches!(
+                        packet[3],
+                        event::SUB_CONNECTION_COMPLETE | event::SUB_ENHANCED_CONNECTION_COMPLETE
+                    )
+                    && packet[4] == 0x00 =>
+            {
+                let handle = u16::from_le_bytes([packet[5], packet[6]]) & 0x0FFF;
+                let peer = Address::new(packet[9..15].try_into().expect("6 address bytes"));
+                self.primary()
+                    .with_server(|s| s.device.on_connected(handle, peer));
+                self.connection = Some((handle, peer));
+                Ok(())
+            }
+            Some(&event::DISCONNECTION_COMPLETE) if packet.len() >= 6 => {
+                let handle = u16::from_le_bytes([packet[4], packet[5]]);
+                self.primary()
+                    .with_server(|s| s.device.on_disconnected(handle));
+                self.reassembler.on_disconnected(handle);
+                self.connection = None;
+                // The controller stops advertising on connection establishment
+                // (Core Spec Vol 6, Part B, Section 4.4.2); re-enable so the
+                // device is discoverable again.
+                queue_command(channel, [0x0A, 0x20], &[0x01])
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn handle_acl(&mut self, channel: &HciChannel, packet: &[u8]) -> Result<(), SimbleError> {
+        let Some((header, payload)) = HciAclHeader::parse(&packet[1..]) else {
+            return Err(SimbleError::PacketParseError("Invalid ACL header".into()));
+        };
+        let handle = header.handle();
+        let is_first = header.is_first_fragment();
+        let Some(frame) = self.reassembler.push_fragment(handle, is_first, payload)? else {
+            return Ok(());
+        };
+        let response = self
+            .primary()
+            .with_server(|s| s.device.process_l2cap_packet(handle, &frame))?;
+        if let Some(l2cap) = response {
+            send_acl(channel, handle, &l2cap)?;
+        }
+        Ok(())
+    }
+
+    /// One host tick: calls the script's `fn tick(server, t)` if defined
+    /// (`t` = seconds since Run), then turns any changed notify-capable
+    /// value into a real ATT notification for a subscribed central.
+    pub fn tick(&mut self, channel: &HciChannel, t_seconds: f64) -> Result<(), SimbleError> {
+        if self.tick_defined {
+            let args = (Dynamic::from(self.primary().clone()), t_seconds);
+            // eval_ast(false): the script body already ran in `run_script`;
+            // re-evaluating it here would rebuild the device every tick.
+            let result = self.engine.call_fn_with_options::<Dynamic>(
+                CallFnOptions::new().eval_ast(false),
+                &mut self.scope,
+                &self.ast,
+                "tick",
+                args,
+            );
+            match result {
+                Ok(_) => self.last_error = None,
+                Err(e) => self.last_error = Some(e.to_string()),
+            }
+        }
+        self.flush_value_notifications(channel)?;
+        // The observer queue records every ATT event for scripts; nothing
+        // drains it across ticks, so cap it here (scripts that want events
+        // must consume them with `take_events()` inside their own tick).
+        let _ = self.engine.eval::<Array>("take_events()");
+        Ok(())
+    }
+
+    fn flush_value_notifications(&mut self, channel: &HciChannel) -> Result<(), SimbleError> {
+        let watched = self.watched.clone();
+        for watch in watched {
+            let Some(current) = self.attribute_value(&watch) else {
+                continue;
+            };
+            if self.last_values.get(&watch.value_handle) == Some(&current) {
+                continue;
+            }
+            self.last_values.insert(watch.value_handle, current.clone());
+            let Some((handle, _)) = self.connection else {
+                continue;
+            };
+            if !self.cccd_notify_enabled(&watch) {
+                continue;
+            }
+            let l2cap = self.servers[watch.server_index].with_server(|s| {
+                s.device
+                    .create_notification_for(handle, watch.value_handle, &current)
+            });
+            send_acl(channel, handle, &l2cap)?;
+        }
+        Ok(())
+    }
+
+    /// The page-facing status snapshot, as JSON.
+    pub fn status_json(&self) -> String {
+        // Subscription state is resolved before the server borrow below —
+        // `cccd_notify_enabled` borrows the same server, and `with_server`
+        // borrows are not reentrant.
+        let subscribed_handles: Vec<u16> = self
+            .watched
+            .iter()
+            .filter(|w| self.cccd_notify_enabled(w))
+            .map(|w| w.value_handle)
+            .collect();
+        let services = self.primary().with_server(|s| {
+            s.get_services()
+                .iter()
+                .map(|service| ServiceStatus {
+                    uuid: service.uuid.to_string(),
+                    characteristics: service
+                        .characteristics
+                        .iter()
+                        .map(|characteristic| {
+                            let value = characteristic
+                                .value_handle
+                                .and_then(|h| s.device.gatt_db.attributes.get(&h))
+                                .map(|attribute| hex(&attribute.value))
+                                .unwrap_or_default();
+                            let subscribed = characteristic
+                                .value_handle
+                                .is_some_and(|h| subscribed_handles.contains(&h));
+                            CharacteristicStatus {
+                                uuid: characteristic.uuid.to_string(),
+                                value,
+                                subscribed,
+                            }
+                        })
+                        .collect(),
+                })
+                .collect()
+        });
+        let status = PeripheralStatus {
+            name: self.device_name(),
+            address: self.primary().with_server(|s| s.device.address.to_string()),
+            connected: self.connection.is_some(),
+            peer: self.connection.map(|(_, peer)| peer.to_string()),
+            tick_defined: self.tick_defined,
+            last_error: self.last_error.clone(),
+            services,
+        };
+        serde_json::to_string(&status).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"))
+    }
+}
+
+/// Finds the CCCD belonging to the characteristic whose value sits at
+/// `value_handle`, scanning forward until the next declaration bounds the
+/// characteristic's descriptor group (Core Spec Vol 3, Part G, Section 3.3).
+fn find_cccd_after(db: &crate::gatt::GattDatabase, value_handle: u16) -> Option<u16> {
+    db.attributes
+        .range(value_handle.checked_add(1)?..)
+        .take_while(|(_, attribute)| {
+            !matches!(
+                attribute.uuid,
+                Uuid::CHARACTERISTIC | Uuid::PRIMARY_SERVICE | Uuid::SECONDARY_SERVICE
+            )
+        })
+        .find(|(_, attribute)| attribute.uuid == Uuid::CCCD)
+        .map(|(&handle, _)| handle)
+}
+
+#[cfg(target_arch = "wasm32")]
+mod web {
+    //! The browser half: `web_sys::WebSocket` pumping and the wasm-bindgen
+    //! types the demo pages instantiate. Each `tick()` call from the page's
+    //! JS interval pumps both directions once and returns render-ready JSON.
+
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::rc::Rc;
+    use std::sync::Once;
+
+    use wasm_bindgen::JsCast;
+    use wasm_bindgen::prelude::*;
+    use web_sys::{BinaryType, MessageEvent, WebSocket};
+
+    use super::super::hci_adapter::HciChannel;
+    use super::{
+        DEFAULT_HEART_RATE_SCRIPT, ScriptedPeripheral, parse_scan_reports, queue_scanner_start,
+    };
+
+    /// Panics otherwise vanish into an opaque `unreachable` trap; route them
+    /// to the browser console instead.
+    fn install_panic_hook() {
+        static HOOK: Once = Once::new();
+        HOOK.call_once(|| {
+            std::panic::set_hook(Box::new(|info| {
+                web_sys::console::error_1(&JsValue::from_str(&info.to_string()));
+            }));
+        });
+    }
+
+    fn js_error(message: impl std::fmt::Display) -> JsValue {
+        JsValue::from_str(&message.to_string())
+    }
+
+    /// The wasm sibling of `NetsimTransport`: same pump shape (drain
+    /// `HciChannel` host packets to the socket, drain received messages into
+    /// the channel), but the browser owns all WebSocket framing, and receipt
+    /// is event-driven — `onmessage` queues packets for the next pump.
+    struct WasmWsTransport {
+        ws: WebSocket,
+        inbound: Rc<RefCell<VecDeque<Vec<u8>>>>,
+        _on_message: Closure<dyn FnMut(MessageEvent)>,
+    }
+
+    impl WasmWsTransport {
+        fn connect(url: &str) -> Result<Self, JsValue> {
+            let ws = WebSocket::new(url)?;
+            ws.set_binary_type(BinaryType::Arraybuffer);
+            let inbound: Rc<RefCell<VecDeque<Vec<u8>>>> = Rc::default();
+            let queue = inbound.clone();
+            let on_message = Closure::<dyn FnMut(MessageEvent)>::new(move |event: MessageEvent| {
+                if let Ok(buffer) = event.data().dyn_into::<js_sys::ArrayBuffer>() {
+                    queue
+                        .borrow_mut()
+                        .push_back(js_sys::Uint8Array::new(&buffer).to_vec());
+                }
+            });
+            ws.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
+            Ok(Self {
+                ws,
+                inbound,
+                _on_message: on_message,
+            })
+        }
+
+        fn ready_state(&self) -> u16 {
+            self.ws.ready_state()
+        }
+
+        fn is_open(&self) -> bool {
+            self.ready_state() == WebSocket::OPEN
+        }
+
+        fn pump(&self, channel: &HciChannel) -> Result<(), JsValue> {
+            if self.is_open() {
+                while let Some(packet) = channel.poll_host_packet() {
+                    self.ws.send_with_u8_array(&packet)?;
+                }
+            }
+            loop {
+                let next = self.inbound.borrow_mut().pop_front();
+                match next {
+                    Some(packet) => channel.receive_from_controller(packet).map_err(js_error)?,
+                    None => break,
+                }
+            }
+            Ok(())
+        }
+    }
+
+    impl Drop for WasmWsTransport {
+        fn drop(&mut self) {
+            self.ws.set_onmessage(None);
+            let _ = self.ws.close();
+        }
+    }
+
+    /// The scanner page's engine: joins netsim as a scanning device and
+    /// returns decoded advertising reports as JSON on every tick.
+    #[wasm_bindgen]
+    pub struct WebScanner {
+        transport: WasmWsTransport,
+        channel: HciChannel,
+        started: bool,
+    }
+
+    #[wasm_bindgen]
+    impl WebScanner {
+        #[wasm_bindgen(constructor)]
+        pub fn new(url: &str) -> Result<WebScanner, JsValue> {
+            install_panic_hook();
+            Ok(Self {
+                transport: WasmWsTransport::connect(url)?,
+                channel: HciChannel::new(),
+                started: false,
+            })
+        }
+
+        /// 0 = connecting, 1 = open, 2 = closing, 3 = closed — the page's
+        /// connection-failure UX keys off this.
+        pub fn ready_state(&self) -> u16 {
+            self.transport.ready_state()
+        }
+
+        /// One pump: returns a JSON array of decoded advertising reports
+        /// (possibly empty).
+        pub fn tick(&mut self) -> Result<String, JsValue> {
+            self.transport.pump(&self.channel)?;
+            if !self.started && self.transport.is_open() {
+                queue_scanner_start(&self.channel).map_err(js_error)?;
+                self.started = true;
+                self.transport.pump(&self.channel)?;
+            }
+            let mut reports = Vec::new();
+            while let Some(packet) = self.channel.poll_controller_packet() {
+                reports.extend(parse_scan_reports(&packet));
+            }
+            serde_json::to_string(&reports).map_err(js_error)
+        }
+    }
+
+    /// The HRM page's engine: a running Simble whose device is defined by an
+    /// editable Rhai script (see [`ScriptedPeripheral`]).
+    #[wasm_bindgen]
+    pub struct WebPeripheral {
+        transport: WasmWsTransport,
+        channel: HciChannel,
+        peripheral: ScriptedPeripheral,
+        started: bool,
+    }
+
+    #[wasm_bindgen]
+    impl WebPeripheral {
+        #[wasm_bindgen(constructor)]
+        pub fn new(url: &str, script: &str) -> Result<WebPeripheral, JsValue> {
+            install_panic_hook();
+            let peripheral = ScriptedPeripheral::run_script(script).map_err(js_error)?;
+            Ok(Self {
+                transport: WasmWsTransport::connect(url)?,
+                channel: HciChannel::new(),
+                peripheral,
+                started: false,
+            })
+        }
+
+        /// Tears down the current scripted device and rebuilds it from
+        /// `script` on the same socket (Run/Restart button). Errors are the
+        /// script's compile/runtime message; on error the old device keeps
+        /// running.
+        pub fn run_script(&mut self, script: &str) -> Result<(), JsValue> {
+            let peripheral = ScriptedPeripheral::run_script(script).map_err(js_error)?;
+            self.peripheral = peripheral;
+            self.channel = HciChannel::new();
+            self.started = false;
+            Ok(())
+        }
+
+        pub fn ready_state(&self) -> u16 {
+            self.transport.ready_state()
+        }
+
+        /// One pump + script tick; `t_seconds` is seconds since the current
+        /// script was Run. Returns the peripheral status JSON.
+        pub fn tick(&mut self, t_seconds: f64) -> Result<String, JsValue> {
+            self.transport.pump(&self.channel)?;
+            if !self.started && self.transport.is_open() {
+                self.peripheral
+                    .queue_start(&self.channel)
+                    .map_err(js_error)?;
+                self.started = true;
+            }
+            while let Some(packet) = self.channel.poll_controller_packet() {
+                if let Err(e) = self.peripheral.handle_packet(&self.channel, &packet) {
+                    self.peripheral.record_error(e.to_string());
+                }
+            }
+            if let Err(e) = self.peripheral.tick(&self.channel, t_seconds) {
+                self.peripheral.record_error(e.to_string());
+            }
+            self.transport.pump(&self.channel)?;
+            Ok(self.peripheral.status_json())
+        }
+    }
+
+    /// The default HRM script, so the page needs no separate fetch.
+    #[wasm_bindgen]
+    pub fn default_heart_rate_script() -> String {
+        DEFAULT_HEART_RATE_SCRIPT.to_string()
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub use web::{WebPeripheral, WebScanner, default_heart_rate_script};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::att::opcode;
+    use crate::l2cap::{L2capHeader, cid};
+
+    fn drain_host_packets(channel: &HciChannel) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        while let Some(packet) = channel.poll_host_packet() {
+            out.push(packet);
+        }
+        out
+    }
+
+    fn opcode_of(command: &[u8]) -> u16 {
+        assert_eq!(command[0], h4_type::HCI_COMMAND);
+        u16::from_le_bytes([command[1], command[2]])
+    }
+
+    #[test]
+    fn test_scanner_start_queues_reset_masks_params_enable() {
+        let channel = HciChannel::new();
+        queue_scanner_start(&channel).unwrap();
+        let commands = drain_host_packets(&channel);
+        let opcodes: Vec<u16> = commands.iter().map(|c| opcode_of(c)).collect();
+        assert_eq!(opcodes, vec![0x0C03, 0x0C01, 0x2001, 0x200B, 0x200C]);
+        // Both event masks fully open (LE Meta Events are masked by default).
+        assert_eq!(&commands[1][4..12], &[0xFF; 8]);
+        assert_eq!(&commands[2][4..12], &[0xFF; 8]);
+        // Scan enable with duplicate filtering off.
+        assert_eq!(&commands[4][4..], &[0x01, 0x00]);
+    }
+
+    /// Builds one LE Advertising Report event around `data`.
+    fn adv_report_event(event_type: u8, data: &[u8], rssi: i8) -> Vec<u8> {
+        let mut packet = vec![
+            h4_type::HCI_EVENT,
+            event::LE_META,
+            (11 + data.len()) as u8,
+            event::SUB_ADVERTISING_REPORT,
+            0x01,       // one report
+            event_type, // ADV_IND etc.
+            0x00,       // public address
+            0x01,
+            0x02,
+            0x03,
+            0x04,
+            0x05,
+            0x06, // address (little-endian)
+            data.len() as u8,
+        ];
+        packet.extend_from_slice(data);
+        packet.push(rssi as u8);
+        packet
+    }
+
+    #[test]
+    fn test_parse_scan_reports_decodes_ad_structures() {
+        let mut data = vec![0x02, ad_type::FLAGS, 0x06];
+        data.extend_from_slice(&[0x08, ad_type::COMPLETE_LOCAL_NAME]);
+        data.extend_from_slice(b"web-hrm");
+        data.extend_from_slice(&[0x03, ad_type::COMPLETE_16BIT_UUIDS, 0x0D, 0x18]);
+        data.extend_from_slice(&[
+            0x05,
+            ad_type::MANUFACTURER_SPECIFIC_DATA,
+            0xE0,
+            0x00,
+            0xAB,
+            0xCD,
+        ]);
+        let packet = adv_report_event(0x00, &data, -42);
+
+        let reports = parse_scan_reports(&packet);
+        assert_eq!(reports.len(), 1);
+        let report = &reports[0];
+        assert_eq!(report.address, "06:05:04:03:02:01");
+        assert_eq!(report.address_type, "public");
+        assert!(report.connectable);
+        assert!(!report.scan_response);
+        assert_eq!(report.rssi, -42);
+        assert_eq!(report.name.as_deref(), Some("web-hrm"));
+        assert_eq!(report.flags, Some(0x06));
+        assert_eq!(report.service_uuids, vec!["180D".to_string()]);
+        let manufacturer = report.manufacturer_data.as_ref().unwrap();
+        assert_eq!(manufacturer.tag, "00E0");
+        assert_eq!(manufacturer.data, "ABCD");
+    }
+
+    #[test]
+    fn test_parse_scan_reports_ignores_other_packets() {
+        assert!(
+            parse_scan_reports(&[h4_type::HCI_EVENT, 0x0E, 0x04, 0x01, 0x03, 0x0C, 0x00])
+                .is_empty()
+        );
+        assert!(parse_scan_reports(&[h4_type::HCI_ACL_DATA, 0x40, 0x00, 0x00, 0x00]).is_empty());
+        // Truncated report body: no panic, no report.
+        assert!(
+            parse_scan_reports(&[
+                h4_type::HCI_EVENT,
+                event::LE_META,
+                0x04,
+                event::SUB_ADVERTISING_REPORT,
+                0x01,
+                0x00,
+                0x00
+            ])
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn test_build_adv_payload_fits_31_bytes_and_keeps_name() {
+        let payload = build_adv_payload("web-hrm", &[0x180D]);
+        assert!(payload.len() <= 31);
+        assert!(payload.windows(7).any(|w| w == b"web-hrm"));
+        assert!(payload.windows(2).any(|w| w == [0x0D, 0x18]));
+
+        // An oversized name drops the UUID list and trims, never overflows.
+        let long = "a-device-name-well-past-the-thirty-one-byte-advertising-limit";
+        let payload = build_adv_payload(long, &[0x180D, 0x180F, 0x1812]);
+        assert!(payload.len() <= 31);
+        assert!(!payload.windows(2).any(|w| w == [0x0D, 0x18]));
+        assert!(payload.windows(9).any(|w| w == b"a-device-"));
+    }
+
+    fn le_connection_complete(handle: u16, peer_le: [u8; 6]) -> Vec<u8> {
+        let mut packet = vec![
+            h4_type::HCI_EVENT,
+            event::LE_META,
+            19,
+            event::SUB_CONNECTION_COMPLETE,
+            0x00, // status
+        ];
+        packet.extend_from_slice(&handle.to_le_bytes());
+        packet.push(0x01); // role: peripheral
+        packet.push(0x00); // peer address type
+        packet.extend_from_slice(&peer_le);
+        packet.extend_from_slice(&[0x28, 0x00, 0x00, 0x00, 0x48, 0x00, 0x00]); // interval etc.
+        packet
+    }
+
+    fn acl_packet(handle: u16, l2cap: &[u8]) -> Vec<u8> {
+        let mut packet = vec![h4_type::HCI_ACL_DATA];
+        packet.extend_from_slice(
+            HciAclHeader::new(
+                handle,
+                AclPacketBoundary::FirstAutoFlushable,
+                l2cap.len() as u16,
+            )
+            .as_bytes(),
+        );
+        packet.extend_from_slice(l2cap);
+        packet
+    }
+
+    /// Runs the shipped default script and walks the full peripheral life
+    /// cycle a browser session would: start (advertising bring-up), connect,
+    /// subscribe via a real CCCD write, script tick driving a real
+    /// notification, then disconnect and re-advertise.
+    #[test]
+    fn test_default_script_full_lifecycle() {
+        let mut peripheral =
+            ScriptedPeripheral::run_script(DEFAULT_HEART_RATE_SCRIPT).expect("default script runs");
+        assert_eq!(peripheral.device_name(), "web-hrm");
+        assert!(peripheral.tick_defined);
+
+        let channel = HciChannel::new();
+        peripheral.queue_start(&channel).unwrap();
+        let commands = drain_host_packets(&channel);
+        let opcodes: Vec<u16> = commands.iter().map(|c| opcode_of(c)).collect();
+        assert_eq!(
+            opcodes,
+            vec![0x0C03, 0x0C01, 0x2001, 0x2006, 0x2008, 0x2009, 0x200A]
+        );
+        // Advertising data carries the script device's name and the Heart
+        // Rate service UUID the script declared.
+        let adv_data = &commands[4];
+        assert!(adv_data.windows(7).any(|w| w == b"web-hrm"));
+        assert!(adv_data.windows(2).any(|w| w == [0x0D, 0x18]));
+
+        // Central connects.
+        let peer = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
+        peripheral
+            .handle_packet(&channel, &le_connection_complete(0x0040, peer))
+            .unwrap();
+        let status = peripheral.status_json();
+        assert!(status.contains("\"connected\":true"));
+
+        // Central subscribes: real ATT write to the CCCD the script added.
+        let watch = peripheral.watched[0].clone();
+        let cccd = watch.cccd_handle.expect("script added a CCCD");
+        let mut write = vec![opcode::WRITE_REQ];
+        write.extend_from_slice(&cccd.to_le_bytes());
+        write.extend_from_slice(&[0x01, 0x00]);
+        peripheral
+            .handle_packet(
+                &channel,
+                &acl_packet(0x0040, &L2capHeader::serialize(cid::ATT, &write)),
+            )
+            .unwrap();
+        // The Write Response went out as ACL data.
+        let responses = drain_host_packets(&channel);
+        assert!(
+            responses
+                .iter()
+                .any(|p| p[0] == h4_type::HCI_ACL_DATA && p.ends_with(&[opcode::WRITE_RSP]))
+        );
+        assert!(peripheral.cccd_notify_enabled(&watch));
+
+        // Script tick updates the measurement, which becomes a notification.
+        peripheral.tick(&channel, 2.0).unwrap();
+        assert!(
+            peripheral.last_error.is_none(),
+            "{:?}",
+            peripheral.last_error
+        );
+        let packets = drain_host_packets(&channel);
+        let notification = packets
+            .iter()
+            .find(|p| p[0] == h4_type::HCI_ACL_DATA && p.contains(&opcode::HANDLE_VALUE_NTF))
+            .expect("tick produced a notification");
+        // 8-bit measurement: flags 0x00, then a plausible bpm.
+        let bpm = *notification.last().unwrap();
+        assert!((60..=90).contains(&bpm), "bpm {bpm}");
+
+        // Same value on the next tick at the same t: no duplicate notification.
+        peripheral.tick(&channel, 2.0).unwrap();
+        assert!(drain_host_packets(&channel).is_empty());
+
+        // Disconnect: state clears and advertising is re-enabled.
+        let disconnect = vec![
+            h4_type::HCI_EVENT,
+            event::DISCONNECTION_COMPLETE,
+            4,
+            0x00,
+            0x40,
+            0x00,
+            0x13,
+        ];
+        peripheral.handle_packet(&channel, &disconnect).unwrap();
+        assert!(peripheral.status_json().contains("\"connected\":false"));
+        let commands = drain_host_packets(&channel);
+        assert_eq!(commands.len(), 1);
+        assert_eq!(opcode_of(&commands[0]), 0x200A);
+        assert_eq!(commands[0][4], 0x01);
+    }
+
+    #[test]
+    fn test_script_errors_surface_as_strings() {
+        let compile_error = ScriptedPeripheral::run_script("let x = ;")
+            .err()
+            .expect("syntax error");
+        assert!(!compile_error.is_empty());
+
+        let no_server = ScriptedPeripheral::run_script("let x = 1 + 1;")
+            .err()
+            .expect("no server created");
+        assert!(no_server.contains("BluetoothGattServer"));
+
+        // A broken tick doesn't kill the device — the error is recorded.
+        let script = r#"
+            let server = android::BluetoothGattServer("web-hrm");
+            fn tick(server, t) { nonexistent_function(); }
+        "#;
+        let mut peripheral = ScriptedPeripheral::run_script(script).unwrap();
+        let channel = HciChannel::new();
+        peripheral.tick(&channel, 0.1).unwrap();
+        assert!(peripheral.last_error.is_some());
+        assert!(peripheral.status_json().contains("last_error"));
+    }
+
+    #[test]
+    fn test_update_value_extension_writes_the_real_database() {
+        let script = r#"
+            let server = android::BluetoothGattServer("dev");
+            let svc = android::BluetoothGattService(uuid::HEART_RATE_SERVICE, android::SERVICE_TYPE_PRIMARY);
+            let chr = android::BluetoothGattCharacteristic(
+                uuid::HEART_RATE_MEASUREMENT,
+                android::PROPERTY_READ | android::PROPERTY_NOTIFY,
+                android::PERMISSION_READ,
+            );
+            chr.set_value([0x00, 60]);
+            svc.add_characteristic(chr);
+            server.add_service(svc);
+            server.update_value(uuid::HEART_RATE_MEASUREMENT, [0x00, 99]);
+        "#;
+        let peripheral = ScriptedPeripheral::run_script(script).unwrap();
+        let watch = &peripheral.watched[0];
+        assert_eq!(peripheral.attribute_value(watch).unwrap(), vec![0x00, 99]);
+    }
+}

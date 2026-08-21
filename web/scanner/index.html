@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simble Web Scanner</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d; --text: #e6edf3;
+    --dim: #8b949e; --accent: #58a6ff; --good: #3fb950; --bad: #f85149;
+    --warn: #d29922;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
+    padding: 1rem 1.5rem; border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 1.15rem; margin: 0; }
+  header .sub { color: var(--dim); font-size: 0.85rem; }
+  header a { color: var(--accent); text-decoration: none; margin-left: auto; font-size: 0.85rem; }
+  .pill {
+    font-size: 0.75rem; padding: 0.1rem 0.6rem; border-radius: 1rem;
+    border: 1px solid var(--border); color: var(--dim);
+  }
+  .pill.ok { color: var(--good); border-color: var(--good); }
+  .pill.bad { color: var(--bad); border-color: var(--bad); }
+  main { padding: 1.25rem 1.5rem; max-width: 68rem; margin: 0 auto; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 1rem; margin-bottom: 1.25rem;
+  }
+  .panel h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--dim); margin: 0 0 0.75rem; }
+  #setup { display: none; border-color: var(--warn); }
+  #setup.visible { display: block; }
+  #setup pre {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.6rem; overflow-x: auto; font-size: 0.8rem;
+  }
+  #setup code { color: var(--good); }
+  #setup a { color: var(--accent); }
+  .device {
+    border: 1px solid var(--border); border-radius: 8px; background: var(--panel);
+    padding: 0.7rem 0.9rem; margin-bottom: 0.6rem;
+    display: grid; grid-template-columns: 1fr auto; gap: 0.2rem 1rem;
+    transition: opacity 0.5s;
+  }
+  .device.stale { opacity: 0.35; }
+  .device .name { font-weight: 600; }
+  .device .name .anon { color: var(--dim); font-weight: 400; font-style: italic; }
+  .device .addr { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--dim); font-size: 0.8rem; }
+  .device .ad { grid-column: 1 / -1; font-size: 0.78rem; color: var(--dim);
+    font-family: ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
+  .chip {
+    display: inline-block; border: 1px solid var(--border); border-radius: 1rem;
+    padding: 0 0.5rem; margin-right: 0.3rem; font-size: 0.72rem; color: var(--accent);
+    font-family: -apple-system, sans-serif;
+  }
+  .rssi { text-align: right; }
+  .rssi .db { font-size: 0.8rem; color: var(--dim);
+    font-family: ui-monospace, Menlo, monospace; }
+  .bar { width: 7rem; height: 5px; background: var(--border); border-radius: 3px;
+    margin-top: 0.35rem; overflow: hidden; }
+  .bar span { display: block; height: 100%; background: var(--good); border-radius: 3px; }
+  #empty { color: var(--dim); font-size: 0.9rem; }
+  footer { color: var(--dim); font-size: 0.78rem; padding: 0 1.5rem 1.5rem;
+    max-width: 68rem; margin: 0 auto; }
+  footer code { color: var(--good); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Simble Web Scanner</h1>
+  <span class="sub">Simble's real HCI + GAP stack, compiled to WebAssembly, scanning your local netsim scene</span>
+  <span id="conn" class="pill">starting…</span>
+  <a href="../hrm/">open the scripted HRM ↗</a>
+</header>
+
+<main>
+  <section id="setup" class="panel">
+    <h2>netsimd is not reachable</h2>
+    <p>This page is served from the cloud, but the Bluetooth scene runs <strong>on your machine</strong>:
+       the wasm build of Simble in this tab connects to a local
+       <code>netsimd</code> over <code>ws://localhost:7681</code>. Start it (the
+       <code>--test-beacons</code> flag puts two beacons on the air immediately), and this page
+       connects by itself:</p>
+    <pre><code># One-time: install the canary-channel emulator package (stable netsimd has no WebSocket endpoint)
+~/Library/Android/sdk/cmdline-tools/latest/bin/sdkmanager --channel=3 emulator
+
+# Start netsim with the WebSocket endpoint on
+~/Library/Android/sdk/emulator/netsimd --logtostderr --no-shutdown --ws-port 7681 --test-beacons</code></pre>
+    <p>Tip: open <a href="../hrm/">the scripted HRM</a> in a second tab — both tabs join the same
+       netsim scene. Edit the HRM's Rhai script there, press Run, and watch its advertisement
+       change in this list.</p>
+  </section>
+
+  <section>
+    <div id="devices"></div>
+    <p id="empty">No advertisements yet — scanning…</p>
+  </section>
+</main>
+
+<footer>
+  The page joins netsim as device <code>web-scanner</code> and runs the real scan bring-up
+  (Reset → event masks → scan parameters → enable). Advertising reports are parsed and their AD
+  structures decoded by Simble's Rust code running in this tab.
+</footer>
+
+<script type="module" src="./scanner.js"></script>
+</body>
+</html>
