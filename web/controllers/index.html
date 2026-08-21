@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimBLE Controller Ladder</title>
+<link rel="stylesheet" href="../common/simble.css">
+<link rel="stylesheet" href="../common/nav.css">
+<style>
+  main { max-width: 75rem; margin: 0 auto; padding: 1.5rem; }
+  h1 { font-size: 1.6rem; margin: 0 0 0.35rem; }
+  .lede { color: var(--dim); font-size: 0.95rem; max-width: 55rem; margin: 0 0 1.5rem; }
+  .lede code { color: var(--good); }
+
+  section.tier { margin-bottom: 1.5rem; }
+  section.tier > h2 {
+    font-size: 1.1rem; margin: 0 0 0.15rem; color: var(--text);
+    text-transform: none; letter-spacing: normal;
+  }
+  section.tier .tag {
+    display: inline-block; font-size: 0.66rem; text-transform: uppercase;
+    letter-spacing: 0.05em; color: var(--good); border: 1px solid var(--border);
+    border-radius: 1rem; padding: 0 0.5rem; margin-left: 0.5rem; vertical-align: middle;
+  }
+  section.tier .tier-sub {
+    color: var(--dim); font-size: 0.82rem; margin: 0 0 0.9rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  section.tier p { margin: 0 0 0.7rem; }
+  .panel { margin-bottom: 1rem; }
+
+  .lbl { display: block; font-size: 0.72rem; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--dim); margin: 0.9rem 0 0.35rem; }
+  .lbl:first-child { margin-top: 0; }
+
+  ul.reasons { margin: 0.25rem 0 0; padding-left: 1.1rem; }
+  ul.reasons li { margin-bottom: 0.3rem; }
+  ul.limits li::marker { color: var(--warn); }
+
+  pre.run {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.6rem 0.75rem; overflow-x: auto; font-size: 0.82rem; margin: 0.35rem 0 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  pre.run code { color: var(--good); }
+  code.inl { color: var(--good); background: var(--bg); padding: 0 0.3rem;
+    border-radius: 4px; font-size: 0.85em;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  .tablewrap { overflow-x: auto; margin: 0.5rem 0 0; }
+  table.cmp { border-collapse: collapse; width: 100%; font-size: 0.85rem; min-width: 44rem; }
+  table.cmp th, table.cmp td {
+    border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left;
+    vertical-align: top;
+  }
+  table.cmp thead th { background: #1c2230; color: var(--text); font-weight: 600; }
+  table.cmp tbody th { background: var(--panel); font-weight: 600; white-space: nowrap; }
+  table.cmp td .yes { color: var(--good); font-weight: 600; }
+  table.cmp td .no { color: var(--bad); }
+  table.cmp td .part { color: var(--warn); }
+
+  .callout { border-left: 3px solid var(--accent); padding: 0.15rem 0 0.15rem 0.8rem;
+    color: var(--dim); font-size: 0.85rem; margin: 0.6rem 0 0; }
+  .callout code { color: var(--good); }
+</style>
+</head>
+<body>
+<nav class="sitenav">
+  <a class="brand" href="../">Sim<b>BLE</b></a>
+  <div class="tabs">
+    <a href="../playground/">Playground</a>
+    <a href="../explorer/">API Explorer</a>
+    <a href="../scanner/">Scanner</a>
+    <a href="../hrm/">Scripted device</a>
+    <a href="../lightbulb/">Color Bulb</a>
+    <a href="../controllers/" aria-current="page">Controllers</a>
+  </div>
+  <span class="spacer"></span>
+  <a class="ext" href="../doc/">Docs</a>
+  <a class="ext" href="https://github.com/schilit/simble">GitHub ↗</a>
+</nav>
+
+<main>
+  <h1>The controller ladder</h1>
+  <p class="lede">
+    A SimBLE host stack produces and consumes <strong>HCI</strong> — the Host Controller Interface.
+    Everything above HCI (GAP, GATT, ATT, L2CAP, SMP) is SimBLE. Everything <em>below</em> it — the
+    Link Layer, the physical channel, timing, encryption, the radio — is the job of a
+    <strong>controller</strong>. SimBLE deliberately ships none of its own beyond a tiny built-in
+    model, keeping the crate compact. Instead it offers a <strong>ladder</strong> of controller
+    backends you plug in underneath, trading fidelity for weight. Pick the lowest rung that still
+    answers your question.
+  </p>
+
+  <!-- Tier 1 -->
+  <section class="tier">
+    <h2>1 · In-process controller <span class="tag">micro</span></h2>
+    <p class="tier-sub">simble::controller::sim::Link</p>
+    <div class="panel">
+      <span class="lbl">What it is</span>
+      <p>
+        A minimal, pure-Rust LE controller plus a shared medium built directly into SimBLE. It
+        routes advertising packets to scanners, completes connections, and shuttles ACL data between
+        devices. There is <strong>no external process, no netsim, and no radio</strong> — it is just
+        library code that stands in for the Link Layer and PHY.
+      </p>
+      <p>
+        Because it is ordinary Rust, it runs <strong>identically native and in the browser</strong>
+        (compiled to WebAssembly). A single web page can therefore host many devices talking to each
+        other, and a <code class="inl">SharedWorker</code> can share one <code class="inl">Link</code>
+        across same-origin tabs.
+      </p>
+
+      <span class="lbl">Choose it when</span>
+      <ul class="reasons">
+        <li>Writing unit and integration tests for the host stack.</li>
+        <li>Running CI with no daemon, no emulator, and no setup.</li>
+        <li>Building quick single-page or multi-tab browser scenes.</li>
+      </ul>
+
+      <span class="lbl">Limits</span>
+      <ul class="reasons limits">
+        <li>Models no real PHY — no channel hopping, no timing, no encryption, no ISO, no Channel Sounding.</li>
+        <li>No cross-device or cross-browser reach; everything lives inside one process (or one origin).</li>
+      </ul>
+
+      <span class="lbl">Build &amp; run</span>
+      <p>It is just library code — nothing to launch. See the <code class="inl">in_process_scene</code> example:</p>
+      <pre class="run"><code>cargo run --example in_process_scene</code></pre>
+    </div>
+  </section>
+
+  <!-- Tier 2 -->
+  <section class="tier">
+    <h2>2 · rootcanal-ws <span class="tag">high fidelity</span></h2>
+    <p class="tier-sub">real AOSP Rootcanal · Simble netsim-style WebSocket</p>
+    <div class="panel">
+      <span class="lbl">What it is</span>
+      <p>
+        The real <strong>AOSP Rootcanal</strong> controller — a full, faithful Link Layer and LMP
+        implementation covering BR/EDR + LE + ISO, extended and periodic advertising, and encryption
+        — wrapped in a standalone binary that speaks SimBLE's netsim-style WebSocket protocol. You
+        get genuine controller behavior without the weight of spatial or ranging modeling.
+      </p>
+
+      <span class="lbl">Choose it when</span>
+      <ul class="reasons">
+        <li>You need faithful, spec-accurate controller behavior (real Link Layer, LMP, encryption, ISO).</li>
+        <li>You are exercising extended or periodic advertising, or BR/EDR alongside LE.</li>
+        <li>You do <em>not</em> need device positions, movement, or distance/ranging modeling.</li>
+      </ul>
+
+      <span class="lbl">Build &amp; run</span>
+      <p>From the <code class="inl">rootcanal-rs</code> repo, launch the binary and point SimBLE at it:</p>
+      <pre class="run"><code>bazel run //:rootcanal-ws -- --ws-port 7681
+# then point SimBLE at ws://localhost:7681</code></pre>
+      <p class="callout">
+        The <code>rootcanal-ws</code> binary is newly added and lives in the
+        <code>rootcanal-rs</code> companion repository, not in the SimBLE crate itself.
+      </p>
+    </div>
+  </section>
+
+  <!-- Tier 3 -->
+  <section class="tier">
+    <h2>3 · netsim <span class="tag">full radio + spatial</span></h2>
+    <p class="tier-sub">Rootcanal + 3D position/ranging + multi-radio + Android emulator</p>
+    <div class="panel">
+      <span class="lbl">What it is</span>
+      <p>
+        <strong>netsim</strong> is Rootcanal <em>plus</em> a 3D position and ranging model, multiple
+        radios (BLE / Wi-Fi / UWB), and interop with the Android emulator. On top of everything
+        rootcanal-ws gives you, it models where devices sit in space and how far apart they are, and
+        it lets a real Android app running in the emulator share the scene with SimBLE devices.
+      </p>
+
+      <span class="lbl">Choose it when</span>
+      <ul class="reasons">
+        <li>You need device movement or spatial layout in the scene.</li>
+        <li>You need distance / ranging behavior, including Channel Sounding.</li>
+        <li>You want to test a real Android app in the emulator against SimBLE devices.</li>
+      </ul>
+
+      <span class="lbl">Build &amp; run</span>
+      <p>Needs the <strong>canary-channel</strong> Android emulator. Start <code class="inl">netsimd</code>, then point SimBLE at it:</p>
+      <pre class="run"><code>~/Library/Android/sdk/emulator/netsimd --logtostderr --no-shutdown --ws-port 7681
+# then point SimBLE at ws://localhost:7681</code></pre>
+      <p class="callout">See the README's <strong>netsim</strong> section for emulator setup details.</p>
+    </div>
+  </section>
+
+  <!-- Comparison -->
+  <section class="tier">
+    <h2>At a glance</h2>
+    <div class="tablewrap">
+      <table class="cmp">
+        <thead>
+          <tr>
+            <th>Tier</th>
+            <th>Fidelity</th>
+            <th>Native</th>
+            <th>Browser</th>
+            <th>Cross-device</th>
+            <th>External process</th>
+            <th>Choose when</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th>In-process<br><code class="inl">sim::Link</code></th>
+            <td>Minimal — no real PHY, timing, encryption, ISO, or ranging</td>
+            <td><span class="yes">Yes</span></td>
+            <td><span class="yes">Yes</span> (wasm)</td>
+            <td><span class="no">No</span></td>
+            <td><span class="no">None</span></td>
+            <td>Tests, CI, quick single-page or multi-tab browser scenes</td>
+          </tr>
+          <tr>
+            <th>rootcanal-ws</th>
+            <td>High — full Link Layer/LMP, BR/EDR + LE + ISO, ext/periodic adv, encryption</td>
+            <td><span class="yes">Yes</span></td>
+            <td><span class="yes">Yes</span> (via WS)</td>
+            <td><span class="yes">Yes</span></td>
+            <td><span class="part">Binary</span> (rootcanal-ws)</td>
+            <td>Faithful controller behavior without spatial/ranging modeling</td>
+          </tr>
+          <tr>
+            <th>netsim</th>
+            <td>Highest — Rootcanal + 3D position/ranging + multi-radio (BLE/Wi-Fi/UWB)</td>
+            <td><span class="yes">Yes</span></td>
+            <td><span class="yes">Yes</span> (via WS)</td>
+            <td><span class="yes">Yes</span></td>
+            <td><span class="part">Daemon</span> + emulator</td>
+            <td>Movement, distance/ranging (Channel Sounding), or a real Android app in the emulator</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<footer>
+  Everything above HCI is SimBLE; a controller supplies the Link Layer and PHY below it. Climb the
+  ladder only as far as your question requires — <code>sim::Link</code> for tests and browser scenes,
+  <code>rootcanal-ws</code> for faithful radio behavior, <code>netsim</code> for space, ranging, and
+  Android-emulator interop.
+</footer>
+</body>
+</html>
