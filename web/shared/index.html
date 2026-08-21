@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimBLE Shared Scene</title>
+<link rel="stylesheet" href="../common/simble.css">
+<link rel="stylesheet" href="../common/nav.css">
+<style>
+  main { padding: 1.25rem 1.5rem; max-width: 68rem; margin: 0 auto; }
+  header { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
+    padding: 1rem 1.5rem; border-bottom: 1px solid var(--border); }
+  header h1 { font-size: 1.15rem; margin: 0; }
+  header .sub { color: var(--dim); font-size: 0.85rem; }
+  .panel { margin-bottom: 1.25rem; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; align-items: start; }
+  @media (max-width: 52rem) { .two { grid-template-columns: 1fr; } }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .seg button { border: none; border-radius: 0; background: transparent; }
+  .seg button.active { background: #1f6feb; color: #fff; }
+  label.fld { display: block; font-size: 0.8rem; color: var(--dim); margin: 0.6rem 0 0.2rem; }
+  input.wide, select.wide { width: 100%; }
+  .mine-badge { font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--good); border: 1px solid var(--good); border-radius: 1rem;
+    padding: 0 0.4rem; margin-left: 0.4rem; vertical-align: middle; }
+  .card2 { border: 1px solid var(--border); border-radius: 8px; background: var(--panel);
+    padding: 0.7rem 0.9rem; margin-bottom: 0.6rem; }
+  .card2 .top { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
+  .card2 .nm { font-weight: 600; }
+  .card2 .addr { font-family: ui-monospace, Menlo, monospace; color: var(--dim); font-size: 0.78rem; }
+  .card2 .meta { color: var(--dim); font-size: 0.8rem; margin-top: 0.2rem; }
+  .empty { color: var(--dim); font-size: 0.9rem; }
+  .gattmini { margin-top: 0.4rem; font-size: 0.8rem; }
+  .gattmini .s { color: var(--accent); font-family: ui-monospace, Menlo, monospace; }
+  .gattmini .c { color: var(--text); padding-left: 0.9rem; }
+  .gattmini .c .u { color: var(--dim); font-family: ui-monospace, Menlo, monospace; }
+  .gattmini .c .v { color: var(--good); font-family: ui-monospace, Menlo, monospace; }
+  .fallback { border-color: var(--warn); display: none; }
+  .fallback.visible { display: block; }
+  .fatal { border-color: var(--bad); color: var(--bad); display: none; }
+  .fatal.visible { display: block; }
+  .steps { color: var(--dim); font-size: 0.85rem; }
+  .steps b { color: var(--text); }
+  footer { color: var(--dim); font-size: 0.78rem; padding: 0 1.5rem 1.5rem;
+    max-width: 68rem; margin: 0 auto; }
+  footer code { color: var(--good); }
+</style>
+</head>
+<body>
+<nav class="sitenav">
+  <a class="brand" href="../">Sim<b>BLE</b></a>
+  <div class="tabs">
+    <a href="../playground/">Playground</a>
+    <a href="../explorer/">API Explorer</a>
+    <a href="../scanner/">Scanner</a>
+    <a href="../hrm/">Scripted device</a>
+    <a href="../lightbulb/">Color Bulb</a>
+    <a href="../dual/">Server + Client</a>
+    <a href="../shared/" aria-current="page">Shared</a>
+  </div>
+  <span class="spacer"></span>
+  <a class="ext" href="../doc/">Docs</a>
+  <a class="ext" href="https://github.com/schilit/simble">GitHub ↗</a>
+</nav>
+
+<header>
+  <h1>SimBLE Shared Scene</h1>
+  <span class="sub">One in-page <code>Link</code> hosted in a SharedWorker — every same-origin tab
+    joins the same radio scene. No netsim, no server.</span>
+  <span id="conn" class="pill">starting…</span>
+</header>
+
+<main>
+  <section class="panel">
+    <p class="steps"><b>Try it:</b> add a device below, then open
+      <a href="./" target="_blank" rel="noopener">this same page in a second tab</a> and add a
+      <b>different</b> device. Both tabs share one Link, so a <b>scanner</b> in one tab sees an
+      <b>advertiser</b> added in the other, and a <b>central</b> connects to a peripheral from any tab.
+      Your own devices are marked <span class="mine-badge">mine</span>.</p>
+  </section>
+
+  <section id="fallback" class="panel fallback">
+    <h2>SharedWorker unavailable — single-tab mode</h2>
+    <p class="steps">This browser/context does not support module SharedWorkers (Safari, for example,
+      has no SharedWorker at all). The page has fallen back to a <b>private in-page Link</b> that runs
+      only in this tab, so cross-tab sharing is off — but you can still add devices and watch them
+      interact here. For the real cross-tab demo, use a Chromium-based browser.</p>
+  </section>
+
+  <section id="fatal" class="panel fatal">
+    <h2>Failed to start</h2>
+    <p id="fatal-msg"></p>
+  </section>
+
+  <div class="two">
+    <section class="panel">
+      <h2>Add a device to the shared Link</h2>
+      <div class="seg" id="role-seg">
+        <button data-role="peripheral" class="active">Peripheral</button>
+        <button data-role="scanner">Scanner</button>
+        <button data-role="central">Central</button>
+      </div>
+
+      <div id="fld-name">
+        <label class="fld" for="name">Peripheral name (advertised)</label>
+        <input id="name" class="wide" type="text" value="Tab Device">
+        <label class="fld" for="script">Rhai script (the device)</label>
+        <textarea id="script" class="code" rows="9"></textarea>
+      </div>
+
+      <div id="fld-target" style="display:none">
+        <label class="fld" for="target">Connect to (peripheral address)</label>
+        <select id="target" class="wide"></select>
+        <p class="hint">Populated from peripherals currently in the shared scene (any tab).</p>
+      </div>
+
+      <div class="row">
+        <button id="add" class="primary">Add to shared Link</button>
+        <span class="hint" id="add-addr"></span>
+      </div>
+      <div id="add-error" class="error"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Shared scene <span id="scene-count" class="hint"></span></h2>
+
+      <h3 style="font-size:0.8rem;color:var(--dim);margin:0.4rem 0 0.3rem">Peripherals</h3>
+      <div id="peripherals"><p class="empty">No peripherals yet.</p></div>
+
+      <h3 style="font-size:0.8rem;color:var(--dim);margin:0.9rem 0 0.3rem">Centrals</h3>
+      <div id="centrals"><p class="empty">No centrals yet.</p></div>
+
+      <h3 style="font-size:0.8rem;color:var(--dim);margin:0.9rem 0 0.3rem">
+        Your scanner's discoveries</h3>
+      <div id="scanner"><p class="empty">Add a scanner to see advertisers on the air.</p></div>
+    </section>
+  </div>
+</main>
+
+<footer>
+  The shared Link lives in <code>common/link-worker.js</code>, a module SharedWorker that owns one
+  wasm <code>WebLink</code> for the whole origin. Live cross-tab behaviour must be verified in a real
+  browser — it cannot be exercised from the build tooling.
+</footer>
+
+<script type="module" src="./shared.js"></script>
+</body>
+</html>
