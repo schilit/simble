@@ -294,8 +294,8 @@
 
       <span class="lbl">Limits</span>
       <ul class="reasons limits">
-        <li>Needs a physical USB Bluetooth dongle whose interface SimBLE can claim (native only).</li>
-        <li>Native only — no browser path.</li>
+        <li>Needs a physical USB Bluetooth dongle whose interface SimBLE can claim.</li>
+        <li>Native only today — a browser would reach it through a native <code class="inl">usb-ble-ws</code> bridge (the same pattern as <code class="inl">rootcanal-ws</code>), which isn't built yet.</li>
         <li>Real RF is non-deterministic: great for interop, wrong for CI — use <code class="inl">sim::Link</code> there.</li>
       </ul>
 
