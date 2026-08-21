@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SimBLE Playground</title>
 <link rel="stylesheet" href="../common/simble.css">
+<link rel="stylesheet" href="../common/nav.css">
 <style>
   main { padding: 1rem 1.5rem 0; max-width: 82rem; margin: 0 auto; }
   .toolbar {
@@ -30,15 +31,23 @@
 </style>
 </head>
 <body>
+<nav class="sitenav">
+  <a class="brand" href="../">Sim<b>BLE</b></a>
+  <div class="tabs">
+    <a href="../playground/" aria-current="page">Playground</a>
+    <a href="../explorer/">API Explorer</a>
+    <a href="../scanner/">Scanner</a>
+    <a href="../hrm/">Scripted device</a>
+    <a href="../lightbulb/">Color Bulb</a>
+  </div>
+  <span class="spacer"></span>
+  <a class="ext" href="../doc/">Docs</a>
+  <a class="ext" href="https://github.com/schilit/simble">GitHub ↗</a>
+</nav>
 <header>
   <h1>SimBLE Playground</h1>
   <span class="sub">a free-form Rhai editor — the script <em>is</em> the Bluetooth device</span>
   <span id="conn" class="pill">starting…</span>
-  <div class="links">
-    <a href="../">← SimBLE demos</a>
-    <a href="../explorer/">API Explorer ↗</a>
-    <a href="../scanner/">Scanner ↗</a>
-  </div>
 </header>
 
 <main>

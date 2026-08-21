@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Simble in the browser</title>
+<link rel="stylesheet" href="common/nav.css">
 <style>
   :root {
     --bg: #0d1117; --panel: #161b22; --border: #30363d; --text: #e6edf3;
@@ -13,9 +14,8 @@
   body {
     margin: 0; background: var(--bg); color: var(--text);
     font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    display: flex; min-height: 100vh; align-items: center; justify-content: center;
   }
-  main { max-width: 46rem; padding: 2rem; }
+  main { max-width: 46rem; margin: 0 auto; padding: 2rem; }
   h1 { font-size: 1.6rem; margin: 0 0 0.25rem; }
   .sub { color: var(--dim); margin-bottom: 1.5rem; }
   a.card {
@@ -36,9 +36,20 @@
 </style>
 </head>
 <body>
+<nav class="sitenav">
+  <a class="brand" href="./">Sim<b>BLE</b></a>
+  <div class="tabs">
+    <a href="playground/">Playground</a>
+    <a href="explorer/">API Explorer</a>
+    <a href="scanner/">Scanner</a>
+    <a href="hrm/">Scripted device</a>
+    <a href="lightbulb/">Color Bulb</a>
+  </div>
+  <span class="spacer"></span>
+  <a class="ext" href="doc/">Docs</a>
+  <a class="ext" href="https://github.com/schilit/simble">GitHub ↗</a>
+</nav>
 <main>
-  <p style="margin:0 0 0.75rem"><a href="https://github.com/schilit/simble"
-     style="color:var(--accent);text-decoration:none;font-size:0.85rem">&larr; SimBLE on GitHub</a></p>
   <h1>Simble in the browser</h1>
   <p class="sub">Simble's Rust Bluetooth stack compiled to WebAssembly, connected to the
     netsim daemon running on <em>your</em> machine — no backend, no interpreter. Everything below

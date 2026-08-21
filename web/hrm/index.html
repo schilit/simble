@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Simble scripted device</title>
+<link rel="stylesheet" href="../common/nav.css">
 <style>
   :root {
     --bg: #0d1117; --panel: #161b22; --border: #30363d; --text: #e6edf3;
@@ -133,12 +134,23 @@
 </style>
 </head>
 <body>
+<nav class="sitenav">
+  <a class="brand" href="../">Sim<b>BLE</b></a>
+  <div class="tabs">
+    <a href="../playground/">Playground</a>
+    <a href="../explorer/">API Explorer</a>
+    <a href="../scanner/">Scanner</a>
+    <a href="../hrm/" aria-current="page">Scripted device</a>
+    <a href="../lightbulb/">Color Bulb</a>
+  </div>
+  <span class="spacer"></span>
+  <a class="ext" href="../doc/">Docs</a>
+  <a class="ext" href="https://github.com/schilit/simble">GitHub ↗</a>
+</nav>
 <header>
-  <p style="margin:0 0 8px"><a href="../">&larr; SimBLE demos</a></p>
-  <h1>Simble scripted device</h1>
+  <h1>SimBLE scripted device</h1>
   <span class="sub">this page opened a running Simble — the Rhai script below <em>is</em> the device</span>
   <span id="conn" class="pill">starting…</span>
-  <a href="../scanner/">open the scanner ↗</a>
 </header>
 
 <main>

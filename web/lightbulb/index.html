@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SimBLE Color Bulb</title>
 <link rel="stylesheet" href="../common/simble.css">
+<link rel="stylesheet" href="../common/nav.css">
 <style>
   main { display: grid; grid-template-columns: minmax(20rem, 1fr) minmax(18rem, 1fr);
     gap: 1.25rem; padding: 1.25rem 1.5rem; max-width: 72rem; margin: 0 auto; }
@@ -27,15 +28,23 @@
 </style>
 </head>
 <body>
+<nav class="sitenav">
+  <a class="brand" href="../">Sim<b>BLE</b></a>
+  <div class="tabs">
+    <a href="../playground/">Playground</a>
+    <a href="../explorer/">API Explorer</a>
+    <a href="../scanner/">Scanner</a>
+    <a href="../hrm/">Scripted device</a>
+    <a href="../lightbulb/" aria-current="page">Color Bulb</a>
+  </div>
+  <span class="spacer"></span>
+  <a class="ext" href="../doc/">Docs</a>
+  <a class="ext" href="https://github.com/schilit/simble">GitHub ↗</a>
+</nav>
 <header>
   <h1>SimBLE Color Bulb</h1>
   <span class="sub">a PLAYBULB-style smart light — the bulb reflects a writable BLE color characteristic</span>
   <span id="conn" class="pill">starting…</span>
-  <div class="links">
-    <a href="../">← SimBLE demos</a>
-    <a href="../playground/">Playground ↗</a>
-    <a href="../scanner/">Scanner ↗</a>
-  </div>
 </header>
 
 <main>

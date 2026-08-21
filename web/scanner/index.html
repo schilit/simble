@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SimBLE Scanner</title>
+<link rel="stylesheet" href="../common/nav.css">
 <style>
   :root {
     --bg: #0d1117; --panel: #161b22; --border: #30363d; --text: #e6edf3;
@@ -78,12 +79,23 @@
 </style>
 </head>
 <body>
+<nav class="sitenav">
+  <a class="brand" href="../">Sim<b>BLE</b></a>
+  <div class="tabs">
+    <a href="../playground/">Playground</a>
+    <a href="../explorer/">API Explorer</a>
+    <a href="../scanner/" aria-current="page">Scanner</a>
+    <a href="../hrm/">Scripted device</a>
+    <a href="../lightbulb/">Color Bulb</a>
+  </div>
+  <span class="spacer"></span>
+  <a class="ext" href="../doc/">Docs</a>
+  <a class="ext" href="https://github.com/schilit/simble">GitHub ↗</a>
+</nav>
 <header>
-  <p style="margin:0 0 8px"><a href="../">&larr; SimBLE demos</a></p>
   <h1>SimBLE Scanner</h1>
   <span class="sub">Simble's real HCI + GAP stack, compiled to WebAssembly, scanning your local netsim scene</span>
   <span id="conn" class="pill">starting…</span>
-  <a href="../hrm/">open the scripted device ↗</a>
 </header>
 
 <main>
