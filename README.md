@@ -3,7 +3,7 @@
 [![CI](https://github.com/schilit/simble/actions/workflows/ci.yml/badge.svg)](https://github.com/schilit/simble/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-**SimBLE creates virtual Bluetooth devices for testing.** Spin up a simulated heart-rate
+**SimBLE creates simulated Bluetooth devices for testing.** Spin up a virtual heart-rate
 monitor, keyboard, LE Audio earbud, hands-free car kit, or media remote — and connect to it
 from the Android emulator, from test code, or (with a USB dongle) from a real phone. No
 hardware to charge, pair, or lose: every device is defined in code, behaves the same way
