@@ -5,8 +5,11 @@
 
 mod a2dp_test;
 mod aics_test;
+mod ams_test;
+mod ancs_test;
 mod android_api_test;
 mod ascs_test;
+mod asha_test;
 mod at_test;
 mod avdtp_test;
 mod avrcp_test;
@@ -18,8 +21,10 @@ mod core_test;
 mod csip_test;
 mod device_test;
 mod df_test;
+mod ext_adv_test;
 mod gatt_service_test;
 mod gatt_test;
+mod hap_test;
 mod hfp_test;
 mod hid_test;
 mod keystore_test;

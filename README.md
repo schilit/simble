@@ -3,139 +3,142 @@
 [![CI](https://github.com/schilit/simble/actions/workflows/ci.yml/badge.svg)](https://github.com/schilit/simble/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-**Simble** is a lightweight, zero-copy, memory-safe virtual Bluetooth Low Energy (BLE) Host Stack and Device Simulation Engine written in pure Rust.
+**Simble creates virtual Bluetooth devices for testing.** Spin up a simulated heart-rate
+monitor, keyboard, LE Audio earbud, hands-free car kit, or media remote — and connect to it
+from the Android emulator, from test code, or (with a USB dongle) from a real phone. No
+hardware to charge, pair, or lose: every device is defined in code, behaves the same way
+every run, and can misbehave on command when that's what your test needs.
 
-Designed as an alternative to Python-based Bumble for simulation environments, Simble enables declarative modeling of virtual BLE peripherals, GATT servers and clients, L2CAP connection-oriented channels, Security Manager (SMP) pairing, LE Audio profiles, and Bluetooth 6.0 Channel Sounding.
-
----
-
-## Key Features
-
-- **Zero-Copy Serialization (`zerocopy`)**: Native in-place parsing and slicing of ATT, L2CAP, SMP, and HCI packets with zero heap reallocations.
-- **Pure Rust Cryptographic Engine**: AES-128, AES-CMAC (RFC 4493), Resolvable Private Address resolution (`ah`), confirm generators (`c1`, `s1`, `f4`, `g2`), and Bumble-compatible `JsonKeyStore`.
-- **Bluetooth 6.0 Channel Sounding (CS)**: High-accuracy Phase-Based Ranging (PBR) distance estimation ($\Delta d = \frac{c \cdot \Delta \phi}{4\pi \cdot \Delta f}$) and Ranging Service (`0x185B`).
-- **Complete Profile Ecosystem**:
-  - **Health & Device**: Heart Rate (`0x180D`), Battery (`0x180F`), Device Information (`0x180A`), Generic Attribute (`0x1801` with database hash).
-  - **LE Audio**: Coordinated Set Identification (CSIP `0x1846`), Published Audio Capabilities (PACS `0x1850`), Volume Control (VCP `0x1844`).
-  - **HID over GATT (HOGP)**: Virtual Keyboards and Mice with automated ASCII-to-HID report conversion.
-- **REST & Web Management**: Built-in HTTP router for declarative multi-device provisioning and real-time attribute mutation.
-- **Zero External Dependencies**: Compiles in milliseconds with standard `cargo build` and `cargo test` across Linux, macOS, and Windows.
+Simble is written in pure Rust, runs everywhere `cargo` does, and is a native companion to
+[netsim](https://android.googlesource.com/platform/tools/netsim), the Android emulator's
+network simulator.
 
 ---
 
-## Architecture
+## What can I do with it?
 
-```text
-┌─────────────────────────────────────────────────────────────┐
-│                      Simble Virtual Device                  │
-│  - Declarative GATT Database & Hash Engine (0x1801)         │
-│  - SMP Security Manager & Persistent JSON KeyStore          │
-│  - Profiles: HRS, BAS, DIS, CSIP, PACS, VCP, RAS, HID       │
-│  - Bluetooth 6.0 Channel Sounding PBR Distance Estimator    │
-└──────────────────────────────┬──────────────────────────────┘
-                               │
-            ┌──────────────────┴──────────────────┐
-            │   L2CAP Reassembler & CoC Manager   │
-            │   - Fixed Channels: ATT (0x04), SMP │
-            │   - Dynamic CoC / EATT (0x0040-0x7F)│
-            │   - Credit-Based Flow Control       │
-            └──────────────────┬──────────────────┘
-                               │
-            ┌──────────────────┴──────────────────┐
-            │   In-Memory HciChannel Transport    │
-            │   (H4: 0x01 Cmd, 0x02 ACL, 0x04 Evt)│
-            └─────────────────────────────────────┘
+- **Test Android apps against Bluetooth accessories that don't exist yet** — or that you
+  don't want a drawer full of. Your app in the Android emulator, Simble as the accessory,
+  netsim as the radio between them.
+- **Reproduce the unreproducible.** A peripheral that drops the connection mid-notification,
+  sends a stale pairing value, or advertises malformed data — real accessories won't
+  misbehave on cue; simulated ones will, identically, every run.
+- **Exercise the whole stack, not a mock.** Simble speaks real HCI, L2CAP, ATT/GATT, SMP
+  pairing (Legacy and Secure Connections), SDP, RFCOMM, HFP, A2DP/AVDTP, AVRCP, and HID —
+  what connects to it is talking to a real protocol implementation, packet by packet.
+- **Reach real hardware when you want it.** With a USB Bluetooth dongle, a Simble device
+  advertises over real RF and your actual phone can scan, connect, and pair with it.
+
+## What devices come built in?
+
+Ready-made simulated devices: **heart-rate monitor**, **keyboard**, **mouse**,
+**Eddystone and iBeacon beacons** — plus the full profile catalog to build your own:
+Battery, Device Information, LE Audio (BAP, ASCS, PACS, volume/input control, broadcast
+scan, media control, hearing access, and the coordinator profiles), Apple ANCS/AMS,
+Classic audio and telephony (A2DP, AVRCP, HFP), Classic HID, and Bluetooth 6.0
+**Channel Sounding** distance ranging with **AoA/AoD** direction finding.
+
+---
+
+## Quick start 1: talk to the Android emulator (netsim)
+
+Simble connects to netsim over a WebSocket, naming its device right in the URL. This needs
+the **canary-channel emulator** (37.2.5+) — the stable emulator's netsim doesn't have the
+WebSocket endpoint yet:
+
+```bash
+# One-time: install the canary-channel emulator package
+~/Library/Android/sdk/cmdline-tools/latest/bin/sdkmanager --channel=3 emulator
+
+# Start netsim with the WebSocket endpoint on
+# (--no-shutdown keeps it alive while no devices are connected)
+~/Library/Android/sdk/emulator/netsimd --logtostderr --no-shutdown --ws-port 7681
+
+# Prove the pipe works: one Simble device, HCI round trip
+cargo run --example netsim_smoke
+
+# Two Simble devices discovering each other through the simulated radio
+cargo run --example netsim_two_devices
+
+# See who's on the air
+~/Library/Android/sdk/emulator/netsim devices
 ```
 
----
+Any device you create this way appears in netsim alongside emulator instances — name and
+address come straight from the connection URL:
 
-## Quick Start
+```
+ws://localhost:7681/v1/websocket/bt?name=my-hrm&address=11:22:33:44:55:01
+```
 
-### 1. Creating a Virtual Heart Rate Monitor
+## Quick start 2: talk to a real phone (USB dongle)
+
+Plug in a USB Bluetooth dongle (macOS's built-in radio is not accessible — a generic
+CSR-style dongle works out of the box), then:
+
+```bash
+# Advertise as "Simble HRM"; scan and connect from your phone with nRF Connect
+cargo run --example usb_hrm
+
+# Or pick a specific dongle
+cargo run --example usb_hrm -- 0a12:0001
+```
+
+If opening the dongle fails on macOS, check whether the OS claimed it; on Linux you'll need
+device permissions (a udev rule, or `sudo`).
+
+## Quick start 3: use it as a library
 
 ```rust
 use simble::devices::HeartRateMonitor;
-use simble::types::{Address, AddressType};
+use simble::types::Address;
 
-fn main() {
-    let addr = Address::from_be_bytes([0xF1, 0xF2, 0xF3, 0xF4, 0xF5, 0xF6]);
-    let mut hrm = HeartRateMonitor::new("MyHeartRateMonitor", addr);
-
-    // Update heart rate to 78 bpm and emit a notification
-    let notification_pdu = hrm.send_heart_rate(78);
-    println!("Emitted notification PDU: {notification_pdu:02X?}");
-}
+let addr: Address = "F1:F2:F3:F4:F5:F6".parse()?;
+let mut hrm = HeartRateMonitor::new("MyHeartRateMonitor", addr);
+let notification = hrm.send_heart_rate(78);   // a real ATT notification PDU
 ```
 
-### 2. Performing Bluetooth 6.0 Phase-Based Ranging
+Or the Android-flavored API, if that's the vocabulary you know:
 
 ```rust
-use simble::cs::{compute_pbr_distance, CsStepResult};
-
-fn main() {
-    let steps = vec![
-        CsStepResult { channel: 10, phase_rad: 0.15 },
-        CsStepResult { channel: 20, phase_rad: 0.75 },
-        CsStepResult { channel: 30, phase_rad: 1.35 },
-    ];
-
-    let estimate = compute_pbr_distance(&steps);
-    println!("Estimated distance: {:.2} meters", estimate.estimated_distance_meters);
-}
+use simble::android::gatt_server::BluetoothGattServer;
+use simble::android::gatt_service::{BluetoothGattService, BluetoothGattCharacteristic};
+// BluetoothGattServer / addService / notifyCharacteristicChanged —
+// the android.bluetooth shapes, backed by Simble's real stack.
 ```
+
+Scripts work too — Simble embeds the [Rhai](https://rhai.rs) scripting engine with the same
+Android-shaped API, so device behavior can live in a text file instead of a rebuild.
 
 ---
 
-## Running Tests
+## Examples
 
-Simble contains 75+ unit and integration tests ported from Bumble:
+| Example | What it shows |
+|---|---|
+| `netsim_smoke` | One Simble device connected to netsim, HCI round trip |
+| `netsim_two_devices` | Two devices seeing each other through the simulated radio |
+| `usb_hrm` | A heart-rate monitor on real RF via a USB dongle |
+| `heart_rate_monitor`, `ble_keyboard` | Library-level virtual devices |
+| `channel_sounding` | Bluetooth 6.0 distance-ranging math |
+
+## Verifying a change
 
 ```bash
 cargo test --all-targets --all-features
 ```
 
----
-
-## Testing Against netsim
-
-Simble's primary client is Android's [netsim](https://android.googlesource.com/platform/tools/netsim)
-virtual Bluetooth controller. `simble::transport::NetsimTransport` (`src/transport/netsim.rs`)
-connects to netsim's native WebSocket HCI endpoint, carrying H4-framed packets and passing the
-virtual device's name straight through the connection URI &mdash; no separate handshake message,
-no gRPC dependency:
-
-```
-ws://localhost:7681/v1/websocket/bt?name=<device-name>&address=<mac-address>
-```
-
-**Requires the canary-channel emulator package (37.2.5+)**, not the stable one. The stable
-emulator's `netsimd` (33.x) has no WebSocket frontend at all; the canary build is a rewritten
-`netsimd` that supports it via an explicit `--ws-port` flag (off by default), plus a separate
-`netsim` CLI for inspecting live devices. Verified working end-to-end with Simble's
-`NetsimTransport` (see `examples/netsim_smoke.rs`):
-
-```bash
-# Install the canary-channel emulator package
-~/Library/Android/sdk/cmdline-tools/latest/bin/sdkmanager --channel=3 emulator
-
-# Start netsimd with the WebSocket frontend enabled
-# (--no-shutdown prevents the 15s no-devices startup timeout during development)
-~/Library/Android/sdk/emulator/netsimd --logtostderr --no-shutdown --ws-port 7681
-
-# Run the live smoke test: HCI Reset -> Command Complete over WebSocket
-cargo run --example netsim_smoke
-
-# Inspect connected devices (names come from the ?name= URI parameter)
-~/Library/Android/sdk/emulator/netsim devices
-```
+The suite is 850+ tests covering every protocol layer, largely ported from Bumble's test
+suite (see Acknowledgments) plus spec-derived coverage of its gaps.
 
 ---
 
 ## Acknowledgments
 
-Simble is inspired by, and ports test coverage from, [Bumble](https://github.com/google/bumble),
-Google's Python Bluetooth stack. Where a Simble test suite is a direct port of a Bumble test
-file, that provenance is noted in this README rather than repeated per-file in the source.
+Simble is inspired by, and ports test coverage from,
+[Bumble](https://github.com/google/bumble), Google's Python Bluetooth stack. Where a Simble
+test suite is a direct port of a Bumble test file, that provenance is noted here rather than
+repeated per-file in the source.
 
 ## License
 

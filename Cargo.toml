@@ -19,6 +19,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
 zerocopy = { version = "0.8", features = ["derive"] }
+nusb = "0.2"
 
 [[example]]
 name = "heart_rate_monitor"

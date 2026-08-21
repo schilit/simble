@@ -6,7 +6,9 @@
 pub mod hci_adapter;
 pub mod netsim;
 pub mod rootcanal;
+pub mod usb;
 
 pub use hci_adapter::{HciChannel, h4_type};
 pub use netsim::NetsimTransport;
 pub use rootcanal::{H4FrameReader, RootcanalTransport, read_h4_packet, write_h4_packet};
+pub use usb::UsbTransport;

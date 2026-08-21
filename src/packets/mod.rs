@@ -4,6 +4,7 @@
 //! Zero-copy Bluetooth packet structures and serializers.
 
 pub mod att;
+pub mod ext_adv;
 pub mod hci;
 pub mod l2cap_frame;
 pub mod l2cap_signaling;
@@ -14,6 +15,23 @@ pub use att::{
     AttHandleValueHeader, AttPdu, AttPrepareWriteReqHeader, AttReadBlobReq,
     AttReadByGroupTypeReqHeader, AttReadByTypeReqHeader, AttReadReq, AttWriteReqHeader,
     error_code as att_error_code, opcode as att_opcode,
+};
+pub use ext_adv::{
+    AdvSetError, AdvertisingEnableEntry, AdvertisingSet, AdvertisingSets,
+    ExtendedAdvertisingReportHeader, LeAdvertisingSetTerminatedEvent, LeClearAdvertisingSets,
+    LeExtendedAdvertisingReportEvent, LePeriodicAdvertisingCreateSync,
+    LePeriodicAdvertisingCreateSyncCancel, LePeriodicAdvertisingReportEventHeader,
+    LePeriodicAdvertisingSyncEstablishedEvent, LePeriodicAdvertisingSyncLostEvent,
+    LePeriodicAdvertisingTerminateSync, LeReadMaximumAdvertisingDataLength,
+    LeReadMaximumAdvertisingDataLengthResponse, LeRemoveAdvertisingSet, LeScanRequestReceivedEvent,
+    LeSetAdvertisingSetRandomAddress, LeSetExtendedAdvertisingDataHeader,
+    LeSetExtendedAdvertisingEnableHeader, LeSetExtendedAdvertisingParameters,
+    LeSetExtendedAdvertisingParametersResponse, LeSetExtendedScanEnable,
+    LeSetExtendedScanParametersHeader, LeSetExtendedScanResponseDataHeader,
+    LeSetPeriodicAdvertisingDataHeader, LeSetPeriodicAdvertisingEnable,
+    LeSetPeriodicAdvertisingParameters, MAX_ADVERTISING_DATA_LENGTH, ScanPhyParameters, U24,
+    adv_event_properties, adv_phy, data_operation, ext_adv_opcode, ext_adv_report_event_type,
+    ext_adv_subevent_code,
 };
 pub use hci::*;
 pub use l2cap_frame::{AclPacketBoundary, HciAclHeader, L2capHeader, cid as l2cap_cid};
