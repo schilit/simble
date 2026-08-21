@@ -6,6 +6,7 @@
  * playground, explorer, and lightbulb pages import this). */
 
 :root {
+  color-scheme: light; /* opt out of browser auto-dark / forced-dark inversion */
   --bg: #ffffff; --panel: #f6f8fa; --panel2: #eaeef2; --border: #d0d7de;
   --text: #1f2328; --dim: #656d76; --accent: #0969da; --good: #1a7f37;
   --bad: #cf222e; --warn: #9a6700; --heart: #cf222e;
