@@ -583,8 +583,10 @@ impl Message {
             (sig::DISCOVER, MessageType::Command) => Some(Message::DiscoverCommand),
             (sig::DISCOVER, MessageType::ResponseAccept) => Some(Message::DiscoverResponse(
                 payload
-                    .chunks_exact(2)
-                    .map(SepInfo::parse)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|pair| SepInfo::parse(pair))
                     .collect::<Option<Vec<_>>>()?,
             )),
             (sig::GET_CAPABILITIES, MessageType::Command) => {

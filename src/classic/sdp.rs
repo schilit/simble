@@ -490,7 +490,9 @@ impl ServiceAttribute {
     /// skipped rather than rejecting the whole list.
     pub fn list_from_data_elements(elements: &[DataElement]) -> Vec<ServiceAttribute> {
         elements
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .filter_map(|pair| {
                 let (id, _) = pair[0].as_unsigned_integer()?;
                 Some(ServiceAttribute::new(id as u16, pair[1].clone()))
