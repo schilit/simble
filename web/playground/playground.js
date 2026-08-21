@@ -127,7 +127,7 @@ hr.add_descriptor(cccd);
 hrs.add_characteristic(hr);
 server.add_service(hrs);
 
-// --- assertions (run once, at build time) ---
+// --- assertions (run once, when the script runs) ---
 assert(server.name == "web-selftest", "server keeps its name");
 let svc = server.get_service(uuid::HEART_RATE_SERVICE);
 assert(svc.characteristics.len() == 1, "service has one characteristic");

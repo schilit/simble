@@ -117,25 +117,19 @@
     </div>
     <div class="world">
       <p class="wlabel">Natively · <span class="runs-ci">where CI runs</span></p>
-      <p>The same <code>.rhai</code> file through the native <code>simble-test</code> CLI (exit 0 pass / 1 fail),
+      <p>The same <code>.rhai</code> file through the native <code>simble</code> CLI (exit 0 pass / 1 fail),
         or a Rust <code>#[test]</code>. No browser, no netsim.</p>
-      <pre><code>simble-test device.rhai   # exit 0 / 1</code></pre>
+      <pre><code>simble device.rhai   # exit 0 / 1</code></pre>
     </div>
   </div>
 
   <h2 class="sub">Why this matters</h2>
-  <p class="aside">Every assertion runs at <strong>build time</strong> in a fresh engine, against SimBLE's real
-    GATT stack — so it checks the device your app will actually meet, not a mock. Because the run is deterministic,
+  <p class="aside">Every assertion runs against SimBLE's <strong>real GATT stack</strong> in a fresh engine — so it
+    checks the device your app will actually meet, not a mock. Because the run is deterministic,
     the exact same script an LLM writes, that you check here, and that CI runs natively are one file — no
     hand-translation between "the test" and "the fixture". Behavioural tests (connect, subscribe, assert a
     notification over time) build on the same primitive with <code>wait_for</code> and the scene APIs.</p>
 </main>
-
-<footer>
-  <code>run_test(script)</code> compiles and runs the script in a fresh SimBLE scripting engine; a failed
-  <code>assert(condition, "message")</code> (or any runtime error) is reported here with its message. No netsim,
-  no connection — pure, repeatable evaluation.
-</footer>
 
 <script type="module" src="./testing.js"></script>
 </body>

@@ -8,7 +8,7 @@ import { attachHighlightedEditor } from "../common/highlight.js";
 const $ = (id) => document.getElementById(id);
 
 // The examples are real .rhai files under examples/ — the same files CI runs
-// through the `simble-test` CLI, so the page and CI can never drift. The map
+// through the `simble` CLI, so the page and CI can never drift. The map
 // is select-option value -> file (the *.pass/*.fail suffix tells CI what to
 // expect; see .github/workflows/ci.yml).
 const EXAMPLE_FILES = {
