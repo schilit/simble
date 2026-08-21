@@ -349,10 +349,11 @@ function refreshObjrefs() {
     if (registry[type].length) {
       sel.innerHTML = registry[type].map((n) => `<option>${n}</option>`).join("");
       sel.value = registry[type].includes(prev) ? prev : registry[type][registry[type].length - 1];
-      sel.disabled = false;
     } else {
-      sel.innerHTML = `<option value="" disabled selected>— create a ${type} first —</option>`;
-      sel.disabled = true;
+      // Keep the control ENABLED (a disabled select reads as broken); the
+      // placeholder plus the row's disabled Execute button convey that you need
+      // to create the object first.
+      sel.innerHTML = `<option value="">— create a ${type} first —</option>`;
     }
   }
   for (const el of $("methods").querySelectorAll(".method")) el._refresh && el._refresh();

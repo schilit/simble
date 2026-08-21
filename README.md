@@ -12,7 +12,7 @@ every run, and can misbehave on command when that's what your test needs.
 Inspired by [Bumble](https://github.com/google/bumble) and
 [NimBLE](https://github.com/apache/mynewt-nimble), SimBLE exposes the
 [Rhai](https://rhai.rs) scripting language to make device creation and testing a snap.
-SimBLE is written in pure Rust, runs everywhere `cargo` does, and is a native companion to
+SimBLE is written in pure Rust and is a native companion to
 [netsim](https://android.googlesource.com/platform/tools/netsim), the Android emulator's
 network simulator.
 
