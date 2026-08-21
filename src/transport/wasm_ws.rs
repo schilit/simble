@@ -1499,6 +1499,21 @@ impl SceneEngine {
         }
     }
 
+    /// Host-writes `value` into characteristic `uuid` of peripheral `index`
+    /// (the in-page equivalent of `WebPeripheral::set_value`): updates the live
+    /// GATT database and notifies any subscribed central.
+    pub fn peripheral_set_value(
+        &mut self,
+        index: usize,
+        uuid: &str,
+        value: &[u8],
+    ) -> Result<(), String> {
+        match self.devices.get_mut(index).map(|d| &mut d.role) {
+            Some(SceneRole::Peripheral(p)) => p.set_characteristic_value(uuid, value),
+            _ => Err("not a peripheral".to_string()),
+        }
+    }
+
     /// The scan reports scanner `index` has collected as a JSON array, draining
     /// them so each call returns only what's new.
     pub fn scanner_reports_json(&mut self, index: usize) -> String {
@@ -1805,6 +1820,19 @@ mod web {
         /// Queue enabling notifications on `value_handle` for central `index`.
         pub fn central_subscribe(&mut self, index: usize, value_handle: u16) {
             self.scene.central_subscribe(index, value_handle);
+        }
+
+        /// Host-write `value` into characteristic `uuid` of peripheral `index`
+        /// (updates the live GATT database and notifies subscribers).
+        pub fn peripheral_set_value(
+            &mut self,
+            index: usize,
+            uuid: &str,
+            value: Vec<u8>,
+        ) -> Result<(), JsValue> {
+            self.scene
+                .peripheral_set_value(index, uuid, &value)
+                .map_err(js_error)
         }
 
         /// The number of devices in the scene.
