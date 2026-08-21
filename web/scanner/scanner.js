@@ -13,11 +13,11 @@ const WS_URL =
 // (unique per device), optional 16-bit service UUID (0 = none), and optional
 // manufacturer data (company id + bytes; empty = none).
 const DEMO_DEVICES = [
-  { node: "demo-beacon", address: "CC:1E:57:00:00:11", name: "Simble Beacon",
+  { node: "demo-beacon", address: "CC:1E:57:00:00:11", name: "SimBLE Beacon",
     service: 0x0000, company: 0x0059, data: [0x01, 0x02, 0x03, 0x04] },
-  { node: "demo-thermo", address: "CC:1E:57:00:00:12", name: "Simble Thermometer",
+  { node: "demo-thermo", address: "CC:1E:57:00:00:12", name: "SimBLE Thermometer",
     service: 0x181a, company: 0x0000, data: [] },
-  { node: "demo-hrm", address: "CC:1E:57:00:00:13", name: "Simble Heart Rate",
+  { node: "demo-hrm", address: "CC:1E:57:00:00:13", name: "SimBLE Heart Rate",
     service: 0x180d, company: 0x0000, data: [] },
 ];
 
