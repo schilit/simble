@@ -32,6 +32,11 @@ jobs:
       - name: Run Tests
         run: cargo test --all-targets --all-features -- --nocapture
 
+      - name: Doc (deny broken links)
+        run: cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+
   duplication-report:
     name: Duplication Report (non-blocking)
     runs-on: ubuntu-latest
