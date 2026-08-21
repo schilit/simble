@@ -71,7 +71,7 @@ fn tick(server, t) {
   },
   thermometer: {
     label: "🌡 Thermometer (default)",
-    script: default_heart_rate_script(),
+    script: "", // filled from the wasm default in boot(), after init()
   },
   misbehaving: {
     label: "⚠️ Misbehaving device",
@@ -272,6 +272,10 @@ function wireExamples() {
 
 // --- boot ------------------------------------------------------------------
 await init();
+
+// Now that wasm is initialized, the default script is available — the examples
+// object couldn't call this at module-eval time (before init).
+EXAMPLES.thermometer.script = default_heart_rate_script();
 
 const shared = await decodeScript(location.search);
 editor.value = shared || default_heart_rate_script();
