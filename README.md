@@ -64,6 +64,19 @@ cargo run --example netsim_two_devices
 ~/Library/Android/sdk/emulator/netsim devices
 ```
 
+**Try it in your browser** — with `netsimd` running locally as above, Simble itself runs
+in the page (compiled to WebAssembly) and joins the simulation:
+
+- **Beacon scanner**: https://schilit.github.io/simble/scanner/ — live scan of everything
+  on the simulated air
+- **Scripted heart-rate monitor**: https://schilit.github.io/simble/hrm/ — a running
+  Simble whose device is defined by an editable Rhai script in the page; edit, hit Run,
+  and watch it change in the scanner tab
+
+Open both side by side for the full loop: rename the device in the HRM tab's script and
+see the new name appear in the scanner. (Links go live once GitHub Pages is enabled for
+this repo; until then, build locally and serve `web/` — instructions in that directory.)
+
 Any device you create this way appears in netsim alongside emulator instances — name and
 address come straight from the connection URL:
 
@@ -108,7 +121,22 @@ use simble::android::gatt_service::{BluetoothGattService, BluetoothGattCharacter
 ```
 
 Scripts work too — Simble embeds the [Rhai](https://rhai.rs) scripting engine with the same
-Android-shaped API, so device behavior can live in a text file instead of a rebuild.
+Android-shaped API, so device behavior can live in a text file instead of a rebuild. This is
+**Rhai** (a Rust-flavored scripting language), not Rust — no compiler involved:
+
+```rhai
+// heart_rate.rhai — Rhai script, evaluated at runtime
+let server = android::BluetoothGattServer("Scripted HRM");
+let hrs = android::BluetoothGattService(uuid::HEART_RATE_SERVICE, android::SERVICE_TYPE_PRIMARY);
+let chr = android::BluetoothGattCharacteristic(
+    uuid::HEART_RATE_MEASUREMENT,
+    android::PROPERTY_READ | android::PROPERTY_NOTIFY,
+    android::PERMISSION_READ
+);
+chr.set_value([0x00, 72]);
+hrs.add_characteristic(chr);
+server.add_service(hrs);
+```
 
 ---
 
