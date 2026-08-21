@@ -1018,16 +1018,37 @@ impl CentralPhase {
     }
 }
 
+/// A client-initiated GATT operation, queued from the UI and sent when the
+/// central is idle (one outstanding request at a time).
+#[derive(Clone)]
+enum CentralOp {
+    /// Read a characteristic value handle.
+    Read(u16),
+    /// Write a value to a characteristic value handle.
+    Write(u16, Vec<u8>),
+    /// Enable notifications by writing 0x0001 to the CCCD after a value handle.
+    Subscribe(u16),
+}
+
 /// A scene central: connects to a peripheral by address over the shared
 /// [`Link`], exchanges MTU, and discovers its GATT — the *client* half of the
 /// server/client view. It drives a [`GattClient`], framing ATT over L2CAP over
-/// ACL, the mirror of the peripheral's inbound path.
+/// ACL, the mirror of the peripheral's inbound path, and supports interactive
+/// read / write / subscribe once discovery is complete.
 struct CentralDevice {
     target: Address,
     client: GattClient,
     reassembler: AclReassembler,
     phase: CentralPhase,
     connect_requested: bool,
+    /// Operations requested from the UI, awaiting their turn on the link.
+    pending_ops: std::collections::VecDeque<CentralOp>,
+    /// The operation whose response we're waiting for, if any.
+    in_flight: Option<CentralOp>,
+    /// Latest value seen per handle (from a read response or a notification).
+    values: std::collections::BTreeMap<u16, Vec<u8>>,
+    /// Value handles with notifications enabled.
+    subscribed: std::collections::BTreeSet<u16>,
 }
 
 impl CentralDevice {
@@ -1038,7 +1059,48 @@ impl CentralDevice {
             reassembler: AclReassembler::new(),
             phase: CentralPhase::Connecting,
             connect_requested: false,
+            pending_ops: std::collections::VecDeque::new(),
+            in_flight: None,
+            values: std::collections::BTreeMap::new(),
+            subscribed: std::collections::BTreeSet::new(),
         }
+    }
+
+    /// Queue a read of the given value handle.
+    fn queue_read(&mut self, value_handle: u16) {
+        self.pending_ops.push_back(CentralOp::Read(value_handle));
+    }
+
+    /// Queue a write of `value` to the given value handle.
+    fn queue_write(&mut self, value_handle: u16, value: Vec<u8>) {
+        self.pending_ops
+            .push_back(CentralOp::Write(value_handle, value));
+    }
+
+    /// Queue enabling notifications on the given value handle (writes its CCCD).
+    fn queue_subscribe(&mut self, value_handle: u16) {
+        self.pending_ops
+            .push_back(CentralOp::Subscribe(value_handle));
+    }
+
+    /// Send the next queued operation when discovery is done and nothing is in
+    /// flight.
+    fn pump_ops(&mut self, channel: &HciChannel) {
+        if self.phase != CentralPhase::Ready || self.in_flight.is_some() {
+            return;
+        }
+        let Some(op) = self.pending_ops.pop_front() else {
+            return;
+        };
+        let handle = self.client.connection_handle;
+        let req = match &op {
+            CentralOp::Read(h) => self.client.create_read_request(*h),
+            CentralOp::Write(h, v) => self.client.create_write_request(*h, v),
+            // The CCCD sits at value_handle + 1 in the standard layout.
+            CentralOp::Subscribe(h) => self.client.create_write_request(h + 1, &[0x01, 0x00]),
+        };
+        let _ = send_acl(channel, handle, &req);
+        self.in_flight = Some(op);
     }
 
     /// On the first tick, request a connection to the target advertiser.
@@ -1051,6 +1113,7 @@ impl CentralDevice {
             let _ = queue_command(channel, [0x0D, 0x20], &params); // LE Create Connection
             self.connect_requested = true;
         }
+        self.pump_ops(channel);
     }
 
     /// Consume one controller→host packet: a connection completion starts the
@@ -1086,11 +1149,20 @@ impl CentralDevice {
         }
     }
 
-    /// Advance the discovery state machine on one ATT response.
+    /// Advance the discovery state machine, or handle a read/write/notification,
+    /// on one ATT response.
     fn dispatch_att(&mut self, channel: &HciChannel, att: &[u8]) {
         let handle = self.client.connection_handle;
         let Some(&op) = att.first() else { return };
         let is_error = op == att_op::ERROR_RSP;
+
+        // Notifications can arrive at any time, independent of the request FSM.
+        if op == att_op::HANDLE_VALUE_NTF && att.len() >= 3 {
+            let value_handle = u16::from_le_bytes([att[1], att[2]]);
+            self.values.insert(value_handle, att[3..].to_vec());
+            return;
+        }
+
         match self.phase {
             CentralPhase::ExchangingMtu => {
                 if op == att_op::EXCHANGE_MTU_RSP && att.len() >= 3 {
@@ -1141,7 +1213,23 @@ impl CentralDevice {
                     }
                 }
             }
-            CentralPhase::Connecting | CentralPhase::Ready => {}
+            CentralPhase::Ready => {
+                // Response to the in-flight read / write / subscribe.
+                if let Some(pending) = self.in_flight.take()
+                    && !is_error
+                {
+                    match pending {
+                        CentralOp::Read(h) if op == att_op::READ_RSP => {
+                            self.values.insert(h, att[1..].to_vec());
+                        }
+                        CentralOp::Subscribe(h) => {
+                            self.subscribed.insert(h);
+                        }
+                        CentralOp::Read(_) | CentralOp::Write(..) => {}
+                    }
+                }
+            }
+            CentralPhase::Connecting => {}
         }
     }
 
@@ -1195,7 +1283,12 @@ impl CentralDevice {
             uuid: String,
             value_handle: u16,
             properties: u8,
+            /// Latest value (read or notified) as uppercase hex, if any.
+            value: Option<String>,
+            /// Whether notifications are enabled on this characteristic.
+            subscribed: bool,
         }
+        let hex = |v: &[u8]| v.iter().map(|b| format!("{b:02X}")).collect::<String>();
         let view = View {
             connected: self.client.connection_handle != 0,
             peer: self.target.to_string(),
@@ -1213,6 +1306,8 @@ impl CentralDevice {
                             uuid: c.uuid.to_string(),
                             value_handle: c.value_handle,
                             properties: c.properties,
+                            value: self.values.get(&c.value_handle).map(|v| hex(v)),
+                            subscribed: self.subscribed.contains(&c.value_handle),
                         })
                         .collect(),
                 })
@@ -1380,6 +1475,27 @@ impl SceneEngine {
         match self.devices.get(index)?.role {
             SceneRole::Central(ref c) => Some(c.status_json()),
             SceneRole::Peripheral(_) | SceneRole::Scanner(_) => None,
+        }
+    }
+
+    /// Queue a read of `value_handle` on central `index`.
+    pub fn central_read(&mut self, index: usize, value_handle: u16) {
+        if let Some(SceneRole::Central(c)) = self.devices.get_mut(index).map(|d| &mut d.role) {
+            c.queue_read(value_handle);
+        }
+    }
+
+    /// Queue a write of `value` to `value_handle` on central `index`.
+    pub fn central_write(&mut self, index: usize, value_handle: u16, value: Vec<u8>) {
+        if let Some(SceneRole::Central(c)) = self.devices.get_mut(index).map(|d| &mut d.role) {
+            c.queue_write(value_handle, value);
+        }
+    }
+
+    /// Queue enabling notifications on `value_handle` for central `index`.
+    pub fn central_subscribe(&mut self, index: usize, value_handle: u16) {
+        if let Some(SceneRole::Central(c)) = self.devices.get_mut(index).map(|d| &mut d.role) {
+            c.queue_subscribe(value_handle);
         }
     }
 
@@ -1674,6 +1790,21 @@ mod web {
         /// central).
         pub fn central_status_json(&self, index: usize) -> Option<String> {
             self.scene.central_status_json(index)
+        }
+
+        /// Queue a read of `value_handle` on central `index`.
+        pub fn central_read(&mut self, index: usize, value_handle: u16) {
+            self.scene.central_read(index, value_handle);
+        }
+
+        /// Queue a write of `value` to `value_handle` on central `index`.
+        pub fn central_write(&mut self, index: usize, value_handle: u16, value: Vec<u8>) {
+            self.scene.central_write(index, value_handle, value);
+        }
+
+        /// Queue enabling notifications on `value_handle` for central `index`.
+        pub fn central_subscribe(&mut self, index: usize, value_handle: u16) {
+            self.scene.central_subscribe(index, value_handle);
         }
 
         /// The number of devices in the scene.
