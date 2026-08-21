@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimBLE in the Android Emulator</title>
+<link rel="stylesheet" href="../common/simble.css">
+<link rel="stylesheet" href="../common/nav.css">
+<style>
+  main { max-width: 52rem; margin: 0 auto; padding: 1.25rem 1.25rem 3rem; }
+  h1 { font-size: 1.5rem; margin: 0.4rem 0 0.3rem; }
+  .lede { color: var(--dim); font-size: 1.02rem; line-height: 1.6; margin: 0 0 1.6rem; }
+  h2 { font-size: 1.1rem; margin: 1.9rem 0 0.6rem; padding-top: 0.8rem;
+    border-top: 1px solid var(--border); }
+  h3 { font-size: 0.95rem; margin: 1.1rem 0 0.4rem; }
+  p, li { line-height: 1.65; }
+  code { background: var(--panel); color: var(--good); padding: 0.05rem 0.35rem;
+    border-radius: 4px; font-size: 0.86em; }
+  pre { background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.8rem 1rem; overflow-x: auto; }
+  pre code { background: none; padding: 0; color: var(--text); font-size: 0.82rem; line-height: 1.6; }
+  a { color: var(--accent); }
+  .flow { display: flex; align-items: stretch; gap: 0.5rem; flex-wrap: wrap; margin: 1rem 0 0.5rem; }
+  .flow .box { flex: 1 1 8rem; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--panel); padding: 0.7rem 0.8rem; }
+  .flow .box b { display: block; color: var(--accent); font-size: 0.9rem; }
+  .flow .box span { color: var(--dim); font-size: 0.8rem; }
+  .flow .arrow { align-self: center; color: var(--dim); font-size: 1.1rem; }
+  .note { border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent);
+    padding: 0.6rem 0.9rem; border-radius: 0 6px 6px 0; margin: 1rem 0; font-size: 0.92rem; }
+  ol li { margin-bottom: 0.5rem; }
+  .step-n { color: var(--accent); font-weight: 700; }
+</style>
+</head>
+<body>
+<nav class="sitenav">
+  <a class="brand" href="../">Sim<b>BLE</b></a>
+  <div class="tabs">
+    <a href="../playground/">Playground</a>
+    <a href="../explorer/">API Explorer</a>
+    <a href="../scanner/">Scanner</a>
+    <a href="../hrm/">Scripted device</a>
+    <a href="../lightbulb/">Color Bulb</a>
+    <a href="../dual/">Server + Client</a>
+    <a href="../scene/">Scene</a>
+    <a href="../shared/">Shared</a>
+    <a href="../controllers/">Controllers</a>
+  </div>
+  <span class="spacer"></span>
+  <a class="ext" href="../doc/">Docs</a>
+  <a class="ext" href="https://github.com/schilit/simble">GitHub ↗</a>
+</nav>
+
+<main>
+  <h1>SimBLE in the Android Emulator</h1>
+  <p class="lede">Develop and test a Bluetooth LE app end-to-end with <strong>no physical hardware</strong>.
+    Your app runs in the Android&nbsp;Studio Emulator; <a href="https://android.googlesource.com/platform/tools/netsim">netsim</a>
+    is the radio between it and a scene of <strong>simulated devices</strong>; SimBLE provides those devices —
+    real GATT peripherals your app scans, connects to, pairs with, and reads and writes, exactly as it would
+    a real accessory. Deterministic, reproducible, and always available.</p>
+
+  <div class="flow">
+    <div class="box"><b>Your app</b><span>in the Android Emulator (AVD)</span></div>
+    <div class="arrow">↔</div>
+    <div class="box"><b>netsim</b><span>the simulated radio + scene</span></div>
+    <div class="arrow">↔</div>
+    <div class="box"><b>SimBLE devices</b><span>scripted GATT peripherals</span></div>
+  </div>
+
+  <h2>Why this matters</h2>
+  <p>Testing a BLE app normally means a drawer of accessories to charge, pair, and keep in range — and
+    behaviours you can't stage on demand (a device that drops mid-notification, sends a stale value, or
+    misbehaves at exactly the wrong moment). With this setup the accessory is <em>software</em>: it behaves
+    the same way every run, it's always there, and it can misbehave on command when that's what your test needs.</p>
+
+  <h2>What each piece does</h2>
+  <ul>
+    <li><strong>The Emulator (AVD)</strong> runs your app. Its virtual Bluetooth controller is wired to netsim
+      instead of a real radio.</li>
+    <li><strong>netsim</strong> is the Android emulator's network simulator: the simulated PHY that carries
+      packets between the emulator and everything else on the scene, plus a 3D position model for
+      movement and ranging.</li>
+    <li><strong>SimBLE</strong> supplies the devices your app talks to. netsim can host simple
+      <em>beacons</em> on its own, but not full GATT peripherals — services, characteristics, descriptors,
+      pairing, notifications. That's SimBLE's job: the real devices, defined in a few lines of Rhai.</li>
+  </ul>
+
+  <h2>Step by step</h2>
+  <ol>
+    <li><span class="step-n">1.</span> <strong>Install the canary-channel emulator</strong> (37.2.5+ — the stable
+      emulator's netsim doesn't have the WebSocket endpoint yet):
+      <pre><code>~/Library/Android/sdk/cmdline-tools/latest/bin/sdkmanager --channel=3 emulator</code></pre></li>
+    <li><span class="step-n">2.</span> <strong>Start netsim</strong> with its WebSocket frontend:
+      <pre><code>~/Library/Android/sdk/emulator/netsimd --logtostderr --no-shutdown --ws-port 7681</code></pre></li>
+    <li><span class="step-n">3.</span> <strong>Launch your AVD</strong> from Android Studio and run your BLE app on it.
+      The emulator joins the same netsim scene automatically.</li>
+    <li><span class="step-n">4.</span> <strong>Add SimBLE devices</strong> to the scene. Each connects to netsim
+      over <code>ws://localhost:7681</code>, naming itself in the URL:
+      <pre><code>cargo run --example netsim_smoke        # one device, HCI round-trip
+cargo run --example netsim_two_devices  # two devices discovering each other</code></pre>
+      or build your own from the Rust API or a Rhai script (see the <a href="../playground/">Playground</a>).</li>
+    <li><span class="step-n">5.</span> <strong>Test.</strong> Your app scans, finds the SimBLE peripherals,
+      connects, and exercises them — the same code paths it would run against real hardware.</li>
+  </ol>
+
+  <div class="note">
+    Check who's on the air with <code>~/Library/Android/sdk/emulator/netsim devices</code>, and capture traffic
+    with <code>netsim capture</code> — the same tooling the emulator uses.
+  </div>
+
+  <h2>Managing simulated devices — a web page, not a CLI</h2>
+  <p>Rather than script devices by hand, the <a href="../scene/">Scene creator</a> is a visual device manager:
+    add scripted <strong>servers</strong>, <strong>scanners</strong>, and <strong>clients</strong>, edit their
+    Rhai, and inspect their GATT. Today it drives an in-page controller; pointed at netsim (a backend selector,
+    like the other pages have) it becomes the surface for managing the <em>emulator's</em> scene — the modern,
+    web form of an "add simulated BLE devices" panel, no IDE plugin required. Open it beside Android Studio,
+    add the devices your app expects, and iterate.</p>
+
+  <h2>Reproducibility</h2>
+  <p>Because each device is a short Rhai script, the script <em>is</em> the fixture. The same file that stages
+    a scenario by hand ships into CI unchanged, so an emulator test and a CI run exercise the identical device —
+    no drift between "what I tested against" and "what CI runs".</p>
+
+  <p style="margin-top:2rem"><a href="../controllers/">← Controllers: how the pieces below the app connect</a></p>
+</main>
+</body>
+</html>
