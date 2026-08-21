@@ -107,7 +107,8 @@
       in both worlds — natively under <code class="inl">cargo test</code> and the
       <code class="inl">simble-test</code> CLI, and in-process in a browser tab. The heavier rungs are
       external processes a browser reaches over WebSocket (<code class="inl">rootcanal-ws</code>,
-      <code class="inl">netsim</code>); a USB dongle is native-only. The <em>Native</em> and
+      <code class="inl">netsim</code>) — and a USB dongle could join the same way through a
+      <code class="inl">usb-ble-ws</code> bridge, which isn't built yet. The <em>Native</em> and
       <em>Browser</em> columns below capture this per rung.
     </p>
     <div class="tablewrap">
@@ -151,7 +152,7 @@
             <th>USB dongle<br><code class="inl">UsbTransport</code></th>
             <td><strong>Real</strong> — an actual Bluetooth controller and radio; no model at all</td>
             <td><span class="yes">Yes</span></td>
-            <td><span class="no">No</span></td>
+            <td><span class="part">Via bridge</span> — usb-ble-ws (unbuilt)</td>
             <td><span class="part">Hardware</span> — a physical dongle</td>
             <td>Final interop against real phones/laptops over the air</td>
           </tr>
