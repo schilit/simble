@@ -143,8 +143,8 @@ impl U24 {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeSetAdvertisingSetRandomAddress {
-    pub advertising_handle: u8,
-    pub random_address: [u8; 6],
+    pub(crate) advertising_handle: u8,
+    pub(crate) random_address: [u8; 6],
 }
 
 impl HciCommand for LeSetAdvertisingSetRandomAddress {
@@ -181,8 +181,8 @@ impl HciCommand for LeSetExtendedAdvertisingParameters {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeSetExtendedAdvertisingParametersResponse {
-    pub status: u8,
-    pub selected_tx_power: i8, // dBm.
+    pub(crate) status: u8,
+    pub(crate) selected_tx_power: i8, // dBm.
 }
 
 /// LE Set Extended Advertising Data Command Header (7.8.54).
@@ -237,10 +237,10 @@ impl LeSetExtendedAdvertisingDataHeader {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeSetExtendedScanResponseDataHeader {
-    pub advertising_handle: u8,
-    pub operation: u8, // See `data_operation`.
-    pub fragment_preference: u8,
-    pub scan_response_data_length: u8,
+    pub(crate) advertising_handle: u8,
+    pub(crate) operation: u8, // See `data_operation`.
+    pub(crate) fragment_preference: u8,
+    pub(crate) scan_response_data_length: u8,
 }
 
 impl HciCommand for LeSetExtendedScanResponseDataHeader {
@@ -338,15 +338,15 @@ impl HciCommand for LeReadMaximumAdvertisingDataLength {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeReadMaximumAdvertisingDataLengthResponse {
-    pub status: u8,
-    pub max_advertising_data_length: U16<LittleEndian>, // 0x001F-0x0672.
+    pub(crate) status: u8,
+    pub(crate) max_advertising_data_length: U16<LittleEndian>, // 0x001F-0x0672.
 }
 
 /// LE Remove Advertising Set Command (7.8.59).
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeRemoveAdvertisingSet {
-    pub advertising_handle: u8,
+    pub(crate) advertising_handle: u8,
 }
 
 impl HciCommand for LeRemoveAdvertisingSet {
@@ -419,8 +419,8 @@ impl LeSetPeriodicAdvertisingDataHeader {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeSetPeriodicAdvertisingEnable {
-    pub enable: u8, // Bit 0: enable; bit 1: include ADI (5.4).
-    pub advertising_handle: u8,
+    pub(crate) enable: u8, // Bit 0: enable; bit 1: include ADI (5.4).
+    pub(crate) advertising_handle: u8,
 }
 
 impl HciCommand for LeSetPeriodicAdvertisingEnable {
@@ -488,10 +488,10 @@ impl LeSetExtendedScanParametersHeader {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeSetExtendedScanEnable {
-    pub enable: u8,
-    pub filter_duplicates: u8,
-    pub duration: U16<LittleEndian>, // Units of 10 ms; 0 = continuous.
-    pub period: U16<LittleEndian>,   // Units of 1.28 s; 0 = continuous.
+    pub(crate) enable: u8,
+    pub(crate) filter_duplicates: u8,
+    pub(crate) duration: U16<LittleEndian>, // Units of 10 ms; 0 = continuous.
+    pub(crate) period: U16<LittleEndian>,   // Units of 1.28 s; 0 = continuous.
 }
 
 impl HciCommand for LeSetExtendedScanEnable {
@@ -528,7 +528,7 @@ impl HciCommand for LePeriodicAdvertisingCreateSyncCancel {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LePeriodicAdvertisingTerminateSync {
-    pub sync_handle: U16<LittleEndian>,
+    pub(crate) sync_handle: U16<LittleEndian>,
 }
 
 impl HciCommand for LePeriodicAdvertisingTerminateSync {
@@ -688,7 +688,7 @@ pub struct LeScanRequestReceivedEvent {
 }
 
 /// Maximum total advertising data per set (7.8.57 upper bound, 0x0672).
-pub const MAX_ADVERTISING_DATA_LENGTH: usize = 1650;
+pub(crate) const MAX_ADVERTISING_DATA_LENGTH: usize = 1650;
 
 /// Errors from applying advertising-set commands, mirroring the HCI status
 /// codes a controller would return (Vol 1, Part F).

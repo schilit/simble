@@ -34,36 +34,66 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 // Normative feature bitmasks (AT+BRSF)
 // ---------------------------------------------------------------------------
 
+/// HF supported-features bitmask, exchanged at Service Level Connection via
+/// `AT+BRSF` (HFP v1.9 4.34.1).
 pub mod hf_feature {
-    pub const EC_NR: u32 = 0x001;
+    /// EC/NR function.
+    pub(crate) const EC_NR: u32 = 0x001;
+    /// Three-way calling.
     pub const THREE_WAY_CALLING: u32 = 0x002;
+    /// CLI presentation capability.
     pub const CLI_PRESENTATION_CAPABILITY: u32 = 0x004;
-    pub const VOICE_RECOGNITION_ACTIVATION: u32 = 0x008;
-    pub const REMOTE_VOLUME_CONTROL: u32 = 0x010;
+    /// Voice recognition activation.
+    pub(crate) const VOICE_RECOGNITION_ACTIVATION: u32 = 0x008;
+    /// Remote volume control.
+    pub(crate) const REMOTE_VOLUME_CONTROL: u32 = 0x010;
+    /// Enhanced call status.
     pub const ENHANCED_CALL_STATUS: u32 = 0x020;
+    /// Enhanced call control.
     pub const ENHANCED_CALL_CONTROL: u32 = 0x040;
+    /// Codec negotiation.
     pub const CODEC_NEGOTIATION: u32 = 0x080;
+    /// HF indicators.
     pub const HF_INDICATORS: u32 = 0x100;
+    /// eSCO S4 settings supported.
     pub const ESCO_S4_SETTINGS_SUPPORTED: u32 = 0x200;
-    pub const ENHANCED_VOICE_RECOGNITION_STATUS: u32 = 0x400;
-    pub const VOICE_RECOGNITION_TEXT: u32 = 0x800;
+    /// Enhanced voice recognition status.
+    pub(crate) const ENHANCED_VOICE_RECOGNITION_STATUS: u32 = 0x400;
+    /// Voice recognition text.
+    pub(crate) const VOICE_RECOGNITION_TEXT: u32 = 0x800;
 }
 
+/// AG supported-features bitmask, reported at Service Level Connection via
+/// `+BRSF` (HFP v1.9 4.34.2).
 pub mod ag_feature {
+    /// Three-way calling.
     pub const THREE_WAY_CALLING: u32 = 0x001;
-    pub const EC_NR: u32 = 0x002;
-    pub const VOICE_RECOGNITION_FUNCTION: u32 = 0x004;
+    /// EC/NR function.
+    pub(crate) const EC_NR: u32 = 0x002;
+    /// Voice recognition function.
+    pub(crate) const VOICE_RECOGNITION_FUNCTION: u32 = 0x004;
+    /// In-band ring tone capability.
     pub const IN_BAND_RING_TONE_CAPABILITY: u32 = 0x008;
+    /// Attach a number to a voice tag.
     pub const VOICE_TAG: u32 = 0x010;
+    /// Ability to reject a call.
     pub const REJECT_CALL: u32 = 0x020;
+    /// Enhanced call status.
     pub const ENHANCED_CALL_STATUS: u32 = 0x040;
+    /// Enhanced call control.
     pub const ENHANCED_CALL_CONTROL: u32 = 0x080;
+    /// Extended error result codes.
     pub const EXTENDED_ERROR_RESULT_CODES: u32 = 0x100;
+    /// Codec negotiation.
     pub const CODEC_NEGOTIATION: u32 = 0x200;
+    /// HF indicators.
     pub const HF_INDICATORS: u32 = 0x400;
+    /// eSCO S4 settings supported.
     pub const ESCO_S4_SETTINGS_SUPPORTED: u32 = 0x800;
-    pub const ENHANCED_VOICE_RECOGNITION_STATUS: u32 = 0x1000;
-    pub const VOICE_RECOGNITION_TEXT: u32 = 0x2000;
+    /// Enhanced voice recognition status.
+    pub(crate) const ENHANCED_VOICE_RECOGNITION_STATUS: u32 = 0x1000;
+    /// Voice recognition text.
+    pub(crate) const VOICE_RECOGNITION_TEXT: u32 = 0x2000;
 }
 
 const STATUS_CODES: [&str; 8] = [
@@ -81,15 +111,20 @@ const STATUS_CODES: [&str; 8] = [
 // Normative value enums
 // ---------------------------------------------------------------------------
 
+/// Negotiable HFP audio codec (AT+BAC/AT+BCS).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioCodec {
+    /// CVSD (narrow-band).
     Cvsd,
+    /// mSBC (wide-band speech).
     Msbc,
+    /// LC3-SWB (super-wide-band).
     Lc3Swb,
 }
 
 impl AudioCodec {
-    pub fn to_value(self) -> u8 {
+    /// Encodes to its codec ID.
+    pub(crate) fn to_value(self) -> u8 {
         match self {
             Self::Cvsd => 0x01,
             Self::Msbc => 0x02,
@@ -97,7 +132,8 @@ impl AudioCodec {
         }
     }
 
-    pub fn from_value(value: u8) -> Option<Self> {
+    /// Decodes from its codec ID.
+    pub(crate) fn from_value(value: u8) -> Option<Self> {
         match value {
             0x01 => Some(Self::Cvsd),
             0x02 => Some(Self::Msbc),
@@ -107,21 +143,26 @@ impl AudioCodec {
     }
 }
 
+/// HF indicator (AT+BIND / +BIND).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum HfIndicator {
+    /// Enhanced Safety indicator.
     EnhancedSafety,
+    /// Battery Level indicator.
     BatteryLevel,
 }
 
 impl HfIndicator {
-    pub fn to_value(self) -> u8 {
+    /// Encodes to its assigned number.
+    pub(crate) fn to_value(self) -> u8 {
         match self {
             Self::EnhancedSafety => 1,
             Self::BatteryLevel => 2,
         }
     }
 
-    pub fn from_value(value: u8) -> Option<Self> {
+    /// Decodes from its assigned number.
+    pub(crate) fn from_value(value: u8) -> Option<Self> {
         match value {
             1 => Some(Self::EnhancedSafety),
             2 => Some(Self::BatteryLevel),
@@ -130,18 +171,27 @@ impl HfIndicator {
     }
 }
 
+/// Three-way / call-hold operation (AT+CHLD).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallHoldOperation {
+    /// Release all held calls (CHLD=0).
     ReleaseAllHeldCalls,
+    /// Release all active calls, accept the other (CHLD=1).
     ReleaseAllActiveCalls,
+    /// Release a specific call (CHLD=1x).
     ReleaseSpecificCall,
+    /// Hold all active calls, accept the other (CHLD=2).
     HoldAllActiveCalls,
+    /// Hold all calls except a specific one (CHLD=2x).
     HoldAllCallsExcept,
+    /// Add a held call to the conversation (CHLD=3).
     AddHeldCall,
+    /// Connect the two calls and disconnect (CHLD=4).
     ConnectTwoCalls,
 }
 
 impl CallHoldOperation {
+    /// Returns the AT+CHLD code string.
     pub fn code(self) -> &'static str {
         match self {
             Self::ReleaseAllHeldCalls => "0",
@@ -154,7 +204,8 @@ impl CallHoldOperation {
         }
     }
 
-    pub fn from_code(code: &str) -> Option<Self> {
+    /// Parses an AT+CHLD code string.
+    pub(crate) fn from_code(code: &str) -> Option<Self> {
         match code {
             "0" => Some(Self::ReleaseAllHeldCalls),
             "1" => Some(Self::ReleaseAllActiveCalls),
@@ -168,19 +219,28 @@ impl CallHoldOperation {
     }
 }
 
+/// AG indicator reported in +CIND / +CIEV.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgIndicator {
+    /// Network service availability.
     Service,
+    /// Call active.
     Call,
+    /// Call setup state.
     CallSetup,
+    /// Call-held state.
     CallHeld,
+    /// Signal strength.
     Signal,
+    /// Roaming status.
     Roam,
+    /// Battery charge level.
     BatteryCharge,
 }
 
 impl AgIndicator {
-    pub fn wire_name(self) -> &'static str {
+    /// Returns the indicator's +CIND name.
+    pub(crate) fn wire_name(self) -> &'static str {
         match self {
             Self::Service => "service",
             Self::Call => "call",
@@ -192,7 +252,8 @@ impl AgIndicator {
         }
     }
 
-    pub fn from_wire_name(name: &str) -> Option<Self> {
+    /// Parses an indicator from its +CIND name.
+    pub(crate) fn from_wire_name(name: &str) -> Option<Self> {
         match name {
             "service" => Some(Self::Service),
             "call" => Some(Self::Call),
@@ -206,21 +267,26 @@ impl AgIndicator {
     }
 }
 
+/// Call direction in a +CLCC entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallInfoDirection {
+    /// Outgoing (mobile-originated).
     MobileOriginated,
+    /// Incoming (mobile-terminated).
     MobileTerminated,
 }
 
 impl CallInfoDirection {
-    pub fn to_value(self) -> u8 {
+    /// Encodes to its +CLCC value.
+    pub(crate) fn to_value(self) -> u8 {
         match self {
             Self::MobileOriginated => 0,
             Self::MobileTerminated => 1,
         }
     }
 
-    pub fn from_value(value: u32) -> Option<Self> {
+    /// Decodes from its +CLCC value.
+    pub(crate) fn from_value(value: u32) -> Option<Self> {
         match value {
             0 => Some(Self::MobileOriginated),
             1 => Some(Self::MobileTerminated),
@@ -229,18 +295,26 @@ impl CallInfoDirection {
     }
 }
 
+/// Call status in a +CLCC entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallInfoStatus {
+    /// Active call.
     Active,
+    /// Held call.
     Held,
+    /// Dialing (outgoing).
     Dialing,
+    /// Alerting (outgoing, remote ringing).
     Alerting,
+    /// Incoming call.
     Incoming,
+    /// Waiting call.
     Waiting,
 }
 
 impl CallInfoStatus {
-    pub fn to_value(self) -> u8 {
+    /// Encodes to its +CLCC value.
+    pub(crate) fn to_value(self) -> u8 {
         match self {
             Self::Active => 0,
             Self::Held => 1,
@@ -251,7 +325,8 @@ impl CallInfoStatus {
         }
     }
 
-    pub fn from_value(value: u32) -> Option<Self> {
+    /// Decodes from its +CLCC value.
+    pub(crate) fn from_value(value: u32) -> Option<Self> {
         match value {
             0 => Some(Self::Active),
             1 => Some(Self::Held),
@@ -265,15 +340,21 @@ impl CallInfoStatus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Call bearer/teleservice mode in a +CLCC entry.
 pub enum CallInfoMode {
+    /// Voice.
     Voice,
+    /// Data.
     Data,
+    /// Fax.
     Fax,
+    /// Unknown.
     Unknown,
 }
 
 impl CallInfoMode {
-    pub fn to_value(self) -> u8 {
+    /// Encodes to its +CLCC value.
+    pub(crate) fn to_value(self) -> u8 {
         match self {
             Self::Voice => 0,
             Self::Data => 1,
@@ -282,7 +363,8 @@ impl CallInfoMode {
         }
     }
 
-    pub fn from_value(value: u32) -> Option<Self> {
+    /// Decodes from its +CLCC value.
+    pub(crate) fn from_value(value: u32) -> Option<Self> {
         match value {
             0 => Some(Self::Voice),
             1 => Some(Self::Data),
@@ -294,20 +376,25 @@ impl CallInfoMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Whether a +CLCC call is part of a multiparty (conference) call.
 pub enum CallInfoMultiParty {
+    /// Not in a conference.
     NotInConference,
+    /// In a conference.
     InConference,
 }
 
 impl CallInfoMultiParty {
-    pub fn to_value(self) -> u8 {
+    /// Encodes to its +CLCC value.
+    pub(crate) fn to_value(self) -> u8 {
         match self {
             Self::NotInConference => 0,
             Self::InConference => 1,
         }
     }
 
-    pub fn from_value(value: u32) -> Option<Self> {
+    /// Decodes from its +CLCC value.
+    pub(crate) fn from_value(value: u32) -> Option<Self> {
         match value {
             0 => Some(Self::NotInConference),
             1 => Some(Self::InConference),
@@ -316,26 +403,39 @@ impl CallInfoMultiParty {
     }
 }
 
+/// One call entry as reported by AT+CLCC (+CLCC).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallInfo {
+    /// Call index (+CLCC).
     pub index: u32,
+    /// Call direction.
     pub direction: CallInfoDirection,
+    /// Call status.
     pub status: CallInfoStatus,
+    /// Bearer/teleservice mode.
     pub mode: CallInfoMode,
+    /// Multiparty (conference) membership.
     pub multi_party: CallInfoMultiParty,
+    /// Remote party number, if present.
     pub number: Option<String>,
+    /// Address type byte, if present.
     pub kind: Option<u8>,
 }
 
+/// Voice-recognition activation state (AT+BVRA / +BVRA).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VoiceRecognitionState {
+    /// Deactivated.
     Disable,
+    /// Activated.
     Enable,
+    /// Enhanced VR ready to accept audio.
     EnhancedReady,
 }
 
 impl VoiceRecognitionState {
-    pub fn to_value(self) -> u8 {
+    /// Encodes to its +BVRA value.
+    pub(crate) fn to_value(self) -> u8 {
         match self {
             Self::Disable => 0,
             Self::Enable => 1,
@@ -343,7 +443,8 @@ impl VoiceRecognitionState {
         }
     }
 
-    pub fn from_value(value: u32) -> Option<Self> {
+    /// Decodes from its +BVRA value.
+    pub(crate) fn from_value(value: u32) -> Option<Self> {
         match value {
             0 => Some(Self::Disable),
             1 => Some(Self::Enable),
@@ -353,18 +454,26 @@ impl VoiceRecognitionState {
     }
 }
 
+/// Extended audio-gateway error reported in +CME ERROR.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CmeError {
+    /// Phone failure.
     PhoneFailure,
+    /// Operation not allowed.
     OperationNotAllowed,
+    /// Operation not supported.
     OperationNotSupported,
+    /// Memory full.
     MemoryFull,
+    /// Invalid index.
     InvalidIndex,
+    /// Not found.
     NotFound,
 }
 
 impl CmeError {
-    pub fn to_value(self) -> u32 {
+    /// Returns the +CME ERROR code.
+    pub(crate) fn to_value(self) -> u32 {
         match self {
             Self::PhoneFailure => 0,
             Self::OperationNotAllowed => 3,
@@ -376,13 +485,20 @@ impl CmeError {
     }
 }
 
+/// Caller line identification carried in a +CLIP notification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallLineIdentification {
+    /// Caller number.
     pub number: String,
+    /// Address type byte.
     pub kind: u32,
+    /// Subaddress, if present.
     pub subaddr: Option<String>,
+    /// Subaddress type, if present.
     pub satype: Option<u32>,
+    /// Alphanumeric name, if present.
     pub alpha: Option<String>,
+    /// CLI validity code, if present.
     pub cli_validity: Option<u32>,
 }
 
@@ -394,7 +510,8 @@ fn nonempty_param_str(param: Option<&AtParameter>) -> Option<&str> {
 }
 
 impl CallLineIdentification {
-    pub fn parse_from(parameters: &[AtParameter]) -> Result<Self, AtParsingError> {
+    /// Parses a +CLIP parameter list.
+    pub(crate) fn parse_from(parameters: &[AtParameter]) -> Result<Self, AtParsingError> {
         let number = nonempty_param_str(parameters.first())
             .ok_or_else(|| AtParsingError("CLIP: missing number".into()))?
             .to_string();
@@ -437,7 +554,8 @@ impl CallLineIdentification {
         })
     }
 
-    pub fn to_clip_string(&self) -> String {
+    /// Renders the +CLIP parameter string.
+    pub(crate) fn to_clip_string(&self) -> String {
         let fields = [
             if self.number.is_empty() {
                 String::new()
@@ -464,11 +582,16 @@ impl CallLineIdentification {
 // Indicator state
 // ---------------------------------------------------------------------------
 
+/// An AG indicator plus its supported range and current value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgIndicatorState {
+    /// Which AG indicator.
     pub indicator: AgIndicator,
-    pub supported_values: BTreeSet<u32>,
+    /// Values this indicator can take.
+    pub(crate) supported_values: BTreeSet<u32>,
+    /// Current indicator value.
     pub current_status: u32,
+    /// Whether +CIEV reporting is enabled for it.
     pub enabled: bool,
 }
 
@@ -482,37 +605,44 @@ impl AgIndicatorState {
         }
     }
 
+    /// Call indicator state (range 0-1).
     pub fn call() -> Self {
         Self::with_range(AgIndicator::Call, 0, 1)
     }
 
+    /// Call-setup indicator state (range 0-3).
     pub fn callsetup() -> Self {
         Self::with_range(AgIndicator::CallSetup, 0, 3)
     }
 
+    /// Call-held indicator state (range 0-2).
     pub fn callheld() -> Self {
         Self::with_range(AgIndicator::CallHeld, 0, 2)
     }
 
+    /// Service indicator state (range 0-1).
     pub fn service() -> Self {
         Self::with_range(AgIndicator::Service, 0, 1)
     }
 
+    /// Signal indicator state (range 0-5).
     pub fn signal() -> Self {
         Self::with_range(AgIndicator::Signal, 0, 5)
     }
 
+    /// Roaming indicator state (range 0-1).
     pub fn roam() -> Self {
         Self::with_range(AgIndicator::Roam, 0, 1)
     }
 
+    /// Battery-charge indicator state (range 0-5).
     pub fn battchg() -> Self {
         Self::with_range(AgIndicator::BatteryCharge, 0, 5)
     }
 
     /// Renders the `("name",(min-max))` (or `("name",(v1,v2,...))` for a
     /// non-contiguous set) text used in an `+CIND: ...` test response.
-    pub fn on_test_text(&self) -> String {
+    pub(crate) fn on_test_text(&self) -> String {
         let min = *self.supported_values.iter().next().unwrap_or(&0);
         let max = *self.supported_values.iter().next_back().unwrap_or(&0);
         let contiguous = self.supported_values.len() as u32 == max.saturating_sub(min) + 1;
@@ -532,11 +662,16 @@ impl AgIndicatorState {
     }
 }
 
+/// An HF indicator plus its supported/enabled state and value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HfIndicatorState {
+    /// Which HF indicator.
     pub indicator: HfIndicator,
+    /// Whether the peer supports it.
     pub supported: bool,
+    /// Whether it is enabled.
     pub enabled: bool,
+    /// Current value.
     pub current_status: u32,
 }
 
@@ -544,19 +679,29 @@ pub struct HfIndicatorState {
 // Configuration
 // ---------------------------------------------------------------------------
 
+/// Configuration for the Hands-Free side of an HFP connection.
 #[derive(Debug, Clone)]
 pub struct HfConfiguration {
+    /// HF supported-features bitmask (`hf_feature::*`).
     pub supported_hf_features: u32,
+    /// HF indicators to advertise.
     pub supported_hf_indicators: Vec<HfIndicator>,
+    /// Audio codecs the HF supports.
     pub supported_audio_codecs: Vec<AudioCodec>,
 }
 
+/// Configuration for the Audio Gateway side of an HFP connection.
 #[derive(Debug, Clone)]
 pub struct AgConfiguration {
+    /// AG supported-features bitmask (`ag_feature::*`).
     pub supported_ag_features: u32,
+    /// AG indicators with their ranges.
     pub supported_ag_indicators: Vec<AgIndicatorState>,
+    /// HF indicators the AG supports.
     pub supported_hf_indicators: Vec<HfIndicator>,
+    /// Supported AT+CHLD operations.
     pub supported_ag_call_hold_operations: Vec<CallHoldOperation>,
+    /// Audio codecs the AG supports.
     pub supported_audio_codecs: Vec<AudioCodec>,
 }
 
@@ -732,16 +877,24 @@ enum SlcStep {
 /// bytes are meant to be wired to an RFCOMM `Dlc`.
 #[derive(Debug)]
 pub struct HfProtocol {
+    /// HF supported-features bitmask.
     pub supported_hf_features: u32,
+    /// Audio codecs the HF supports.
     pub supported_audio_codecs: Vec<AudioCodec>,
-    pub hf_indicators: BTreeMap<HfIndicator, HfIndicatorState>,
+    /// HF indicator states, keyed by indicator.
+    pub(crate) hf_indicators: BTreeMap<HfIndicator, HfIndicatorState>,
 
+    /// AG features learned during SLC.
     pub supported_ag_features: u32,
+    /// AG call-hold operations learned during SLC.
     pub supported_ag_call_hold_operations: Vec<CallHoldOperation>,
+    /// AG indicator states learned during SLC.
     pub ag_indicators: Vec<AgIndicatorState>,
 
+    /// Currently selected audio codec.
     pub active_codec: AudioCodec,
-    pub slc_initialized: bool,
+    /// Whether the Service Level Connection is up.
+    pub(crate) slc_initialized: bool,
 
     slc_step: Option<SlcStep>,
     pending_command: Option<String>,
@@ -750,6 +903,7 @@ pub struct HfProtocol {
 }
 
 impl HfProtocol {
+    /// Creates a Hands-Free protocol from its configuration.
     pub fn new(configuration: HfConfiguration) -> Self {
         Self {
             supported_hf_features: configuration.supported_hf_features,
@@ -781,11 +935,13 @@ impl HfProtocol {
         }
     }
 
-    pub fn supports_hf_feature(&self, feature: u32) -> bool {
+    /// Whether the HF advertises `feature` (`hf_feature::*`).
+    pub(crate) fn supports_hf_feature(&self, feature: u32) -> bool {
         self.supported_hf_features & feature != 0
     }
 
-    pub fn supports_ag_feature(&self, feature: u32) -> bool {
+    /// Whether the AG advertised `feature` (`ag_feature::*`).
+    pub(crate) fn supports_ag_feature(&self, feature: u32) -> bool {
         self.supported_ag_features & feature != 0
     }
 
@@ -817,38 +973,47 @@ impl HfProtocol {
         bytes
     }
 
+    /// Answers an incoming call (ATA).
     pub fn answer_incoming_call(&mut self) -> Vec<u8> {
         self.send_command("ATA")
     }
 
+    /// Rejects or hangs up the current call (AT+CHUP).
     pub fn reject_incoming_call(&mut self) -> Vec<u8> {
         self.send_command("AT+CHUP")
     }
 
+    /// Terminates the active call (AT+CHUP).
     pub fn terminate_call(&mut self) -> Vec<u8> {
         self.send_command("AT+CHUP")
     }
 
+    /// Dials `number` (ATD).
     pub fn dial(&mut self, number: &str) -> Vec<u8> {
         self.send_command(format!("ATD{number}"))
     }
 
+    /// Queries current calls (AT+CLCC).
     pub fn query_current_calls(&mut self) -> Vec<u8> {
         self.send_command("AT+CLCC")
     }
 
+    /// Sends an HF indicator value (AT+BIEV).
     pub fn set_hf_indicator(&mut self, indicator: HfIndicator, value: u32) -> Vec<u8> {
         self.send_command(format!("AT+BIEV={},{value}", indicator.to_value()))
     }
 
+    /// Sets voice-recognition state (AT+BVRA).
     pub fn set_voice_recognition(&mut self, state: VoiceRecognitionState) -> Vec<u8> {
         self.send_command(format!("AT+BVRA={}", state.to_value()))
     }
 
+    /// Requests the codec connection procedure (AT+BCC).
     pub fn setup_audio_connection(&mut self) -> Vec<u8> {
         self.send_command("AT+BCC")
     }
 
+    /// Sends a call-hold operation (AT+CHLD).
     pub fn hold_call(&mut self, operation: CallHoldOperation, call_index: Option<u32>) -> Vec<u8> {
         let code = match call_index {
             Some(index) => format!("{}{index}", &operation.code()[..1]),
@@ -1124,21 +1289,34 @@ impl HfProtocol {
 /// like [`HfProtocol`].
 #[derive(Debug)]
 pub struct AgProtocol {
+    /// AG supported-features bitmask.
     pub supported_ag_features: u32,
+    /// Supported AT+CHLD operations.
     pub supported_ag_call_hold_operations: Vec<CallHoldOperation>,
+    /// AG indicator states.
     pub ag_indicators: Vec<AgIndicatorState>,
     supported_hf_indicators: BTreeSet<HfIndicator>,
-    pub hf_indicators: Vec<(HfIndicator, HfIndicatorState)>,
+    /// HF indicator states, in advertised order.
+    pub(crate) hf_indicators: Vec<(HfIndicator, HfIndicatorState)>,
 
+    /// HF features learned during SLC.
     pub supported_hf_features: u32,
+    /// Audio codecs the AG supports.
     pub supported_audio_codecs: Vec<AudioCodec>,
+    /// Currently selected audio codec.
     pub active_codec: AudioCodec,
+    /// Current calls tracked by the AG.
     pub calls: Vec<CallInfo>,
 
-    pub indicator_report_enabled: bool,
-    pub cme_error_enabled: bool,
-    pub cli_notification_enabled: bool,
-    pub call_waiting_enabled: bool,
+    /// Whether +CIEV indicator reporting is enabled (AT+CMER).
+    pub(crate) indicator_report_enabled: bool,
+    /// Whether extended +CME ERROR codes are enabled (AT+CMEE).
+    pub(crate) cme_error_enabled: bool,
+    /// Whether +CLIP notifications are enabled (AT+CLIP).
+    pub(crate) cli_notification_enabled: bool,
+    /// Whether call-waiting notifications are enabled (AT+CCWA).
+    pub(crate) call_waiting_enabled: bool,
+    /// Whether in-band ring tones are enabled.
     pub inband_ringtone_enabled: bool,
 
     remaining_slc_setup_features: HashSet<u32>,
@@ -1146,6 +1324,7 @@ pub struct AgProtocol {
 }
 
 impl AgProtocol {
+    /// Creates an Audio Gateway protocol from its configuration.
     pub fn new(configuration: AgConfiguration) -> Self {
         Self {
             supported_ag_features: configuration.supported_ag_features,
@@ -1167,11 +1346,13 @@ impl AgProtocol {
         }
     }
 
-    pub fn supports_hf_feature(&self, feature: u32) -> bool {
+    /// Whether the HF advertised `feature` (`hf_feature::*`).
+    pub(crate) fn supports_hf_feature(&self, feature: u32) -> bool {
         self.supported_hf_features & feature != 0
     }
 
-    pub fn supports_ag_feature(&self, feature: u32) -> bool {
+    /// Whether the AG advertises `feature` (`ag_feature::*`).
+    pub(crate) fn supports_ag_feature(&self, feature: u32) -> bool {
         self.supported_ag_features & feature != 0
     }
 
@@ -1614,18 +1795,22 @@ impl AgProtocol {
         response_bytes(&format!("+BCS: {}", codec.to_value()))
     }
 
+    /// Emits a RING alert for an incoming call.
     pub fn send_ring(&self) -> Vec<u8> {
         response_bytes("RING")
     }
 
+    /// Reports a speaker volume change (+VGS).
     pub fn set_speaker_volume(&mut self, level: u8) -> Vec<u8> {
         response_bytes(&format!("+VGS: {level}"))
     }
 
+    /// Reports a microphone volume change (+VGM).
     pub fn set_microphone_volume(&mut self, level: u8) -> Vec<u8> {
         response_bytes(&format!("+VGM: {level}"))
     }
 
+    /// Enables or disables in-band ring tones.
     pub fn set_inband_ringtone_enabled(&mut self, enabled: bool) -> Vec<u8> {
         self.inband_ringtone_enabled = enabled;
         response_bytes(&format!("+BSIR: {}", enabled as u8))
@@ -1649,10 +1834,12 @@ impl AgProtocol {
         Ok(response_bytes(&format!("+CIEV: {},{value}", index + 1)))
     }
 
+    /// Sends a caller-line-identification notification (+CLIP).
     pub fn send_cli_notification(&mut self, cli: &CallLineIdentification) -> Vec<u8> {
         response_bytes(&format!("+CLIP: {}", cli.to_clip_string()))
     }
 
+    /// Sends a raw response line to the HF.
     pub fn send_response(&self, text: &str) -> Vec<u8> {
         response_bytes(text)
     }
@@ -1668,18 +1855,25 @@ const BT_HANDSFREE_SERVICE: SdpUuid = SdpUuid::Uuid16(0x111E);
 const BT_HANDSFREE_AUDIO_GATEWAY_SERVICE: SdpUuid = SdpUuid::Uuid16(0x111F);
 const BT_GENERIC_AUDIO_SERVICE: SdpUuid = SdpUuid::Uuid16(0x1203);
 
+/// HFP profile version advertised in SDP.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 pub enum ProfileVersion {
+    /// HFP v1.5.
     V1_5,
+    /// HFP v1.6.
     V1_6,
+    /// HFP v1.7.
     V1_7,
+    /// HFP v1.8.
     V1_8,
+    /// HFP v1.9.
     V1_9,
 }
 
 impl ProfileVersion {
-    pub fn to_value(self) -> u16 {
+    /// Returns the SDP profile-version value.
+    pub(crate) fn to_value(self) -> u16 {
         match self {
             Self::V1_5 => 0x0105,
             Self::V1_6 => 0x0106,
@@ -1689,7 +1883,8 @@ impl ProfileVersion {
         }
     }
 
-    pub fn from_value(value: u16) -> Option<Self> {
+    /// Parses an SDP profile-version value.
+    pub(crate) fn from_value(value: u16) -> Option<Self> {
         match value {
             0x0105 => Some(Self::V1_5),
             0x0106 => Some(Self::V1_6),
@@ -1704,26 +1899,46 @@ impl ProfileVersion {
 /// HF-side SDP `SupportedFeatures` bitmask (distinct from the AT+BRSF
 /// runtime bitmask in [`hf_feature`] — see HFP v1.9 6.3).
 pub mod hf_sdp_feature {
-    pub const EC_NR: u16 = 0x01;
+    /// EC/NR function.
+    pub(crate) const EC_NR: u16 = 0x01;
+    /// Three-way calling.
     pub const THREE_WAY_CALLING: u16 = 0x02;
+    /// CLI presentation capability.
     pub const CLI_PRESENTATION_CAPABILITY: u16 = 0x04;
-    pub const VOICE_RECOGNITION_ACTIVATION: u16 = 0x08;
-    pub const REMOTE_VOLUME_CONTROL: u16 = 0x10;
+    /// Voice recognition activation.
+    pub(crate) const VOICE_RECOGNITION_ACTIVATION: u16 = 0x08;
+    /// Remote volume control.
+    pub(crate) const REMOTE_VOLUME_CONTROL: u16 = 0x10;
+    /// Wide-band speech.
     pub const WIDE_BAND_SPEECH: u16 = 0x20;
-    pub const ENHANCED_VOICE_RECOGNITION_STATUS: u16 = 0x40;
-    pub const VOICE_RECOGNITION_TEXT: u16 = 0x80;
+    /// Enhanced voice recognition status.
+    pub(crate) const ENHANCED_VOICE_RECOGNITION_STATUS: u16 = 0x40;
+    /// Voice recognition text.
+    pub(crate) const VOICE_RECOGNITION_TEXT: u16 = 0x80;
+    /// Super-wide-band speech.
     pub const SUPER_WIDE_BAND: u16 = 0x100;
 }
 
+/// AG-side SDP `SupportedFeatures` bitmask (distinct from the AT+BRSF
+/// runtime bitmask in [`ag_feature`] — see HFP v1.9 6.3).
 pub mod ag_sdp_feature {
+    /// Three-way calling.
     pub const THREE_WAY_CALLING: u16 = 0x01;
-    pub const EC_NR: u16 = 0x02;
-    pub const VOICE_RECOGNITION_FUNCTION: u16 = 0x04;
+    /// EC/NR function.
+    pub(crate) const EC_NR: u16 = 0x02;
+    /// Voice recognition function.
+    pub(crate) const VOICE_RECOGNITION_FUNCTION: u16 = 0x04;
+    /// In-band ring tone capability.
     pub const IN_BAND_RING_TONE_CAPABILITY: u16 = 0x08;
+    /// Attach a number to a voice tag.
     pub const VOICE_TAG: u16 = 0x10;
+    /// Wide-band speech.
     pub const WIDE_BAND_SPEECH: u16 = 0x20;
-    pub const ENHANCED_VOICE_RECOGNITION_STATUS: u16 = 0x40;
-    pub const VOICE_RECOGNITION_TEXT: u16 = 0x80;
+    /// Enhanced voice recognition status.
+    pub(crate) const ENHANCED_VOICE_RECOGNITION_STATUS: u16 = 0x40;
+    /// Voice recognition text.
+    pub(crate) const VOICE_RECOGNITION_TEXT: u16 = 0x80;
+    /// Super-wide-band speech.
     pub const SUPER_WIDE_BAND_SPEED_SPEECH: u16 = 0x100;
 }
 

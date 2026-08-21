@@ -37,6 +37,8 @@ impl BluetoothProfile {
 /// Requires `Send` since it's held behind an `Arc<Mutex<_>>` alongside
 /// `AttServerObserver` (see [`AttServerObserver`]'s doc comment).
 pub trait BluetoothGattServerCallback: Send {
+    /// Mirrors `BluetoothGattServerCallback.onConnectionStateChange`: a peer
+    /// connected or disconnected.
     fn on_connection_state_change(
         &mut self,
         _device: &BluetoothDevice,
@@ -44,7 +46,10 @@ pub trait BluetoothGattServerCallback: Send {
         _new_state: i32,
     ) {
     }
+    /// Mirrors `BluetoothGattServerCallback.onServiceAdded`: a service finished
+    /// registering.
     fn on_service_added(&mut self, _status: i32, _service: &BluetoothGattService) {}
+    /// Mirrors `BluetoothGattServerCallback.onCharacteristicReadRequest`.
     fn on_characteristic_read_request(
         &mut self,
         _device: &BluetoothDevice,
@@ -53,6 +58,7 @@ pub trait BluetoothGattServerCallback: Send {
         _characteristic: &BluetoothGattCharacteristic,
     ) {
     }
+    /// Mirrors `BluetoothGattServerCallback.onCharacteristicWriteRequest`.
     #[allow(clippy::too_many_arguments)]
     fn on_characteristic_write_request(
         &mut self,
@@ -65,6 +71,7 @@ pub trait BluetoothGattServerCallback: Send {
         _value: &[u8],
     ) {
     }
+    /// Mirrors `BluetoothGattServerCallback.onDescriptorReadRequest`.
     fn on_descriptor_read_request(
         &mut self,
         _device: &BluetoothDevice,
@@ -73,6 +80,7 @@ pub trait BluetoothGattServerCallback: Send {
         _descriptor: &BluetoothGattDescriptor,
     ) {
     }
+    /// Mirrors `BluetoothGattServerCallback.onDescriptorWriteRequest`.
     #[allow(clippy::too_many_arguments)]
     fn on_descriptor_write_request(
         &mut self,
@@ -85,8 +93,11 @@ pub trait BluetoothGattServerCallback: Send {
         _value: &[u8],
     ) {
     }
+    /// Mirrors `BluetoothGattServerCallback.onExecuteWrite`.
     fn on_execute_write(&mut self, _device: &BluetoothDevice, _request_id: i32, _execute: bool) {}
+    /// Mirrors `BluetoothGattServerCallback.onNotificationSent`.
     fn on_notification_sent(&mut self, _device: &BluetoothDevice, _status: i32) {}
+    /// Mirrors `BluetoothGattServerCallback.onMtuChanged`.
     fn on_mtu_changed(&mut self, _device: &BluetoothDevice, _mtu: i32) {}
 }
 
@@ -287,11 +298,15 @@ impl AttServerObserver for ServerObserverBridge {
 /// `VirtualDevice` and drives its `GattDatabase`/ATT dispatch under an
 /// Android-shaped API.
 pub struct BluetoothGattServer {
+    /// The underlying Simble device this server drives.
     pub device: VirtualDevice,
     state: Arc<Mutex<CallbackState>>,
 }
 
 impl BluetoothGattServer {
+    /// Wraps a `VirtualDevice` and registers `callback` to receive ATT
+    /// events. Mirrors obtaining a `BluetoothGattServer` via
+    /// `BluetoothManager.openGattServer`.
     pub fn new(mut device: VirtualDevice, callback: Box<dyn BluetoothGattServerCallback>) -> Self {
         let state = Arc::new(Mutex::new(CallbackState {
             callback: Some(callback),

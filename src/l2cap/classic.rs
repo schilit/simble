@@ -27,20 +27,27 @@ pub const MIN_BR_EDR_MTU: u16 = 48;
 /// trimmed to the states reachable without ERTM/streaming modes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelState {
+    /// Client sent a Connection Request and awaits the response.
     WaitConnectRsp,
+    /// Connection established; MTU configuration exchange is in progress.
     WaitConfig,
+    /// Channel is configured and open for data.
     Open,
+    /// A disconnection has been initiated and awaits completion.
     WaitDisconnect,
 }
 
 /// Spec for a Classic Basic Mode L2CAP channel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassicChannelSpec {
+    /// Protocol/Service Multiplexer identifying the target service.
     pub psm: u16,
+    /// Locally offered Maximum Transmission Unit.
     pub mtu: u16,
 }
 
 impl ClassicChannelSpec {
+    /// Creates a spec for `psm` using the default MTU.
     pub fn new(psm: u16) -> Self {
         Self {
             psm,
@@ -48,6 +55,7 @@ impl ClassicChannelSpec {
         }
     }
 
+    /// Creates a spec for `psm` with an explicit MTU.
     pub fn with_mtu(psm: u16, mtu: u16) -> Self {
         Self { psm, mtu }
     }
@@ -56,17 +64,24 @@ impl ClassicChannelSpec {
 /// An active Classic Basic Mode L2CAP channel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassicChannel {
+    /// Local (source) channel identifier.
     pub cid: u16,
+    /// Peer (destination) channel identifier.
     pub peer_cid: u16,
+    /// Protocol/Service Multiplexer this channel serves.
     pub psm: u16,
+    /// Our locally offered Maximum Transmission Unit.
     pub mtu: u16,
+    /// The peer's MTU, adopted from its Configuration Request.
     pub peer_mtu: u16,
+    /// Current connection lifecycle state.
     pub state: ChannelState,
     local_config_done: bool,
     remote_config_done: bool,
 }
 
 impl ClassicChannel {
+    /// Returns `true` once the channel has completed configuration and is open.
     pub fn is_open(&self) -> bool {
         self.state == ChannelState::Open
     }
@@ -98,9 +113,12 @@ impl Default for ClassicChannelManager {
 }
 
 impl ClassicChannelManager {
+    /// Lowest dynamic CID assignable to a Classic channel (0x0040).
     pub const MIN_DYNAMIC_CID: u16 = 0x0040;
+    /// Highest dynamic CID assignable to a Classic channel (0xFFFF).
     pub const MAX_DYNAMIC_CID: u16 = 0xFFFF;
 
+    /// Creates an empty manager with no registered servers or channels.
     pub fn new() -> Self {
         Self {
             channels: CidAllocator::new(Self::MIN_DYNAMIC_CID, Self::MAX_DYNAMIC_CID),
@@ -118,10 +136,12 @@ impl ClassicChannelManager {
         Ok(())
     }
 
+    /// Removes a PSM from the set accepting inbound connections.
     pub fn unregister_server(&mut self, psm: u16) {
         self.servers.remove(&psm);
     }
 
+    /// Returns `true` if the given PSM is registered as a server.
     pub fn is_server_registered(&self, psm: u16) -> bool {
         self.servers.contains(&psm)
     }
@@ -287,14 +307,17 @@ impl ClassicChannelManager {
         Ok((channel.peer_cid, channel.cid))
     }
 
+    /// Returns a shared reference to the channel with the given local CID.
     pub fn get_channel(&self, cid: u16) -> Option<&ClassicChannel> {
         self.channels.get(cid)
     }
 
+    /// Returns a mutable reference to the channel with the given local CID.
     pub fn get_channel_mut(&mut self, cid: u16) -> Option<&mut ClassicChannel> {
         self.channels.get_mut(cid)
     }
 
+    /// Removes and returns the channel with the given local CID.
     pub fn remove_channel(&mut self, cid: u16) -> Option<ClassicChannel> {
         self.channels.remove(cid)
     }

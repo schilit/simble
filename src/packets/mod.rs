@@ -18,18 +18,13 @@ pub use att::{
 };
 pub use ext_adv::{
     AdvSetError, AdvertisingEnableEntry, AdvertisingSet, AdvertisingSets,
-    ExtendedAdvertisingReportHeader, LeAdvertisingSetTerminatedEvent, LeClearAdvertisingSets,
+    ExtendedAdvertisingReportHeader, LeAdvertisingSetTerminatedEvent,
     LeExtendedAdvertisingReportEvent, LePeriodicAdvertisingCreateSync,
-    LePeriodicAdvertisingCreateSyncCancel, LePeriodicAdvertisingReportEventHeader,
-    LePeriodicAdvertisingSyncEstablishedEvent, LePeriodicAdvertisingSyncLostEvent,
-    LePeriodicAdvertisingTerminateSync, LeReadMaximumAdvertisingDataLength,
-    LeReadMaximumAdvertisingDataLengthResponse, LeRemoveAdvertisingSet, LeScanRequestReceivedEvent,
-    LeSetAdvertisingSetRandomAddress, LeSetExtendedAdvertisingDataHeader,
-    LeSetExtendedAdvertisingEnableHeader, LeSetExtendedAdvertisingParameters,
-    LeSetExtendedAdvertisingParametersResponse, LeSetExtendedScanEnable,
-    LeSetExtendedScanParametersHeader, LeSetExtendedScanResponseDataHeader,
-    LeSetPeriodicAdvertisingDataHeader, LeSetPeriodicAdvertisingEnable,
-    LeSetPeriodicAdvertisingParameters, MAX_ADVERTISING_DATA_LENGTH, ScanPhyParameters, U24,
+    LePeriodicAdvertisingReportEventHeader, LePeriodicAdvertisingSyncEstablishedEvent,
+    LePeriodicAdvertisingSyncLostEvent, LeScanRequestReceivedEvent,
+    LeSetExtendedAdvertisingDataHeader, LeSetExtendedAdvertisingEnableHeader,
+    LeSetExtendedAdvertisingParameters, LeSetExtendedScanParametersHeader,
+    LeSetPeriodicAdvertisingDataHeader, LeSetPeriodicAdvertisingParameters, ScanPhyParameters, U24,
     adv_event_properties, adv_phy, data_operation, ext_adv_opcode, ext_adv_report_event_type,
     ext_adv_subevent_code,
 };
@@ -39,8 +34,7 @@ pub use l2cap_signaling::{
     ConfigurationRequestHeader, ConfigurationResponseHeader, ConnectionRequestHeader,
     ConnectionResponseHeader, DisconnectionRequest, DisconnectionResponse, L2capSignalingHeader,
     LeCreditBasedConnectionRequestHeader, LeCreditBasedConnectionResponseHeader,
-    LeFlowControlCredit, configuration_result, connection_result, encode_mtu_option,
-    parse_mtu_option, signaling_code,
+    LeFlowControlCredit, signaling_code,
 };
 pub use smp::{
     SmpPairingFailed, SmpPairingPacket, auth_req as smp_auth_req, error_code as smp_error_code,

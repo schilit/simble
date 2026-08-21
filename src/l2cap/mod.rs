@@ -5,8 +5,8 @@
 
 pub(crate) mod cid_allocator;
 pub mod classic;
-pub mod coc;
-pub mod reassembler;
+pub(crate) mod coc;
+pub(crate) mod reassembler;
 
 pub use crate::packets::{
     AclPacketBoundary, DisconnectionRequest, DisconnectionResponse, HciAclHeader, L2capHeader,

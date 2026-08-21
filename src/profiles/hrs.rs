@@ -22,10 +22,15 @@ pub enum BodySensorLocation {
 /// Heart Rate Service manager.
 #[derive(Debug, Clone)]
 pub struct HeartRateService {
+    /// Attribute handle of the service declaration.
     pub service_handle: u16,
+    /// Attribute handle of the Measurement Decl.
     pub measurement_decl_handle: u16,
+    /// Attribute handle of the Measurement Val.
     pub measurement_val_handle: u16,
+    /// Attribute handle of the Measurement Cccd.
     pub measurement_cccd_handle: u16,
+    /// Attribute handle of the Location.
     pub location_handle: Option<u16>,
 }
 

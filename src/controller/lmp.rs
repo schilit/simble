@@ -17,17 +17,24 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Ref, Unaligned};
 
 /// LMP opcode constants (Bluetooth Core Spec Vol 2, Part C, Appendix I).
 pub mod opcode {
+    /// LMP_accepted opcode.
     pub const ACCEPTED: u8 = 3;
+    /// LMP_not_accepted opcode.
     pub const NOT_ACCEPTED: u8 = 4;
+    /// LMP_features_req opcode.
     pub const FEATURES_REQ: u8 = 39;
+    /// LMP_features_res opcode.
     pub const FEATURES_RES: u8 = 40;
+    /// LMP_host_connection_req opcode.
     pub const HOST_CONNECTION_REQ: u8 = 51;
 }
 
 /// Baseband/LMP error codes usable as the reason in an `LmpNotAccepted` PDU
 /// (a subset of the shared HCI error code space, Core Spec Vol 1, Part F).
 pub mod reject_reason {
+    /// Connection rejected due to limited resources (0x0D).
     pub const CONNECTION_REJECTED_LIMITED_RESOURCES: u8 = 0x0D;
+    /// Unsupported LMP parameter value (0x20).
     pub const UNSUPPORTED_LMP_PARAMETER_VALUE: u8 = 0x20;
 }
 
@@ -54,20 +61,24 @@ fn header_tid(header: u8) -> u8 {
     Copy, Clone, Debug, PartialEq, Eq, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
 )]
 pub struct LmpHostConnectionReq {
+    /// Packed transaction-ID/opcode header octet.
     pub header: u8,
 }
 
 impl LmpHostConnectionReq {
+    /// Builds a new `LMP_host_connection_req` PDU with the given transaction ID.
     pub fn new(tid: u8) -> Self {
         Self {
             header: pack_header(tid, opcode::HOST_CONNECTION_REQ),
         }
     }
 
+    /// Returns the transaction ID carried in the header.
     pub fn tid(&self) -> u8 {
         header_tid(self.header)
     }
 
+    /// Parses this PDU from the front of `bytes`, returning `None` on opcode mismatch.
     pub fn parse(bytes: &[u8]) -> Option<(Ref<&[u8], Self>, &[u8])> {
         let (pkt, rest) = Ref::<&[u8], Self>::from_prefix(bytes).ok()?;
         if header_opcode(pkt.header) != opcode::HOST_CONNECTION_REQ {
@@ -83,11 +94,14 @@ impl LmpHostConnectionReq {
     Copy, Clone, Debug, PartialEq, Eq, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
 )]
 pub struct LmpAccepted {
+    /// Packed transaction-ID/opcode header octet.
     pub header: u8,
+    /// The opcode being accepted.
     pub accepted_opcode: u8,
 }
 
 impl LmpAccepted {
+    /// Builds a new `LMP_accepted` PDU acknowledging `accepted_opcode`.
     pub fn new(tid: u8, accepted_opcode: u8) -> Self {
         Self {
             header: pack_header(tid, opcode::ACCEPTED),
@@ -95,10 +109,12 @@ impl LmpAccepted {
         }
     }
 
+    /// Returns the transaction ID carried in the header.
     pub fn tid(&self) -> u8 {
         header_tid(self.header)
     }
 
+    /// Parses this PDU from the front of `bytes`, returning `None` on opcode mismatch.
     pub fn parse(bytes: &[u8]) -> Option<(Ref<&[u8], Self>, &[u8])> {
         let (pkt, rest) = Ref::<&[u8], Self>::from_prefix(bytes).ok()?;
         if header_opcode(pkt.header) != opcode::ACCEPTED {
@@ -115,12 +131,16 @@ impl LmpAccepted {
     Copy, Clone, Debug, PartialEq, Eq, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
 )]
 pub struct LmpNotAccepted {
+    /// Packed transaction-ID/opcode header octet.
     pub header: u8,
+    /// The opcode being rejected.
     pub rejected_opcode: u8,
+    /// Baseband/HCI error code explaining the rejection.
     pub error_code: u8,
 }
 
 impl LmpNotAccepted {
+    /// Builds a new `LMP_not_accepted` PDU rejecting `rejected_opcode` with `error_code`.
     pub fn new(tid: u8, rejected_opcode: u8, error_code: u8) -> Self {
         Self {
             header: pack_header(tid, opcode::NOT_ACCEPTED),
@@ -129,10 +149,12 @@ impl LmpNotAccepted {
         }
     }
 
+    /// Returns the transaction ID carried in the header.
     pub fn tid(&self) -> u8 {
         header_tid(self.header)
     }
 
+    /// Parses this PDU from the front of `bytes`, returning `None` on opcode mismatch.
     pub fn parse(bytes: &[u8]) -> Option<(Ref<&[u8], Self>, &[u8])> {
         let (pkt, rest) = Ref::<&[u8], Self>::from_prefix(bytes).ok()?;
         if header_opcode(pkt.header) != opcode::NOT_ACCEPTED {
@@ -149,20 +171,24 @@ impl LmpNotAccepted {
     Copy, Clone, Debug, PartialEq, Eq, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
 )]
 pub struct LmpFeaturesReq {
+    /// Packed transaction-ID/opcode header octet.
     pub header: u8,
 }
 
 impl LmpFeaturesReq {
+    /// Builds a new `LMP_features_req` PDU with the given transaction ID.
     pub fn new(tid: u8) -> Self {
         Self {
             header: pack_header(tid, opcode::FEATURES_REQ),
         }
     }
 
+    /// Returns the transaction ID carried in the header.
     pub fn tid(&self) -> u8 {
         header_tid(self.header)
     }
 
+    /// Parses this PDU from the front of `bytes`, returning `None` on opcode mismatch.
     pub fn parse(bytes: &[u8]) -> Option<(Ref<&[u8], Self>, &[u8])> {
         let (pkt, rest) = Ref::<&[u8], Self>::from_prefix(bytes).ok()?;
         if header_opcode(pkt.header) != opcode::FEATURES_REQ {
@@ -179,11 +205,14 @@ impl LmpFeaturesReq {
     Copy, Clone, Debug, PartialEq, Eq, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
 )]
 pub struct LmpFeaturesRes {
+    /// Packed transaction-ID/opcode header octet.
     pub header: u8,
+    /// Page-0 supported-features bitmask, byte 0 covering features 0-7.
     pub features: [u8; 8],
 }
 
 impl LmpFeaturesRes {
+    /// Builds a new `LMP_features_res` PDU carrying the given feature bitmask.
     pub fn new(tid: u8, features: [u8; 8]) -> Self {
         Self {
             header: pack_header(tid, opcode::FEATURES_RES),
@@ -191,10 +220,12 @@ impl LmpFeaturesRes {
         }
     }
 
+    /// Returns the transaction ID carried in the header.
     pub fn tid(&self) -> u8 {
         header_tid(self.header)
     }
 
+    /// Parses this PDU from the front of `bytes`, returning `None` on opcode mismatch.
     pub fn parse(bytes: &[u8]) -> Option<(Ref<&[u8], Self>, &[u8])> {
         let (pkt, rest) = Ref::<&[u8], Self>::from_prefix(bytes).ok()?;
         if header_opcode(pkt.header) != opcode::FEATURES_RES {
@@ -209,17 +240,24 @@ impl LmpFeaturesRes {
 /// of scope for this pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LmpRole {
+    /// The connection-initiating end (master).
     Central,
+    /// The connection-accepting end (slave).
     Peripheral,
 }
 
 /// Coarse link-establishment state, driven entirely by `LmpLink::receive`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LmpLinkState {
+    /// No connection attempt in progress.
     Idle,
+    /// Central has sent `host_connection_req` and awaits a response.
     ConnectionRequested,
+    /// The connection request was accepted; feature exchange is underway.
     ConnectionAccepted,
+    /// Connection established and both feature masks are known.
     Connected,
+    /// The connection attempt was rejected.
     Rejected,
 }
 
@@ -231,10 +269,15 @@ pub enum LmpLinkState {
 /// `CoCManager`/`CoCChannel` use for L2CAP CoC.
 #[derive(Debug, Clone)]
 pub struct LmpLink {
+    /// Which end of the link this instance represents.
     pub role: LmpRole,
+    /// This end's page-0 supported-features bitmask.
     pub local_features: [u8; 8],
+    /// The peer's advertised features, once received.
     pub peer_features: Option<[u8; 8]>,
+    /// Current link-establishment state.
     pub state: LmpLinkState,
+    /// Error code recorded when the link was rejected, if any.
     pub rejected_reason: Option<u8>,
     /// Whether the peripheral should accept an incoming `host_connection_req`;
     /// flip to `false` to exercise the rejection path.
@@ -243,6 +286,7 @@ pub struct LmpLink {
 }
 
 impl LmpLink {
+    /// Creates a new link end for `role` advertising `local_features`.
     pub fn new(role: LmpRole, local_features: [u8; 8]) -> Self {
         Self {
             role,
@@ -255,6 +299,7 @@ impl LmpLink {
         }
     }
 
+    /// Returns `true` once the link has reached `Connected`.
     pub fn is_connected(&self) -> bool {
         self.state == LmpLinkState::Connected
     }

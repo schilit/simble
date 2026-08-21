@@ -15,12 +15,14 @@ use crate::profiles::csip::{CoordinatedSetIdentificationService, csip_uuid};
 pub mod cap_uuid {
     use crate::types::Uuid;
 
+    /// Common Audio Service UUID.
     pub const COMMON_AUDIO_SERVICE: Uuid = Uuid::Uuid16(0x1853);
 }
 
 /// Common Audio Service GATT container.
 #[derive(Debug, Clone)]
 pub struct CommonAudioService {
+    /// Attribute handle of the service declaration.
     pub service_handle: u16,
     /// Handle of the Include declaration referencing CSIS; `None` when the device is
     /// not a coordinated-set member (the CSIS include is optional per CAP Section 4.2).

@@ -90,6 +90,7 @@ pub struct MemoryBondStore {
 }
 
 impl MemoryBondStore {
+    /// Creates an empty in-memory bond store.
     pub fn new() -> Self {
         Self::default()
     }

@@ -70,7 +70,7 @@ impl HciCommand for LeCsReadLocalSupportedCapabilities {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeCsReadRemoteSupportedCapabilities {
-    pub connection_handle: U16<LittleEndian>,
+    pub(crate) connection_handle: U16<LittleEndian>,
 }
 
 impl HciCommand for LeCsReadRemoteSupportedCapabilities {
@@ -109,8 +109,8 @@ impl HciCommand for LeCsCreateConfig {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeCsRemoveConfig {
-    pub connection_handle: U16<LittleEndian>,
-    pub config_id: u8,
+    pub(crate) connection_handle: U16<LittleEndian>,
+    pub(crate) config_id: u8,
 }
 
 impl HciCommand for LeCsRemoveConfig {
@@ -134,25 +134,25 @@ impl HciCommand for LeCsProcedureEnable {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeCsConfigCompleteEvent {
-    pub status: u8,
-    pub connection_handle: U16<LittleEndian>,
-    pub config_id: u8,
-    pub action: u8,
-    pub main_mode_type: u8,
-    pub sub_mode_type: u8,
-    pub min_main_mode_steps: u8,
-    pub max_main_mode_steps: u8,
-    pub main_mode_repetition: u8,
-    pub mode_0_steps: u8,
-    pub role: u8,
-    pub rtt_type: u8,
-    pub cs_sync_phy: u8,
-    pub channel_map: [u8; 10],
-    pub channel_map_repetition: u8,
-    pub channel_selection_type: u8,
-    pub ch3c_shape: u8,
-    pub ch3c_jump: u8,
-    pub companion_signal_status: u8,
+    pub(crate) status: u8,
+    pub(crate) connection_handle: U16<LittleEndian>,
+    pub(crate) config_id: u8,
+    pub(crate) action: u8,
+    pub(crate) main_mode_type: u8,
+    pub(crate) sub_mode_type: u8,
+    pub(crate) min_main_mode_steps: u8,
+    pub(crate) max_main_mode_steps: u8,
+    pub(crate) main_mode_repetition: u8,
+    pub(crate) mode_0_steps: u8,
+    pub(crate) role: u8,
+    pub(crate) rtt_type: u8,
+    pub(crate) cs_sync_phy: u8,
+    pub(crate) channel_map: [u8; 10],
+    pub(crate) channel_map_repetition: u8,
+    pub(crate) channel_selection_type: u8,
+    pub(crate) ch3c_shape: u8,
+    pub(crate) ch3c_jump: u8,
+    pub(crate) companion_signal_status: u8,
 }
 
 /// LE CS Subevent Result Header (Subevent 0x31).

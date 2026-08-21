@@ -29,55 +29,93 @@ use crate::profiles::bap::{LC3_CODEC_ID, read_u24_le, write_u24_le};
 pub mod ascs_uuid {
     use crate::types::Uuid;
 
+    /// Audio Stream Control Service UUID.
     pub const AUDIO_STREAM_CONTROL_SERVICE: Uuid = Uuid::Uuid16(0x184E);
+    /// Sink Ase characteristic UUID.
     pub const SINK_ASE: Uuid = Uuid::Uuid16(0x2BC4);
+    /// Source Ase characteristic UUID.
     pub const SOURCE_ASE: Uuid = Uuid::Uuid16(0x2BC5);
+    /// Ase Control Point characteristic UUID.
     pub const ASE_CONTROL_POINT: Uuid = Uuid::Uuid16(0x2BC6);
 }
 
 /// ASE Control Point opcodes (Audio Stream Control Service, Section 5).
 pub mod opcode {
+    /// Config Codec control-point opcode.
     pub const CONFIG_CODEC: u8 = 0x01;
+    /// Config Qos control-point opcode.
     pub const CONFIG_QOS: u8 = 0x02;
+    /// Enable control-point opcode.
     pub const ENABLE: u8 = 0x03;
+    /// Receiver Start Ready control-point opcode.
     pub const RECEIVER_START_READY: u8 = 0x04;
+    /// Disable control-point opcode.
     pub const DISABLE: u8 = 0x05;
+    /// Receiver Stop Ready control-point opcode.
     pub const RECEIVER_STOP_READY: u8 = 0x06;
+    /// Update Metadata control-point opcode.
     pub const UPDATE_METADATA: u8 = 0x07;
+    /// Release control-point opcode.
     pub const RELEASE: u8 = 0x08;
 }
 
 /// ASE Response Code values notified back on the Control Point (ASCS Table 5.1).
 pub mod response_code {
+    /// Success.
     pub const SUCCESS: u8 = 0x00;
+    /// Unsupported Opcode.
     pub const UNSUPPORTED_OPCODE: u8 = 0x01;
+    /// Invalid Length.
     pub const INVALID_LENGTH: u8 = 0x02;
+    /// Invalid Ase Id.
     pub const INVALID_ASE_ID: u8 = 0x03;
+    /// Invalid Ase State Machine Transition.
     pub const INVALID_ASE_STATE_MACHINE_TRANSITION: u8 = 0x04;
+    /// Invalid Ase Direction.
     pub const INVALID_ASE_DIRECTION: u8 = 0x05;
+    /// Unsupported Audio Capabilities.
     pub const UNSUPPORTED_AUDIO_CAPABILITIES: u8 = 0x06;
+    /// Unsupported Configuration Parameter Value.
     pub const UNSUPPORTED_CONFIGURATION_PARAMETER_VALUE: u8 = 0x07;
+    /// Rejected Configuration Parameter Value.
     pub const REJECTED_CONFIGURATION_PARAMETER_VALUE: u8 = 0x08;
+    /// Invalid Configuration Parameter Value.
     pub const INVALID_CONFIGURATION_PARAMETER_VALUE: u8 = 0x09;
+    /// Unsupported Metadata.
     pub const UNSUPPORTED_METADATA: u8 = 0x0A;
+    /// Rejected Metadata.
     pub const REJECTED_METADATA: u8 = 0x0B;
+    /// Invalid Metadata.
     pub const INVALID_METADATA: u8 = 0x0C;
+    /// Insufficient Resources.
     pub const INSUFFICIENT_RESOURCES: u8 = 0x0D;
+    /// Unspecified Error.
     pub const UNSPECIFIED_ERROR: u8 = 0x0E;
 }
 
 /// ASE Reason Code values, valid when `response_code` names a rejected parameter.
 pub mod reason_code {
+    /// None.
     pub const NONE: u8 = 0x00;
+    /// Codec Id.
     pub const CODEC_ID: u8 = 0x01;
+    /// Codec Specific Configuration.
     pub const CODEC_SPECIFIC_CONFIGURATION: u8 = 0x02;
+    /// Sdu Interval.
     pub const SDU_INTERVAL: u8 = 0x03;
+    /// Framing.
     pub const FRAMING: u8 = 0x04;
+    /// Phy.
     pub const PHY: u8 = 0x05;
+    /// Maximum Sdu Size.
     pub const MAXIMUM_SDU_SIZE: u8 = 0x06;
+    /// Retransmission Number.
     pub const RETRANSMISSION_NUMBER: u8 = 0x07;
+    /// Max Transport Latency.
     pub const MAX_TRANSPORT_LATENCY: u8 = 0x08;
+    /// Presentation Delay.
     pub const PRESENTATION_DELAY: u8 = 0x09;
+    /// Invalid Ase Cis Mapping.
     pub const INVALID_ASE_CIS_MAPPING: u8 = 0x0A;
 }
 
@@ -109,21 +147,37 @@ pub enum AudioRole {
 /// One Audio Stream Endpoint: GATT handle plus the state ASCS Section 5 tracks for it.
 #[derive(Debug, Clone)]
 pub struct AudioStreamEndpoint {
+    /// Ase Id.
     pub ase_id: u8,
+    /// Role.
     pub role: AudioRole,
+    /// Attribute handle of the Value.
     pub value_handle: u16,
+    /// State.
     pub state: AseState,
+    /// Codec Id.
     pub codec_id: [u8; 5],
+    /// Codec Specific Configuration.
     pub codec_specific_configuration: Vec<u8>,
+    /// Cig Id.
     pub cig_id: u8,
+    /// Cis Id.
     pub cis_id: u8,
+    /// Sdu Interval.
     pub sdu_interval: u32,
+    /// Framing.
     pub framing: u8,
+    /// Phy.
     pub phy: u8,
+    /// Max Sdu.
     pub max_sdu: u16,
+    /// Retransmission Number.
     pub retransmission_number: u8,
+    /// Max Transport Latency.
     pub max_transport_latency: u16,
+    /// Presentation Delay.
     pub presentation_delay: u32,
+    /// Metadata.
     pub metadata: Vec<u8>,
 }
 
@@ -150,7 +204,7 @@ impl AudioStreamEndpoint {
     }
 
     /// Serializes ASE_ID, ASE_State, and the additional parameters ASCS 5 defines per state.
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub(crate) fn to_bytes(&self) -> Vec<u8> {
         let mut buf = vec![self.ase_id, self.state as u8];
         match self.state {
             AseState::CodecConfigured => {
@@ -190,7 +244,7 @@ impl AudioStreamEndpoint {
 
     /// ASCS 5.1 - Config Codec Operation. Valid from Idle, Codec Configured, or QoS
     /// Configured (re-configuring before QoS/Enable is permitted).
-    pub fn on_config_codec(
+    pub(crate) fn on_config_codec(
         &mut self,
         codec_id: [u8; 5],
         codec_specific_configuration: &[u8],
@@ -212,7 +266,7 @@ impl AudioStreamEndpoint {
 
     /// ASCS 5.2 - Config QoS Operation. Valid from Codec Configured or QoS Configured.
     #[allow(clippy::too_many_arguments)]
-    pub fn on_config_qos(
+    pub(crate) fn on_config_qos(
         &mut self,
         cig_id: u8,
         cis_id: u8,
@@ -247,7 +301,7 @@ impl AudioStreamEndpoint {
     }
 
     /// ASCS 5.3 - Enable Operation. Valid only from QoS Configured.
-    pub fn on_enable(&mut self, metadata: &[u8]) -> (u8, u8) {
+    pub(crate) fn on_enable(&mut self, metadata: &[u8]) -> (u8, u8) {
         if self.state != AseState::QosConfigured {
             return (
                 response_code::INVALID_ASE_STATE_MACHINE_TRANSITION,
@@ -260,7 +314,7 @@ impl AudioStreamEndpoint {
     }
 
     /// ASCS 5.4 - Receiver Start Ready Operation. Valid only from Enabling.
-    pub fn on_receiver_start_ready(&mut self) -> (u8, u8) {
+    pub(crate) fn on_receiver_start_ready(&mut self) -> (u8, u8) {
         if self.state != AseState::Enabling {
             return (
                 response_code::INVALID_ASE_STATE_MACHINE_TRANSITION,
@@ -274,7 +328,7 @@ impl AudioStreamEndpoint {
     /// ASCS 5.5 - Disable Operation. Valid from Enabling or Streaming; a Sink ASE returns
     /// straight to QoS Configured (it has no Receiver Stop Ready step), a Source ASE goes
     /// through Disabling until the client sends Receiver Stop Ready.
-    pub fn on_disable(&mut self) -> (u8, u8) {
+    pub(crate) fn on_disable(&mut self) -> (u8, u8) {
         if !matches!(self.state, AseState::Enabling | AseState::Streaming) {
             return (
                 response_code::INVALID_ASE_STATE_MACHINE_TRANSITION,
@@ -291,7 +345,7 @@ impl AudioStreamEndpoint {
 
     /// ASCS 5.6 - Receiver Stop Ready Operation. Only meaningful for a Source ASE in
     /// Disabling (ASCS 3.4: Sink ASEs never enter Disabling).
-    pub fn on_receiver_stop_ready(&mut self) -> (u8, u8) {
+    pub(crate) fn on_receiver_stop_ready(&mut self) -> (u8, u8) {
         if self.role != AudioRole::Source || self.state != AseState::Disabling {
             return (
                 response_code::INVALID_ASE_STATE_MACHINE_TRANSITION,
@@ -304,7 +358,7 @@ impl AudioStreamEndpoint {
 
     /// ASCS 5.7 - Update Metadata Operation. Valid from Enabling or Streaming; state is
     /// unchanged.
-    pub fn on_update_metadata(&mut self, metadata: &[u8]) -> (u8, u8) {
+    pub(crate) fn on_update_metadata(&mut self, metadata: &[u8]) -> (u8, u8) {
         if !matches!(self.state, AseState::Enabling | AseState::Streaming) {
             return (
                 response_code::INVALID_ASE_STATE_MACHINE_TRANSITION,
@@ -318,7 +372,7 @@ impl AudioStreamEndpoint {
     /// ASCS 5.8 - Release Operation. Valid from any state but Idle. Real ASCS passes
     /// through Releasing while the CIS (if any) is torn down; Simble has no CIS to tear
     /// down, so Release resolves straight to Idle.
-    pub fn on_release(&mut self) -> (u8, u8) {
+    pub(crate) fn on_release(&mut self) -> (u8, u8) {
         if self.state == AseState::Idle {
             return (
                 response_code::INVALID_ASE_STATE_MACHINE_TRANSITION,
@@ -366,8 +420,11 @@ impl AttributeHandler for AseControlPointHandler {
 /// Audio Stream Control Service GATT container plus the ASE state machines it owns.
 #[derive(Debug, Clone)]
 pub struct AudioStreamControlService {
+    /// Attribute handle of the service declaration.
     pub service_handle: u16,
+    /// Attribute handle of the Control Point.
     pub control_point_handle: u16,
+    /// Value attribute handle of the Control Point characteristic.
     pub control_point_value_handle: u16,
     state: Arc<Mutex<AscsState>>,
 }

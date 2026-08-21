@@ -91,6 +91,7 @@ pub enum RemoteCommandId {
 }
 
 impl RemoteCommandId {
+    /// Maps a wire byte to the matching variant, or `None` if unrecognized.
     pub fn from_u8(value: u8) -> Option<Self> {
         Some(match value {
             0 => Self::Play,
@@ -140,6 +141,7 @@ pub enum EntityId {
 }
 
 impl EntityId {
+    /// Maps a wire byte to the matching variant, or `None` if unrecognized.
     pub fn from_u8(value: u8) -> Option<Self> {
         Some(match value {
             0 => Self::Player,
@@ -167,6 +169,7 @@ pub enum PlayerAttributeId {
 }
 
 impl PlayerAttributeId {
+    /// Maps a wire byte to the matching variant, or `None` if unrecognized.
     pub fn from_u8(value: u8) -> Option<Self> {
         Some(match value {
             0 => Self::Name,
@@ -188,6 +191,7 @@ pub enum QueueAttributeId {
 }
 
 impl QueueAttributeId {
+    /// Maps a wire byte to the matching variant, or `None` if unrecognized.
     pub fn from_u8(value: u8) -> Option<Self> {
         Some(match value {
             0 => Self::Index,
@@ -210,6 +214,7 @@ pub enum TrackAttributeId {
 }
 
 impl TrackAttributeId {
+    /// Maps a wire byte to the matching variant, or `None` if unrecognized.
     pub fn from_u8(value: u8) -> Option<Self> {
         Some(match value {
             0 => Self::Artist,
@@ -231,6 +236,7 @@ pub enum ShuffleMode {
 }
 
 impl ShuffleMode {
+    /// Maps a wire byte to the matching variant, or `None` if unrecognized.
     pub fn from_u8(value: u8) -> Option<Self> {
         Some(match value {
             0 => Self::Off,
@@ -259,6 +265,7 @@ pub enum RepeatMode {
 }
 
 impl RepeatMode {
+    /// Maps a wire byte to the matching variant, or `None` if unrecognized.
     pub fn from_u8(value: u8) -> Option<Self> {
         Some(match value {
             0 => Self::Off,
@@ -288,6 +295,7 @@ pub enum PlaybackState {
 }
 
 impl PlaybackState {
+    /// Maps a wire byte to the matching variant, or `None` if unrecognized.
     pub fn from_u8(value: u8) -> Option<Self> {
         Some(match value {
             0 => Self::Paused,
@@ -303,8 +311,11 @@ impl PlaybackState {
 /// `PlaybackState,PlaybackRate,ElapsedTime` string on the wire.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PlaybackInfo {
+    /// Playback State.
     pub playback_state: PlaybackState,
+    /// Playback Rate.
     pub playback_rate: f32,
+    /// Elapsed Time.
     pub elapsed_time: f32,
 }
 
@@ -316,6 +327,7 @@ impl PlaybackInfo {
         )
     }
 
+    /// Parses a value from its wire representation.
     pub fn from_wire(value: &str) -> Option<Self> {
         let mut fields = value.split(',');
         let playback_state = PlaybackState::from_u8(fields.next()?.parse().ok()?)?;
@@ -598,14 +610,19 @@ impl AttributeHandler for EntityAttributeHandler {
 /// it owns.
 #[derive(Debug)]
 pub struct MediaService {
+    /// Attribute handle of the service declaration.
     pub service_handle: u16,
+    /// Value attribute handle of the Remote Command characteristic.
     pub remote_command_value_handle: u16,
+    /// Value attribute handle of the Entity Update characteristic.
     pub entity_update_value_handle: u16,
+    /// Value attribute handle of the Entity Attribute characteristic.
     pub entity_attribute_value_handle: u16,
     state: Arc<Mutex<AmsState>>,
 }
 
 impl MediaService {
+    /// Registers the service and its characteristics into a GATT database.
     pub fn register(db: &mut GattDatabase, player_name: &str) -> Self {
         let service_handle = db.add_service(ams_uuid::APPLE_MEDIA_SERVICE, true);
 
@@ -713,6 +730,7 @@ impl MediaService {
         });
     }
 
+    /// Sets the player name.
     pub fn set_player_name(&self, db: &mut GattDatabase, name: &str) {
         self.with_state(|state| {
             state.player_name = name.to_string();
@@ -720,6 +738,7 @@ impl MediaService {
         });
     }
 
+    /// Sets the playback info.
     pub fn set_playback_info(&self, db: &mut GattDatabase, info: PlaybackInfo) {
         self.with_state(|state| {
             state.playback_state = info.playback_state;
@@ -737,6 +756,7 @@ impl MediaService {
         });
     }
 
+    /// Sets the queue.
     pub fn set_queue(&self, db: &mut GattDatabase, index: u32, count: u32) {
         self.with_state(|state| {
             state.queue_index = index;
@@ -746,6 +766,7 @@ impl MediaService {
         });
     }
 
+    /// Sets the shuffle mode.
     pub fn set_shuffle_mode(&self, db: &mut GattDatabase, mode: ShuffleMode) {
         self.with_state(|state| {
             state.shuffle_mode = mode;
@@ -753,6 +774,7 @@ impl MediaService {
         });
     }
 
+    /// Sets the repeat mode.
     pub fn set_repeat_mode(&self, db: &mut GattDatabase, mode: RepeatMode) {
         self.with_state(|state| {
             state.repeat_mode = mode;
@@ -784,30 +806,37 @@ impl MediaService {
         });
     }
 
+    /// Returns the playback state.
     pub fn playback_state(&self) -> PlaybackState {
         self.with_state(|state| state.playback_state)
     }
 
+    /// Returns the playback info.
     pub fn playback_info(&self) -> PlaybackInfo {
         self.with_state(|state| state.playback_info())
     }
 
+    /// Returns the volume.
     pub fn volume(&self) -> f32 {
         self.with_state(|state| state.volume)
     }
 
+    /// Returns the queue index.
     pub fn queue_index(&self) -> u32 {
         self.with_state(|state| state.queue_index)
     }
 
+    /// Returns the shuffle mode.
     pub fn shuffle_mode(&self) -> ShuffleMode {
         self.with_state(|state| state.shuffle_mode)
     }
 
+    /// Returns the repeat mode.
     pub fn repeat_mode(&self) -> RepeatMode {
         self.with_state(|state| state.repeat_mode)
     }
 
+    /// Returns the supported commands.
     pub fn supported_commands(&self) -> Vec<RemoteCommandId> {
         self.with_state(|state| state.supported_commands.clone())
     }
@@ -828,13 +857,18 @@ impl MediaService {
 /// end mid-UTF-8-sequence.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntityUpdate {
+    /// Entity.
     pub entity: EntityId,
+    /// Attribute Id.
     pub attribute_id: u8,
+    /// Flags.
     pub flags: u8,
+    /// Value.
     pub value: Vec<u8>,
 }
 
 impl EntityUpdate {
+    /// Returns whether this Entity Update value was truncated to fit the characteristic.
     pub fn truncated(&self) -> bool {
         self.flags & entity_update_flags::TRUNCATED != 0
     }
@@ -845,17 +879,29 @@ impl EntityUpdate {
 /// media state they carry.
 #[derive(Debug)]
 pub struct AmsClient {
+    /// Supported Commands.
     pub supported_commands: Vec<RemoteCommandId>,
+    /// Player Name.
     pub player_name: String,
+    /// Playback Info.
     pub playback_info: PlaybackInfo,
+    /// Volume.
     pub volume: f32,
+    /// Queue Index.
     pub queue_index: u32,
+    /// Queue Count.
     pub queue_count: u32,
+    /// Shuffle Mode.
     pub shuffle_mode: ShuffleMode,
+    /// Repeat Mode.
     pub repeat_mode: RepeatMode,
+    /// Track Artist.
     pub track_artist: String,
+    /// Track Album.
     pub track_album: String,
+    /// Track Title.
     pub track_title: String,
+    /// Track Duration.
     pub track_duration: f32,
 }
 
@@ -883,6 +929,7 @@ impl Default for AmsClient {
 }
 
 impl AmsClient {
+    /// Creates a new instance.
     pub fn new() -> Self {
         Self::default()
     }

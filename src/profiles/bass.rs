@@ -28,25 +28,36 @@ use std::sync::{Arc, Mutex};
 pub mod bass_uuid {
     use crate::types::Uuid;
 
+    /// Broadcast Audio Scan Service UUID.
     pub const BROADCAST_AUDIO_SCAN_SERVICE: Uuid = Uuid::Uuid16(0x184F);
+    /// Broadcast Audio Scan Control Point characteristic UUID.
     pub const BROADCAST_AUDIO_SCAN_CONTROL_POINT: Uuid = Uuid::Uuid16(0x2BC7);
+    /// Broadcast Receive State characteristic UUID.
     pub const BROADCAST_RECEIVE_STATE: Uuid = Uuid::Uuid16(0x2BC8);
 }
 
 /// Broadcast Audio Scan Control Point opcodes (BASS Section 3.1.1).
 pub mod opcode {
+    /// Remote Scan Stopped control-point opcode.
     pub const REMOTE_SCAN_STOPPED: u8 = 0x00;
+    /// Remote Scan Started control-point opcode.
     pub const REMOTE_SCAN_STARTED: u8 = 0x01;
+    /// Add Source control-point opcode.
     pub const ADD_SOURCE: u8 = 0x02;
+    /// Modify Source control-point opcode.
     pub const MODIFY_SOURCE: u8 = 0x03;
+    /// Set Broadcast Code control-point opcode.
     pub const SET_BROADCAST_CODE: u8 = 0x04;
+    /// Remove Source control-point opcode.
     pub const REMOVE_SOURCE: u8 = 0x05;
 }
 
 /// BASS application error codes (BASS Section 1.5), returned as the ATT error code when a
 /// Control Point write is rejected.
 pub mod error_code {
+    /// Opcode Not Supported error code.
     pub const OPCODE_NOT_SUPPORTED: u8 = 0x80;
+    /// Invalid Source Id error code.
     pub const INVALID_SOURCE_ID: u8 = 0x81;
 }
 
@@ -64,6 +75,7 @@ pub enum PeriodicAdvertisingSyncParams {
 }
 
 impl PeriodicAdvertisingSyncParams {
+    /// Maps a wire byte to the matching variant, or `None` if unrecognized.
     pub fn from_u8(value: u8) -> Option<Self> {
         Some(match value {
             0x00 => Self::DoNotSynchronizeToPa,
@@ -86,6 +98,7 @@ pub enum PeriodicAdvertisingSyncState {
 }
 
 impl PeriodicAdvertisingSyncState {
+    /// Maps a wire byte to the matching variant, or `None` if unrecognized.
     pub fn from_u8(value: u8) -> Option<Self> {
         Some(match value {
             0x00 => Self::NotSynchronizedToPa,
@@ -109,6 +122,7 @@ pub enum BigEncryption {
 }
 
 impl BigEncryption {
+    /// Maps a wire byte to the matching variant, or `None` if unrecognized.
     pub fn from_u8(value: u8) -> Option<Self> {
         Some(match value {
             0x00 => Self::NotEncrypted,
@@ -124,14 +138,16 @@ impl BigEncryption {
 /// a 32-bit BIS index bitmask plus LTV metadata (BASS Sections 3.1.1.4 / 3.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubgroupInfo {
+    /// Bis Sync.
     pub bis_sync: u32,
+    /// Metadata.
     pub metadata: Vec<u8>,
 }
 
 /// Serializes subgroups as `[Num_Subgroups, (BIS_Sync(4), Metadata_Length(1),
 /// Metadata)*]`, the layout shared by the Control Point operations and the Broadcast
 /// Receive State.
-pub fn encode_subgroups(subgroups: &[SubgroupInfo]) -> Vec<u8> {
+pub(crate) fn encode_subgroups(subgroups: &[SubgroupInfo]) -> Vec<u8> {
     let mut buf = vec![subgroups.len() as u8];
     for subgroup in subgroups {
         buf.extend_from_slice(&subgroup.bis_sync.to_le_bytes());
@@ -143,7 +159,7 @@ pub fn encode_subgroups(subgroups: &[SubgroupInfo]) -> Vec<u8> {
 
 /// Parses the subgroup layout produced by [`encode_subgroups`], consuming `data` to its
 /// end (subgroups are always the final field of the structures that carry them).
-pub fn decode_subgroups(data: &[u8]) -> Option<Vec<SubgroupInfo>> {
+pub(crate) fn decode_subgroups(data: &[u8]) -> Option<Vec<SubgroupInfo>> {
     let (&num_subgroups, mut rest) = data.split_first()?;
     let mut subgroups = Vec::with_capacity(num_subgroups as usize);
     for _ in 0..num_subgroups {
@@ -186,6 +202,7 @@ pub enum ControlPointOperation {
 }
 
 impl ControlPointOperation {
+    /// Serializes to the characteristic wire format.
     pub fn to_bytes(&self) -> Vec<u8> {
         match self {
             Self::RemoteScanStopped => vec![opcode::REMOTE_SCAN_STOPPED],
@@ -231,6 +248,7 @@ impl ControlPointOperation {
         }
     }
 
+    /// Parses a value from its wire bytes.
     pub fn parse(data: &[u8]) -> Option<Self> {
         let (&op, params) = data.split_first()?;
         Some(match op {
@@ -283,18 +301,28 @@ impl ControlPointOperation {
 /// echoes the 16-byte Broadcast_Code that failed to decrypt the BIG.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BroadcastReceiveState {
+    /// Source Id.
     pub source_id: u8,
+    /// Source Address Type.
     pub source_address_type: u8,
+    /// Source Address.
     pub source_address: Address,
+    /// Source Adv Sid.
     pub source_adv_sid: u8,
+    /// Broadcast Id.
     pub broadcast_id: u32,
+    /// Pa Sync State.
     pub pa_sync_state: PeriodicAdvertisingSyncState,
+    /// Big Encryption.
     pub big_encryption: BigEncryption,
+    /// Bad Code.
     pub bad_code: Vec<u8>,
+    /// Subgroups.
     pub subgroups: Vec<SubgroupInfo>,
 }
 
 impl BroadcastReceiveState {
+    /// Serializes to the characteristic wire format.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buf = vec![self.source_id, self.source_address_type];
         buf.extend_from_slice(&self.source_address.bytes);
@@ -307,6 +335,7 @@ impl BroadcastReceiveState {
         buf
     }
 
+    /// Parses a value from its wire bytes.
     pub fn parse(data: &[u8]) -> Option<Self> {
         let source_id = *data.first()?;
         let source_address_type = *data.get(1)?;
@@ -504,8 +533,11 @@ impl AttributeHandler for ScanControlPointHandler {
 /// Broadcast Audio Scan Service GATT container (the Scan Delegator role).
 #[derive(Debug)]
 pub struct BroadcastAudioScanService {
+    /// Attribute handle of the service declaration.
     pub service_handle: u16,
+    /// Value attribute handle of the Control Point characteristic.
     pub control_point_value_handle: u16,
+    /// Receive State Value Handles.
     pub receive_state_value_handles: Vec<u16>,
     state: Arc<Mutex<ScanDelegatorState>>,
 }

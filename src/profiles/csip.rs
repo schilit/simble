@@ -14,10 +14,15 @@ use crate::gatt::{AttributePermissions, CharacteristicProperties, GattDatabase};
 pub mod csip_uuid {
     use crate::types::Uuid;
 
+    /// Csis Service UUID.
     pub const CSIS_SERVICE: Uuid = Uuid::Uuid16(0x1846);
+    /// Set Identity Resolving Key characteristic UUID.
     pub const SET_IDENTITY_RESOLVING_KEY: Uuid = Uuid::Uuid16(0x2B84);
+    /// Set Member Size characteristic UUID.
     pub const SET_MEMBER_SIZE: Uuid = Uuid::Uuid16(0x2B85);
+    /// Set Member Lock characteristic UUID.
     pub const SET_MEMBER_LOCK: Uuid = Uuid::Uuid16(0x2B86);
+    /// Set Member Rank characteristic UUID.
     pub const SET_MEMBER_RANK: Uuid = Uuid::Uuid16(0x2B87);
 }
 
@@ -45,7 +50,7 @@ pub fn k1(k: &[u8; 16], salt: &[u8; 16], p: &[u8]) -> [u8; 16] {
 }
 
 /// Bluetooth Security function `e` (Vol 3, Part H, Section 2.2.1).
-pub fn e(key: &[u8; 16], data: &[u8; 16]) -> [u8; 16] {
+pub(crate) fn e(key: &[u8; 16], data: &[u8; 16]) -> [u8; 16] {
     let mut rev_k = *key;
     rev_k.reverse();
     let mut rev_d = *data;
@@ -66,14 +71,23 @@ pub fn sih(sirk: &[u8; 16], prand: &[u8; 3]) -> [u8; 3] {
 /// Coordinated Set Identification Service GATT container.
 #[derive(Debug, Clone)]
 pub struct CoordinatedSetIdentificationService {
+    /// Attribute handle of the service declaration.
     pub service_handle: u16,
+    /// Attribute handle of the Sirk.
     pub sirk_handle: u16,
+    /// Value attribute handle of the Sirk characteristic.
     pub sirk_value_handle: u16,
+    /// Attribute handle of the Size.
     pub size_handle: u16,
+    /// Value attribute handle of the Size characteristic.
     pub size_value_handle: u16,
+    /// Attribute handle of the Lock.
     pub lock_handle: u16,
+    /// Value attribute handle of the Lock characteristic.
     pub lock_value_handle: u16,
+    /// Attribute handle of the Rank.
     pub rank_handle: u16,
+    /// Value attribute handle of the Rank characteristic.
     pub rank_value_handle: u16,
 }
 

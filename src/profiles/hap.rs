@@ -30,24 +30,38 @@ use std::sync::{Arc, Mutex};
 pub mod hap_uuid {
     use crate::types::Uuid;
 
+    /// Hearing Access Service UUID.
     pub const HEARING_ACCESS_SERVICE: Uuid = Uuid::Uuid16(0x1854);
+    /// Hearing Aid Features characteristic UUID.
     pub const HEARING_AID_FEATURES: Uuid = Uuid::Uuid16(0x2BDA);
+    /// Hearing Aid Preset Control Point characteristic UUID.
     pub const HEARING_AID_PRESET_CONTROL_POINT: Uuid = Uuid::Uuid16(0x2BDB);
+    /// Active Preset Index characteristic UUID.
     pub const ACTIVE_PRESET_INDEX: Uuid = Uuid::Uuid16(0x2BDC);
 }
 
 /// Hearing Aid Preset Control Point opcodes (HAS Section 3.2.1). Opcodes 0x02/0x03 are
 /// server-to-client only: they head the indication payloads the operations produce.
 pub mod opcode {
+    /// Read Presets Request control-point opcode.
     pub const READ_PRESETS_REQUEST: u8 = 0x01;
+    /// Read Preset Response control-point opcode.
     pub const READ_PRESET_RESPONSE: u8 = 0x02;
+    /// Preset Changed control-point opcode.
     pub const PRESET_CHANGED: u8 = 0x03;
+    /// Write Preset Name control-point opcode.
     pub const WRITE_PRESET_NAME: u8 = 0x04;
+    /// Set Active Preset control-point opcode.
     pub const SET_ACTIVE_PRESET: u8 = 0x05;
+    /// Set Next Preset control-point opcode.
     pub const SET_NEXT_PRESET: u8 = 0x06;
+    /// Set Previous Preset control-point opcode.
     pub const SET_PREVIOUS_PRESET: u8 = 0x07;
+    /// Set Active Preset Synchronized Locally control-point opcode.
     pub const SET_ACTIVE_PRESET_SYNCHRONIZED_LOCALLY: u8 = 0x08;
+    /// Set Next Preset Synchronized Locally control-point opcode.
     pub const SET_NEXT_PRESET_SYNCHRONIZED_LOCALLY: u8 = 0x09;
+    /// Set Previous Preset Synchronized Locally control-point opcode.
     pub const SET_PREVIOUS_PRESET_SYNCHRONIZED_LOCALLY: u8 = 0x0A;
 }
 
@@ -56,30 +70,42 @@ pub mod opcode {
 /// (Core Spec Supplement Part B, Out of Range), returned as the ATT error code when a
 /// Control Point write is rejected.
 pub mod error_code {
+    /// Invalid Opcode error code.
     pub const INVALID_OPCODE: u8 = 0x80;
+    /// Write Name Not Allowed error code.
     pub const WRITE_NAME_NOT_ALLOWED: u8 = 0x81;
+    /// Preset Synchronization Not Supported error code.
     pub const PRESET_SYNCHRONIZATION_NOT_SUPPORTED: u8 = 0x82;
+    /// Preset Operation Not Possible error code.
     pub const PRESET_OPERATION_NOT_POSSIBLE: u8 = 0x83;
+    /// Invalid Parameters Length error code.
     pub const INVALID_PARAMETERS_LENGTH: u8 = 0x84;
+    /// Out Of Range error code.
     pub const OUT_OF_RANGE: u8 = 0xFF;
 }
 
 /// ChangeId values of a Preset Changed operation (HAS Section 3.2.2.2).
 pub mod change_id {
+    /// Generic Update.
     pub const GENERIC_UPDATE: u8 = 0x00;
+    /// Preset Record Deleted.
     pub const PRESET_RECORD_DELETED: u8 = 0x01;
+    /// Preset Record Available.
     pub const PRESET_RECORD_AVAILABLE: u8 = 0x02;
+    /// Preset Record Unavailable.
     pub const PRESET_RECORD_UNAVAILABLE: u8 = 0x03;
 }
 
 /// Preset record Properties bitfield (HAS Section 2.8).
 pub mod preset_properties {
+    /// Writable.
     pub const WRITABLE: u8 = 1 << 0;
+    /// Is Available.
     pub const IS_AVAILABLE: u8 = 1 << 1;
 }
 
 /// Preset names are 1..=40 bytes of UTF-8 (HAS Section 2.8).
-pub const MAX_PRESET_NAME_LENGTH: usize = 40;
+pub(crate) const MAX_PRESET_NAME_LENGTH: usize = 40;
 
 /// Hearing Aid Type field of the Hearing Aid Features bitfield (HAS Section 3.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +117,7 @@ pub enum HearingAidType {
 }
 
 impl HearingAidType {
+    /// Maps a wire byte to the matching variant, or `None` if unrecognized.
     pub fn from_u8(value: u8) -> Option<Self> {
         Some(match value {
             0b00 => Self::Binaural,
@@ -105,16 +132,20 @@ impl HearingAidType {
 /// bits 0-1 and four single-bit capability flags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HearingAidFeatures {
+    /// Hearing Aid Type.
     pub hearing_aid_type: HearingAidType,
+    /// Preset Synchronization Supported.
     pub preset_synchronization_supported: bool,
     /// Set when the two devices of a binaural set may expose different preset lists.
     pub independent_presets: bool,
     /// Set when the preset list may change at runtime (records added/deleted).
     pub dynamic_presets: bool,
+    /// Writable Presets Supported.
     pub writable_presets_supported: bool,
 }
 
 impl HearingAidFeatures {
+    /// Packs the Hearing Aid Features field into its wire byte.
     pub fn to_byte(self) -> u8 {
         (self.hearing_aid_type as u8)
             | (u8::from(self.preset_synchronization_supported) << 2)
@@ -123,6 +154,7 @@ impl HearingAidFeatures {
             | (u8::from(self.writable_presets_supported) << 5)
     }
 
+    /// Parses the Hearing Aid Features field from its wire byte.
     pub fn from_byte(value: u8) -> Option<Self> {
         Some(Self {
             hearing_aid_type: HearingAidType::from_u8(value & 0b11)?,
@@ -137,9 +169,13 @@ impl HearingAidFeatures {
 /// One preset record (HAS Section 2.8): a list index, Properties bits, and a UTF-8 name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PresetRecord {
+    /// Index.
     pub index: u8,
+    /// Writable.
     pub writable: bool,
+    /// Available.
     pub available: bool,
+    /// Name.
     pub name: String,
 }
 
@@ -166,6 +202,7 @@ impl PresetRecord {
         buf
     }
 
+    /// Parses a value from its wire bytes.
     pub fn parse(data: &[u8]) -> Option<Self> {
         let index = *data.first()?;
         let properties = *data.get(1)?;
@@ -362,9 +399,13 @@ impl AttributeHandler for PresetControlPointHandler {
 /// Hearing Access Service GATT container plus the preset-list state it owns.
 #[derive(Debug)]
 pub struct HearingAccessService {
+    /// Attribute handle of the service declaration.
     pub service_handle: u16,
+    /// Value attribute handle of the Features characteristic.
     pub features_value_handle: u16,
+    /// Value attribute handle of the Preset Control Point characteristic.
     pub preset_control_point_value_handle: u16,
+    /// Value attribute handle of the Active Preset Index characteristic.
     pub active_preset_index_value_handle: u16,
     state: Arc<Mutex<HearingAccessState>>,
 }
@@ -446,10 +487,12 @@ impl HearingAccessService {
         }
     }
 
+    /// Returns the features.
     pub fn features(&self) -> HearingAidFeatures {
         self.state.lock().expect("HAP state lock poisoned").features
     }
 
+    /// Returns the active preset index.
     pub fn active_preset_index(&self) -> u8 {
         self.state
             .lock()

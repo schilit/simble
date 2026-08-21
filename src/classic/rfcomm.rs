@@ -34,28 +34,43 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Ref, Unaligned};
 
 /// Well-known PSM for RFCOMM (Bluetooth Assigned Numbers).
 pub const RFCOMM_PSM: u16 = 0x0003;
+/// Default L2CAP MTU used for the RFCOMM channel.
 pub const DEFAULT_L2CAP_MTU: u16 = 2048;
+/// Default initial RFCOMM credit grant per DLC.
 pub const DEFAULT_INITIAL_CREDITS: u8 = 7;
-pub const DEFAULT_MAX_CREDITS: u8 = 32;
-pub const DEFAULT_CREDIT_THRESHOLD: u8 = DEFAULT_MAX_CREDITS / 2;
+/// Maximum RFCOMM credits held per DLC.
+pub(crate) const DEFAULT_MAX_CREDITS: u8 = 32;
+/// Credit low-water mark that triggers a credit top-up.
+pub(crate) const DEFAULT_CREDIT_THRESHOLD: u8 = DEFAULT_MAX_CREDITS / 2;
+/// Default negotiated maximum RFCOMM frame size.
 pub const DEFAULT_MAX_FRAME_SIZE: u16 = 1000;
+/// Lowest assignable RFCOMM server channel number.
 pub const DYNAMIC_CHANNEL_NUMBER_START: u8 = 1;
+/// Highest assignable RFCOMM server channel number.
 pub const DYNAMIC_CHANNEL_NUMBER_END: u8 = 30;
 
 /// Control-field frame types (low 5/high-minus-P/F bits; bit 4 is the P/F
 /// bit and is masked out of these constants).
 pub mod frame_type {
+    /// SABM: sets up a DLC (or the multiplexer on DLCI 0).
     pub const SABM: u8 = 0x2F;
+    /// UA: unnumbered acknowledgement of SABM/DISC.
     pub const UA: u8 = 0x63;
+    /// DM: disconnected mode (rejects a connection).
     pub const DM: u8 = 0x0F;
+    /// DISC: tears down a DLC or the multiplexer.
     pub const DISC: u8 = 0x43;
+    /// UIH: unnumbered information with header check (data and MCC frames).
     pub const UIH: u8 = 0xEF;
+    /// UI: unnumbered information (unused here).
     pub const UI: u8 = 0x03;
 }
 
 /// Multiplexer Control Channel (MCC) command types (ETSI TS 07.10, 5.4.6.3).
-pub mod mcc_type {
+pub(crate) mod mcc_type {
+    /// PN: Parameter Negotiation command.
     pub const PN: u8 = 0x20;
+    /// MSC: Modem Status Command.
     pub const MSC: u8 = 0x38;
 }
 
@@ -118,8 +133,10 @@ fn compute_fcs(buffer: &[u8]) -> u8 {
 #[derive(
     Copy, Clone, Debug, PartialEq, Eq, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
 )]
-pub struct RfcommFrameHeader {
+pub(crate) struct RfcommFrameHeader {
+    /// Address octet: DLCI, C/R, and EA bits.
     pub address: u8,
+    /// Control octet: frame type and P/F bit.
     pub control: u8,
 }
 
@@ -128,10 +145,15 @@ pub struct RfcommFrameHeader {
 /// counts in `information` but is excluded from the encoded length field.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RfcommFrame {
-    pub frame_type: u8,
+    /// Frame type (`frame_type::*`), with the P/F bit masked out.
+    pub(crate) frame_type: u8,
+    /// Command/response bit.
     pub c_r: u8,
+    /// DLCI (data link connection identifier).
     pub dlci: u8,
+    /// Poll/Final bit.
     pub p_f: u8,
+    /// Information payload (includes a leading credit octet on credit-bearing UIH frames).
     pub information: Vec<u8>,
     with_credits: bool,
 }
@@ -155,22 +177,27 @@ impl RfcommFrame {
         }
     }
 
+    /// Builds a SABM frame.
     pub fn sabm(c_r: u8, dlci: u8) -> Self {
         Self::new(frame_type::SABM, c_r, dlci, 1, Vec::new(), false)
     }
 
-    pub fn ua(c_r: u8, dlci: u8) -> Self {
+    /// Builds a UA (unnumbered acknowledgement) frame.
+    pub(crate) fn ua(c_r: u8, dlci: u8) -> Self {
         Self::new(frame_type::UA, c_r, dlci, 1, Vec::new(), false)
     }
 
-    pub fn dm(c_r: u8, dlci: u8) -> Self {
+    /// Builds a DM (disconnected mode) frame.
+    pub(crate) fn dm(c_r: u8, dlci: u8) -> Self {
         Self::new(frame_type::DM, c_r, dlci, 1, Vec::new(), false)
     }
 
+    /// Builds a DISC frame.
     pub fn disc(c_r: u8, dlci: u8) -> Self {
         Self::new(frame_type::DISC, c_r, dlci, 1, Vec::new(), false)
     }
 
+    /// Builds a UIH frame; `p_f = 1` marks a leading credit octet.
     pub fn uih(c_r: u8, dlci: u8, information: Vec<u8>, p_f: u8) -> Self {
         Self::new(frame_type::UIH, c_r, dlci, p_f, information, p_f == 1)
     }
@@ -286,18 +313,25 @@ fn make_mcc(mcc_type: u8, c_r: bool, data: &[u8]) -> Vec<u8> {
 /// PN (Parameter Negotiation): negotiates a DLC's max frame size and initial
 /// credit count before it opens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MccPn {
+pub(crate) struct MccPn {
+    /// DLCI this negotiation applies to.
     pub dlci: u8,
+    /// Convergence layer / frame type field.
     pub cl: u8,
+    /// DLC priority.
     pub priority: u8,
+    /// Acknowledgement timer (unused; 0).
     pub ack_timer: u8,
+    /// Negotiated maximum frame size.
     pub max_frame_size: u16,
+    /// Maximum retransmissions (0 for UIH).
     pub max_retransmissions: u8,
     /// Only the low 3 bits are meaningful (credits range [1, 7]).
     pub initial_credits: u8,
 }
 
 impl MccPn {
+    /// Encodes the 8-byte PN value field.
     pub fn to_bytes(self) -> [u8; 8] {
         [
             self.dlci,
@@ -311,6 +345,7 @@ impl MccPn {
         ]
     }
 
+    /// Decodes the 8-byte PN value field.
     pub fn parse(data: &[u8]) -> Option<Self> {
         if data.len() < 8 {
             return None;
@@ -330,16 +365,23 @@ impl MccPn {
 /// MSC (Modem Status Command): carries V.24 signal state (RTS/CTS/DTR/DSR
 /// equivalents) for a DLC.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MccMsc {
+pub(crate) struct MccMsc {
+    /// DLCI this status applies to.
     pub dlci: u8,
+    /// Flow-control (legacy aggregate) bit.
     pub fc: bool,
+    /// Ready To Communicate (DSR equivalent).
     pub rtc: bool,
+    /// Ready To Receive (RTS/CTS equivalent).
     pub rtr: bool,
+    /// Incoming Call (RI) indicator.
     pub ic: bool,
+    /// Data Valid (DCD equivalent).
     pub dv: bool,
 }
 
 impl MccMsc {
+    /// Encodes the 2-byte MSC value field.
     pub fn to_bytes(self) -> [u8; 2] {
         [
             (self.dlci << 2) | 3,
@@ -351,6 +393,7 @@ impl MccMsc {
         ]
     }
 
+    /// Decodes the 2-byte MSC value field.
     pub fn parse(data: &[u8]) -> Option<Self> {
         if data.len() < 2 {
             return None;
@@ -384,10 +427,15 @@ impl MccMsc {
 /// Lifecycle of one DLC, ETSI TS 07.10 5.4.6.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DlcState {
+    /// Created, not yet negotiated.
     Init,
+    /// SABM sent, awaiting UA.
     Connecting,
+    /// Open and carrying data.
     Connected,
+    /// DISC sent, awaiting UA.
     Disconnecting,
+    /// Closed.
     Disconnected,
 }
 
@@ -396,16 +444,25 @@ pub enum DlcState {
 /// layered above L2CAP's own flow control on the underlying Basic Mode channel.
 #[derive(Debug, Clone)]
 pub struct Dlc {
+    /// DLCI of this connection.
     pub dlci: u8,
+    /// Current lifecycle state.
     pub state: DlcState,
     c_r: u8,
+    /// Maximum frame size we accept.
     pub rx_max_frame_size: u16,
+    /// Initial credits we grant the peer.
     pub rx_initial_credits: u8,
-    pub rx_max_credits: u8,
-    pub rx_credits: u8,
-    pub rx_credits_threshold: u8,
+    /// Maximum credits we will hold for the peer.
+    pub(crate) rx_max_credits: u8,
+    /// Credits currently granted to the peer.
+    pub(crate) rx_credits: u8,
+    /// Low-water mark for topping up peer credits.
+    pub(crate) rx_credits_threshold: u8,
+    /// Maximum frame size the peer accepts.
     pub tx_max_frame_size: u16,
-    pub tx_credits: u8,
+    /// Credits currently available to us for sending.
+    pub(crate) tx_credits: u8,
     mtu: usize,
     tx_buffer: Vec<u8>,
 }
@@ -439,6 +496,7 @@ impl Dlc {
         }
     }
 
+    /// Whether the DLC is in the Connected state.
     pub fn is_open(&self) -> bool {
         self.state == DlcState::Connected
     }
@@ -494,20 +552,29 @@ impl Dlc {
 // Multiplexer
 // ---------------------------------------------------------------------------
 
+/// Which side opened the RFCOMM multiplexer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
+    /// The side that started the multiplexer (SABM on DLCI 0).
     Initiator,
+    /// The side that accepted the multiplexer.
     Responder,
 }
 
 /// Multiplexer session state, ETSI TS 07.10 5.4.6.1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MultiplexerState {
+    /// Created, multiplexer not yet started.
     Init,
+    /// SABM(0) sent, awaiting UA.
     Connecting,
+    /// Multiplexer session established.
     Connected,
+    /// A DLC open (PN) is in progress.
     Opening,
+    /// DISC(0) sent, awaiting UA.
     Disconnecting,
+    /// Multiplexer closed.
     Disconnected,
 }
 
@@ -550,8 +617,11 @@ fn reserve_listen_channel(
 /// plus any events for the caller to act on, mirroring `lmp::LmpLink`.
 #[derive(Debug)]
 pub struct Multiplexer {
+    /// Whether this endpoint is the initiator or responder.
     pub role: Role,
+    /// Current multiplexer session state.
     pub state: MultiplexerState,
+    /// Open data link connections, keyed by DLCI.
     pub dlcs: HashMap<u8, Dlc>,
     peer_mtu: u16,
     pending_open: Option<MccPn>,
@@ -559,6 +629,7 @@ pub struct Multiplexer {
 }
 
 impl Multiplexer {
+    /// Creates a multiplexer for `role`, sized to the peer's L2CAP MTU.
     pub fn new(role: Role, peer_mtu: u16) -> Self {
         Self {
             role,
@@ -570,6 +641,7 @@ impl Multiplexer {
         }
     }
 
+    /// Whether the multiplexer session (DLCI 0) is up.
     pub fn is_connected(&self) -> bool {
         self.state == MultiplexerState::Connected
     }
@@ -987,10 +1059,12 @@ pub struct RfcommServer {
 }
 
 impl RfcommServer {
+    /// Creates a server with no listening channels.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Registers the RFCOMM PSM with the L2CAP channel manager.
     pub fn register(&self, manager: &mut ClassicChannelManager) -> Result<(), SimbleError> {
         manager.register_server(RFCOMM_PSM)
     }

@@ -9,16 +9,25 @@ use crate::gatt::{AttributePermissions, CharacteristicProperties, GattDatabase};
 use crate::types::Uuid;
 
 /// DIS Characteristic UUIDs.
-pub mod characteristic_uuid {
-    pub const SYSTEM_ID: u16 = 0x2A23;
-    pub const MODEL_NUMBER: u16 = 0x2A24;
-    pub const SERIAL_NUMBER: u16 = 0x2A25;
-    pub const FIRMWARE_REVISION: u16 = 0x2A26;
-    pub const HARDWARE_REVISION: u16 = 0x2A27;
-    pub const SOFTWARE_REVISION: u16 = 0x2A28;
-    pub const MANUFACTURER_NAME: u16 = 0x2A29;
-    pub const IEEE_REGULATORY: u16 = 0x2A2A;
-    pub const PNP_ID: u16 = 0x2A50;
+pub(crate) mod characteristic_uuid {
+    /// System Id characteristic UUID.
+    pub(crate) const SYSTEM_ID: u16 = 0x2A23;
+    /// Model Number characteristic UUID.
+    pub(crate) const MODEL_NUMBER: u16 = 0x2A24;
+    /// Serial Number characteristic UUID.
+    pub(crate) const SERIAL_NUMBER: u16 = 0x2A25;
+    /// Firmware Revision characteristic UUID.
+    pub(crate) const FIRMWARE_REVISION: u16 = 0x2A26;
+    /// Hardware Revision characteristic UUID.
+    pub(crate) const HARDWARE_REVISION: u16 = 0x2A27;
+    /// Software Revision characteristic UUID.
+    pub(crate) const SOFTWARE_REVISION: u16 = 0x2A28;
+    /// Manufacturer Name characteristic UUID.
+    pub(crate) const MANUFACTURER_NAME: u16 = 0x2A29;
+    /// Ieee Regulatory characteristic UUID.
+    pub(crate) const IEEE_REGULATORY: u16 = 0x2A2A;
+    /// Pnp Id characteristic UUID.
+    pub(crate) const PNP_ID: u16 = 0x2A50;
 }
 
 macro_rules! impl_dis_field {
@@ -33,11 +42,17 @@ macro_rules! impl_dis_field {
 /// Builder and manager for Device Information Service (0x180A).
 #[derive(Debug, Clone, Default)]
 pub struct DeviceInformationService {
+    /// Manufacturer Name.
     pub manufacturer_name: Option<String>,
+    /// Model Number.
     pub model_number: Option<String>,
+    /// Serial Number.
     pub serial_number: Option<String>,
+    /// Hardware Revision.
     pub hardware_revision: Option<String>,
+    /// Firmware Revision.
     pub firmware_revision: Option<String>,
+    /// Software Revision.
     pub software_revision: Option<String>,
 }
 

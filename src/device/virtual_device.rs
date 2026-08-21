@@ -18,13 +18,21 @@ use crate::types::{Address, AddressType, SimbleError, Uuid};
 
 /// A simulated virtual Bluetooth device.
 pub struct VirtualDevice {
+    /// Human-readable device name (also used in GAP advertising).
     pub name: String,
+    /// The device's Bluetooth address.
     pub address: Address,
+    /// The device's address type (public or random).
     pub address_type: AddressType,
+    /// The device's GATT server database.
     pub gatt_db: GattDatabase,
+    /// Advertising payload broadcast while advertising, if configured.
     pub advertising_data: Option<AdvertisingData>,
+    /// Whether the device is currently advertising.
     pub is_advertising: bool,
+    /// Active connections keyed by connection handle.
     pub connections: HashMap<u16, ConnectionState>,
+    /// Default ATT MTU applied to new connections before negotiation.
     pub default_mtu: u16,
     /// Optional hook for real ATT-server events (reads, writes, connection
     /// state changes, MTU changes, notifications/indications sent). Used by

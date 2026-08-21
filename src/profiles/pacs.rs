@@ -12,12 +12,19 @@ use crate::gatt::{AttributePermissions, CharacteristicProperties, GattDatabase};
 pub mod pacs_uuid {
     use crate::types::Uuid;
 
+    /// Pacs Service UUID.
     pub const PACS_SERVICE: Uuid = Uuid::Uuid16(0x1850);
+    /// Sink Pac characteristic UUID.
     pub const SINK_PAC: Uuid = Uuid::Uuid16(0x2BC9);
+    /// Sink Audio Locations characteristic UUID.
     pub const SINK_AUDIO_LOCATIONS: Uuid = Uuid::Uuid16(0x2BCA);
+    /// Source Pac characteristic UUID.
     pub const SOURCE_PAC: Uuid = Uuid::Uuid16(0x2BCB);
+    /// Source Audio Locations characteristic UUID.
     pub const SOURCE_AUDIO_LOCATIONS: Uuid = Uuid::Uuid16(0x2BCC);
+    /// Available Audio Contexts characteristic UUID.
     pub const AVAILABLE_AUDIO_CONTEXTS: Uuid = Uuid::Uuid16(0x2BCD);
+    /// Supported Audio Contexts characteristic UUID.
     pub const SUPPORTED_AUDIO_CONTEXTS: Uuid = Uuid::Uuid16(0x2BCE);
 }
 
@@ -28,12 +35,19 @@ pub use crate::profiles::bap::audio_location;
 /// Published Audio Capabilities Service GATT container.
 #[derive(Debug, Clone)]
 pub struct PublishedAudioCapabilitiesService {
+    /// Attribute handle of the service declaration.
     pub service_handle: u16,
+    /// Value attribute handle of the Sink Pac characteristic.
     pub sink_pac_value_handle: u16,
+    /// Value attribute handle of the Sink Locations characteristic.
     pub sink_locations_value_handle: u16,
+    /// Value attribute handle of the Source Pac characteristic.
     pub source_pac_value_handle: u16,
+    /// Value attribute handle of the Source Locations characteristic.
     pub source_locations_value_handle: u16,
+    /// Value attribute handle of the Available Contexts characteristic.
     pub available_contexts_value_handle: u16,
+    /// Value attribute handle of the Supported Contexts characteristic.
     pub supported_contexts_value_handle: u16,
 }
 

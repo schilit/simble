@@ -12,14 +12,19 @@ use crate::devices::helpers::hid_reports::{KEYBOARD_REPORT_MAP, ascii_to_hid, mo
 use crate::profiles::BatteryService;
 use crate::types::Address;
 
+/// Re-export of the HID-over-GATT Profile (HOGP) service UUID helper.
 pub use crate::devices::helpers::hid_device::hogp_uuid;
 
 /// A simulated virtual BLE keyboard peripheral.
 #[derive(Debug, Clone)]
 pub struct BleKeyboard {
+    /// The underlying virtual device hosting the HID GATT database.
     pub device: VirtualDevice,
+    /// Attribute handle of the HID input report characteristic value.
     pub input_report_val_handle: u16,
+    /// Attribute handle of the input report's Client Characteristic Configuration descriptor.
     pub input_report_cccd_handle: u16,
+    /// The Battery Service backing the keyboard's battery level.
     pub bas: BatteryService,
 }
 

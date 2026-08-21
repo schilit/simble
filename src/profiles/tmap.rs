@@ -14,24 +14,34 @@ use crate::gatt::{AttributePermissions, CharacteristicProperties, GattDatabase};
 pub mod tmap_uuid {
     use crate::types::Uuid;
 
+    /// Telephony And Media Audio Service UUID.
     pub const TELEPHONY_AND_MEDIA_AUDIO_SERVICE: Uuid = Uuid::Uuid16(0x1855);
+    /// Tmap Role characteristic UUID.
     pub const TMAP_ROLE: Uuid = Uuid::Uuid16(0x2B51);
 }
 
 /// TMAP Role bitmask (TMAP Section 8.1, 16-bit little-endian on the wire).
 pub mod tmap_role {
+    /// Call Gateway.
     pub const CALL_GATEWAY: u16 = 1 << 0;
+    /// Call Terminal.
     pub const CALL_TERMINAL: u16 = 1 << 1;
+    /// Unicast Media Sender.
     pub const UNICAST_MEDIA_SENDER: u16 = 1 << 2;
+    /// Unicast Media Receiver.
     pub const UNICAST_MEDIA_RECEIVER: u16 = 1 << 3;
+    /// Broadcast Media Sender.
     pub const BROADCAST_MEDIA_SENDER: u16 = 1 << 4;
+    /// Broadcast Media Receiver.
     pub const BROADCAST_MEDIA_RECEIVER: u16 = 1 << 5;
 }
 
 /// Telephony and Media Audio Service GATT container.
 #[derive(Debug, Clone)]
 pub struct TelephonyAndMediaAudioService {
+    /// Attribute handle of the service declaration.
     pub service_handle: u16,
+    /// Value attribute handle of the Role characteristic.
     pub role_value_handle: u16,
 }
 

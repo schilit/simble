@@ -54,7 +54,7 @@ pub mod configuration_result {
 }
 
 /// L2CAP Configuration Option types (Bluetooth Core Vol 3, Part A, 5).
-pub mod configuration_option {
+pub(crate) mod configuration_option {
     pub const MTU: u8 = 0x01;
 }
 
@@ -96,7 +96,7 @@ pub struct ConfigurationResponseHeader {
 }
 
 /// Encodes an MTU configuration option TLV (type 0x01, length 2).
-pub fn encode_mtu_option(mtu: u16) -> [u8; 4] {
+pub(crate) fn encode_mtu_option(mtu: u16) -> [u8; 4] {
     let mut buf = [0u8; 4];
     buf[0] = configuration_option::MTU;
     buf[1] = 2;
@@ -105,7 +105,7 @@ pub fn encode_mtu_option(mtu: u16) -> [u8; 4] {
 }
 
 /// Scans a configuration options TLV list for an MTU option.
-pub fn parse_mtu_option(options: &[u8]) -> Option<u16> {
+pub(crate) fn parse_mtu_option(options: &[u8]) -> Option<u16> {
     let mut i = 0;
     while i + 2 <= options.len() {
         let option_type = options[i];

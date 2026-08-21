@@ -3,15 +3,15 @@
 
 //! HCI Transports and in-memory bridges to the Rootcanal Controller.
 
-pub mod hci_adapter;
+pub(crate) mod hci_adapter;
 // The socket/USB transports need `std::net`/`nusb`, neither of which exists
 // on wasm32-unknown-unknown; the browser build talks to netsim through
 // `wasm_ws` instead, whose JS-binding half is gated inside the module so its
 // pure-Rust demo engines stay natively compiled and natively tested.
 #[cfg(not(target_arch = "wasm32"))]
-pub mod netsim;
+pub(crate) mod netsim;
 #[cfg(not(target_arch = "wasm32"))]
-pub mod rootcanal;
+pub(crate) mod rootcanal;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod usb;
 pub mod wasm_ws;

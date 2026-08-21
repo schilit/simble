@@ -28,40 +28,67 @@ const CONTINUATION_MARKER: [u8; 2] = [0x01, 0x00];
 
 /// SDP PDU identifiers (Bluetooth Core Vol 3, Part B, 4.2).
 pub mod pdu_id {
-    pub const ERROR_RESPONSE: u8 = 0x01;
-    pub const SERVICE_SEARCH_REQUEST: u8 = 0x02;
-    pub const SERVICE_SEARCH_RESPONSE: u8 = 0x03;
-    pub const SERVICE_ATTRIBUTE_REQUEST: u8 = 0x04;
-    pub const SERVICE_ATTRIBUTE_RESPONSE: u8 = 0x05;
-    pub const SERVICE_SEARCH_ATTRIBUTE_REQUEST: u8 = 0x06;
-    pub const SERVICE_SEARCH_ATTRIBUTE_RESPONSE: u8 = 0x07;
+    /// SDP_ErrorResponse.
+    pub(crate) const ERROR_RESPONSE: u8 = 0x01;
+    /// SDP_ServiceSearchRequest.
+    pub(crate) const SERVICE_SEARCH_REQUEST: u8 = 0x02;
+    /// SDP_ServiceSearchResponse.
+    pub(crate) const SERVICE_SEARCH_RESPONSE: u8 = 0x03;
+    /// SDP_ServiceAttributeRequest.
+    pub(crate) const SERVICE_ATTRIBUTE_REQUEST: u8 = 0x04;
+    /// SDP_ServiceAttributeResponse.
+    pub(crate) const SERVICE_ATTRIBUTE_RESPONSE: u8 = 0x05;
+    /// SDP_ServiceSearchAttributeRequest.
+    pub(crate) const SERVICE_SEARCH_ATTRIBUTE_REQUEST: u8 = 0x06;
+    /// SDP_ServiceSearchAttributeResponse.
+    pub(crate) const SERVICE_SEARCH_ATTRIBUTE_RESPONSE: u8 = 0x07;
 }
 
 /// SDP error codes carried in an `SDP_ErrorResponse` PDU.
 pub mod error_code {
+    /// Invalid or unsupported SDP version.
     pub const INVALID_SDP_VERSION: u16 = 0x0001;
-    pub const INVALID_SERVICE_RECORD_HANDLE: u16 = 0x0002;
-    pub const INVALID_REQUEST_SYNTAX: u16 = 0x0003;
+    /// Invalid service record handle.
+    pub(crate) const INVALID_SERVICE_RECORD_HANDLE: u16 = 0x0002;
+    /// Invalid request syntax.
+    pub(crate) const INVALID_REQUEST_SYNTAX: u16 = 0x0003;
+    /// Invalid PDU size.
     pub const INVALID_PDU_SIZE: u16 = 0x0004;
-    pub const INVALID_CONTINUATION_STATE: u16 = 0x0005;
+    /// Invalid continuation state.
+    pub(crate) const INVALID_CONTINUATION_STATE: u16 = 0x0005;
+    /// Insufficient resources to satisfy the request.
     pub const INSUFFICIENT_RESOURCES_TO_SATISFY_REQUEST: u16 = 0x0006;
 }
 
 /// Universal Service Attribute IDs (Bluetooth Assigned Numbers).
 pub mod attribute_id {
+    /// ServiceRecordHandle attribute.
     pub const SERVICE_RECORD_HANDLE: u16 = 0x0000;
+    /// ServiceClassIDList attribute.
     pub const SERVICE_CLASS_ID_LIST: u16 = 0x0001;
+    /// ServiceRecordState attribute.
     pub const SERVICE_RECORD_STATE: u16 = 0x0002;
+    /// ServiceID attribute.
     pub const SERVICE_ID: u16 = 0x0003;
+    /// ProtocolDescriptorList attribute.
     pub const PROTOCOL_DESCRIPTOR_LIST: u16 = 0x0004;
+    /// BrowseGroupList attribute.
     pub const BROWSE_GROUP_LIST: u16 = 0x0005;
-    pub const LANGUAGE_BASE_ATTRIBUTE_ID_LIST: u16 = 0x0006;
+    /// LanguageBaseAttributeIDList attribute.
+    pub(crate) const LANGUAGE_BASE_ATTRIBUTE_ID_LIST: u16 = 0x0006;
+    /// ServiceInfoTimeToLive attribute.
     pub const SERVICE_INFO_TIME_TO_LIVE: u16 = 0x0007;
+    /// ServiceAvailability attribute.
     pub const SERVICE_AVAILABILITY: u16 = 0x0008;
-    pub const BLUETOOTH_PROFILE_DESCRIPTOR_LIST: u16 = 0x0009;
+    /// BluetoothProfileDescriptorList attribute.
+    pub(crate) const BLUETOOTH_PROFILE_DESCRIPTOR_LIST: u16 = 0x0009;
+    /// DocumentationURL attribute.
     pub const DOCUMENTATION_URL: u16 = 0x000A;
+    /// ClientExecutableURL attribute.
     pub const CLIENT_EXECUTABLE_URL: u16 = 0x000B;
+    /// IconURL attribute.
     pub const ICON_URL: u16 = 0x000C;
+    /// AdditionalProtocolDescriptorList attribute.
     pub const ADDITIONAL_PROTOCOL_DESCRIPTOR_LIST: u16 = 0x000D;
 }
 
@@ -76,8 +103,11 @@ pub const ALL_ATTRIBUTES_RANGE: (u16, u16) = (0x0000, 0xFFFF);
 /// `crate::types::Uuid` because SDP additionally allows a 32-bit form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SdpUuid {
+    /// 16-bit UUID.
     Uuid16(u16),
+    /// 32-bit UUID (SDP-only form).
     Uuid32(u32),
+    /// 128-bit UUID, stored big-endian.
     Uuid128([u8; 16]),
 }
 
@@ -85,7 +115,7 @@ impl SdpUuid {
     /// L2CAP protocol UUID (0x0100), used in protocol descriptor lists.
     pub const BT_L2CAP_PROTOCOL_ID: SdpUuid = SdpUuid::Uuid16(0x0100);
     /// RFCOMM protocol UUID (0x0003).
-    pub const BT_RFCOMM_PROTOCOL_ID: SdpUuid = SdpUuid::Uuid16(0x0003);
+    pub(crate) const BT_RFCOMM_PROTOCOL_ID: SdpUuid = SdpUuid::Uuid16(0x0003);
     /// PublicBrowseRoot UUID (0x1002).
     pub const SDP_PUBLIC_BROWSE_ROOT: SdpUuid = SdpUuid::Uuid16(0x1002);
 
@@ -140,88 +170,113 @@ impl From<crate::types::Uuid> for SdpUuid {
 /// An SDP TLV data element (Bluetooth Core Vol 3, Part B, 3.2).
 #[derive(Debug, Clone, PartialEq)]
 pub enum DataElement {
+    /// Nil (no value).
     Nil,
     /// `(value, size_in_bytes)`, size is one of 1/2/4/8.
     UnsignedInteger(u64, u8),
     /// `(value, size_in_bytes)`, size is one of 1/2/4/8.
     SignedInteger(i64, u8),
+    /// A UUID (16/32/128-bit).
     Uuid(SdpUuid),
+    /// A text string (raw bytes).
     TextString(Vec<u8>),
+    /// A boolean.
     Boolean(bool),
+    /// An ordered sequence of elements.
     Sequence(Vec<DataElement>),
+    /// A set of alternative elements.
     Alternative(Vec<DataElement>),
+    /// A URL string.
     Url(String),
 }
 
 impl DataElement {
+    /// Constructs a Nil element.
     pub fn nil() -> Self {
         DataElement::Nil
     }
 
+    /// Constructs an unsigned integer of `size` bytes.
     pub fn unsigned_integer(value: u64, size: u8) -> Self {
         DataElement::UnsignedInteger(value, size)
     }
 
-    pub fn unsigned_integer_8(value: u8) -> Self {
+    /// Constructs a 1-byte unsigned integer.
+    pub(crate) fn unsigned_integer_8(value: u8) -> Self {
         Self::unsigned_integer(value as u64, 1)
     }
 
+    /// Constructs a 2-byte unsigned integer.
     pub fn unsigned_integer_16(value: u16) -> Self {
         Self::unsigned_integer(value as u64, 2)
     }
 
+    /// Constructs a 4-byte unsigned integer.
     pub fn unsigned_integer_32(value: u32) -> Self {
         Self::unsigned_integer(value as u64, 4)
     }
 
+    /// Constructs an 8-byte unsigned integer.
     pub fn unsigned_integer_64(value: u64) -> Self {
         Self::unsigned_integer(value, 8)
     }
 
+    /// Constructs a signed integer of `size` bytes.
     pub fn signed_integer(value: i64, size: u8) -> Self {
         DataElement::SignedInteger(value, size)
     }
 
+    /// Constructs a 1-byte signed integer.
     pub fn signed_integer_8(value: i8) -> Self {
         Self::signed_integer(value as i64, 1)
     }
 
+    /// Constructs a 2-byte signed integer.
     pub fn signed_integer_16(value: i16) -> Self {
         Self::signed_integer(value as i64, 2)
     }
 
+    /// Constructs a 4-byte signed integer.
     pub fn signed_integer_32(value: i32) -> Self {
         Self::signed_integer(value as i64, 4)
     }
 
+    /// Constructs an 8-byte signed integer.
     pub fn signed_integer_64(value: i64) -> Self {
         Self::signed_integer(value, 8)
     }
 
+    /// Constructs a UUID element.
     pub fn uuid(value: SdpUuid) -> Self {
         DataElement::Uuid(value)
     }
 
+    /// Constructs a text-string element.
     pub fn text_string(value: impl Into<Vec<u8>>) -> Self {
         DataElement::TextString(value.into())
     }
 
+    /// Constructs a boolean element.
     pub fn boolean(value: bool) -> Self {
         DataElement::Boolean(value)
     }
 
+    /// Constructs a SEQUENCE element.
     pub fn sequence(items: impl Into<Vec<DataElement>>) -> Self {
         DataElement::Sequence(items.into())
     }
 
+    /// Constructs an ALTERNATIVE element.
     pub fn alternative(items: impl Into<Vec<DataElement>>) -> Self {
         DataElement::Alternative(items.into())
     }
 
+    /// Constructs a URL element.
     pub fn url(value: impl Into<String>) -> Self {
         DataElement::Url(value.into())
     }
 
+    /// Returns the elements of a SEQUENCE, else `None`.
     pub fn as_sequence(&self) -> Option<&[DataElement]> {
         match self {
             DataElement::Sequence(items) => Some(items),
@@ -229,6 +284,7 @@ impl DataElement {
         }
     }
 
+    /// Returns the UUID of a Uuid element, else `None`.
     pub fn as_uuid(&self) -> Option<SdpUuid> {
         match self {
             DataElement::Uuid(u) => Some(*u),
@@ -236,6 +292,7 @@ impl DataElement {
         }
     }
 
+    /// Returns `(value, size)` of an unsigned integer, else `None`.
     pub fn as_unsigned_integer(&self) -> Option<(u64, u8)> {
         match self {
             DataElement::UnsignedInteger(v, s) => Some((*v, *s)),
@@ -473,7 +530,9 @@ fn parse_element(data: &[u8], offset: usize, depth: u32) -> Option<(DataElement,
 /// One `(attribute ID, value)` pair within a service record.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ServiceAttribute {
+    /// Attribute ID.
     pub id: u16,
+    /// Attribute value.
     pub value: DataElement,
 }
 
@@ -481,6 +540,7 @@ pub struct ServiceAttribute {
 pub type Service = Vec<ServiceAttribute>;
 
 impl ServiceAttribute {
+    /// Creates an attribute from an ID and value.
     pub fn new(id: u16, value: DataElement) -> Self {
         Self { id, value }
     }
@@ -488,7 +548,7 @@ impl ServiceAttribute {
     /// Decodes `[id0, value0, id1, value1, ...]` pairs, as found in a
     /// flattened attribute-list `DataElement::Sequence`. Non-integer IDs are
     /// skipped rather than rejecting the whole list.
-    pub fn list_from_data_elements(elements: &[DataElement]) -> Vec<ServiceAttribute> {
+    pub(crate) fn list_from_data_elements(elements: &[DataElement]) -> Vec<ServiceAttribute> {
         elements
             .as_chunks::<2>()
             .0
@@ -500,12 +560,13 @@ impl ServiceAttribute {
             .collect()
     }
 
+    /// Finds the value of attribute `id` in `list`, if present.
     pub fn find_attribute_in_list(list: &[ServiceAttribute], id: u16) -> Option<&DataElement> {
         list.iter().find(|a| a.id == id).map(|a| &a.value)
     }
 
     /// Checks whether `uuid` appears in `value`, recursing into sequences.
-    pub fn is_uuid_in_value(uuid: SdpUuid, value: &DataElement) -> bool {
+    pub(crate) fn is_uuid_in_value(uuid: SdpUuid, value: &DataElement) -> bool {
         match value {
             DataElement::Uuid(u) => *u == uuid,
             DataElement::Sequence(items) => items.iter().any(|e| Self::is_uuid_in_value(uuid, e)),
@@ -521,7 +582,9 @@ impl ServiceAttribute {
 /// An attribute ID, or an inclusive `(start, end)` range of attribute IDs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttributeIdSpec {
+    /// A single attribute ID.
     Single(u16),
+    /// An inclusive `(start, end)` range of attribute IDs.
     Range(u16, u16),
 }
 
@@ -541,22 +604,26 @@ fn encode_attribute_id_list(ids: &[AttributeIdSpec]) -> DataElement {
 /// An SDP request/response PDU (Bluetooth Core Vol 3, Part B, 4).
 #[derive(Debug, Clone, PartialEq)]
 pub enum SdpPdu {
+    /// SDP_ErrorResponse: an error code for a failed request.
     ErrorResponse {
         transaction_id: u16,
         error_code: u16,
     },
+    /// SDP_ServiceSearchRequest: search for records matching a UUID pattern.
     ServiceSearchRequest {
         transaction_id: u16,
         service_search_pattern: DataElement,
         maximum_service_record_count: u16,
         continuation_state: Vec<u8>,
     },
+    /// SDP_ServiceSearchResponse: matching service record handles.
     ServiceSearchResponse {
         transaction_id: u16,
         total_service_record_count: u16,
         service_record_handle_list: Vec<u32>,
         continuation_state: Vec<u8>,
     },
+    /// SDP_ServiceAttributeRequest: request attributes of one service record.
     ServiceAttributeRequest {
         transaction_id: u16,
         service_record_handle: u32,
@@ -564,11 +631,13 @@ pub enum SdpPdu {
         attribute_id_list: DataElement,
         continuation_state: Vec<u8>,
     },
+    /// SDP_ServiceAttributeResponse: the requested attribute list.
     ServiceAttributeResponse {
         transaction_id: u16,
         attribute_list: Vec<u8>,
         continuation_state: Vec<u8>,
     },
+    /// SDP_ServiceSearchAttributeRequest: combined search plus attribute request.
     ServiceSearchAttributeRequest {
         transaction_id: u16,
         service_search_pattern: DataElement,
@@ -576,6 +645,7 @@ pub enum SdpPdu {
         attribute_id_list: DataElement,
         continuation_state: Vec<u8>,
     },
+    /// SDP_ServiceSearchAttributeResponse: attribute lists for all matches.
     ServiceSearchAttributeResponse {
         transaction_id: u16,
         attribute_lists: Vec<u8>,
@@ -600,6 +670,7 @@ impl SdpPdu {
         }
     }
 
+    /// Returns the PDU's transaction ID.
     pub fn transaction_id(&self) -> u16 {
         match self {
             SdpPdu::ErrorResponse { transaction_id, .. }
@@ -816,6 +887,7 @@ pub struct SdpClient {
 }
 
 impl SdpClient {
+    /// Creates a client with a fresh transaction-ID counter.
     pub fn new() -> Self {
         Self::default()
     }
@@ -1002,11 +1074,13 @@ enum PendingResponse {
 /// per-channel — one in-flight request/continuation sequence at a time.
 #[derive(Default)]
 pub struct SdpServer {
+    /// Registered service records, keyed by record handle.
     pub service_records: HashMap<u32, Service>,
     current_response: Option<PendingResponse>,
 }
 
 impl SdpServer {
+    /// Creates a server with no registered records.
     pub fn new() -> Self {
         Self::default()
     }

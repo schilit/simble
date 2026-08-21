@@ -11,33 +11,48 @@ use crate::types::{Address, AddressType, Uuid};
 
 /// Standard HOGP characteristic UUIDs.
 pub mod hogp_uuid {
+    /// HID Service (0x1812).
     pub const HID_SERVICE: u16 = 0x1812;
+    /// Protocol Mode characteristic (0x2A4E).
     pub const PROTOCOL_MODE: u16 = 0x2A4E;
+    /// Report characteristic (0x2A4D).
     pub const REPORT: u16 = 0x2A4D;
+    /// Report Map characteristic (0x2A4B).
     pub const REPORT_MAP: u16 = 0x2A4B;
+    /// HID Information characteristic (0x2A4A).
     pub const HID_INFORMATION: u16 = 0x2A4A;
+    /// HID Control Point characteristic (0x2A4C).
     pub const HID_CONTROL_POINT: u16 = 0x2A4C;
 }
 
 /// Configuration parameters for initializing a standard HID device.
-pub struct HidDeviceConfig<'a> {
+pub(crate) struct HidDeviceConfig<'a> {
+    /// Device name advertised over GAP.
     pub name: String,
+    /// Model number reported by the Device Information Service.
     pub model_number: &'static str,
+    /// The device's Bluetooth address.
     pub address: Address,
+    /// The USB HID report descriptor exposed as the Report Map.
     pub report_map: &'a [u8],
+    /// Initial length (in bytes) of the input report value.
     pub initial_report_len: usize,
 }
 
 /// Initialized common HID components.
-pub struct CommonHidComponents {
+pub(crate) struct CommonHidComponents {
+    /// The fully configured virtual device.
     pub device: VirtualDevice,
+    /// Attribute handle of the HID input report characteristic value.
     pub input_report_val_handle: u16,
+    /// Attribute handle of the input report's Client Characteristic Configuration descriptor.
     pub input_report_cccd_handle: u16,
+    /// The Battery Service registered on the device.
     pub bas: BatteryService,
 }
 
 /// Constructs and registers all standard HOGP services, characteristics, and advertising data.
-pub fn setup_common_hid_device(config: HidDeviceConfig<'_>) -> CommonHidComponents {
+pub(crate) fn setup_common_hid_device(config: HidDeviceConfig<'_>) -> CommonHidComponents {
     let mut dev = VirtualDevice::new(&config.name, config.address, AddressType::Random);
 
     // 1. Device Information Service

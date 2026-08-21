@@ -84,6 +84,7 @@ pub enum EventId {
 }
 
 impl EventId {
+    /// Maps a wire byte to the matching variant, or `None` if unrecognized.
     pub fn from_u8(value: u8) -> Option<Self> {
         Some(match value {
             0 => Self::NotificationAdded,
@@ -96,10 +97,15 @@ impl EventId {
 
 /// EventFlags bitmask in Notification Source packets.
 pub mod event_flags {
+    /// Silent flag bit.
     pub const SILENT: u8 = 1 << 0;
+    /// Important flag bit.
     pub const IMPORTANT: u8 = 1 << 1;
+    /// Pre Existing flag bit.
     pub const PRE_EXISTING: u8 = 1 << 2;
+    /// Positive Action flag bit.
     pub const POSITIVE_ACTION: u8 = 1 << 3;
+    /// Negative Action flag bit.
     pub const NEGATIVE_ACTION: u8 = 1 << 4;
 }
 
@@ -123,6 +129,7 @@ pub enum CategoryId {
 }
 
 impl CategoryId {
+    /// Maps a wire byte to the matching variant, or `None` if unrecognized.
     pub fn from_u8(value: u8) -> Option<Self> {
         Some(match value {
             0 => Self::Other,
@@ -152,6 +159,7 @@ pub enum CommandId {
 }
 
 impl CommandId {
+    /// Maps a wire byte to the matching variant, or `None` if unrecognized.
     pub fn from_u8(value: u8) -> Option<Self> {
         Some(match value {
             0 => Self::GetNotificationAttributes,
@@ -177,6 +185,7 @@ pub enum NotificationAttributeId {
 }
 
 impl NotificationAttributeId {
+    /// Maps a wire byte to the matching variant, or `None` if unrecognized.
     pub fn from_u8(value: u8) -> Option<Self> {
         Some(match value {
             0 => Self::AppIdentifier,
@@ -206,6 +215,7 @@ pub enum AppAttributeId {
 }
 
 impl AppAttributeId {
+    /// Maps a wire byte to the matching variant, or `None` if unrecognized.
     pub fn from_u8(value: u8) -> Option<Self> {
         match value {
             0 => Some(Self::DisplayName),
@@ -223,6 +233,7 @@ pub enum ActionId {
 }
 
 impl ActionId {
+    /// Maps a wire byte to the matching variant, or `None` if unrecognized.
     pub fn from_u8(value: u8) -> Option<Self> {
         Some(match value {
             0 => Self::Positive,
@@ -236,16 +247,23 @@ impl ActionId {
 /// CategoryCount, NotificationUID (u32 LE)]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NotificationEvent {
+    /// Event Id.
     pub event_id: EventId,
+    /// Event Flags.
     pub event_flags: u8,
+    /// Category Id.
     pub category_id: CategoryId,
+    /// Category Count.
     pub category_count: u8,
+    /// Notification Uid.
     pub notification_uid: u32,
 }
 
 impl NotificationEvent {
+    /// Packet Size.
     pub const PACKET_SIZE: usize = 8;
 
+    /// Serializes to the characteristic wire format.
     pub fn to_bytes(self) -> [u8; Self::PACKET_SIZE] {
         let uid = self.notification_uid.to_le_bytes();
         [
@@ -260,6 +278,7 @@ impl NotificationEvent {
         ]
     }
 
+    /// Parses a value from its wire bytes.
     pub fn from_bytes(data: &[u8]) -> Option<Self> {
         let data: &[u8; Self::PACKET_SIZE] = data.get(..Self::PACKET_SIZE)?.try_into().ok()?;
         Some(Self {
@@ -278,17 +297,25 @@ impl NotificationEvent {
 /// uses `yyyyMMdd'T'HHmmSS` (ANCS Specification, "Get Notification Attributes").
 #[derive(Debug, Clone, Default)]
 pub struct NotificationContent {
+    /// Category Id.
     pub category_id: CategoryId,
     /// `event_flags` bits other than the action bits; POSITIVE_ACTION /
     /// NEGATIVE_ACTION are derived from the action labels below so the flags can
     /// never advertise an action the notification doesn't carry.
     pub event_flags: u8,
+    /// App Identifier.
     pub app_identifier: String,
+    /// Title.
     pub title: String,
+    /// Subtitle.
     pub subtitle: String,
+    /// Message.
     pub message: String,
+    /// Date.
     pub date: String,
+    /// Positive Action Label.
     pub positive_action_label: String,
+    /// Negative Action Label.
     pub negative_action_label: String,
 }
 
@@ -511,14 +538,19 @@ impl AttributeHandler for ControlPointHandler {
 /// notification-center state it owns.
 #[derive(Debug)]
 pub struct NotificationCenterService {
+    /// Attribute handle of the service declaration.
     pub service_handle: u16,
+    /// Value attribute handle of the Notification Source characteristic.
     pub notification_source_value_handle: u16,
+    /// Value attribute handle of the Control Point characteristic.
     pub control_point_value_handle: u16,
+    /// Value attribute handle of the Data Source characteristic.
     pub data_source_value_handle: u16,
     state: Arc<Mutex<AncsState>>,
 }
 
 impl NotificationCenterService {
+    /// Registers the service and its characteristics into a GATT database.
     pub fn register(db: &mut GattDatabase) -> Self {
         let service_handle = db.add_service(ancs_uuid::APPLE_NOTIFICATION_CENTER_SERVICE, true);
 
@@ -679,12 +711,14 @@ impl NotificationCenterService {
 /// One attribute request for [`AncsClient::create_get_notification_attributes_command`].
 #[derive(Debug, Clone, Copy)]
 pub struct NotificationAttributeRequest {
+    /// Attribute Id.
     pub attribute_id: NotificationAttributeId,
     /// Only meaningful for Title/Subtitle/Message; `None` requests the full value.
     pub max_length: Option<u16>,
 }
 
 impl NotificationAttributeRequest {
+    /// Creates a new instance.
     pub fn new(attribute_id: NotificationAttributeId) -> Self {
         Self {
             attribute_id,
@@ -692,6 +726,7 @@ impl NotificationAttributeRequest {
         }
     }
 
+    /// Sets the max length (builder style).
     pub fn with_max_length(attribute_id: NotificationAttributeId, max_length: u16) -> Self {
         Self {
             attribute_id,
@@ -737,6 +772,7 @@ pub struct AncsClient {
 }
 
 impl AncsClient {
+    /// Creates a new instance.
     pub fn new() -> Self {
         Self::default()
     }

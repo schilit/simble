@@ -65,10 +65,12 @@ pub struct H4FrameReader {
 }
 
 impl H4FrameReader {
+    /// Creates an empty H4 frame reader.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Appends received bytes to the internal buffer for later framing.
     pub fn feed(&mut self, bytes: &[u8]) {
         if self.offset > 0 {
             self.buffer.drain(..self.offset);
@@ -159,6 +161,7 @@ impl RootcanalTransport<TcpStream> {
 }
 
 impl<S: Read + Write> RootcanalTransport<S> {
+    /// Wraps an already-connected stream as a Rootcanal transport.
     pub fn new(stream: S) -> Self {
         Self {
             stream,

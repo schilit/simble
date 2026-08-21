@@ -9,16 +9,24 @@ use crate::types::SimbleError;
 /// An active L2CAP Connection-Oriented Channel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoCChannel {
+    /// Local (source) channel identifier.
     pub cid: u16,
+    /// Peer (destination) channel identifier.
     pub peer_cid: u16,
+    /// Simplified Protocol/Service Multiplexer identifying the CoC service.
     pub spsm: u16,
+    /// Maximum Transmission Unit: largest SDU this channel accepts.
     pub mtu: u16,
+    /// Maximum PDU Size: largest L2CAP payload per fragment.
     pub mps: u16,
+    /// Credits available for the peer to send to us.
     pub local_credits: u16,
+    /// Credits available for us to send to the peer.
     pub peer_credits: u16,
 }
 
 impl CoCChannel {
+    /// Creates a CoC channel with the given CIDs, SPSM, MTU/MPS, and initial credit counts.
     pub fn new(
         cid: u16,
         peer_cid: u16,
@@ -79,9 +87,12 @@ impl Default for CoCManager {
 }
 
 impl CoCManager {
+    /// Lowest dynamic CID assignable to a CoC channel (0x0040).
     pub const MIN_DYNAMIC_CID: u16 = 0x0040;
+    /// Highest dynamic CID assignable to a CoC channel (0x007F).
     pub const MAX_DYNAMIC_CID: u16 = 0x007F;
 
+    /// Creates an empty manager over the dynamic CID range.
     pub fn new() -> Self {
         Self {
             channels: CidAllocator::new(Self::MIN_DYNAMIC_CID, Self::MAX_DYNAMIC_CID),
@@ -117,14 +128,17 @@ impl CoCManager {
             .ok_or_else(|| SimbleError::DeviceError("L2CAP CoC: All dynamic CIDs exhausted".into()))
     }
 
+    /// Returns a shared reference to the channel with the given local CID.
     pub fn get_channel(&self, cid: u16) -> Option<&CoCChannel> {
         self.channels.get(cid)
     }
 
+    /// Returns a mutable reference to the channel with the given local CID.
     pub fn get_channel_mut(&mut self, cid: u16) -> Option<&mut CoCChannel> {
         self.channels.get_mut(cid)
     }
 
+    /// Removes and returns the channel with the given local CID.
     pub fn remove_channel(&mut self, cid: u16) -> Option<CoCChannel> {
         self.channels.remove(cid)
     }

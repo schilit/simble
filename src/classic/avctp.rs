@@ -25,9 +25,9 @@ use crate::packets::l2cap_signaling::ConnectionRequestHeader;
 use crate::types::SimbleError;
 
 /// Well-known PSM for the AVCTP control channel (Bluetooth Assigned Numbers).
-pub const AVCTP_PSM: u16 = 0x0017;
+pub(crate) const AVCTP_PSM: u16 = 0x0017;
 /// Well-known PSM for the AVCTP browsing channel (Bluetooth Assigned Numbers).
-pub const AVCTP_BROWSING_PSM: u16 = 0x001B;
+pub(crate) const AVCTP_BROWSING_PSM: u16 = 0x001B;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PacketType {
@@ -60,12 +60,16 @@ impl PacketType {
 /// A fully reassembled AVCTP message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Message {
+    /// Transaction label pairing a response with its command (header bits 4-7).
     pub transaction_label: u8,
+    /// `true` for a command message, `false` for a response (C/R bit).
     pub is_command: bool,
     /// Set in a response to report that the command's PID is not supported
     /// (AVCTP spec 1.4, section 6.1.2).
     pub ipid: bool,
+    /// Profile ID: the service class UUID value of the carried profile.
     pub pid: u16,
+    /// The reassembled message payload (the AV/C frame for AVRCP).
     pub payload: Vec<u8>,
 }
 
@@ -157,6 +161,7 @@ pub struct MessageAssembler {
 }
 
 impl MessageAssembler {
+    /// Creates an empty assembler with no message in progress.
     pub fn new() -> Self {
         Self::default()
     }
@@ -274,6 +279,8 @@ pub struct Protocol {
 }
 
 impl Protocol {
+    /// Creates a channel state machine that fragments outgoing messages to
+    /// `peer_mtu`.
     pub fn new(peer_mtu: u16) -> Self {
         Self {
             peer_mtu,
@@ -296,12 +303,17 @@ impl Protocol {
     }
 
     /// Builds the packets for one response message.
-    pub fn send_response(&self, transaction_label: u8, pid: u16, payload: &[u8]) -> Vec<Vec<u8>> {
+    pub(crate) fn send_response(
+        &self,
+        transaction_label: u8,
+        pid: u16,
+        payload: &[u8],
+    ) -> Vec<Vec<u8>> {
         write_message(transaction_label, false, false, pid, payload, self.peer_mtu)
     }
 
     /// Builds the IPID (invalid PID) response for a command we cannot serve.
-    pub fn send_ipid_response(&self, transaction_label: u8, pid: u16) -> Vec<Vec<u8>> {
+    pub(crate) fn send_ipid_response(&self, transaction_label: u8, pid: u16) -> Vec<Vec<u8>> {
         write_message(transaction_label, false, true, pid, &[], self.peer_mtu)
     }
 

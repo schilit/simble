@@ -13,6 +13,7 @@ pub const EDDYSTONE_SERVICE_UUID: u16 = 0xFEAA;
 /// An Eddystone-UID proximity beacon.
 #[derive(Debug, Clone)]
 pub struct EddystoneUidBeacon {
+    /// The underlying virtual device carrying the Eddystone-UID advertisement.
     pub device: VirtualDevice,
 }
 
@@ -54,6 +55,7 @@ impl EddystoneUidBeacon {
 /// An Apple-compatible iBeacon proximity broadcaster.
 #[derive(Debug, Clone)]
 pub struct IBeacon {
+    /// The underlying virtual device carrying the iBeacon advertisement.
     pub device: VirtualDevice,
 }
 

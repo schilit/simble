@@ -31,6 +31,7 @@ use std::sync::{Arc, Mutex};
 pub mod asha_uuid {
     use crate::types::Uuid;
 
+    /// Asha Service UUID.
     pub const ASHA_SERVICE: Uuid = Uuid::Uuid16(0xFDF0);
     /// 6333651e-c481-4a3e-9169-7c902aad37bb
     pub const READ_ONLY_PROPERTIES: Uuid = Uuid::Uuid128([
@@ -61,55 +62,74 @@ pub mod asha_uuid {
 
 /// DeviceCapabilities bitmask in ReadOnlyProperties and the service-data advertisement.
 pub mod device_capabilities {
+    /// Is Right.
     pub const IS_RIGHT: u8 = 0x01;
+    /// Is Dual.
     pub const IS_DUAL: u8 = 0x02;
+    /// Csis Supported.
     pub const CSIS_SUPPORTED: u8 = 0x04;
 }
 
 /// FeatureMap bitmask in ReadOnlyProperties.
 pub mod feature_map {
+    /// Le Coc Audio Output Streaming Supported.
     pub const LE_COC_AUDIO_OUTPUT_STREAMING_SUPPORTED: u8 = 0x01;
 }
 
 /// AudioControlPoint opcodes.
 pub mod opcode {
+    /// Start control-point opcode.
     pub const START: u8 = 1;
+    /// Stop control-point opcode.
     pub const STOP: u8 = 2;
+    /// Status control-point opcode.
     pub const STATUS: u8 = 3;
 }
 
 /// Codec IDs carried in the Start command's codec field.
 pub mod codec {
+    /// G722 16khz.
     pub const G722_16KHZ: u8 = 1;
 }
 
 /// SupportedCodecs bitmask in ReadOnlyProperties: bit N set means codec ID N is
 /// supported, so G.722 at 16 kHz (codec ID 1) is bit 1.
 pub mod supported_codecs {
+    /// G722 16khz.
     pub const G722_16KHZ: u16 = 1 << 1;
 }
 
 /// AudioType field of the Start command.
 pub mod audio_type {
+    /// Unknown.
     pub const UNKNOWN: u8 = 0x00;
+    /// Ringtone.
     pub const RINGTONE: u8 = 0x01;
+    /// Phone Call.
     pub const PHONE_CALL: u8 = 0x02;
+    /// Media.
     pub const MEDIA: u8 = 0x03;
 }
 
 /// Status field of the Status command: what happened to the other peripheral of the
 /// binaural set.
 pub mod peripheral_status {
+    /// Other Peripheral Disconnected.
     pub const OTHER_PERIPHERAL_DISCONNECTED: u8 = 1;
+    /// Other Peripheral Connected.
     pub const OTHER_PERIPHERAL_CONNECTED: u8 = 2;
+    /// Connection Parameter Updated.
     pub const CONNECTION_PARAMETER_UPDATED: u8 = 3;
 }
 
 /// AudioStatus characteristic values. The protocol defines the error values as signed
 /// (-1/-2); on the wire they are the two's-complement bytes below.
 pub mod audio_status {
+    /// Ok.
     pub const OK: u8 = 0x00;
+    /// Unknown Command.
     pub const UNKNOWN_COMMAND: u8 = 0xFF;
+    /// Illegal Parameters.
     pub const ILLEGAL_PARAMETERS: u8 = 0xFE;
 }
 
@@ -118,6 +138,7 @@ pub mod audio_status {
 /// Reserved(2), SupportedCodecs(2 LE)]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReadOnlyProperties {
+    /// Protocol Version.
     pub protocol_version: u8,
     /// [`device_capabilities`] bitmask.
     pub capabilities: u8,
@@ -133,6 +154,7 @@ pub struct ReadOnlyProperties {
 }
 
 impl ReadOnlyProperties {
+    /// Serializes to the characteristic wire format.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(17);
         buf.push(self.protocol_version);
@@ -146,6 +168,7 @@ impl ReadOnlyProperties {
         buf
     }
 
+    /// Parses a value from its wire bytes.
     pub fn parse(data: &[u8]) -> Option<Self> {
         Some(Self {
             protocol_version: *data.first()?,
@@ -249,15 +272,22 @@ impl AttributeHandler for VolumeHandler {
 /// ASHA service GATT container plus the streaming state it owns.
 #[derive(Debug)]
 pub struct AshaService {
+    /// Attribute handle of the service declaration.
     pub service_handle: u16,
+    /// Value attribute handle of the Read Only Properties characteristic.
     pub read_only_properties_value_handle: u16,
+    /// Value attribute handle of the Audio Control Point characteristic.
     pub audio_control_point_value_handle: u16,
+    /// Value attribute handle of the Audio Status characteristic.
     pub audio_status_value_handle: u16,
+    /// Value attribute handle of the Volume characteristic.
     pub volume_value_handle: u16,
+    /// Value attribute handle of the Le Psm Out characteristic.
     pub le_psm_out_value_handle: u16,
     /// The CoC PSM advertised in LE_PSM_OUT (see module docs for the transport
     /// boundary).
     pub psm: u16,
+    /// Properties.
     pub properties: ReadOnlyProperties,
     state: Arc<Mutex<AshaState>>,
 }
@@ -366,6 +396,7 @@ impl AshaService {
             .active_codec
     }
 
+    /// Returns the audio type.
     pub fn audio_type(&self) -> Option<u8> {
         self.state
             .lock()
@@ -373,10 +404,12 @@ impl AshaService {
             .audio_type
     }
 
+    /// Returns the volume.
     pub fn volume(&self) -> Option<i8> {
         self.state.lock().expect("ASHA state lock poisoned").volume
     }
 
+    /// Returns the OtherState field byte, if present.
     pub fn other_state(&self) -> Option<u8> {
         self.state
             .lock()

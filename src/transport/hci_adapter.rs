@@ -12,21 +12,28 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 
 /// H4 Packet Types (Bluetooth Core Specification Vol 4, Part A)
 pub mod h4_type {
+    /// HCI Command packet type (0x01).
     pub const HCI_COMMAND: u8 = 0x01;
+    /// HCI ACL Data packet type (0x02).
     pub const HCI_ACL_DATA: u8 = 0x02;
+    /// HCI Synchronous (SCO) Data packet type (0x03).
     pub const HCI_SCO_DATA: u8 = 0x03;
+    /// HCI Event packet type (0x04).
     pub const HCI_EVENT: u8 = 0x04;
+    /// HCI Isochronous (ISO) Data packet type (0x05).
     pub const HCI_ISO_DATA: u8 = 0x05;
 }
 
 /// In-memory bidirectional HCI channel pair connecting Simble Host to Rootcanal Controller.
 pub struct HciChannel {
-    /// Outgoing channel (Host -> Controller)
+    /// Sender for the Host -> Controller direction.
     pub host_to_ctrl_tx: Sender<Vec<u8>>,
+    /// Receiver for the Host -> Controller direction.
     pub host_to_ctrl_rx: Mutex<Receiver<Vec<u8>>>,
 
-    /// Incoming channel (Controller -> Host)
+    /// Sender for the Controller -> Host direction.
     pub ctrl_to_host_tx: Sender<Vec<u8>>,
+    /// Receiver for the Controller -> Host direction.
     pub ctrl_to_host_rx: Mutex<Receiver<Vec<u8>>>,
 }
 

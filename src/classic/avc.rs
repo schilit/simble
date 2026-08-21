@@ -18,132 +18,230 @@
 
 /// The Bluetooth SIG company ID carried in AVRCP vendor-dependent frames
 /// (AVRCP spec 6.1).
-pub const BLUETOOTH_SIG_COMPANY_ID: u32 = 0x00_1958;
+pub(crate) const BLUETOOTH_SIG_COMPANY_ID: u32 = 0x00_1958;
 
 /// Subunit types (AV/C General Specification 4.1, Table 7.4).
 pub mod subunit_type {
+    /// `MONITOR` subunit type (AV/C General Specification 4.1, Table 7.4).
     pub const MONITOR: u8 = 0x00;
+    /// `AUDIO` subunit type (AV/C General Specification 4.1, Table 7.4).
     pub const AUDIO: u8 = 0x01;
+    /// `PRINTER` subunit type (AV/C General Specification 4.1, Table 7.4).
     pub const PRINTER: u8 = 0x02;
+    /// `DISC` subunit type (AV/C General Specification 4.1, Table 7.4).
     pub const DISC: u8 = 0x03;
+    /// `TAPE_RECORDER_OR_PLAYER` subunit type (AV/C General Specification 4.1, Table 7.4).
     pub const TAPE_RECORDER_OR_PLAYER: u8 = 0x04;
+    /// `TUNER` subunit type (AV/C General Specification 4.1, Table 7.4).
     pub const TUNER: u8 = 0x05;
+    /// `CA` subunit type (AV/C General Specification 4.1, Table 7.4).
     pub const CA: u8 = 0x06;
+    /// `CAMERA` subunit type (AV/C General Specification 4.1, Table 7.4).
     pub const CAMERA: u8 = 0x07;
+    /// `PANEL` subunit type (AV/C General Specification 4.1, Table 7.4).
     pub const PANEL: u8 = 0x09;
+    /// `BULLETIN_BOARD` subunit type (AV/C General Specification 4.1, Table 7.4).
     pub const BULLETIN_BOARD: u8 = 0x0A;
+    /// `VENDOR_UNIQUE` subunit type (AV/C General Specification 4.1, Table 7.4).
     pub const VENDOR_UNIQUE: u8 = 0x1C;
-    pub const EXTENDED: u8 = 0x1E;
-    pub const UNIT: u8 = 0x1F;
+    /// `EXTENDED` subunit type (AV/C General Specification 4.1, Table 7.4).
+    pub(crate) const EXTENDED: u8 = 0x1E;
+    /// `UNIT` subunit type (AV/C General Specification 4.1, Table 7.4).
+    pub(crate) const UNIT: u8 = 0x1F;
 }
 
 /// Operation codes (AV/C General Specification 4.1, section 7.3.1).
 pub mod opcode {
     // 0x00 - 0x0F: unit and subunit commands
+    /// `VENDOR_DEPENDENT` operation code (AV/C General Specification 4.1, section 7.3.1).
     pub const VENDOR_DEPENDENT: u8 = 0x00;
+    /// `RESERVE` operation code (AV/C General Specification 4.1, section 7.3.1).
     pub const RESERVE: u8 = 0x01;
+    /// `PLUG_INFO` operation code (AV/C General Specification 4.1, section 7.3.1).
     pub const PLUG_INFO: u8 = 0x02;
 
     // 0x10 - 0x3F: unit commands
+    /// `DIGITAL_OUTPUT` operation code (AV/C General Specification 4.1, section 7.3.1).
     pub const DIGITAL_OUTPUT: u8 = 0x10;
+    /// `DIGITAL_INPUT` operation code (AV/C General Specification 4.1, section 7.3.1).
     pub const DIGITAL_INPUT: u8 = 0x11;
+    /// `CHANNEL_USAGE` operation code (AV/C General Specification 4.1, section 7.3.1).
     pub const CHANNEL_USAGE: u8 = 0x12;
+    /// `OUTPUT_PLUG_SIGNAL_FORMAT` operation code (AV/C General Specification 4.1, section 7.3.1).
     pub const OUTPUT_PLUG_SIGNAL_FORMAT: u8 = 0x18;
+    /// `INPUT_PLUG_SIGNAL_FORMAT` operation code (AV/C General Specification 4.1, section 7.3.1).
     pub const INPUT_PLUG_SIGNAL_FORMAT: u8 = 0x19;
+    /// `GENERAL_BUS_SETUP` operation code (AV/C General Specification 4.1, section 7.3.1).
     pub const GENERAL_BUS_SETUP: u8 = 0x1F;
+    /// `CONNECT_AV` operation code (AV/C General Specification 4.1, section 7.3.1).
     pub const CONNECT_AV: u8 = 0x20;
+    /// `DISCONNECT_AV` operation code (AV/C General Specification 4.1, section 7.3.1).
     pub const DISCONNECT_AV: u8 = 0x21;
+    /// `CONNECTIONS` operation code (AV/C General Specification 4.1, section 7.3.1).
     pub const CONNECTIONS: u8 = 0x22;
+    /// `CONNECT` operation code (AV/C General Specification 4.1, section 7.3.1).
     pub const CONNECT: u8 = 0x24;
+    /// `DISCONNECT` operation code (AV/C General Specification 4.1, section 7.3.1).
     pub const DISCONNECT: u8 = 0x25;
+    /// `UNIT_INFO` operation code (AV/C General Specification 4.1, section 7.3.1).
     pub const UNIT_INFO: u8 = 0x30;
+    /// `SUBUNIT_INFO` operation code (AV/C General Specification 4.1, section 7.3.1).
     pub const SUBUNIT_INFO: u8 = 0x31;
 
     // 0x40 - 0x7F: subunit commands
-    pub const PASS_THROUGH: u8 = 0x7C;
+    /// `PASS_THROUGH` operation code (AV/C General Specification 4.1, section 7.3.1).
+    pub(crate) const PASS_THROUGH: u8 = 0x7C;
+    /// `GUI_UPDATE` operation code (AV/C General Specification 4.1, section 7.3.1).
     pub const GUI_UPDATE: u8 = 0x7D;
+    /// `PUSH_GUI_DATA` operation code (AV/C General Specification 4.1, section 7.3.1).
     pub const PUSH_GUI_DATA: u8 = 0x7E;
+    /// `USER_ACTION` operation code (AV/C General Specification 4.1, section 7.3.1).
     pub const USER_ACTION: u8 = 0x7F;
 
     // 0xA0 - 0xBF: unit and subunit commands
+    /// `VERSION` operation code (AV/C General Specification 4.1, section 7.3.1).
     pub const VERSION: u8 = 0xB0;
+    /// `POWER` operation code (AV/C General Specification 4.1, section 7.3.1).
     pub const POWER: u8 = 0xB2;
 }
 
 /// PASS THROUGH operation IDs (AV/C Panel Subunit Specification 1.1,
 /// Table 9.21).
 pub mod operation_id {
+    /// `SELECT` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const SELECT: u8 = 0x00;
+    /// `UP` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const UP: u8 = 0x01;
+    /// `DOWN` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const DOWN: u8 = 0x02;
+    /// `LEFT` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const LEFT: u8 = 0x03;
+    /// `RIGHT` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const RIGHT: u8 = 0x04;
+    /// `RIGHT_UP` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const RIGHT_UP: u8 = 0x05;
+    /// `RIGHT_DOWN` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const RIGHT_DOWN: u8 = 0x06;
+    /// `LEFT_UP` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const LEFT_UP: u8 = 0x07;
+    /// `LEFT_DOWN` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const LEFT_DOWN: u8 = 0x08;
+    /// `ROOT_MENU` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const ROOT_MENU: u8 = 0x09;
+    /// `SETUP_MENU` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const SETUP_MENU: u8 = 0x0A;
+    /// `CONTENTS_MENU` PASS THROUGH operation ID.
     pub const CONTENTS_MENU: u8 = 0x0B;
+    /// `FAVORITE_MENU` PASS THROUGH operation ID.
     pub const FAVORITE_MENU: u8 = 0x0C;
+    /// `EXIT` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const EXIT: u8 = 0x0D;
+    /// `NUMBER_0` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const NUMBER_0: u8 = 0x20;
+    /// `NUMBER_1` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const NUMBER_1: u8 = 0x21;
+    /// `NUMBER_2` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const NUMBER_2: u8 = 0x22;
+    /// `NUMBER_3` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const NUMBER_3: u8 = 0x23;
+    /// `NUMBER_4` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const NUMBER_4: u8 = 0x24;
+    /// `NUMBER_5` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const NUMBER_5: u8 = 0x25;
+    /// `NUMBER_6` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const NUMBER_6: u8 = 0x26;
+    /// `NUMBER_7` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const NUMBER_7: u8 = 0x27;
+    /// `NUMBER_8` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const NUMBER_8: u8 = 0x28;
+    /// `NUMBER_9` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const NUMBER_9: u8 = 0x29;
+    /// `DOT` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const DOT: u8 = 0x2A;
+    /// `ENTER` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const ENTER: u8 = 0x2B;
+    /// `CLEAR` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const CLEAR: u8 = 0x2C;
+    /// `CHANNEL_UP` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const CHANNEL_UP: u8 = 0x30;
+    /// `CHANNEL_DOWN` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const CHANNEL_DOWN: u8 = 0x31;
+    /// `PREVIOUS_CHANNEL` PASS THROUGH operation ID.
     pub const PREVIOUS_CHANNEL: u8 = 0x32;
+    /// `SOUND_SELECT` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const SOUND_SELECT: u8 = 0x33;
+    /// `INPUT_SELECT` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const INPUT_SELECT: u8 = 0x34;
+    /// `DISPLAY_INFORMATION` PASS THROUGH operation ID.
     pub const DISPLAY_INFORMATION: u8 = 0x35;
+    /// `HELP` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const HELP: u8 = 0x36;
+    /// `PAGE_UP` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const PAGE_UP: u8 = 0x37;
+    /// `PAGE_DOWN` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const PAGE_DOWN: u8 = 0x38;
+    /// `POWER` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const POWER: u8 = 0x40;
+    /// `VOLUME_UP` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const VOLUME_UP: u8 = 0x41;
+    /// `VOLUME_DOWN` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const VOLUME_DOWN: u8 = 0x42;
+    /// `MUTE` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const MUTE: u8 = 0x43;
+    /// `PLAY` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const PLAY: u8 = 0x44;
+    /// `STOP` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const STOP: u8 = 0x45;
+    /// `PAUSE` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const PAUSE: u8 = 0x46;
+    /// `RECORD` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const RECORD: u8 = 0x47;
+    /// `REWIND` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const REWIND: u8 = 0x48;
+    /// `FAST_FORWARD` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const FAST_FORWARD: u8 = 0x49;
+    /// `EJECT` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const EJECT: u8 = 0x4A;
+    /// `FORWARD` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const FORWARD: u8 = 0x4B;
+    /// `BACKWARD` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const BACKWARD: u8 = 0x4C;
+    /// `ANGLE` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const ANGLE: u8 = 0x50;
+    /// `SUBPICTURE` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const SUBPICTURE: u8 = 0x51;
+    /// `F1` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const F1: u8 = 0x71;
+    /// `F2` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const F2: u8 = 0x72;
+    /// `F3` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const F3: u8 = 0x73;
+    /// `F4` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const F4: u8 = 0x74;
+    /// `F5` PASS THROUGH operation ID (AV/C Panel Subunit Specification 1.1, Table 9.21).
     pub const F5: u8 = 0x75;
+    /// `VENDOR_UNIQUE` PASS THROUGH operation ID.
     pub const VENDOR_UNIQUE: u8 = 0x7E;
 }
 
 /// Command types (AV/C General Specification 4.1, Table 7.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandType {
+    /// CONTROL: request an operation be performed.
     Control,
+    /// STATUS: query the current status of a target.
     Status,
+    /// SPECIFIC INQUIRY: ask whether a specific control operation is supported.
     SpecificInquiry,
+    /// NOTIFY: register to be notified of a future status change.
     Notify,
+    /// GENERAL INQUIRY: ask whether an opcode is supported.
     GeneralInquiry,
 }
 
 impl CommandType {
-    pub fn from_u8(value: u8) -> Option<Self> {
+    /// Decodes a ctype nibble, or `None` for a reserved value.
+    pub(crate) fn from_u8(value: u8) -> Option<Self> {
         match value {
             0x00 => Some(CommandType::Control),
             0x01 => Some(CommandType::Status),
@@ -154,7 +252,8 @@ impl CommandType {
         }
     }
 
-    pub fn as_u8(self) -> u8 {
+    /// Encodes this command type as its ctype nibble.
+    pub(crate) fn as_u8(self) -> u8 {
         match self {
             CommandType::Control => 0x00,
             CommandType::Status => 0x01,
@@ -168,17 +267,25 @@ impl CommandType {
 /// Response codes (AV/C General Specification 4.1, Table 7.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResponseCode {
+    /// NOT IMPLEMENTED: the target does not implement the command.
     NotImplemented,
+    /// ACCEPTED: a CONTROL command was accepted.
     Accepted,
+    /// REJECTED: the command was understood but refused.
     Rejected,
+    /// IN TRANSITION: the target is transitioning and cannot answer yet.
     InTransition,
+    /// IMPLEMENTED / STABLE: a STATUS/INQUIRY command answered with stable data.
     ImplementedOrStable,
+    /// CHANGED: a registered notification fired.
     Changed,
+    /// INTERIM: an initial notification snapshot, to be followed by CHANGED.
     Interim,
 }
 
 impl ResponseCode {
-    pub fn from_u8(value: u8) -> Option<Self> {
+    /// Decodes a response nibble, or `None` for a reserved value.
+    pub(crate) fn from_u8(value: u8) -> Option<Self> {
         match value {
             0x08 => Some(ResponseCode::NotImplemented),
             0x09 => Some(ResponseCode::Accepted),
@@ -191,7 +298,8 @@ impl ResponseCode {
         }
     }
 
-    pub fn as_u8(self) -> u8 {
+    /// Encodes this response code as its response nibble.
+    pub(crate) fn as_u8(self) -> u8 {
         match self {
             ResponseCode::NotImplemented => 0x08,
             ResponseCode::Accepted => 0x09,
@@ -213,28 +321,40 @@ impl ResponseCode {
 /// Specification 4.1, section 7.3.4), reaching up to 514.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandFrame {
+    /// Command type (ctype) in the low nibble of byte 0.
     pub ctype: CommandType,
+    /// Addressed subunit type (e.g. PANEL for AVRCP).
     pub subunit_type: u8,
+    /// Addressed subunit ID (0 for the PANEL subunit, 7 for the unit).
     pub subunit_id: u16,
+    /// Operation code identifying the command.
     pub opcode: u8,
-    pub operands: Vec<u8>,
+    /// Opcode-specific operand bytes.
+    pub(crate) operands: Vec<u8>,
 }
 
 /// An AV/C response frame; see [`CommandFrame`] for field notes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResponseFrame {
+    /// Response code in the low nibble of byte 0.
     pub response: ResponseCode,
-    pub subunit_type: u8,
-    pub subunit_id: u16,
-    pub opcode: u8,
-    pub operands: Vec<u8>,
+    /// Addressed subunit type (e.g. PANEL for AVRCP).
+    pub(crate) subunit_type: u8,
+    /// Addressed subunit ID (0 for the PANEL subunit, 7 for the unit).
+    pub(crate) subunit_id: u16,
+    /// Operation code identifying the command being answered.
+    pub(crate) opcode: u8,
+    /// Opcode-specific operand bytes.
+    pub(crate) operands: Vec<u8>,
 }
 
 /// A parsed AV/C frame: the low nibble of byte 0 below 8 is a command type,
 /// 8 and above is a response code (AV/C General Specification 4.1, 7.1/7.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Frame {
+    /// A command frame (ctype in the low nibble of byte 0).
     Command(CommandFrame),
+    /// A response frame (response code in the low nibble of byte 0).
     Response(ResponseFrame),
 }
 
@@ -314,6 +434,7 @@ fn frame_to_bytes(
 }
 
 impl CommandFrame {
+    /// Serializes this command frame to its on-the-wire bytes.
     pub fn to_bytes(&self) -> Vec<u8> {
         frame_to_bytes(
             self.ctype.as_u8(),
@@ -373,6 +494,7 @@ impl CommandFrame {
 }
 
 impl ResponseFrame {
+    /// Serializes this response frame to its on-the-wire bytes.
     pub fn to_bytes(&self) -> Vec<u8> {
         frame_to_bytes(
             self.response.as_u8(),
@@ -439,12 +561,15 @@ impl ResponseFrame {
 /// vendor data (AV/C General Specification 4.1, section 9).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VendorDependent {
+    /// 24-bit vendor/company ID (the Bluetooth SIG ID for AVRCP).
     pub company_id: u32,
+    /// Vendor-specific data following the company ID (the AVRCP PDU).
     pub data: Vec<u8>,
 }
 
 impl VendorDependent {
-    pub fn parse(operands: &[u8]) -> Option<Self> {
+    /// Parses the company ID and data from VENDOR DEPENDENT operands.
+    pub(crate) fn parse(operands: &[u8]) -> Option<Self> {
         let id = operands.get(..3)?;
         Some(Self {
             company_id: u32::from_be_bytes([0, id[0], id[1], id[2]]),
@@ -452,7 +577,8 @@ impl VendorDependent {
         })
     }
 
-    pub fn to_operands(&self) -> Vec<u8> {
+    /// Serializes back into VENDOR DEPENDENT operand bytes.
+    pub(crate) fn to_operands(&self) -> Vec<u8> {
         let id = self.company_id.to_be_bytes();
         let mut out = vec![id[1], id[2], id[3]];
         out.extend_from_slice(&self.data);
@@ -465,13 +591,17 @@ impl VendorDependent {
 /// operation data field (AV/C Panel Subunit Specification 1.1, section 9.4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PassThrough {
+    /// State flag: `true` for a key press, `false` for a release.
     pub pressed: bool,
+    /// 7-bit PASS THROUGH operation ID (see [`operation_id`]).
     pub operation_id: u8,
+    /// Optional operation data field (empty for standard key operations).
     pub operation_data: Vec<u8>,
 }
 
 impl PassThrough {
-    pub fn parse(operands: &[u8]) -> Option<Self> {
+    /// Parses the state flag, operation ID, and data from PASS THROUGH operands.
+    pub(crate) fn parse(operands: &[u8]) -> Option<Self> {
         let first = *operands.first()?;
         let length = usize::from(*operands.get(1)?);
         Some(Self {
@@ -481,7 +611,8 @@ impl PassThrough {
         })
     }
 
-    pub fn to_operands(&self) -> Vec<u8> {
+    /// Serializes back into PASS THROUGH operand bytes.
+    pub(crate) fn to_operands(&self) -> Vec<u8> {
         let state_bit = if self.pressed { 0x00 } else { 0x80 };
         let mut out = vec![
             state_bit | (self.operation_id & 0x7F),

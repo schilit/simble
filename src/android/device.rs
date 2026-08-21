@@ -19,6 +19,7 @@ pub struct BluetoothDevice {
 }
 
 impl BluetoothDevice {
+    /// Creates a `BluetoothDevice` for the given peer address and type.
     pub fn new(address: Address, address_type: AddressType) -> Self {
         Self {
             address,
@@ -27,6 +28,7 @@ impl BluetoothDevice {
         }
     }
 
+    /// Creates a `BluetoothDevice` carrying a known peer name.
     pub fn with_name(address: Address, address_type: AddressType, name: impl Into<String>) -> Self {
         Self {
             address,

@@ -60,10 +60,15 @@ pub mod df_subevent_code {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeSetConnectionlessCteTransmitParametersHeader {
+    /// Advertising set the CTE parameters apply to.
     pub advertising_handle: u8,
+    /// CTE length in units of 8 microseconds.
     pub cte_length: u8, // Units of 8us.
+    /// CTE type (AoA, AoD 1us, or AoD 2us).
     pub cte_type: u8,
+    /// Number of CTEs to transmit per periodic advertising interval.
     pub cte_count: u8,
+    /// Number of Antenna_ID octets that follow this header.
     pub switching_pattern_length: u8,
 }
 
@@ -72,6 +77,7 @@ impl HciCommand for LeSetConnectionlessCteTransmitParametersHeader {
 }
 
 impl LeSetConnectionlessCteTransmitParametersHeader {
+    /// Parses the fixed header and returns the trailing antenna-ID octets.
     pub fn parse(bytes: &[u8]) -> Option<(Ref<&[u8], Self>, &[u8])> {
         let (header, rest) = Ref::<&[u8], Self>::from_prefix(bytes).ok()?;
         let expected = header.switching_pattern_length as usize;
@@ -86,7 +92,9 @@ impl LeSetConnectionlessCteTransmitParametersHeader {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeSetConnectionlessCteTransmitEnable {
+    /// Advertising set to enable or disable CTE transmission for.
     pub advertising_handle: u8,
+    /// 0 to disable, 1 to enable CTE transmission.
     pub cte_enable: u8,
 }
 
@@ -98,9 +106,13 @@ impl HciCommand for LeSetConnectionlessCteTransmitEnable {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeSetConnectionlessIqSamplingEnable {
+    /// Periodic advertising sync handle to sample.
     pub sync_handle: U16<LittleEndian>,
+    /// 0 to disable, 1 to enable IQ sampling.
     pub iq_sampling_enable: u8,
+    /// Switching/sampling slot duration (1us or 2us).
     pub slot_durations: u8,
+    /// Maximum number of CTEs to sample per periodic event (0 = all).
     pub max_sampled_ctes: u8,
 }
 
@@ -114,9 +126,13 @@ impl HciCommand for LeSetConnectionlessIqSamplingEnable {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeSetConnectionCteReceiveParametersHeader {
+    /// Connection to configure CTE reception for.
     pub connection_handle: U16<LittleEndian>,
+    /// 0 to disable, 1 to enable IQ sampling on received CTEs.
     pub sampling_enable: u8,
+    /// Switching/sampling slot duration (1us or 2us).
     pub slot_durations: u8,
+    /// Number of Antenna_ID octets that follow this header.
     pub switching_pattern_length: u8,
 }
 
@@ -125,6 +141,7 @@ impl HciCommand for LeSetConnectionCteReceiveParametersHeader {
 }
 
 impl LeSetConnectionCteReceiveParametersHeader {
+    /// Parses the fixed header and returns the trailing antenna-ID octets.
     pub fn parse(bytes: &[u8]) -> Option<(Ref<&[u8], Self>, &[u8])> {
         let (header, rest) = Ref::<&[u8], Self>::from_prefix(bytes).ok()?;
         let expected = header.switching_pattern_length as usize;
@@ -160,8 +177,11 @@ impl LeSetConnectionCteReceiveParametersHeader {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeSetConnectionCteTransmitParametersHeader {
+    /// Connection to configure CTE transmission for.
     pub connection_handle: U16<LittleEndian>,
+    /// Allowed CTE types bitmask: bit0 AoA, bit1 AoD-1us, bit2 AoD-2us.
     pub cte_types: u8, // Bitmask: bit0 AoA, bit1 AoD-1us, bit2 AoD-2us.
+    /// Number of Antenna_ID octets that follow this header.
     pub switching_pattern_length: u8,
 }
 
@@ -170,6 +190,7 @@ impl HciCommand for LeSetConnectionCteTransmitParametersHeader {
 }
 
 impl LeSetConnectionCteTransmitParametersHeader {
+    /// Parses the fixed header and returns the trailing antenna-ID octets.
     pub fn parse(bytes: &[u8]) -> Option<(Ref<&[u8], Self>, &[u8])> {
         let (header, rest) = Ref::<&[u8], Self>::from_prefix(bytes).ok()?;
         let expected = header.switching_pattern_length as usize;
@@ -184,10 +205,15 @@ impl LeSetConnectionCteTransmitParametersHeader {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeConnectionCteRequestEnable {
+    /// Connection on which to request CTEs from the peer.
     pub connection_handle: U16<LittleEndian>,
+    /// 0 to disable, 1 to enable periodic CTE requests.
     pub enable: u8,
+    /// Interval (in connection events) between CTE requests.
     pub cte_request_interval: U16<LittleEndian>,
+    /// Requested CTE length in units of 8 microseconds.
     pub requested_cte_length: u8,
+    /// Requested CTE type (AoA, AoD 1us, or AoD 2us).
     pub requested_cte_type: u8,
 }
 
@@ -199,7 +225,9 @@ impl HciCommand for LeConnectionCteRequestEnable {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeConnectionCteResponseEnable {
+    /// Connection on which to respond to CTE requests.
     pub connection_handle: U16<LittleEndian>,
+    /// 0 to disable, 1 to enable CTE responses.
     pub enable: u8,
 }
 
@@ -220,10 +248,15 @@ impl HciCommand for LeReadAntennaInformation {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeReadAntennaInformationResponse {
+    /// HCI status code.
     pub status: u8,
+    /// Bitmask of supported switching and sampling rates.
     pub supported_switching_sampling_rates: u8,
+    /// Number of antennae available to the controller.
     pub num_antennae: u8,
+    /// Maximum supported antenna switching-pattern length.
     pub max_switching_pattern_length: u8,
+    /// Maximum supported CTE length in units of 8 microseconds.
     pub max_cte_length: u8,
 }
 
@@ -233,18 +266,28 @@ pub struct LeReadAntennaInformationResponse {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeConnectionlessIqReportEventHeader {
+    /// Periodic advertising sync handle the report belongs to.
     pub sync_handle: U16<LittleEndian>,
+    /// RF channel index the CTE was received on.
     pub channel_index: u8,
+    /// Received signal strength in units of 0.1 dBm.
     pub rssi: I16<LittleEndian>, // Units: 0.1 dBm.
+    /// Antenna ID the RSSI was measured on.
     pub rssi_antenna_id: u8,
+    /// CTE type (AoA, AoD 1us, or AoD 2us).
     pub cte_type: u8,
+    /// Switching/sampling slot duration (1us or 2us).
     pub slot_durations: u8,
+    /// Packet status (CRC/insufficient-resources indication).
     pub packet_status: u8,
+    /// Periodic advertising event counter.
     pub periodic_event_counter: U16<LittleEndian>,
+    /// Number of (I, Q) sample pairs that follow this header.
     pub sample_count: u8,
 }
 
 impl LeConnectionlessIqReportEventHeader {
+    /// Parses the fixed header and returns the trailing (I, Q) sample octets.
     pub fn parse(bytes: &[u8]) -> Option<(Ref<&[u8], Self>, &[i8])> {
         let (header, rest) = Ref::<&[u8], Self>::from_prefix(bytes).ok()?;
         let expected = header.sample_count as usize * 2;
@@ -262,15 +305,25 @@ impl LeConnectionlessIqReportEventHeader {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeConnectionIqReportEventHeader {
+    /// Connection the report belongs to.
     pub connection_handle: U16<LittleEndian>,
+    /// Receiver PHY the CTE was received on.
     pub rx_phy: u8,
+    /// Data channel index the CTE was received on.
     pub data_channel_index: u8,
+    /// Received signal strength in units of 0.1 dBm.
     pub rssi: I16<LittleEndian>, // Units: 0.1 dBm.
+    /// Antenna ID the RSSI was measured on.
     pub rssi_antenna_id: u8,
+    /// CTE type (AoA, AoD 1us, or AoD 2us).
     pub cte_type: u8,
+    /// Switching/sampling slot duration (1us or 2us).
     pub slot_durations: u8,
+    /// Packet status (CRC/insufficient-resources indication).
     pub packet_status: u8,
+    /// Connection event counter.
     pub connection_event_counter: U16<LittleEndian>,
+    /// Number of (I, Q) sample pairs that follow this header.
     pub sample_count: u8,
 }
 
@@ -293,7 +346,9 @@ impl LeConnectionIqReportEventHeader {
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct LeCteRequestFailedEvent {
+    /// HCI status code explaining the failure.
     pub status: u8,
+    /// Connection on which the CTE request failed.
     pub connection_handle: U16<LittleEndian>,
 }
 

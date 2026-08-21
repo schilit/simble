@@ -40,31 +40,48 @@ use crate::gatt::{AttributePermissions, CharacteristicProperties, GattDatabase};
 pub mod aics_uuid {
     use crate::types::Uuid;
 
+    /// Audio Input Control Service UUID.
     pub const AUDIO_INPUT_CONTROL_SERVICE: Uuid = Uuid::Uuid16(0x1843);
+    /// Audio Input State characteristic UUID.
     pub const AUDIO_INPUT_STATE: Uuid = Uuid::Uuid16(0x2B77);
+    /// Gain Settings Attribute characteristic UUID.
     pub const GAIN_SETTINGS_ATTRIBUTE: Uuid = Uuid::Uuid16(0x2B78);
+    /// Audio Input Type characteristic UUID.
     pub const AUDIO_INPUT_TYPE: Uuid = Uuid::Uuid16(0x2B79);
+    /// Audio Input Status characteristic UUID.
     pub const AUDIO_INPUT_STATUS: Uuid = Uuid::Uuid16(0x2B7A);
+    /// Audio Input Control Point characteristic UUID.
     pub const AUDIO_INPUT_CONTROL_POINT: Uuid = Uuid::Uuid16(0x2B7B);
+    /// Audio Input Description characteristic UUID.
     pub const AUDIO_INPUT_DESCRIPTION: Uuid = Uuid::Uuid16(0x2B7C);
 }
 
 /// Audio Input Control Point opcodes (AICS Section 3.5.1).
 pub mod opcode {
+    /// Set Gain Setting control-point opcode.
     pub const SET_GAIN_SETTING: u8 = 0x01;
+    /// Unmute control-point opcode.
     pub const UNMUTE: u8 = 0x02;
+    /// Mute control-point opcode.
     pub const MUTE: u8 = 0x03;
+    /// Set Manual Gain Mode control-point opcode.
     pub const SET_MANUAL_GAIN_MODE: u8 = 0x04;
+    /// Set Automatic Gain Mode control-point opcode.
     pub const SET_AUTOMATIC_GAIN_MODE: u8 = 0x05;
 }
 
 /// AICS application error codes (AICS Section 1.6), returned as the ATT error code when a
 /// Control Point write is rejected.
 pub mod error_code {
+    /// Invalid Change Counter error code.
     pub const INVALID_CHANGE_COUNTER: u8 = 0x80;
+    /// Opcode Not Supported error code.
     pub const OPCODE_NOT_SUPPORTED: u8 = 0x81;
+    /// Mute Disabled error code.
     pub const MUTE_DISABLED: u8 = 0x82;
+    /// Value Out Of Range error code.
     pub const VALUE_OUT_OF_RANGE: u8 = 0x83;
+    /// Gain Mode Change Not Allowed error code.
     pub const GAIN_MODE_CHANGE_NOT_ALLOWED: u8 = 0x84;
 }
 
@@ -117,14 +134,19 @@ pub enum AudioInputType {
 /// AICS Section 2.2.1 - Audio Input State characteristic value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct AudioInputState {
+    /// Gain Setting.
     pub gain_setting: u8,
+    /// Mute.
     pub mute: Mute,
+    /// Gain Mode.
     pub gain_mode: GainMode,
+    /// Change Counter.
     pub change_counter: u8,
 }
 
 impl AudioInputState {
-    pub fn to_bytes(&self) -> [u8; 4] {
+    /// Serializes to the characteristic wire format.
+    pub(crate) fn to_bytes(self) -> [u8; 4] {
         [
             self.gain_setting,
             self.mute as u8,
@@ -275,8 +297,11 @@ impl AudioInputState {
 /// AICS Section 3.2 - Gain Settings Properties characteristic value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GainSettingsProperties {
+    /// Gain Settings Units.
     pub gain_settings_units: u8,
+    /// Gain Settings Minimum.
     pub gain_settings_minimum: u8,
+    /// Gain Settings Maximum.
     pub gain_settings_maximum: u8,
 }
 
@@ -291,6 +316,7 @@ impl Default for GainSettingsProperties {
 }
 
 impl GainSettingsProperties {
+    /// Serializes to the characteristic wire format.
     pub fn to_bytes(&self) -> [u8; 3] {
         [
             self.gain_settings_units,
@@ -324,13 +350,21 @@ impl AttributeHandler for AudioInputControlPointHandler {
 /// Audio Input Control Service GATT container plus the Audio Input State it owns.
 #[derive(Debug, Clone)]
 pub struct AudioInputControlService {
+    /// Attribute handle of the service declaration.
     pub service_handle: u16,
+    /// Value attribute handle of the Audio Input State characteristic.
     pub audio_input_state_value_handle: u16,
+    /// Value attribute handle of the Gain Settings Properties characteristic.
     pub gain_settings_properties_value_handle: u16,
+    /// Value attribute handle of the Audio Input Type characteristic.
     pub audio_input_type_value_handle: u16,
+    /// Value attribute handle of the Audio Input Status characteristic.
     pub audio_input_status_value_handle: u16,
+    /// Value attribute handle of the Control Point characteristic.
     pub control_point_value_handle: u16,
+    /// Value attribute handle of the Audio Input Description characteristic.
     pub audio_input_description_value_handle: u16,
+    /// Gain Settings Properties.
     pub gain_settings_properties: GainSettingsProperties,
     state: Arc<Mutex<AudioInputState>>,
 }

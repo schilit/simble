@@ -82,7 +82,9 @@ pub fn queue_scanner_start(channel: &HciChannel) -> Result<(), SimbleError> {
 /// data with its service UUID).
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct TaggedBytes {
+    /// Hex-encoded tag (company id or service UUID).
     pub tag: String,
+    /// Hex-encoded payload bytes.
     pub data: String,
 }
 
@@ -90,17 +92,29 @@ pub struct TaggedBytes {
 /// AD-structure decoding happens here in Rust — the page's JS only renders.
 #[derive(Debug, Serialize)]
 pub struct ScanReport {
+    /// The advertiser's Bluetooth address, formatted as a string.
     pub address: String,
+    /// Human-readable address type ("public", "random", ...).
     pub address_type: &'static str,
+    /// Whether the advertisement is connectable.
     pub connectable: bool,
+    /// Whether this report came from a scan response rather than an advertisement.
     pub scan_response: bool,
+    /// Received signal strength in dBm.
     pub rssi: i8,
+    /// Decoded complete/shortened local name, if present.
     pub name: Option<String>,
+    /// Decoded advertising flags octet, if present.
     pub flags: Option<u8>,
+    /// Decoded Tx power level, if present.
     pub tx_power: Option<i8>,
+    /// Advertised service UUIDs, formatted as strings.
     pub service_uuids: Vec<String>,
+    /// Service data entries keyed by service UUID.
     pub service_data: Vec<TaggedBytes>,
+    /// Manufacturer-specific data keyed by company id, if present.
     pub manufacturer_data: Option<TaggedBytes>,
+    /// Hex dump of the raw advertising payload.
     pub raw: String,
 }
 
@@ -452,7 +466,9 @@ pub struct ScriptedPeripheral {
 /// produced, already formatted for the Explorer's log.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplOutcome {
+    /// The statement's return value, rendered for display.
     pub value: String,
+    /// Queue events produced by the statement, formatted for the log.
     pub events: Vec<String>,
 }
 
@@ -1093,6 +1109,7 @@ mod web {
 
         /// 0 = connecting, 1 = open, 2 = closing, 3 = closed — the page's
         /// connection-failure UX keys off this.
+        /// Returns the underlying WebSocket ready state (per the WebSocket API).
         pub fn ready_state(&self) -> u16 {
             self.transport.ready_state()
         }
@@ -1154,6 +1171,7 @@ mod web {
             })
         }
 
+        /// Returns the underlying WebSocket ready state (per the WebSocket API).
         pub fn ready_state(&self) -> u16 {
             self.transport.ready_state()
         }
@@ -1216,6 +1234,7 @@ mod web {
             Ok(())
         }
 
+        /// Returns the underlying WebSocket ready state (per the WebSocket API).
         pub fn ready_state(&self) -> u16 {
             self.transport.ready_state()
         }
@@ -1282,6 +1301,7 @@ mod web {
             })
         }
 
+        /// Returns the underlying WebSocket ready state (per the WebSocket API).
         pub fn ready_state(&self) -> u16 {
             self.transport.ready_state()
         }

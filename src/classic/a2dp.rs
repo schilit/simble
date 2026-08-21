@@ -24,46 +24,72 @@ use crate::classic::avdtp::{
 use crate::classic::sdp::{DataElement, SdpUuid, ServiceAttribute, attribute_id};
 
 /// Audio Source service class UUID (0x110A).
-pub const AUDIO_SOURCE_SERVICE_UUID: SdpUuid = SdpUuid::Uuid16(0x110A);
+pub(crate) const AUDIO_SOURCE_SERVICE_UUID: SdpUuid = SdpUuid::Uuid16(0x110A);
 /// Audio Sink service class UUID (0x110B).
-pub const AUDIO_SINK_SERVICE_UUID: SdpUuid = SdpUuid::Uuid16(0x110B);
+pub(crate) const AUDIO_SINK_SERVICE_UUID: SdpUuid = SdpUuid::Uuid16(0x110B);
 
 /// Media codec types (A2DP spec Table 4.1 / Assigned Numbers).
 pub mod codec_type {
+    /// SBC, the mandatory A2DP codec.
     pub const SBC: u8 = 0x00;
+    /// MPEG-1/2 Audio (MP3).
     pub const MPEG_1_2_AUDIO: u8 = 0x01;
-    pub const MPEG_2_4_AAC: u8 = 0x02;
+    /// MPEG-2/4 AAC.
+    pub(crate) const MPEG_2_4_AAC: u8 = 0x02;
+    /// ATRAC family.
     pub const ATRAC_FAMILY: u8 = 0x03;
+    /// Vendor-specific (non-A2DP) codec.
     pub const NON_A2DP: u8 = 0xFF;
 }
 
 /// SBC capability bitmasks (A2DP spec 4.3.2, Codec Specific Information
 /// Elements).
 pub mod sbc {
+    /// SBC sampling-frequency capability bits.
     pub mod sampling_frequency {
+        /// 16 kHz.
         pub const SF_16000: u8 = 1 << 3;
+        /// 32 kHz.
         pub const SF_32000: u8 = 1 << 2;
+        /// 44.1 kHz.
         pub const SF_44100: u8 = 1 << 1;
+        /// 48 kHz.
         pub const SF_48000: u8 = 1 << 0;
     }
+    /// SBC channel-mode capability bits.
     pub mod channel_mode {
+        /// Mono.
         pub const MONO: u8 = 1 << 3;
+        /// Dual channel.
         pub const DUAL_CHANNEL: u8 = 1 << 2;
+        /// Stereo.
         pub const STEREO: u8 = 1 << 1;
+        /// Joint stereo.
         pub const JOINT_STEREO: u8 = 1 << 0;
     }
+    /// SBC block-length capability bits.
     pub mod block_length {
+        /// 4 blocks.
         pub const BL_4: u8 = 1 << 3;
+        /// 8 blocks.
         pub const BL_8: u8 = 1 << 2;
+        /// 12 blocks.
         pub const BL_12: u8 = 1 << 1;
+        /// 16 blocks.
         pub const BL_16: u8 = 1 << 0;
     }
+    /// SBC subband-count capability bits.
     pub mod subbands {
+        /// 4 subbands.
         pub const S_4: u8 = 1 << 1;
+        /// 8 subbands.
         pub const S_8: u8 = 1 << 0;
     }
+    /// SBC bit-allocation-method capability bits.
     pub mod allocation_method {
+        /// SNR allocation.
         pub const SNR: u8 = 1 << 1;
+        /// Loudness allocation.
         pub const LOUDNESS: u8 = 1 << 0;
     }
 }
@@ -71,44 +97,74 @@ pub mod sbc {
 /// AAC capability bitmasks (A2DP spec 4.5.2, Codec Specific Information
 /// Elements).
 pub mod aac {
+    /// AAC object-type capability bits.
     pub mod object_type {
+        /// MPEG-2 AAC LC.
         pub const MPEG_2_AAC_LC: u8 = 1 << 7;
+        /// MPEG-4 AAC LC.
         pub const MPEG_4_AAC_LC: u8 = 1 << 6;
+        /// MPEG-4 AAC LTP.
         pub const MPEG_4_AAC_LTP: u8 = 1 << 5;
+        /// MPEG-4 AAC Scalable.
         pub const MPEG_4_AAC_SCALABLE: u8 = 1 << 4;
     }
+    /// AAC sampling-frequency capability bits.
     pub mod sampling_frequency {
+        /// 8 kHz.
         pub const SF_8000: u16 = 1 << 11;
+        /// 11.025 kHz.
         pub const SF_11025: u16 = 1 << 10;
+        /// 12 kHz.
         pub const SF_12000: u16 = 1 << 9;
+        /// 16 kHz.
         pub const SF_16000: u16 = 1 << 8;
+        /// 22.05 kHz.
         pub const SF_22050: u16 = 1 << 7;
+        /// 24 kHz.
         pub const SF_24000: u16 = 1 << 6;
+        /// 32 kHz.
         pub const SF_32000: u16 = 1 << 5;
+        /// 44.1 kHz.
         pub const SF_44100: u16 = 1 << 4;
+        /// 48 kHz.
         pub const SF_48000: u16 = 1 << 3;
+        /// 64 kHz.
         pub const SF_64000: u16 = 1 << 2;
+        /// 88.2 kHz.
         pub const SF_88200: u16 = 1 << 1;
+        /// 96 kHz.
         pub const SF_96000: u16 = 1 << 0;
     }
+    /// AAC channel-count capability bits.
     pub mod channels {
+        /// One channel (mono).
         pub const MONO: u8 = 1 << 1;
+        /// Two channels (stereo).
         pub const STEREO: u8 = 1 << 0;
     }
 }
 
 /// Opus (vendor-specific) capability bitmasks.
 pub mod opus {
+    /// Opus channel-mode capability bits.
     pub mod channel_mode {
+        /// Mono.
         pub const MONO: u8 = 1 << 0;
+        /// Stereo.
         pub const STEREO: u8 = 1 << 1;
+        /// Dual mono.
         pub const DUAL_MONO: u8 = 1 << 2;
     }
+    /// Opus frame-size capability bits.
     pub mod frame_size {
+        /// 10 ms frames.
         pub const FS_10MS: u8 = 1 << 0;
+        /// 20 ms frames.
         pub const FS_20MS: u8 = 1 << 1;
     }
+    /// Opus sampling-frequency capability bits.
     pub mod sampling_frequency {
+        /// 48 kHz.
         pub const SF_48000: u8 = 1 << 0;
     }
 }
@@ -122,16 +178,24 @@ pub mod opus {
 /// exactly one bit a configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SbcMediaCodecInformation {
+    /// Sampling-frequency capability/config mask (`sbc::sampling_frequency`).
     pub sampling_frequency: u8,
+    /// Channel-mode mask (`sbc::channel_mode`).
     pub channel_mode: u8,
+    /// Block-length mask (`sbc::block_length`).
     pub block_length: u8,
+    /// Subband-count mask (`sbc::subbands`).
     pub subbands: u8,
+    /// Bit-allocation-method mask (`sbc::allocation_method`).
     pub allocation_method: u8,
+    /// Minimum SBC bitpool value.
     pub minimum_bitpool_value: u8,
+    /// Maximum SBC bitpool value.
     pub maximum_bitpool_value: u8,
 }
 
 impl SbcMediaCodecInformation {
+    /// Decodes the 4-byte SBC codec information element.
     pub fn parse(data: &[u8]) -> Option<Self> {
         if data.len() < 4 {
             return None;
@@ -147,6 +211,7 @@ impl SbcMediaCodecInformation {
         })
     }
 
+    /// Encodes to the 4-byte SBC codec information element.
     pub fn to_bytes(self) -> [u8; 4] {
         [
             (self.sampling_frequency << 4) | self.channel_mode,
@@ -193,16 +258,20 @@ impl SbcMediaCodecInformation {
 /// MPEG-2/4 AAC codec-specific information element (A2DP spec 4.5.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AacMediaCodecInformation {
+    /// Object-type mask (`aac::object_type`).
     pub object_type: u8,
     /// 12-bit `aac::sampling_frequency` mask.
     pub sampling_frequency: u16,
+    /// Channel-count mask (`aac::channels`).
     pub channels: u8,
+    /// Whether variable bit rate is supported.
     pub vbr: bool,
     /// 23-bit maximum bit rate; 0 means unknown.
     pub bitrate: u32,
 }
 
 impl AacMediaCodecInformation {
+    /// Decodes the 6-byte AAC codec information element.
     pub fn parse(data: &[u8]) -> Option<Self> {
         if data.len() < 6 {
             return None;
@@ -216,6 +285,7 @@ impl AacMediaCodecInformation {
         })
     }
 
+    /// Encodes to the 6-byte AAC codec information element.
     pub fn to_bytes(self) -> [u8; 6] {
         [
             self.object_type,
@@ -233,12 +303,16 @@ impl AacMediaCodecInformation {
 /// bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VendorSpecificMediaCodecInformation {
+    /// 32-bit vendor (company) ID, little-endian on the wire.
     pub vendor_id: u32,
+    /// 16-bit vendor-assigned codec ID, little-endian on the wire.
     pub codec_id: u16,
+    /// Opaque vendor codec-specific value bytes.
     pub value: Vec<u8>,
 }
 
 impl VendorSpecificMediaCodecInformation {
+    /// Decodes a vendor-specific codec information element.
     pub fn parse(data: &[u8]) -> Option<Self> {
         if data.len() < 6 {
             return None;
@@ -250,6 +324,7 @@ impl VendorSpecificMediaCodecInformation {
         })
     }
 
+    /// Encodes to a vendor-specific codec information element.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(6 + self.value.len());
         out.extend_from_slice(&self.vendor_id.to_le_bytes());
@@ -264,13 +339,18 @@ impl VendorSpecificMediaCodecInformation {
 /// byte packs channel mode, frame size, and sampling frequency flags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OpusMediaCodecInformation {
+    /// Channel-mode mask (`opus::channel_mode`).
     pub channel_mode: u8,
+    /// Frame-size mask (`opus::frame_size`).
     pub frame_size: u8,
+    /// Sampling-frequency mask (`opus::sampling_frequency`).
     pub sampling_frequency: u8,
 }
 
 impl OpusMediaCodecInformation {
+    /// Vendor ID under which Opus is carried.
     pub const VENDOR_ID: u32 = 0x0000_00E0;
+    /// Vendor-assigned codec ID for Opus.
     pub const CODEC_ID: u16 = 0x0001;
 
     /// Parses the vendor-specific `value` byte (excluding vendor/codec IDs).
@@ -283,10 +363,12 @@ impl OpusMediaCodecInformation {
         })
     }
 
+    /// Packs channel mode, frame size, and sampling frequency into the single value byte.
     pub fn value_byte(self) -> u8 {
         self.channel_mode | (self.frame_size << 3) | (self.sampling_frequency << 7)
     }
 
+    /// Wraps this Opus configuration as a vendor-specific codec information element.
     pub fn to_vendor_information(self) -> VendorSpecificMediaCodecInformation {
         VendorSpecificMediaCodecInformation {
             vendor_id: Self::VENDOR_ID,
@@ -300,9 +382,13 @@ impl OpusMediaCodecInformation {
 /// media codec type byte.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MediaCodecInformation {
+    /// SBC codec information.
     Sbc(SbcMediaCodecInformation),
+    /// MPEG-2/4 AAC codec information.
     Aac(AacMediaCodecInformation),
+    /// Opus codec information.
     Opus(OpusMediaCodecInformation),
+    /// Any other vendor-specific codec information.
     Vendor(VendorSpecificMediaCodecInformation),
 }
 
@@ -328,6 +414,7 @@ impl MediaCodecInformation {
         }
     }
 
+    /// Returns the AVDTP media codec type byte for this codec.
     pub fn codec_type(&self) -> u8 {
         match self {
             Self::Sbc(..) => codec_type::SBC,
@@ -336,6 +423,7 @@ impl MediaCodecInformation {
         }
     }
 
+    /// Encodes to the AVDTP media codec information bytes.
     pub fn to_bytes(&self) -> Vec<u8> {
         match self {
             Self::Sbc(info) => info.to_bytes().to_vec(),
@@ -359,26 +447,38 @@ impl MediaCodecInformation {
 // SBC / AAC frame headers
 // ---------------------------------------------------------------------------
 
-pub const SBC_SYNC_WORD: u8 = 0x9C;
+/// SBC frame sync word.
+pub(crate) const SBC_SYNC_WORD: u8 = 0x9C;
 
 /// SBC frame-header sampling frequencies (SBC spec, indexed by the 2-bit
 /// header field). Distinct from the A2DP capability bitmask ordering.
-pub const SBC_SAMPLING_FREQUENCIES: [u32; 4] = [16000, 32000, 44100, 48000];
+pub(crate) const SBC_SAMPLING_FREQUENCIES: [u32; 4] = [16000, 32000, 44100, 48000];
 
+/// SBC frame-header mono channel mode.
 pub const SBC_MONO_CHANNEL_MODE: u8 = 0x00;
-pub const SBC_DUAL_CHANNEL_MODE: u8 = 0x01;
+/// SBC frame-header dual-channel mode.
+pub(crate) const SBC_DUAL_CHANNEL_MODE: u8 = 0x01;
+/// SBC frame-header stereo channel mode.
 pub const SBC_STEREO_CHANNEL_MODE: u8 = 0x02;
-pub const SBC_JOINT_STEREO_CHANNEL_MODE: u8 = 0x03;
+/// SBC frame-header joint-stereo channel mode.
+pub(crate) const SBC_JOINT_STEREO_CHANNEL_MODE: u8 = 0x03;
 
 /// One SBC frame with its decoded header parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SbcFrame {
+    /// Sampling frequency in Hz.
     pub sampling_frequency: u32,
+    /// Number of blocks in the frame.
     pub block_count: u8,
+    /// Channel mode (`SBC_*_CHANNEL_MODE`).
     pub channel_mode: u8,
+    /// Bit-allocation method (0 = loudness, 1 = SNR).
     pub allocation_method: u8,
+    /// Number of subbands (4 or 8).
     pub subband_count: u8,
+    /// SBC bitpool value.
     pub bitpool: u8,
+    /// Raw frame bytes, including the header.
     pub payload: Vec<u8>,
 }
 
@@ -429,6 +529,7 @@ impl SbcFrame {
         ))
     }
 
+    /// Number of PCM samples the frame decodes to.
     pub fn sample_count(&self) -> u32 {
         self.subband_count as u32 * self.block_count as u32
     }
@@ -441,25 +542,34 @@ impl SbcFrame {
 
 /// AAC frame-header sampling frequencies (ADTS, indexed by the 4-bit
 /// sampling frequency index field; 0 marks reserved entries).
-pub const ADTS_AAC_SAMPLING_FREQUENCIES: [u32; 16] = [
+pub(crate) const ADTS_AAC_SAMPLING_FREQUENCIES: [u32; 16] = [
     96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350, 0, 0,
     0,
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// AAC profile carried in the ADTS header.
 pub enum AacProfile {
+    /// Main profile.
     Main,
+    /// Low Complexity (LC).
     Lc,
+    /// Scalable Sample Rate (SSR).
     Ssr,
+    /// Long Term Prediction (LTP).
     Ltp,
 }
 
 /// One AAC frame extracted from an ADTS stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AacFrame {
+    /// AAC profile.
     pub profile: AacProfile,
+    /// Sampling frequency in Hz.
     pub sampling_frequency: u32,
+    /// ADTS channel configuration.
     pub channel_configuration: u8,
+    /// Raw AAC payload, excluding the ADTS header.
     pub payload: Vec<u8>,
 }
 

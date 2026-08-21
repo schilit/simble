@@ -17,19 +17,28 @@ use crate::types::Uuid;
 
 /// Standard GATT Profile Characteristic UUIDs.
 pub mod gatt_char_uuid {
+    /// Generic Attribute Service UUID.
     pub const GENERIC_ATTRIBUTE_SERVICE: u16 = 0x1801;
+    /// Service Changed characteristic UUID.
     pub const SERVICE_CHANGED: u16 = 0x2A05;
+    /// Client Supported Features characteristic UUID.
     pub const CLIENT_SUPPORTED_FEATURES: u16 = 0x2B29;
+    /// Database Hash characteristic UUID.
     pub const DATABASE_HASH: u16 = 0x2B2A;
+    /// Server Supported Features characteristic UUID.
     pub const SERVER_SUPPORTED_FEATURES: u16 = 0x2B3A;
 }
 
 /// Generic Attribute Profile Service representation in the GATT database.
 #[derive(Debug, Clone)]
 pub struct GenericAttributeProfileService {
+    /// Attribute handle of the service declaration.
     pub service_handle: u16,
+    /// Attribute handle of the Service Changed Val.
     pub service_changed_val_handle: Option<u16>,
+    /// Attribute handle of the Client Supported Features Val.
     pub client_supported_features_val_handle: Option<u16>,
+    /// Attribute handle of the Database Hash Val.
     pub database_hash_val_handle: Option<u16>,
 }
 

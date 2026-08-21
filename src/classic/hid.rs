@@ -39,9 +39,9 @@ pub const HID_SERVICE_CLASS: SdpUuid = SdpUuid::Uuid16(0x1124);
 pub const HIDP_PROTOCOL_ID: SdpUuid = SdpUuid::Uuid16(0x0011);
 
 /// HID Profile version v1.1 (BluetoothProfileDescriptorList value).
-pub const HID_PROFILE_VERSION: u16 = 0x0101;
+pub(crate) const HID_PROFILE_VERSION: u16 = 0x0101;
 /// HIDParserVersion v1.1.1 (HID Profile v1.1.1, 5.3.4.4).
-pub const HID_PARSER_VERSION: u16 = 0x0111;
+pub(crate) const HID_PARSER_VERSION: u16 = 0x0111;
 /// HID class descriptor type tag for a Report Descriptor (USB HID 1.11, 7.1).
 pub const REPORT_DESCRIPTOR_TYPE: u16 = 0x22;
 /// HIDDeviceSubclass for a combo keyboard/pointing device (Class of Device
@@ -51,58 +51,89 @@ pub const DEVICE_SUBCLASS_COMBO: u8 = 0xC0;
 /// HIDP message types (high nibble of the transaction header, HID Profile
 /// v1.1.1, 7.1).
 pub mod message_type {
-    pub const HANDSHAKE: u8 = 0x00;
-    pub const CONTROL: u8 = 0x01;
+    /// HANDSHAKE transaction.
+    pub(crate) const HANDSHAKE: u8 = 0x00;
+    /// HID_CONTROL transaction.
+    pub(crate) const CONTROL: u8 = 0x01;
+    /// GET_REPORT transaction.
     pub const GET_REPORT: u8 = 0x04;
+    /// SET_REPORT transaction.
     pub const SET_REPORT: u8 = 0x05;
-    pub const GET_PROTOCOL: u8 = 0x06;
-    pub const SET_PROTOCOL: u8 = 0x07;
+    /// GET_PROTOCOL transaction.
+    pub(crate) const GET_PROTOCOL: u8 = 0x06;
+    /// SET_PROTOCOL transaction.
+    pub(crate) const SET_PROTOCOL: u8 = 0x07;
+    /// DATA transaction (report transfer).
     pub const DATA: u8 = 0x0A;
 }
 
 /// Report types (low 2 bits of the header parameter, HID Profile v1.1.1, 7.4.3).
 pub mod report_type {
+    /// Other (untyped) report.
     pub const OTHER: u8 = 0x00;
+    /// Input report (device to host).
     pub const INPUT: u8 = 0x01;
+    /// Output report (host to device).
     pub const OUTPUT: u8 = 0x02;
+    /// Feature report.
     pub const FEATURE: u8 = 0x03;
 }
 
 /// HANDSHAKE result codes (HID Profile v1.1.1, 7.4.1).
 pub mod handshake_code {
+    /// Transaction completed successfully.
     pub const SUCCESSFUL: u8 = 0x00;
+    /// Device not ready.
     pub const NOT_READY: u8 = 0x01;
+    /// Invalid report ID.
     pub const ERR_INVALID_REPORT_ID: u8 = 0x02;
+    /// Unsupported request.
     pub const ERR_UNSUPPORTED_REQUEST: u8 = 0x03;
+    /// Invalid parameter.
     pub const ERR_INVALID_PARAMETER: u8 = 0x04;
+    /// Unspecified error.
     pub const ERR_UNKNOWN: u8 = 0x0E;
+    /// Fatal, unrecoverable error.
     pub const ERR_FATAL: u8 = 0x0F;
 }
 
 /// Protocol modes carried by GET_/SET_PROTOCOL (HID Profile v1.1.1, 7.4.5).
 pub mod protocol_mode {
+    /// Boot Protocol mode.
     pub const BOOT: u8 = 0x00;
+    /// Report Protocol mode.
     pub const REPORT: u8 = 0x01;
 }
 
 /// HID_CONTROL operations (HID Profile v1.1.1, 7.4.2).
-pub mod control_command {
-    pub const SUSPEND: u8 = 0x03;
-    pub const EXIT_SUSPEND: u8 = 0x04;
-    pub const VIRTUAL_CABLE_UNPLUG: u8 = 0x05;
+pub(crate) mod control_command {
+    /// Suspend the device.
+    pub(crate) const SUSPEND: u8 = 0x03;
+    /// Resume from suspend.
+    pub(crate) const EXIT_SUSPEND: u8 = 0x04;
+    /// Tear down the virtual cable.
+    pub(crate) const VIRTUAL_CABLE_UNPLUG: u8 = 0x05;
 }
 
 /// HID-specific SDP attribute IDs (HID Profile v1.1.1, 5.3.4). Generic
 /// attribute IDs live in `sdp::attribute_id`.
 pub mod attribute_id {
-    pub const HID_PARSER_VERSION: u16 = 0x0201;
-    pub const HID_DEVICE_SUBCLASS: u16 = 0x0202;
-    pub const HID_COUNTRY_CODE: u16 = 0x0203;
-    pub const HID_VIRTUAL_CABLE: u16 = 0x0204;
-    pub const HID_RECONNECT_INITIATE: u16 = 0x0205;
+    /// HIDParserVersion attribute.
+    pub(crate) const HID_PARSER_VERSION: u16 = 0x0201;
+    /// HIDDeviceSubclass attribute.
+    pub(crate) const HID_DEVICE_SUBCLASS: u16 = 0x0202;
+    /// HIDCountryCode attribute.
+    pub(crate) const HID_COUNTRY_CODE: u16 = 0x0203;
+    /// HIDVirtualCable attribute.
+    pub(crate) const HID_VIRTUAL_CABLE: u16 = 0x0204;
+    /// HIDReconnectInitiate attribute.
+    pub(crate) const HID_RECONNECT_INITIATE: u16 = 0x0205;
+    /// HIDDescriptorList attribute (carries the report descriptors).
     pub const HID_DESCRIPTOR_LIST: u16 = 0x0206;
-    pub const HID_LANGID_BASE_LIST: u16 = 0x0207;
-    pub const HID_BOOT_DEVICE: u16 = 0x020E;
+    /// HIDLANGIDBaseList attribute.
+    pub(crate) const HID_LANGID_BASE_LIST: u16 = 0x0207;
+    /// HIDBootDevice attribute.
+    pub(crate) const HID_BOOT_DEVICE: u16 = 0x020E;
 }
 
 // ---------------------------------------------------------------------------
@@ -112,12 +143,11 @@ pub mod attribute_id {
 /// One HIDP transaction message (HID Profile v1.1.1, 7.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HidMessage {
-    Handshake {
-        result_code: u8,
-    },
-    Control {
-        operation: u8,
-    },
+    /// HANDSHAKE: result code for a preceding transaction.
+    Handshake { result_code: u8 },
+    /// HID_CONTROL: a control operation such as suspend or unplug.
+    Control { operation: u8 },
+    /// GET_REPORT: request a stored report.
     GetReport {
         report_type: u8,
         report_id: u8,
@@ -127,21 +157,15 @@ pub enum HidMessage {
         buffer_size: Option<u16>,
     },
     /// `payload` is the report ID followed by the report data.
-    SetReport {
-        report_type: u8,
-        payload: Vec<u8>,
-    },
+    SetReport { report_type: u8, payload: Vec<u8> },
+    /// GET_PROTOCOL: query the current protocol mode.
     GetProtocol,
-    SetProtocol {
-        mode: u8,
-    },
+    /// SET_PROTOCOL: switch between Boot and Report protocol modes.
+    SetProtocol { mode: u8 },
     /// On the control channel: a GET_REPORT or GET_PROTOCOL response. On the
     /// interrupt channel: an input (device-to-host) or output (host-to-device)
     /// report transfer.
-    Data {
-        report_type: u8,
-        payload: Vec<u8>,
-    },
+    Data { report_type: u8, payload: Vec<u8> },
 }
 
 impl HidMessage {
@@ -149,6 +173,7 @@ impl HidMessage {
         (msg_type << 4) | (param & 0x0F)
     }
 
+    /// Serializes this message to its HIDP wire bytes.
     pub fn to_bytes(&self) -> Vec<u8> {
         match self {
             Self::Handshake { result_code } => {
@@ -243,7 +268,9 @@ fn handshake(result_code: u8) -> Vec<u8> {
 /// A report transfer received on the interrupt channel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InterruptData {
+    /// Report type (`report_type::*`).
     pub report_type: u8,
+    /// Report payload bytes.
     pub payload: Vec<u8>,
 }
 
@@ -272,14 +299,14 @@ pub fn receive_interrupt(pdu: &[u8]) -> Result<Option<InterruptData>, SimbleErro
 /// Result of feeding one control-channel PDU into [`HidDevice::receive_control`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HidDeviceEvent {
+    /// The host requested SUSPEND.
     Suspend,
+    /// The host requested EXIT_SUSPEND.
     ExitSuspend,
+    /// The host requested VIRTUAL_CABLE_UNPLUG.
     VirtualCableUnplug,
     /// DATA arrived on the control channel (host-initiated report transfer).
-    ControlData {
-        report_type: u8,
-        payload: Vec<u8>,
-    },
+    ControlData { report_type: u8, payload: Vec<u8> },
     /// A SET_REPORT was accepted and stored.
     ReportSet {
         report_type: u8,
@@ -296,6 +323,7 @@ pub enum HidDeviceEvent {
 /// requests for undeclared IDs get a `HANDSHAKE(ERR_INVALID_REPORT_ID)`.
 #[derive(Debug, Clone)]
 pub struct HidDevice {
+    /// Current protocol mode (`protocol_mode::*`).
     pub protocol_mode: u8,
     reports: HashMap<(u8, u8), Vec<u8>>,
 }
@@ -307,6 +335,7 @@ impl Default for HidDevice {
 }
 
 impl HidDevice {
+    /// Creates a device that boots into Report Protocol mode.
     pub fn new() -> Self {
         Self {
             // Devices boot into Report Protocol mode (HID Profile v1.1.1, 7.4.5).
@@ -455,10 +484,8 @@ pub enum HidHostEvent {
     Handshake(u8),
     /// DATA arrived on the control channel: a GET_REPORT response (payload
     /// is report ID + data) or a GET_PROTOCOL response (payload is the mode).
-    ControlData {
-        report_type: u8,
-        payload: Vec<u8>,
-    },
+    ControlData { report_type: u8, payload: Vec<u8> },
+    /// The device requested VIRTUAL_CABLE_UNPLUG.
     VirtualCableUnplug,
 }
 
@@ -468,6 +495,7 @@ pub enum HidHostEvent {
 pub struct HidHost;
 
 impl HidHost {
+    /// Creates a host-role helper.
     pub fn new() -> Self {
         Self
     }
@@ -483,6 +511,7 @@ impl HidHost {
         .to_bytes()
     }
 
+    /// Builds a SET_REPORT request carrying `report_id` and `data`.
     pub fn set_report(&self, report_type: u8, report_id: u8, data: &[u8]) -> Vec<u8> {
         let mut payload = vec![report_id];
         payload.extend_from_slice(data);
@@ -493,14 +522,17 @@ impl HidHost {
         .to_bytes()
     }
 
+    /// Builds a GET_PROTOCOL request.
     pub fn get_protocol(&self) -> Vec<u8> {
         HidMessage::GetProtocol.to_bytes()
     }
 
+    /// Builds a SET_PROTOCOL request selecting `mode`.
     pub fn set_protocol(&self, mode: u8) -> Vec<u8> {
         HidMessage::SetProtocol { mode }.to_bytes()
     }
 
+    /// Builds a `HID_CONTROL(SUSPEND)` PDU.
     pub fn suspend(&self) -> Vec<u8> {
         HidMessage::Control {
             operation: control_command::SUSPEND,
@@ -508,6 +540,7 @@ impl HidHost {
         .to_bytes()
     }
 
+    /// Builds a `HID_CONTROL(EXIT_SUSPEND)` PDU.
     pub fn exit_suspend(&self) -> Vec<u8> {
         HidMessage::Control {
             operation: control_command::EXIT_SUSPEND,
@@ -515,6 +548,7 @@ impl HidHost {
         .to_bytes()
     }
 
+    /// Builds a `HID_CONTROL(VIRTUAL_CABLE_UNPLUG)` PDU.
     pub fn virtual_cable_unplug(&self) -> Vec<u8> {
         HidMessage::Control {
             operation: control_command::VIRTUAL_CABLE_UNPLUG,

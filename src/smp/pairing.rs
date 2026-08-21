@@ -38,6 +38,8 @@ pub const SMP_DEBUG_KEY_PUBLIC_X: [u8; 32] = [
     0x20, 0xB0, 0x03, 0xD2, 0xF2, 0x97, 0xBE, 0x2C, 0x5E, 0x2C, 0x83, 0xA7, 0xE9, 0xF9, 0xA5, 0xB9,
     0xEF, 0xF4, 0x91, 0x11, 0xAC, 0xF4, 0xFD, 0xDB, 0xCC, 0x03, 0x01, 0x48, 0x0E, 0x35, 0x9D, 0xE6,
 ];
+/// Y coordinate of the fixed Debug Mode P-256 public key (see
+/// [`SMP_DEBUG_KEY_PUBLIC_X`]).
 pub const SMP_DEBUG_KEY_PUBLIC_Y: [u8; 32] = [
     0xDC, 0x80, 0x9C, 0x49, 0x65, 0x2A, 0xEB, 0x6D, 0x63, 0x32, 0x9A, 0xBF, 0x5A, 0x52, 0x15, 0x5C,
     0x76, 0x63, 0x45, 0xC2, 0x8F, 0xED, 0x30, 0x24, 0x74, 0x1C, 0x8E, 0xD0, 0x15, 0x89, 0xD2, 0x8B,
@@ -55,7 +57,9 @@ const SMP_CTKD_H7_BRLE_SALT: [u8; 16] = [
 /// Which side of the pairing exchange this session represents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
+    /// The side that sends the Pairing Request (LE central).
     Initiator,
+    /// The side that sends the Pairing Response (LE peripheral).
     Responder,
 }
 
@@ -75,7 +79,9 @@ enum Phase {
 /// Information PDU (Bluetooth Core Spec Vol 3, Part H, Section 3.6.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IdentityAddressPreference {
+    /// Prefer distributing the public identity address.
     Public,
+    /// Prefer distributing the random static identity address.
     Random,
 }
 
@@ -83,13 +89,21 @@ pub enum IdentityAddressPreference {
 /// `PairingConfig` + `SecurityManager` delegate defaults.
 #[derive(Debug, Clone, Copy)]
 pub struct PairingConfig {
+    /// Local IO capability advertised in the Pairing Request/Response.
     pub io_capability: u8,
+    /// Whether to request bonding (persist keys after pairing).
     pub bonding: bool,
+    /// Whether to request MITM (man-in-the-middle) protection.
     pub mitm: bool,
+    /// Whether to request LE Secure Connections (vs. LE Legacy).
     pub sc: bool,
+    /// Whether to use the fixed Debug Mode key pair for reproducible traces.
     pub debug_mode: bool,
+    /// Key-distribution flags this side offers as initiator.
     pub initiator_key_distribution: u8,
+    /// Key-distribution flags this side offers as responder.
     pub responder_key_distribution: u8,
+    /// Which identity address to distribute, if a preference is set.
     pub identity_address_preference: Option<IdentityAddressPreference>,
 }
 
@@ -290,6 +304,8 @@ pub struct PairingSession {
 }
 
 impl PairingSession {
+    /// Creates a pairing session for `role` with the given config and the
+    /// local/peer addresses used in confirm-value computation.
     pub fn new(
         role: Role,
         config: PairingConfig,
@@ -424,14 +440,17 @@ impl PairingSession {
         self.pending.pop_front()
     }
 
+    /// Returns `true` once pairing (including key distribution) has finished.
     pub fn is_complete(&self) -> bool {
         self.complete
     }
 
+    /// Returns `true` if the session ended in a Pairing Failed state.
     pub fn is_failed(&self) -> bool {
         self.failed
     }
 
+    /// Returns `true` once the link key has been established and encryption enabled.
     pub fn is_encrypted(&self) -> bool {
         self.is_encrypted
     }
@@ -443,6 +462,7 @@ impl PairingSession {
         if self.sc { self.ltk } else { self.stk }
     }
 
+    /// The peer's distributed Identity Resolving Key, if any.
     pub fn peer_irk(&self) -> Option<[u8; 16]> {
         self.peer_irk
     }
@@ -474,10 +494,12 @@ impl PairingSession {
         self.preq[4].min(self.pres[4])
     }
 
+    /// The peer's distributed identity address `(address_type, address)`, if any.
     pub fn peer_identity_address(&self) -> Option<(u8, Address)> {
         self.peer_identity_address
     }
 
+    /// This session's local public key `(x, y)` for Secure Connections.
     pub fn local_public_key(&self) -> ([u8; 32], [u8; 32]) {
         (self.local_pub_x, self.local_pub_y)
     }

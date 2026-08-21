@@ -14,13 +14,17 @@
 pub mod pbp_uuid {
     use crate::types::Uuid;
 
+    /// Public Broadcast Announcement Service UUID.
     pub const PUBLIC_BROADCAST_ANNOUNCEMENT_SERVICE: Uuid = Uuid::Uuid16(0x1856);
 }
 
 /// Public Broadcast Announcement Features bitmask (PBP Section 4.1).
 pub mod features {
+    /// Encrypted.
     pub const ENCRYPTED: u8 = 1 << 0;
+    /// Standard Quality Configuration.
     pub const STANDARD_QUALITY_CONFIGURATION: u8 = 1 << 1;
+    /// High Quality Configuration.
     pub const HIGH_QUALITY_CONFIGURATION: u8 = 1 << 2;
 }
 
@@ -30,11 +34,14 @@ pub mod features {
 /// not decoded per-tag).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublicBroadcastAnnouncement {
+    /// Features.
     pub features: u8,
+    /// Metadata.
     pub metadata: Vec<u8>,
 }
 
 impl PublicBroadcastAnnouncement {
+    /// Serializes to the characteristic wire format.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(2 + self.metadata.len());
         buf.push(self.features);
@@ -43,6 +50,7 @@ impl PublicBroadcastAnnouncement {
         buf
     }
 
+    /// Parses a value from its wire bytes.
     pub fn parse(data: &[u8]) -> Option<Self> {
         let features = *data.first()?;
         let metadata_length = *data.get(1)? as usize;

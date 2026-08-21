@@ -12,22 +12,34 @@ use crate::gatt::{AttributePermissions, CharacteristicProperties, GattDatabase};
 pub mod ras_uuid {
     use crate::types::Uuid;
 
+    /// Ranging Service UUID.
     pub const RANGING_SERVICE: Uuid = Uuid::Uuid16(0x185B);
+    /// Ranging Features characteristic UUID.
     pub const RANGING_FEATURES: Uuid = Uuid::Uuid16(0x2B6E);
+    /// Ranging Realtime Data characteristic UUID.
     pub const RANGING_REALTIME_DATA: Uuid = Uuid::Uuid16(0x2B70);
+    /// Ranging On Demand Data characteristic UUID.
     pub const RANGING_ON_DEMAND_DATA: Uuid = Uuid::Uuid16(0x2B71);
+    /// Ranging Control Point characteristic UUID.
     pub const RANGING_CONTROL_POINT: Uuid = Uuid::Uuid16(0x2B72);
 }
 
 /// Ranging Service container holding GATT attribute handles.
 #[derive(Debug, Clone)]
 pub struct RangingService {
+    /// Attribute handle of the service declaration.
     pub service_handle: u16,
+    /// Attribute handle of the Features.
     pub features_handle: u16,
+    /// Value attribute handle of the Features characteristic.
     pub features_value_handle: u16,
+    /// Attribute handle of the Realtime Data.
     pub realtime_data_handle: u16,
+    /// Value attribute handle of the Realtime Data characteristic.
     pub realtime_data_value_handle: u16,
+    /// Attribute handle of the Control Point.
     pub control_point_handle: u16,
+    /// Value attribute handle of the Control Point characteristic.
     pub control_point_value_handle: u16,
 }
 

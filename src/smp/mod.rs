@@ -3,8 +3,8 @@
 
 //! SMP PDU definitions, cryptographic operations, and persistent KeyStore.
 
-pub mod keystore;
-pub mod pairing;
+pub(crate) mod keystore;
+pub(crate) mod pairing;
 
 pub use crate::packets::{
     SmpPairingFailed, SmpPairingPacket, smp_auth_req as auth_req, smp_error_code as error_code,

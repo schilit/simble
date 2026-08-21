@@ -3,7 +3,7 @@
 
 //! GAP (Generic Access Profile) advertising layer.
 
-pub mod advertising;
+pub(crate) mod advertising;
 pub mod ead;
 
 pub use advertising::{AdvertisingData, ad_type, flags};

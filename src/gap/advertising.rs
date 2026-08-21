@@ -7,39 +7,61 @@ use serde::{Deserialize, Serialize};
 
 /// Standard GAP Advertising Data (AD) Types.
 pub mod ad_type {
+    /// Flags AD type (0x01).
     pub const FLAGS: u8 = 0x01;
+    /// Incomplete list of 16-bit Service UUIDs (0x02).
     pub const INCOMPLETE_16BIT_UUIDS: u8 = 0x02;
+    /// Complete list of 16-bit Service UUIDs (0x03).
     pub const COMPLETE_16BIT_UUIDS: u8 = 0x03;
+    /// Incomplete list of 128-bit Service UUIDs (0x06).
     pub const INCOMPLETE_128BIT_UUIDS: u8 = 0x06;
+    /// Complete list of 128-bit Service UUIDs (0x07).
     pub const COMPLETE_128BIT_UUIDS: u8 = 0x07;
+    /// Shortened Local Name (0x08).
     pub const SHORTENED_LOCAL_NAME: u8 = 0x08;
+    /// Complete Local Name (0x09).
     pub const COMPLETE_LOCAL_NAME: u8 = 0x09;
+    /// Tx Power Level (0x0A).
     pub const TX_POWER_LEVEL: u8 = 0x0A;
+    /// Service Data - 16-bit UUID (0x16).
     pub const SERVICE_DATA_16BIT: u8 = 0x16;
+    /// Appearance (0x19).
     pub const APPEARANCE: u8 = 0x19;
+    /// Manufacturer Specific Data (0xFF).
     pub const MANUFACTURER_SPECIFIC_DATA: u8 = 0xFF;
 }
 
 /// Common LE Advertising Flags.
 pub mod flags {
+    /// LE Limited Discoverable Mode.
     pub const LE_LIMITED_DISCOVERABLE: u8 = 0x01;
+    /// LE General Discoverable Mode.
     pub const LE_GENERAL_DISCOVERABLE: u8 = 0x02;
+    /// BR/EDR Not Supported (LE-only device).
     pub const BR_EDR_NOT_SUPPORTED: u8 = 0x04;
+    /// Simultaneous LE and BR/EDR to same device (Controller).
     pub const SIMULTANEOUS_LE_BR_CONTROLLER: u8 = 0x08;
+    /// Simultaneous LE and BR/EDR to same device (Host).
     pub const SIMULTANEOUS_LE_BR_HOST: u8 = 0x10;
 }
 
 /// Builder for constructing LE Advertising and Scan Response data payloads.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AdvertisingData {
+    /// Optional LE discovery flags octet.
     pub flags: Option<u8>,
+    /// Optional complete local device name.
     pub complete_name: Option<String>,
+    /// List of advertised 16-bit Service UUIDs.
     pub service_uuids_16: Vec<u16>,
+    /// List of (16-bit UUID, data) Service Data entries.
     pub service_data_16: Vec<(u16, Vec<u8>)>,
+    /// Optional manufacturer-specific data (company ID prefixed).
     pub manufacturer_data: Option<Vec<u8>>,
 }
 
 impl AdvertisingData {
+    /// Creates an empty advertising-data builder.
     pub fn new() -> Self {
         Self::default()
     }

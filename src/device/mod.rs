@@ -3,11 +3,11 @@
 
 //! Virtual Bluetooth Device state machine and packet processor.
 
-pub mod att_server;
-pub mod bond_store;
-pub mod connection;
-pub mod observer;
-pub mod virtual_device;
+pub(crate) mod att_server;
+pub(crate) mod bond_store;
+pub(crate) mod connection;
+pub(crate) mod observer;
+pub(crate) mod virtual_device;
 
 pub use bond_store::{BondSecurity, BondStore, MemoryBondStore};
 pub use connection::{ConnectionRole, ConnectionState, PrepareWriteChunk};

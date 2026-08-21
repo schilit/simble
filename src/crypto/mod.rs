@@ -3,8 +3,8 @@
 
 //! Cryptographic primitives for Bluetooth Security & Database Hash computation.
 
-pub mod aes;
-pub mod ccm;
+pub(crate) mod aes;
+pub(crate) mod ccm;
 pub mod smp_crypto;
 
 pub use aes::{aes_128_encrypt_block, aes_cmac};

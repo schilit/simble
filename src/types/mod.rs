@@ -8,7 +8,7 @@ pub mod hci_types;
 pub(crate) mod rng;
 
 pub use error::SimbleError;
-pub use hci_types::{Address, AddressType, GapDataType, LeAdvertisingEventType, Uuid};
+pub use hci_types::{Address, AddressType, Uuid};
 
 /// Speed of light in vacuum, meters per second — shared by the RF
 /// distance/angle estimators (Direction Finding, Channel Sounding).

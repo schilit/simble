@@ -9,40 +9,64 @@ use std::collections::BTreeMap;
 
 /// Standard GATT UUIDs for declarations and descriptors.
 pub mod service_uuid {
+    /// Primary Service declaration UUID (0x2800).
     pub const PRIMARY_SERVICE: u16 = 0x2800;
+    /// Secondary Service declaration UUID (0x2801).
     pub const SECONDARY_SERVICE: u16 = 0x2801;
+    /// Include declaration UUID (0x2802).
     pub const INCLUDE: u16 = 0x2802;
+    /// Characteristic declaration UUID (0x2803).
     pub const CHARACTERISTIC: u16 = 0x2803;
 }
 
+/// Standard GATT descriptor UUIDs.
 pub mod desc_uuid {
+    /// Client Characteristic Configuration Descriptor (CCCD, 0x2902).
     pub const CLIENT_CHARACTERISTIC_CONFIGURATION: u16 = 0x2902;
+    /// Characteristic User Description descriptor (0x2901).
     pub const CHARACTERISTIC_USER_DESCRIPTION: u16 = 0x2901;
 }
 
 /// Bitmask for characteristic properties.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct CharacteristicProperties(pub u8);
+pub struct CharacteristicProperties(
+    /// The raw characteristic-properties bitmask.
+    pub u8,
+);
 
 impl CharacteristicProperties {
+    /// Broadcast property bit.
     pub const BROADCAST: u8 = 0x01;
+    /// Read property bit.
     pub const READ: u8 = 0x02;
+    /// Write Without Response property bit.
     pub const WRITE_WITHOUT_RESPONSE: u8 = 0x04;
+    /// Write property bit.
     pub const WRITE: u8 = 0x08;
+    /// Notify property bit.
     pub const NOTIFY: u8 = 0x10;
+    /// Indicate property bit.
     pub const INDICATE: u8 = 0x20;
+    /// Authenticated Signed Writes property bit.
     pub const AUTHENTICATED_SIGNED_WRITES: u8 = 0x40;
+    /// Extended Properties bit.
     pub const EXTENDED_PROPERTIES: u8 = 0x80;
 }
 
 /// Attribute permissions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AttributePermissions {
+    /// Whether the attribute may be read.
     pub read: bool,
+    /// Whether the attribute may be written.
     pub write: bool,
+    /// Whether reads require an authenticated connection.
     pub read_auth: bool,
+    /// Whether writes require an authenticated connection.
     pub write_auth: bool,
+    /// Whether reads require an encrypted connection.
     pub encrypt_read: bool,
+    /// Whether writes require an encrypted connection.
     pub encrypt_write: bool,
 }
 
@@ -114,9 +138,13 @@ pub trait AttributeHandler: std::fmt::Debug + Send + Sync {
 /// A GATT attribute stored in the database.
 #[derive(Debug)]
 pub struct Attribute {
+    /// The attribute's handle (its address in the database).
     pub handle: u16,
+    /// The attribute type UUID.
     pub uuid: Uuid,
+    /// The attribute's stored value.
     pub value: Vec<u8>,
+    /// Access permissions governing reads and writes.
     pub permissions: AttributePermissions,
     /// Optional owner of this attribute's write behavior. See
     /// [`AttributeHandler`].
@@ -154,6 +182,7 @@ impl Eq for Attribute {}
 /// and descriptors on the device.
 #[derive(Debug, Clone, Default)]
 pub struct GattDatabase {
+    /// All registered attributes keyed by handle, in ascending handle order.
     pub attributes: BTreeMap<u16, Attribute>,
     next_handle: u16,
 }

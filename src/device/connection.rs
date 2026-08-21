@@ -12,27 +12,37 @@ use crate::types::Address;
 /// simultaneously.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnectionRole {
+    /// The local device initiated the connection (GAP central).
     Central,
+    /// The local device accepted the connection (GAP peripheral).
     Peripheral,
 }
 
 /// Buffered chunk for queued long writes (PrepareWrite / ExecuteWrite).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrepareWriteChunk {
+    /// Attribute handle the chunk will be written to.
     pub handle: u16,
+    /// Byte offset within the attribute value.
     pub offset: u16,
+    /// The buffered chunk of data.
     pub data: Vec<u8>,
 }
 
 /// State of an active LE connection.
 #[derive(Debug, Clone)]
 pub struct ConnectionState {
+    /// The connection handle.
     pub handle: u16,
+    /// The peer's Bluetooth address.
     pub peer_address: Address,
     /// The local device's GAP role on this connection.
     pub role: ConnectionRole,
+    /// Negotiated ATT MTU for this connection.
     pub mtu: u16,
+    /// Buffered PrepareWrite chunks awaiting an ExecuteWrite.
     pub prepare_write_queue: Vec<PrepareWriteChunk>,
+    /// Whether an indication is awaiting the peer's confirmation.
     pub pending_indication: bool,
     /// The in-progress or completed SMP pairing exchange for this
     /// connection, if pairing has been initiated by either side.

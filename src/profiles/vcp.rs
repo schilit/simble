@@ -11,18 +11,26 @@ use crate::gatt::{AttributePermissions, CharacteristicProperties, GattDatabase};
 pub mod vcp_uuid {
     use crate::types::Uuid;
 
+    /// Volume Control Service UUID.
     pub const VOLUME_CONTROL_SERVICE: Uuid = Uuid::Uuid16(0x1844);
+    /// Volume State characteristic UUID.
     pub const VOLUME_STATE: Uuid = Uuid::Uuid16(0x2B7D);
+    /// Volume Control Point characteristic UUID.
     pub const VOLUME_CONTROL_POINT: Uuid = Uuid::Uuid16(0x2B7E);
+    /// Volume Flags characteristic UUID.
     pub const VOLUME_FLAGS: Uuid = Uuid::Uuid16(0x2B7F);
 }
 
 /// Volume Control Service GATT container.
 #[derive(Debug, Clone)]
 pub struct VolumeControlService {
+    /// Attribute handle of the service declaration.
     pub service_handle: u16,
+    /// Value attribute handle of the Volume State characteristic.
     pub volume_state_value_handle: u16,
+    /// Value attribute handle of the Control Point characteristic.
     pub control_point_value_handle: u16,
+    /// Value attribute handle of the Volume Flags characteristic.
     pub volume_flags_value_handle: u16,
 }
 

@@ -557,6 +557,7 @@ impl NetsimTransport<TcpStream> {
 }
 
 impl<S: Read + Write> NetsimTransport<S> {
+    /// Wraps an already-connected WebSocket stream as a netsim transport.
     pub fn new(stream: S) -> Self {
         Self {
             stream,

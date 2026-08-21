@@ -9,10 +9,15 @@ use crate::types::Uuid;
 /// Battery Service manager.
 #[derive(Debug, Clone)]
 pub struct BatteryService {
+    /// Attribute handle of the service declaration.
     pub service_handle: u16,
+    /// Attribute handle of the Level Decl.
     pub level_decl_handle: u16,
+    /// Attribute handle of the Level Val.
     pub level_val_handle: u16,
+    /// Attribute handle of the Cccd.
     pub cccd_handle: u16,
+    /// Battery Level.
     pub battery_level: u8,
 }
 

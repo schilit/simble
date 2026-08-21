@@ -13,8 +13,13 @@
 
 use std::fmt;
 
+/// Error returned when an AT command or response line cannot be tokenized or
+/// parsed; wraps a human-readable description of the failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AtParsingError(pub String);
+pub struct AtParsingError(
+    /// Human-readable description of the parse failure.
+    pub(crate) String,
+);
 
 impl AtParsingError {
     fn new(message: impl Into<String>) -> Self {
@@ -81,22 +86,28 @@ pub fn tokenize_parameters(buffer: &[u8]) -> Result<Vec<Vec<u8>>, AtParsingError
 /// parameters (used by test-form responses like `+CIND: ("call",(0-1))`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AtParameter {
+    /// A single parameter value, kept as raw bytes.
     Value(Vec<u8>),
+    /// A parenthesized sub-list of parameters, as in AT test-form responses.
     List(Vec<AtParameter>),
 }
 
 impl AtParameter {
-    pub fn as_value(&self) -> Option<&[u8]> {
+    /// Returns the raw bytes of a [`AtParameter::Value`], or `None` for a list.
+    pub(crate) fn as_value(&self) -> Option<&[u8]> {
         match self {
             AtParameter::Value(v) => Some(v),
             AtParameter::List(_) => None,
         }
     }
 
-    pub fn as_str(&self) -> Option<&str> {
+    /// Returns the value interpreted as UTF-8, or `None` for a list or invalid
+    /// UTF-8.
+    pub(crate) fn as_str(&self) -> Option<&str> {
         std::str::from_utf8(self.as_value()?).ok()
     }
 
+    /// Returns the elements of a [`AtParameter::List`], or `None` for a value.
     pub fn as_list(&self) -> Option<&[AtParameter]> {
         match self {
             AtParameter::List(items) => Some(items),
@@ -107,7 +118,7 @@ impl AtParameter {
     /// Parses the value as an integer; a present-but-empty value (as in
     /// `AT+CMER=3,,,1`'s omitted middle parameters) is not a valid integer
     /// and returns `None`, distinct from the parameter being absent.
-    pub fn as_u32(&self) -> Option<u32> {
+    pub(crate) fn as_u32(&self) -> Option<u32> {
         self.as_str()?.parse().ok()
     }
 }
@@ -155,7 +166,7 @@ pub fn parse_parameters(buffer: &[u8]) -> Result<Vec<AtParameter>, AtParsingErro
 
 /// Sub-form of an extended `AT+XXX` command line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AtSubCode {
+pub(crate) enum AtSubCode {
     /// `AT+XXX` or a basic command (`ATA`, `ATD...`): no `=`/`?` suffix.
     None,
     /// `AT+XXX=...`: set/execute form.
@@ -168,10 +179,14 @@ pub enum AtSubCode {
 
 /// A parsed AT command line, sent from the Hands-Free to the Audio Gateway.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AtCommand {
-    pub code: String,
-    pub sub_code: AtSubCode,
-    pub parameters: Vec<AtParameter>,
+pub(crate) struct AtCommand {
+    /// Command mnemonic without the `AT+` prefix (e.g. `BRSF`, `CIND`, or
+    /// `A`/`D` for the basic `ATA`/`ATD` commands).
+    pub(crate) code: String,
+    /// Which extended form the line used (set, test, read, or none).
+    pub(crate) sub_code: AtSubCode,
+    /// Parsed parameter list following the command code.
+    pub(crate) parameters: Vec<AtParameter>,
 }
 
 impl AtCommand {
@@ -179,7 +194,7 @@ impl AtCommand {
     /// are special-cased (per the spec they take no `+` and, for `ATD`, an
     /// unparsed dial-string argument); every other basic/extended form must
     /// match `AT+<CODE>` followed by an optional `=?`/`=`/`?` and parameters.
-    pub fn parse_from(buffer: &[u8]) -> Result<Self, AtParsingError> {
+    pub(crate) fn parse_from(buffer: &[u8]) -> Result<Self, AtParsingError> {
         if let Some(rest) = buffer.strip_prefix(b"AT+") {
             let code_len = rest.iter().take_while(|b| b.is_ascii_uppercase()).count();
             if code_len == 0 {
@@ -230,12 +245,16 @@ impl AtCommand {
 /// `+XXX: ...` result code with parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AtResponse {
-    pub code: String,
-    pub parameters: Vec<AtParameter>,
+    /// Response/result code (e.g. `+BRSF`, `OK`, or `RING`).
+    pub(crate) code: String,
+    /// Parsed parameter list following a `+XXX:` result code.
+    pub(crate) parameters: Vec<AtParameter>,
 }
 
 impl AtResponse {
-    pub fn parse_from(buffer: &[u8]) -> Result<Self, AtParsingError> {
+    /// Parses one response line: an unsolicited/status code (`OK`, `RING`) or a
+    /// `+XXX: ...` result code with a parsed parameter list.
+    pub(crate) fn parse_from(buffer: &[u8]) -> Result<Self, AtParsingError> {
         let mut parts = buffer.splitn(2, |&b| b == b':');
         let code = parts.next().unwrap_or(b"");
         let params_bytes = parts.next().unwrap_or(b"");

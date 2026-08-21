@@ -35,23 +35,32 @@ use crate::gatt::{AttributePermissions, CharacteristicProperties, GattDatabase};
 pub mod vocs_uuid {
     use crate::types::Uuid;
 
+    /// Volume Offset Control Service UUID.
     pub const VOLUME_OFFSET_CONTROL_SERVICE: Uuid = Uuid::Uuid16(0x1845);
+    /// Volume Offset State characteristic UUID.
     pub const VOLUME_OFFSET_STATE: Uuid = Uuid::Uuid16(0x2B80);
+    /// Audio Location characteristic UUID.
     pub const AUDIO_LOCATION: Uuid = Uuid::Uuid16(0x2B81);
+    /// Volume Offset Control Point characteristic UUID.
     pub const VOLUME_OFFSET_CONTROL_POINT: Uuid = Uuid::Uuid16(0x2B82);
+    /// Audio Output Description characteristic UUID.
     pub const AUDIO_OUTPUT_DESCRIPTION: Uuid = Uuid::Uuid16(0x2B83);
 }
 
 /// Volume Offset Control Point opcodes (VOCS Section 3.3).
 pub mod opcode {
+    /// Set Volume Offset control-point opcode.
     pub const SET_VOLUME_OFFSET: u8 = 0x01;
 }
 
 /// VOCS application error codes (VOCS Section 1.6), returned as the ATT error code when a
 /// Control Point write is rejected.
 pub mod error_code {
+    /// Invalid Change Counter error code.
     pub const INVALID_CHANGE_COUNTER: u8 = 0x80;
+    /// Opcode Not Supported error code.
     pub const OPCODE_NOT_SUPPORTED: u8 = 0x81;
+    /// Value Out Of Range error code.
     pub const VALUE_OUT_OF_RANGE: u8 = 0x82;
 }
 
@@ -61,11 +70,14 @@ const MAX_VOLUME_OFFSET: i16 = 255;
 /// VOCS Section 2.1 - Volume Offset State characteristic value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct VolumeOffsetState {
+    /// Volume Offset.
     pub volume_offset: i16,
+    /// Change Counter.
     pub change_counter: u8,
 }
 
 impl VolumeOffsetState {
+    /// Serializes to the characteristic wire format.
     pub fn to_bytes(&self) -> [u8; 3] {
         let offset = self.volume_offset.to_le_bytes();
         [offset[0], offset[1], self.change_counter]
@@ -124,10 +136,15 @@ impl AttributeHandler for VolumeOffsetControlPointHandler {
 /// Volume Offset Control Service GATT container plus the Volume Offset State it owns.
 #[derive(Debug, Clone)]
 pub struct VolumeOffsetControlService {
+    /// Attribute handle of the service declaration.
     pub service_handle: u16,
+    /// Value attribute handle of the Volume Offset State characteristic.
     pub volume_offset_state_value_handle: u16,
+    /// Value attribute handle of the Audio Location characteristic.
     pub audio_location_value_handle: u16,
+    /// Value attribute handle of the Control Point characteristic.
     pub control_point_value_handle: u16,
+    /// Value attribute handle of the Audio Output Description characteristic.
     pub audio_output_description_value_handle: u16,
     state: Arc<Mutex<VolumeOffsetState>>,
 }

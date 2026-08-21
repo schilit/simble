@@ -34,13 +34,21 @@ pub struct ScriptEvent {
     /// Name of the server (its `VirtualDevice`) that produced the event, so
     /// one session queue can serve several scripted servers.
     pub server: String,
+    /// The peer device involved in the event, if any.
     pub peer: Option<BluetoothDevice>,
+    /// The characteristic/descriptor UUID the event concerns, if any.
     pub uuid: Option<Uuid>,
+    /// The attribute value carried by the event, if any.
     pub value: Option<Vec<u8>>,
+    /// ATT request id for read/write events, if any.
     pub request_id: Option<i32>,
+    /// Byte offset for a read/write event, if any.
     pub offset: Option<i32>,
+    /// Status/error code associated with the event, if any.
     pub status: Option<i32>,
+    /// Negotiated ATT MTU for an MTU-change event, if any.
     pub mtu: Option<i32>,
+    /// Whether a write event expects a response, if applicable.
     pub response_needed: Option<bool>,
 }
 

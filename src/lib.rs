@@ -1,9 +1,9 @@
 // Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
-//! # Simble: a native, zero-copy virtual Bluetooth host stack
+//! # SimBLE: a native, zero-copy virtual Bluetooth host stack
 //!
-//! Simble creates virtual Bluetooth devices for testing — a simulated
+//! SimBLE creates virtual Bluetooth devices for testing — a simulated
 //! heart-rate monitor, keyboard, LE Audio earbud, hands-free car kit, and more
 //! — that other software can scan, connect to, and pair with. It implements the
 //! Bluetooth host stack (HCI, L2CAP, ATT/GATT, SMP, plus the Classic and LE
@@ -11,7 +11,7 @@
 //! C.
 //!
 //! Devices can be built from the Rust API, an Android-shaped API, or short
-//! [Rhai](https://rhai.rs) scripts. Simble connects to
+//! [Rhai](https://rhai.rs) scripts. SimBLE connects to
 //! [netsim](https://android.googlesource.com/platform/tools/netsim), the Android
 //! emulator's network simulator, over a WebSocket, and can also reach real
 //! hardware through a USB Bluetooth dongle.

@@ -39,7 +39,9 @@ const AAD: [u8; 1] = [0xEA];
 /// characteristic (UUID 0x2B88).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyMaterial {
+    /// 16-octet AES-CCM session key.
     pub session_key: [u8; 16],
+    /// 8-octet initialization vector, forming the low half of the CCM nonce.
     pub iv: [u8; 8],
 }
 

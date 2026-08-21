@@ -43,6 +43,8 @@ impl BluetoothGattService {
     pub const SERVICE_TYPE_PRIMARY: i32 = 0;
     pub const SERVICE_TYPE_SECONDARY: i32 = 1;
 
+    /// Creates a service of the given type. Mirrors the
+    /// `BluetoothGattService(UUID, int)` constructor.
     pub fn new(uuid: Uuid, service_type: i32) -> Self {
         Self {
             uuid,
@@ -95,6 +97,8 @@ impl BluetoothGattCharacteristic {
     pub const PERMISSION_WRITE_SIGNED: i32 = 0x80;
     pub const PERMISSION_WRITE_SIGNED_MITM: i32 = 0x100;
 
+    /// Creates a characteristic with the given properties and permissions.
+    /// Mirrors the `BluetoothGattCharacteristic(UUID, int, int)` constructor.
     pub fn new(uuid: Uuid, properties: i32, permissions: i32) -> Self {
         Self {
             uuid,
@@ -113,15 +117,19 @@ impl BluetoothGattCharacteristic {
         true
     }
 
+    /// Sets the cached value. Mirrors `BluetoothGattCharacteristic.setValue`.
     pub fn set_value(&mut self, value: impl Into<Vec<u8>>) -> bool {
         self.value = value.into();
         true
     }
 
+    /// Returns the cached value. Mirrors `BluetoothGattCharacteristic.getValue`.
     pub fn get_value(&self) -> &[u8] {
         &self.value
     }
 
+    /// Returns this characteristic's UUID. Mirrors
+    /// `BluetoothGattCharacteristic.getUuid`.
     pub fn get_uuid(&self) -> Uuid {
         self.uuid
     }
@@ -140,6 +148,8 @@ pub struct BluetoothGattDescriptor {
 }
 
 impl BluetoothGattDescriptor {
+    /// Creates a descriptor with the given permissions. Mirrors the
+    /// `BluetoothGattDescriptor(UUID, int)` constructor.
     pub fn new(uuid: Uuid, permissions: i32) -> Self {
         Self {
             uuid,
@@ -149,15 +159,19 @@ impl BluetoothGattDescriptor {
         }
     }
 
+    /// Sets the cached value. Mirrors `BluetoothGattDescriptor.setValue`.
     pub fn set_value(&mut self, value: impl Into<Vec<u8>>) -> bool {
         self.value = value.into();
         true
     }
 
+    /// Returns the cached value. Mirrors `BluetoothGattDescriptor.getValue`.
     pub fn get_value(&self) -> &[u8] {
         &self.value
     }
 
+    /// Returns this descriptor's UUID. Mirrors
+    /// `BluetoothGattDescriptor.getUuid`.
     pub fn get_uuid(&self) -> Uuid {
         self.uuid
     }

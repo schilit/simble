@@ -72,70 +72,125 @@ pub const MOUSE_REPORT_MAP: &[u8] = &[
 
 /// HID Modifier Keys bitmask.
 pub mod modifier {
+    /// No modifier keys held.
     pub const NONE: u8 = 0x00;
+    /// Left Control.
     pub const LCTRL: u8 = 0x01;
+    /// Left Shift.
     pub const LSHIFT: u8 = 0x02;
+    /// Left Alt.
     pub const LALT: u8 = 0x04;
+    /// Left GUI/Meta (Windows/Command key).
     pub const LMETA: u8 = 0x08;
+    /// Right Control.
     pub const RCTRL: u8 = 0x10;
+    /// Right Shift.
     pub const RSHIFT: u8 = 0x20;
+    /// Right Alt.
     pub const RALT: u8 = 0x40;
+    /// Right GUI/Meta (Windows/Command key).
     pub const RMETA: u8 = 0x80;
 }
 
 /// Standard USB HID Mouse Buttons bitmask.
 pub mod mouse_button {
+    /// No buttons pressed.
     pub const NONE: u8 = 0x00;
+    /// Left button.
     pub const LEFT: u8 = 0x01;
+    /// Right button.
     pub const RIGHT: u8 = 0x02;
+    /// Middle button.
     pub const MIDDLE: u8 = 0x04;
 }
 
 /// Standard USB HID Keycodes.
 pub mod keycode {
+    /// No key.
     pub const KEY_NONE: u8 = 0x00;
+    /// The 'A' key.
     pub const KEY_A: u8 = 0x04;
+    /// The 'B' key.
     pub const KEY_B: u8 = 0x05;
+    /// The 'C' key.
     pub const KEY_C: u8 = 0x06;
+    /// The 'D' key.
     pub const KEY_D: u8 = 0x07;
+    /// The 'E' key.
     pub const KEY_E: u8 = 0x08;
+    /// The 'F' key.
     pub const KEY_F: u8 = 0x09;
+    /// The 'G' key.
     pub const KEY_G: u8 = 0x0A;
+    /// The 'H' key.
     pub const KEY_H: u8 = 0x0B;
+    /// The 'I' key.
     pub const KEY_I: u8 = 0x0C;
+    /// The 'J' key.
     pub const KEY_J: u8 = 0x0D;
+    /// The 'K' key.
     pub const KEY_K: u8 = 0x0E;
+    /// The 'L' key.
     pub const KEY_L: u8 = 0x0F;
+    /// The 'M' key.
     pub const KEY_M: u8 = 0x10;
+    /// The 'N' key.
     pub const KEY_N: u8 = 0x11;
+    /// The 'O' key.
     pub const KEY_O: u8 = 0x12;
+    /// The 'P' key.
     pub const KEY_P: u8 = 0x13;
+    /// The 'Q' key.
     pub const KEY_Q: u8 = 0x14;
+    /// The 'R' key.
     pub const KEY_R: u8 = 0x15;
+    /// The 'S' key.
     pub const KEY_S: u8 = 0x16;
+    /// The 'T' key.
     pub const KEY_T: u8 = 0x17;
+    /// The 'U' key.
     pub const KEY_U: u8 = 0x18;
+    /// The 'V' key.
     pub const KEY_V: u8 = 0x19;
+    /// The 'W' key.
     pub const KEY_W: u8 = 0x1A;
+    /// The 'X' key.
     pub const KEY_X: u8 = 0x1B;
+    /// The 'Y' key.
     pub const KEY_Y: u8 = 0x1C;
+    /// The 'Z' key.
     pub const KEY_Z: u8 = 0x1D;
 
+    /// The '1' key.
     pub const KEY_1: u8 = 0x1E;
+    /// The '2' key.
     pub const KEY_2: u8 = 0x1F;
+    /// The '3' key.
     pub const KEY_3: u8 = 0x20;
+    /// The '4' key.
     pub const KEY_4: u8 = 0x21;
+    /// The '5' key.
     pub const KEY_5: u8 = 0x22;
+    /// The '6' key.
     pub const KEY_6: u8 = 0x23;
+    /// The '7' key.
     pub const KEY_7: u8 = 0x24;
+    /// The '8' key.
     pub const KEY_8: u8 = 0x25;
+    /// The '9' key.
     pub const KEY_9: u8 = 0x26;
+    /// The '0' key.
     pub const KEY_0: u8 = 0x27;
 
+    /// Enter/Return key.
     pub const KEY_ENTER: u8 = 0x28;
+    /// Escape key.
     pub const KEY_ESCAPE: u8 = 0x29;
+    /// Backspace key.
     pub const KEY_BACKSPACE: u8 = 0x2A;
+    /// Tab key.
     pub const KEY_TAB: u8 = 0x2B;
+    /// Spacebar.
     pub const KEY_SPACE: u8 = 0x2C;
 }
 

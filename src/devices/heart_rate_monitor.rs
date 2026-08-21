@@ -16,8 +16,11 @@ use crate::types::{Address, AddressType};
 /// A complete virtual Heart Rate Monitor BLE peripheral.
 #[derive(Debug, Clone)]
 pub struct HeartRateMonitor {
+    /// The underlying virtual device hosting the sensor's GATT database.
     pub device: VirtualDevice,
+    /// The Heart Rate Service exposing measurement notifications.
     pub hrs: HeartRateService,
+    /// The Battery Service backing the sensor's battery level.
     pub bas: BatteryService,
 }
 

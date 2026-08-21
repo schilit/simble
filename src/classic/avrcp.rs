@@ -40,20 +40,20 @@ pub const AVRCP_PID: u16 = 0x110E;
 pub const BLUETOOTH_SIG_COMPANY_ID: u32 = avc::BLUETOOTH_SIG_COMPANY_ID;
 
 /// A/V Remote Control service class UUID (0x110E).
-pub const AV_REMOTE_CONTROL_SERVICE_UUID: SdpUuid = SdpUuid::Uuid16(0x110E);
+pub(crate) const AV_REMOTE_CONTROL_SERVICE_UUID: SdpUuid = SdpUuid::Uuid16(0x110E);
 /// A/V Remote Control Target service class UUID (0x110C).
-pub const AV_REMOTE_CONTROL_TARGET_SERVICE_UUID: SdpUuid = SdpUuid::Uuid16(0x110C);
+pub(crate) const AV_REMOTE_CONTROL_TARGET_SERVICE_UUID: SdpUuid = SdpUuid::Uuid16(0x110C);
 /// A/V Remote Control Controller service class UUID (0x110F).
-pub const AV_REMOTE_CONTROL_CONTROLLER_SERVICE_UUID: SdpUuid = SdpUuid::Uuid16(0x110F);
+pub(crate) const AV_REMOTE_CONTROL_CONTROLLER_SERVICE_UUID: SdpUuid = SdpUuid::Uuid16(0x110F);
 /// AVCTP protocol UUID (0x0017) for SDP protocol descriptor lists.
-pub const AVCTP_PROTOCOL_UUID: SdpUuid = SdpUuid::Uuid16(0x0017);
+pub(crate) const AVCTP_PROTOCOL_UUID: SdpUuid = SdpUuid::Uuid16(0x0017);
 /// SupportedFeatures SDP attribute ID (AVRCP spec 8, service records).
 const SUPPORTED_FEATURES_ATTRIBUTE_ID: u16 = 0x0311;
 
 /// Default AVCTP version advertised: 1.4.
-pub const DEFAULT_AVCTP_VERSION: (u8, u8) = (1, 4);
+pub(crate) const DEFAULT_AVCTP_VERSION: (u8, u8) = (1, 4);
 /// Default AVRCP version advertised: 1.6.
-pub const DEFAULT_AVRCP_VERSION: (u8, u8) = (1, 6);
+pub(crate) const DEFAULT_AVRCP_VERSION: (u8, u8) = (1, 6);
 
 /// Highest absolute volume value: the field is 7 bits, 0x7F = 100%
 /// (AVRCP spec 6.13.1).
@@ -66,227 +66,365 @@ pub const PLAYBACK_POSITION_UNAVAILABLE: u32 = 0xFFFF_FFFF;
 
 /// AVRCP PDU IDs (AVRCP spec 4.5, Table 4.5).
 pub mod pdu_id {
-    pub const GET_CAPABILITIES: u8 = 0x10;
-    pub const LIST_PLAYER_APPLICATION_SETTING_ATTRIBUTES: u8 = 0x11;
-    pub const LIST_PLAYER_APPLICATION_SETTING_VALUES: u8 = 0x12;
-    pub const GET_CURRENT_PLAYER_APPLICATION_SETTING_VALUE: u8 = 0x13;
-    pub const SET_PLAYER_APPLICATION_SETTING_VALUE: u8 = 0x14;
-    pub const GET_PLAYER_APPLICATION_SETTING_ATTRIBUTE_TEXT: u8 = 0x15;
-    pub const GET_PLAYER_APPLICATION_SETTING_VALUE_TEXT: u8 = 0x16;
-    pub const INFORM_DISPLAYABLE_CHARACTER_SET: u8 = 0x17;
-    pub const INFORM_BATTERY_STATUS_OF_CT: u8 = 0x18;
+    /// `GET_CAPABILITIES` PDU ID (AVRCP spec 4.5, Table 4.5).
+    pub(crate) const GET_CAPABILITIES: u8 = 0x10;
+    /// `LIST_PLAYER_APPLICATION_SETTING_ATTRIBUTES` PDU ID (AVRCP spec 4.5, Table 4.5).
+    pub(crate) const LIST_PLAYER_APPLICATION_SETTING_ATTRIBUTES: u8 = 0x11;
+    /// `LIST_PLAYER_APPLICATION_SETTING_VALUES` PDU ID (AVRCP spec 4.5, Table 4.5).
+    pub(crate) const LIST_PLAYER_APPLICATION_SETTING_VALUES: u8 = 0x12;
+    /// `GET_CURRENT_PLAYER_APPLICATION_SETTING_VALUE` PDU ID (AVRCP spec 4.5, Table 4.5).
+    pub(crate) const GET_CURRENT_PLAYER_APPLICATION_SETTING_VALUE: u8 = 0x13;
+    /// `SET_PLAYER_APPLICATION_SETTING_VALUE` PDU ID (AVRCP spec 4.5, Table 4.5).
+    pub(crate) const SET_PLAYER_APPLICATION_SETTING_VALUE: u8 = 0x14;
+    /// `GET_PLAYER_APPLICATION_SETTING_ATTRIBUTE_TEXT` PDU ID (AVRCP spec 4.5, Table 4.5).
+    pub(crate) const GET_PLAYER_APPLICATION_SETTING_ATTRIBUTE_TEXT: u8 = 0x15;
+    /// `GET_PLAYER_APPLICATION_SETTING_VALUE_TEXT` PDU ID (AVRCP spec 4.5, Table 4.5).
+    pub(crate) const GET_PLAYER_APPLICATION_SETTING_VALUE_TEXT: u8 = 0x16;
+    /// `INFORM_DISPLAYABLE_CHARACTER_SET` PDU ID (AVRCP spec 4.5, Table 4.5).
+    pub(crate) const INFORM_DISPLAYABLE_CHARACTER_SET: u8 = 0x17;
+    /// `INFORM_BATTERY_STATUS_OF_CT` PDU ID (AVRCP spec 4.5, Table 4.5).
+    pub(crate) const INFORM_BATTERY_STATUS_OF_CT: u8 = 0x18;
+    /// `GET_ELEMENT_ATTRIBUTES` PDU ID (AVRCP spec 4.5, Table 4.5).
     pub const GET_ELEMENT_ATTRIBUTES: u8 = 0x20;
+    /// `GET_PLAY_STATUS` PDU ID (AVRCP spec 4.5, Table 4.5).
     pub const GET_PLAY_STATUS: u8 = 0x30;
+    /// `REGISTER_NOTIFICATION` PDU ID (AVRCP spec 4.5, Table 4.5).
     pub const REGISTER_NOTIFICATION: u8 = 0x31;
+    /// `REQUEST_CONTINUING_RESPONSE` PDU ID (AVRCP spec 4.5, Table 4.5).
     pub const REQUEST_CONTINUING_RESPONSE: u8 = 0x40;
+    /// `ABORT_CONTINUING_RESPONSE` PDU ID (AVRCP spec 4.5, Table 4.5).
     pub const ABORT_CONTINUING_RESPONSE: u8 = 0x41;
-    pub const SET_ABSOLUTE_VOLUME: u8 = 0x50;
-    pub const SET_ADDRESSED_PLAYER: u8 = 0x60;
-    pub const SET_BROWSED_PLAYER: u8 = 0x70;
-    pub const GET_FOLDER_ITEMS: u8 = 0x71;
-    pub const CHANGE_PATH: u8 = 0x72;
-    pub const GET_ITEM_ATTRIBUTES: u8 = 0x73;
-    pub const PLAY_ITEM: u8 = 0x74;
-    pub const GET_TOTAL_NUMBER_OF_ITEMS: u8 = 0x75;
-    pub const SEARCH: u8 = 0x80;
-    pub const ADD_TO_NOW_PLAYING: u8 = 0x90;
+    /// `SET_ABSOLUTE_VOLUME` PDU ID (AVRCP spec 4.5, Table 4.5).
+    pub(crate) const SET_ABSOLUTE_VOLUME: u8 = 0x50;
+    /// `SET_ADDRESSED_PLAYER` PDU ID (AVRCP spec 4.5, Table 4.5).
+    pub(crate) const SET_ADDRESSED_PLAYER: u8 = 0x60;
+    /// `SET_BROWSED_PLAYER` PDU ID (AVRCP spec 4.5, Table 4.5).
+    pub(crate) const SET_BROWSED_PLAYER: u8 = 0x70;
+    /// `GET_FOLDER_ITEMS` PDU ID (AVRCP spec 4.5, Table 4.5).
+    pub(crate) const GET_FOLDER_ITEMS: u8 = 0x71;
+    /// `CHANGE_PATH` PDU ID (AVRCP spec 4.5, Table 4.5).
+    pub(crate) const CHANGE_PATH: u8 = 0x72;
+    /// `GET_ITEM_ATTRIBUTES` PDU ID (AVRCP spec 4.5, Table 4.5).
+    pub(crate) const GET_ITEM_ATTRIBUTES: u8 = 0x73;
+    /// `PLAY_ITEM` PDU ID (AVRCP spec 4.5, Table 4.5).
+    pub(crate) const PLAY_ITEM: u8 = 0x74;
+    /// `GET_TOTAL_NUMBER_OF_ITEMS` PDU ID (AVRCP spec 4.5, Table 4.5).
+    pub(crate) const GET_TOTAL_NUMBER_OF_ITEMS: u8 = 0x75;
+    /// `SEARCH` PDU ID (AVRCP spec 4.5, Table 4.5).
+    pub(crate) const SEARCH: u8 = 0x80;
+    /// `ADD_TO_NOW_PLAYING` PDU ID (AVRCP spec 4.5, Table 4.5).
+    pub(crate) const ADD_TO_NOW_PLAYING: u8 = 0x90;
 }
 
 /// GetCapabilities capability IDs (AVRCP spec 6.4.1).
 pub mod capability_id {
+    /// `COMPANY_ID` GetCapabilities capability ID (AVRCP spec 6.4.1).
     pub const COMPANY_ID: u8 = 0x02;
-    pub const EVENTS_SUPPORTED: u8 = 0x03;
+    /// `EVENTS_SUPPORTED` GetCapabilities capability ID (AVRCP spec 6.4.1).
+    pub(crate) const EVENTS_SUPPORTED: u8 = 0x03;
 }
 
 /// Notification event IDs (AVRCP spec 6.7.2, Table 6.35).
 pub mod event_id {
+    /// `PLAYBACK_STATUS_CHANGED` notification event ID (AVRCP spec 6.7.2, Table 6.35).
     pub const PLAYBACK_STATUS_CHANGED: u8 = 0x01;
+    /// `TRACK_CHANGED` notification event ID (AVRCP spec 6.7.2, Table 6.35).
     pub const TRACK_CHANGED: u8 = 0x02;
+    /// `TRACK_REACHED_END` notification event ID (AVRCP spec 6.7.2, Table 6.35).
     pub const TRACK_REACHED_END: u8 = 0x03;
+    /// `TRACK_REACHED_START` notification event ID (AVRCP spec 6.7.2, Table 6.35).
     pub const TRACK_REACHED_START: u8 = 0x04;
-    pub const PLAYBACK_POS_CHANGED: u8 = 0x05;
+    /// `PLAYBACK_POS_CHANGED` notification event ID (AVRCP spec 6.7.2, Table 6.35).
+    pub(crate) const PLAYBACK_POS_CHANGED: u8 = 0x05;
+    /// `BATT_STATUS_CHANGED` notification event ID (AVRCP spec 6.7.2, Table 6.35).
     pub const BATT_STATUS_CHANGED: u8 = 0x06;
+    /// `SYSTEM_STATUS_CHANGED` notification event ID (AVRCP spec 6.7.2, Table 6.35).
     pub const SYSTEM_STATUS_CHANGED: u8 = 0x07;
+    /// `PLAYER_APPLICATION_SETTING_CHANGED` notification event ID (AVRCP spec 6.7.2, Table 6.35).
     pub const PLAYER_APPLICATION_SETTING_CHANGED: u8 = 0x08;
+    /// `NOW_PLAYING_CONTENT_CHANGED` notification event ID (AVRCP spec 6.7.2, Table 6.35).
     pub const NOW_PLAYING_CONTENT_CHANGED: u8 = 0x09;
-    pub const AVAILABLE_PLAYERS_CHANGED: u8 = 0x0A;
+    /// `AVAILABLE_PLAYERS_CHANGED` notification event ID (AVRCP spec 6.7.2, Table 6.35).
+    pub(crate) const AVAILABLE_PLAYERS_CHANGED: u8 = 0x0A;
+    /// `ADDRESSED_PLAYER_CHANGED` notification event ID (AVRCP spec 6.7.2, Table 6.35).
     pub const ADDRESSED_PLAYER_CHANGED: u8 = 0x0B;
+    /// `UIDS_CHANGED` notification event ID (AVRCP spec 6.7.2, Table 6.35).
     pub const UIDS_CHANGED: u8 = 0x0C;
+    /// `VOLUME_CHANGED` notification event ID (AVRCP spec 6.7.2, Table 6.35).
     pub const VOLUME_CHANGED: u8 = 0x0D;
 }
 
 /// Status codes for REJECTED responses (AVRCP spec 6.15.3, Table 6.49).
 pub mod status_code {
-    pub const INVALID_COMMAND: u8 = 0x00;
-    pub const INVALID_PARAMETER: u8 = 0x01;
+    /// `INVALID_COMMAND` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
+    pub(crate) const INVALID_COMMAND: u8 = 0x00;
+    /// `INVALID_PARAMETER` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
+    pub(crate) const INVALID_PARAMETER: u8 = 0x01;
+    /// `PARAMETER_CONTENT_ERROR` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
     pub const PARAMETER_CONTENT_ERROR: u8 = 0x02;
+    /// `INTERNAL_ERROR` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
     pub const INTERNAL_ERROR: u8 = 0x03;
+    /// `OPERATION_COMPLETED` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
     pub const OPERATION_COMPLETED: u8 = 0x04;
+    /// `UID_CHANGED` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
     pub const UID_CHANGED: u8 = 0x05;
+    /// `INVALID_DIRECTION` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
     pub const INVALID_DIRECTION: u8 = 0x07;
+    /// `NOT_A_DIRECTORY` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
     pub const NOT_A_DIRECTORY: u8 = 0x08;
+    /// `DOES_NOT_EXIST` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
     pub const DOES_NOT_EXIST: u8 = 0x09;
+    /// `INVALID_SCOPE` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
     pub const INVALID_SCOPE: u8 = 0x0A;
+    /// `RANGE_OUT_OF_BOUNDS` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
     pub const RANGE_OUT_OF_BOUNDS: u8 = 0x0B;
+    /// `FOLDER_ITEM_IS_NOT_PLAYABLE` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
     pub const FOLDER_ITEM_IS_NOT_PLAYABLE: u8 = 0x0C;
+    /// `MEDIA_IN_USE` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
     pub const MEDIA_IN_USE: u8 = 0x0D;
+    /// `NOW_PLAYING_LIST_FULL` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
     pub const NOW_PLAYING_LIST_FULL: u8 = 0x0E;
+    /// `SEARCH_NOT_SUPPORTED` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
     pub const SEARCH_NOT_SUPPORTED: u8 = 0x0F;
+    /// `SEARCH_IN_PROGRESS` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
     pub const SEARCH_IN_PROGRESS: u8 = 0x10;
+    /// `INVALID_PLAYER_ID` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
     pub const INVALID_PLAYER_ID: u8 = 0x11;
+    /// `PLAYER_NOT_BROWSABLE` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
     pub const PLAYER_NOT_BROWSABLE: u8 = 0x12;
+    /// `PLAYER_NOT_ADDRESSED` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
     pub const PLAYER_NOT_ADDRESSED: u8 = 0x13;
+    /// `NO_VALID_SEARCH_RESULTS` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
     pub const NO_VALID_SEARCH_RESULTS: u8 = 0x14;
+    /// `NO_AVAILABLE_PLAYERS` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
     pub const NO_AVAILABLE_PLAYERS: u8 = 0x15;
+    /// `ADDRESSED_PLAYER_CHANGED` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
     pub const ADDRESSED_PLAYER_CHANGED: u8 = 0x16;
 }
 
 /// Play status values (AVRCP spec 6.7.1).
 pub mod play_status {
+    /// `STOPPED` play status (AVRCP spec 6.7.1).
     pub const STOPPED: u8 = 0x00;
+    /// `PLAYING` play status (AVRCP spec 6.7.1).
     pub const PLAYING: u8 = 0x01;
+    /// `PAUSED` play status (AVRCP spec 6.7.1).
     pub const PAUSED: u8 = 0x02;
+    /// `FWD_SEEK` play status (AVRCP spec 6.7.1).
     pub const FWD_SEEK: u8 = 0x03;
+    /// `REV_SEEK` play status (AVRCP spec 6.7.1).
     pub const REV_SEEK: u8 = 0x04;
+    /// `ERROR` play status (AVRCP spec 6.7.1).
     pub const ERROR: u8 = 0xFF;
 }
 
 /// Media attribute IDs for element/item attributes (AVRCP spec 26, Appendix E).
 pub mod media_attribute_id {
+    /// `TITLE` media attribute ID (AVRCP spec Appendix E).
     pub const TITLE: u32 = 0x01;
+    /// `ARTIST_NAME` media attribute ID (AVRCP spec Appendix E).
     pub const ARTIST_NAME: u32 = 0x02;
+    /// `ALBUM_NAME` media attribute ID (AVRCP spec Appendix E).
     pub const ALBUM_NAME: u32 = 0x03;
+    /// `TRACK_NUMBER` media attribute ID (AVRCP spec Appendix E).
     pub const TRACK_NUMBER: u32 = 0x04;
+    /// `TOTAL_NUMBER_OF_TRACKS` media attribute ID (AVRCP spec Appendix E).
     pub const TOTAL_NUMBER_OF_TRACKS: u32 = 0x05;
+    /// `GENRE` media attribute ID (AVRCP spec Appendix E).
     pub const GENRE: u32 = 0x06;
+    /// `PLAYING_TIME` media attribute ID (AVRCP spec Appendix E).
     pub const PLAYING_TIME: u32 = 0x07;
+    /// `DEFAULT_COVER_ART` media attribute ID (AVRCP spec Appendix E).
     pub const DEFAULT_COVER_ART: u32 = 0x08;
 }
 
 /// Browsing scopes (AVRCP spec 6.10.1, Table 6.29).
 pub mod scope {
+    /// `MEDIA_PLAYER_LIST` browsing scope (AVRCP spec 6.10.1, Table 6.29).
     pub const MEDIA_PLAYER_LIST: u8 = 0x00;
+    /// `MEDIA_PLAYER_VIRTUAL_FILESYSTEM` browsing scope (AVRCP spec 6.10.1, Table 6.29).
     pub const MEDIA_PLAYER_VIRTUAL_FILESYSTEM: u8 = 0x01;
+    /// `SEARCH` browsing scope (AVRCP spec 6.10.1, Table 6.29).
     pub const SEARCH: u8 = 0x02;
+    /// `NOW_PLAYING` browsing scope (AVRCP spec 6.10.1, Table 6.29).
     pub const NOW_PLAYING: u8 = 0x03;
 }
 
 /// Character set IDs (IANA MIBenum values; AVRCP mandates UTF-8).
 pub mod character_set_id {
+    /// `UTF_8` character set (IANA MIBenum value).
     pub const UTF_8: u16 = 0x006A;
 }
 
 /// Battery status values for InformBatteryStatusOfCT (AVRCP spec 6.5.8).
 pub mod battery_status {
+    /// `NORMAL` battery status for InformBatteryStatusOfCT (AVRCP spec 6.5.8).
     pub const NORMAL: u8 = 0x00;
+    /// `WARNING` battery status for InformBatteryStatusOfCT (AVRCP spec 6.5.8).
     pub const WARNING: u8 = 0x01;
+    /// `CRITICAL` battery status for InformBatteryStatusOfCT (AVRCP spec 6.5.8).
     pub const CRITICAL: u8 = 0x02;
+    /// `EXTERNAL` battery status for InformBatteryStatusOfCT (AVRCP spec 6.5.8).
     pub const EXTERNAL: u8 = 0x03;
+    /// `FULL_CHARGE` battery status for InformBatteryStatusOfCT (AVRCP spec 6.5.8).
     pub const FULL_CHARGE: u8 = 0x04;
 }
 
 /// Player application setting attribute IDs (AVRCP spec 6.5.1, Appendix F).
 pub mod application_setting_attribute {
+    /// `EQUALIZER_ON_OFF` player application setting attribute (AVRCP spec Appendix F).
     pub const EQUALIZER_ON_OFF: u8 = 0x01;
+    /// `REPEAT_MODE` player application setting attribute (AVRCP spec Appendix F).
     pub const REPEAT_MODE: u8 = 0x02;
+    /// `SHUFFLE_ON_OFF` player application setting attribute (AVRCP spec Appendix F).
     pub const SHUFFLE_ON_OFF: u8 = 0x03;
+    /// `SCAN_ON_OFF` player application setting attribute (AVRCP spec Appendix F).
     pub const SCAN_ON_OFF: u8 = 0x04;
 }
 
 /// Equalizer setting values (AVRCP spec Appendix F).
 pub mod equalizer_status {
+    /// `OFF` equalizer setting value (AVRCP spec Appendix F).
     pub const OFF: u8 = 0x01;
+    /// `ON` equalizer setting value (AVRCP spec Appendix F).
     pub const ON: u8 = 0x02;
 }
 
 /// Repeat mode setting values (AVRCP spec Appendix F).
 pub mod repeat_mode_status {
+    /// `OFF` repeat mode setting value (AVRCP spec Appendix F).
     pub const OFF: u8 = 0x01;
+    /// `SINGLE_TRACK_REPEAT` repeat mode setting value (AVRCP spec Appendix F).
     pub const SINGLE_TRACK_REPEAT: u8 = 0x02;
+    /// `ALL_TRACK_REPEAT` repeat mode setting value (AVRCP spec Appendix F).
     pub const ALL_TRACK_REPEAT: u8 = 0x03;
+    /// `GROUP_REPEAT` repeat mode setting value (AVRCP spec Appendix F).
     pub const GROUP_REPEAT: u8 = 0x04;
 }
 
 /// Shuffle setting values (AVRCP spec Appendix F).
 pub mod shuffle_status {
+    /// `OFF` shuffle setting value (AVRCP spec Appendix F).
     pub const OFF: u8 = 0x01;
+    /// `ALL_TRACKS_SHUFFLE` shuffle setting value (AVRCP spec Appendix F).
     pub const ALL_TRACKS_SHUFFLE: u8 = 0x02;
+    /// `GROUP_SHUFFLE` shuffle setting value (AVRCP spec Appendix F).
     pub const GROUP_SHUFFLE: u8 = 0x03;
 }
 
 /// Scan setting values (AVRCP spec Appendix F).
 pub mod scan_status {
+    /// `OFF` scan setting value (AVRCP spec Appendix F).
     pub const OFF: u8 = 0x01;
+    /// `ALL_TRACKS_SCAN` scan setting value (AVRCP spec Appendix F).
     pub const ALL_TRACKS_SCAN: u8 = 0x02;
+    /// `GROUP_SCAN` scan setting value (AVRCP spec Appendix F).
     pub const GROUP_SCAN: u8 = 0x03;
 }
 
 /// Controller SupportedFeatures bits (AVRCP spec 8, Table 8.2).
 pub mod controller_features {
+    /// `CATEGORY_1` controller SupportedFeatures bit (AVRCP spec 8, Table 8.2).
     pub const CATEGORY_1: u16 = 1 << 0;
+    /// `CATEGORY_2` controller SupportedFeatures bit (AVRCP spec 8, Table 8.2).
     pub const CATEGORY_2: u16 = 1 << 1;
+    /// `CATEGORY_3` controller SupportedFeatures bit (AVRCP spec 8, Table 8.2).
     pub const CATEGORY_3: u16 = 1 << 2;
+    /// `CATEGORY_4` controller SupportedFeatures bit (AVRCP spec 8, Table 8.2).
     pub const CATEGORY_4: u16 = 1 << 3;
+    /// `SUPPORTS_BROWSING` controller SupportedFeatures bit (AVRCP spec 8, Table 8.2).
     pub const SUPPORTS_BROWSING: u16 = 1 << 6;
+    /// `SUPPORTS_COVER_ART_GET_IMAGE_PROPERTIES` controller SupportedFeatures bit.
     pub const SUPPORTS_COVER_ART_GET_IMAGE_PROPERTIES: u16 = 1 << 7;
+    /// `SUPPORTS_COVER_ART_GET_IMAGE` controller SupportedFeatures bit (AVRCP spec 8, Table 8.2).
     pub const SUPPORTS_COVER_ART_GET_IMAGE: u16 = 1 << 8;
+    /// `SUPPORTS_COVER_ART_GET_LINKED_THUMBNAIL` controller SupportedFeatures bit.
     pub const SUPPORTS_COVER_ART_GET_LINKED_THUMBNAIL: u16 = 1 << 9;
 }
 
 /// Target SupportedFeatures bits (AVRCP spec 8, Table 8.1).
 pub mod target_features {
+    /// `CATEGORY_1` target SupportedFeatures bit (AVRCP spec 8, Table 8.1).
     pub const CATEGORY_1: u16 = 1 << 0;
+    /// `CATEGORY_2` target SupportedFeatures bit (AVRCP spec 8, Table 8.1).
     pub const CATEGORY_2: u16 = 1 << 1;
+    /// `CATEGORY_3` target SupportedFeatures bit (AVRCP spec 8, Table 8.1).
     pub const CATEGORY_3: u16 = 1 << 2;
+    /// `CATEGORY_4` target SupportedFeatures bit (AVRCP spec 8, Table 8.1).
     pub const CATEGORY_4: u16 = 1 << 3;
+    /// `PLAYER_APPLICATION_SETTINGS` target SupportedFeatures bit (AVRCP spec 8, Table 8.1).
     pub const PLAYER_APPLICATION_SETTINGS: u16 = 1 << 4;
+    /// `GROUP_NAVIGATION` target SupportedFeatures bit (AVRCP spec 8, Table 8.1).
     pub const GROUP_NAVIGATION: u16 = 1 << 5;
+    /// `SUPPORTS_BROWSING` target SupportedFeatures bit (AVRCP spec 8, Table 8.1).
     pub const SUPPORTS_BROWSING: u16 = 1 << 6;
+    /// `SUPPORTS_MULTIPLE_MEDIA_PLAYER_APPLICATIONS` target SupportedFeatures bit.
     pub const SUPPORTS_MULTIPLE_MEDIA_PLAYER_APPLICATIONS: u16 = 1 << 7;
+    /// `SUPPORTS_COVER_ART` target SupportedFeatures bit (AVRCP spec 8, Table 8.1).
     pub const SUPPORTS_COVER_ART: u16 = 1 << 8;
 }
 
 /// Browseable item types (AVRCP spec 6.10.2).
-pub mod item_type {
-    pub const MEDIA_PLAYER: u8 = 0x01;
-    pub const FOLDER: u8 = 0x02;
-    pub const MEDIA_ELEMENT: u8 = 0x03;
+pub(crate) mod item_type {
+    /// `MEDIA_PLAYER` browseable item type (AVRCP spec 6.10.2).
+    pub(crate) const MEDIA_PLAYER: u8 = 0x01;
+    /// `FOLDER` browseable item type (AVRCP spec 6.10.2).
+    pub(crate) const FOLDER: u8 = 0x02;
+    /// `MEDIA_ELEMENT` browseable item type (AVRCP spec 6.10.2).
+    pub(crate) const MEDIA_ELEMENT: u8 = 0x03;
 }
 
 /// Folder types for [`FolderItem`] (AVRCP spec 6.10.2.2).
 pub mod folder_type {
+    /// `MIXED` folder type (AVRCP spec 6.10.2.2).
     pub const MIXED: u8 = 0x00;
+    /// `TITLES` folder type (AVRCP spec 6.10.2.2).
     pub const TITLES: u8 = 0x01;
+    /// `ALBUMS` folder type (AVRCP spec 6.10.2.2).
     pub const ALBUMS: u8 = 0x02;
+    /// `ARTISTS` folder type (AVRCP spec 6.10.2.2).
     pub const ARTISTS: u8 = 0x03;
+    /// `GENRES` folder type (AVRCP spec 6.10.2.2).
     pub const GENRES: u8 = 0x04;
+    /// `PLAYLISTS` folder type (AVRCP spec 6.10.2.2).
     pub const PLAYLISTS: u8 = 0x05;
+    /// `YEARS` folder type (AVRCP spec 6.10.2.2).
     pub const YEARS: u8 = 0x06;
 }
 
 /// Media types for [`MediaElementItem`] (AVRCP spec 6.10.2.3).
 pub mod media_element_type {
+    /// `AUDIO` media type (AVRCP spec 6.10.2.3).
     pub const AUDIO: u8 = 0x00;
+    /// `VIDEO` media type (AVRCP spec 6.10.2.3).
     pub const VIDEO: u8 = 0x01;
 }
 
 /// Major player types for [`MediaPlayerItem`] (AVRCP spec 6.10.2.1).
 pub mod major_player_type {
+    /// `AUDIO` major player type (AVRCP spec 6.10.2.1).
     pub const AUDIO: u8 = 0x01;
+    /// `VIDEO` major player type (AVRCP spec 6.10.2.1).
     pub const VIDEO: u8 = 0x02;
+    /// `BROADCASTING_AUDIO` major player type (AVRCP spec 6.10.2.1).
     pub const BROADCASTING_AUDIO: u8 = 0x04;
+    /// `BROADCASTING_VIDEO` major player type (AVRCP spec 6.10.2.1).
     pub const BROADCASTING_VIDEO: u8 = 0x08;
 }
 
 /// Player sub-types for [`MediaPlayerItem`] (AVRCP spec 6.10.2.1).
 pub mod player_sub_type {
+    /// `AUDIO_BOOK` player sub-type (AVRCP spec 6.10.2.1).
     pub const AUDIO_BOOK: u32 = 0x01;
+    /// `PODCAST` player sub-type (AVRCP spec 6.10.2.1).
     pub const PODCAST: u32 = 0x02;
 }
 
 /// ChangePath directions (AVRCP spec 6.10.4.1).
 pub mod direction {
+    /// `UP` ChangePath direction (AVRCP spec 6.10.4.1).
     pub const UP: u8 = 0x00;
+    /// `DOWN` ChangePath direction (AVRCP spec 6.10.4.1).
     pub const DOWN: u8 = 0x01;
 }
 
@@ -294,74 +432,143 @@ pub mod direction {
 /// the 16-octet feature bitmask, octet 0 carrying bits 0-7 (AVRCP spec
 /// 6.10.2.1, Table 6.32).
 pub mod player_feature {
+    /// `SELECT` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const SELECT: u128 = 1 << 0;
+    /// `UP` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const UP: u128 = 1 << 1;
+    /// `DOWN` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const DOWN: u128 = 1 << 2;
+    /// `LEFT` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const LEFT: u128 = 1 << 3;
+    /// `RIGHT` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const RIGHT: u128 = 1 << 4;
+    /// `RIGHT_UP` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const RIGHT_UP: u128 = 1 << 5;
+    /// `RIGHT_DOWN` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const RIGHT_DOWN: u128 = 1 << 6;
+    /// `LEFT_UP` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const LEFT_UP: u128 = 1 << 7;
+    /// `LEFT_DOWN` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const LEFT_DOWN: u128 = 1 << 8;
+    /// `ROOT_MENU` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const ROOT_MENU: u128 = 1 << 9;
+    /// `SETUP_MENU` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const SETUP_MENU: u128 = 1 << 10;
+    /// `CONTENTS_MENU` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const CONTENTS_MENU: u128 = 1 << 11;
+    /// `FAVORITE_MENU` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const FAVORITE_MENU: u128 = 1 << 12;
+    /// `EXIT` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const EXIT: u128 = 1 << 13;
+    /// `NUM_0` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const NUM_0: u128 = 1 << 14;
+    /// `NUM_1` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const NUM_1: u128 = 1 << 15;
+    /// `NUM_2` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const NUM_2: u128 = 1 << 16;
+    /// `NUM_3` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const NUM_3: u128 = 1 << 17;
+    /// `NUM_4` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const NUM_4: u128 = 1 << 18;
+    /// `NUM_5` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const NUM_5: u128 = 1 << 19;
+    /// `NUM_6` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const NUM_6: u128 = 1 << 20;
+    /// `NUM_7` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const NUM_7: u128 = 1 << 21;
+    /// `NUM_8` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const NUM_8: u128 = 1 << 22;
+    /// `NUM_9` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const NUM_9: u128 = 1 << 23;
+    /// `DOT` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const DOT: u128 = 1 << 24;
+    /// `ENTER` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const ENTER: u128 = 1 << 25;
+    /// `CLEAR` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const CLEAR: u128 = 1 << 26;
+    /// `CHANNEL_UP` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const CHANNEL_UP: u128 = 1 << 27;
+    /// `CHANNEL_DOWN` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const CHANNEL_DOWN: u128 = 1 << 28;
+    /// `PREVIOUS_CHANNEL` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const PREVIOUS_CHANNEL: u128 = 1 << 29;
+    /// `SOUND_SELECT` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const SOUND_SELECT: u128 = 1 << 30;
+    /// `INPUT_SELECT` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const INPUT_SELECT: u128 = 1 << 31;
+    /// `DISPLAY_INFORMATION` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const DISPLAY_INFORMATION: u128 = 1 << 32;
+    /// `HELP` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const HELP: u128 = 1 << 33;
+    /// `PAGE_UP` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const PAGE_UP: u128 = 1 << 34;
+    /// `PAGE_DOWN` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const PAGE_DOWN: u128 = 1 << 35;
+    /// `POWER` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const POWER: u128 = 1 << 36;
+    /// `VOLUME_UP` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const VOLUME_UP: u128 = 1 << 37;
+    /// `VOLUME_DOWN` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const VOLUME_DOWN: u128 = 1 << 38;
+    /// `MUTE` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const MUTE: u128 = 1 << 39;
+    /// `PLAY` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const PLAY: u128 = 1 << 40;
+    /// `STOP` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const STOP: u128 = 1 << 41;
+    /// `PAUSE` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const PAUSE: u128 = 1 << 42;
+    /// `RECORD` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const RECORD: u128 = 1 << 43;
+    /// `REWIND` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const REWIND: u128 = 1 << 44;
+    /// `FAST_FORWARD` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const FAST_FORWARD: u128 = 1 << 45;
+    /// `EJECT` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const EJECT: u128 = 1 << 46;
+    /// `FORWARD` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const FORWARD: u128 = 1 << 47;
+    /// `BACKWARD` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const BACKWARD: u128 = 1 << 48;
+    /// `ANGLE` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const ANGLE: u128 = 1 << 49;
+    /// `SUBPICTURE` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const SUBPICTURE: u128 = 1 << 50;
+    /// `F1` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const F1: u128 = 1 << 51;
+    /// `F2` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const F2: u128 = 1 << 52;
+    /// `F3` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const F3: u128 = 1 << 53;
+    /// `F4` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const F4: u128 = 1 << 54;
+    /// `F5` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const F5: u128 = 1 << 55;
+    /// `VENDOR_UNIQUE` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const VENDOR_UNIQUE: u128 = 1 << 56;
+    /// `BASIC_GROUP_NAVIGATION` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const BASIC_GROUP_NAVIGATION: u128 = 1 << 57;
+    /// `ADVANCED_CONTROL_PLAYER` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const ADVANCED_CONTROL_PLAYER: u128 = 1 << 58;
+    /// `BROWSING` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const BROWSING: u128 = 1 << 59;
+    /// `SEARCHING` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const SEARCHING: u128 = 1 << 60;
+    /// `ADD_TO_NOW_PLAYING` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const ADD_TO_NOW_PLAYING: u128 = 1 << 61;
+    /// `UIDS_UNIQUE_IN_PLAYER_BROWSE_TREE` media player feature bit.
     pub const UIDS_UNIQUE_IN_PLAYER_BROWSE_TREE: u128 = 1 << 62;
+    /// `ONLY_BROWSABLE_WHEN_ADDRESSED` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const ONLY_BROWSABLE_WHEN_ADDRESSED: u128 = 1 << 63;
+    /// `ONLY_SEARCHABLE_WHEN_ADDRESSED` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const ONLY_SEARCHABLE_WHEN_ADDRESSED: u128 = 1 << 64;
+    /// `NOW_PLAYING` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const NOW_PLAYING: u128 = 1 << 65;
+    /// `UID_PERSISTENCY` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const UID_PERSISTENCY: u128 = 1 << 66;
+    /// `NUMBER_OF_ITEMS` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const NUMBER_OF_ITEMS: u128 = 1 << 67;
+    /// `COVER_ART` media player feature bit (AVRCP spec 6.10.2.1, Table 6.32).
     pub const COVER_ART: u128 = 1 << 68;
 }
 
@@ -469,8 +676,11 @@ fn write_u32_list(out: &mut Vec<u8>, values: &[u32]) {
 /// (AVRCP spec 6.6.1, attribute value entry).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaAttribute {
+    /// Media attribute ID (see [`media_attribute_id`]).
     pub attribute_id: u32,
+    /// Character set of `value` (IANA MIBenum; AVRCP mandates UTF-8).
     pub character_set_id: u16,
+    /// The attribute's text value.
     pub value: String,
 }
 
@@ -506,7 +716,9 @@ fn write_media_attribute_list(out: &mut Vec<u8>, attributes: &[MediaAttribute]) 
 /// (AVRCP spec 6.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ApplicationSetting {
+    /// Setting attribute ID (see [`application_setting_attribute`]).
     pub attribute_id: u8,
+    /// Selected value ID for that attribute.
     pub value_id: u8,
 }
 
@@ -536,7 +748,9 @@ fn write_setting_list(out: &mut Vec<u8>, settings: &[ApplicationSetting]) {
 pub struct SettingText {
     /// Attribute ID or value ID, depending on the PDU.
     pub id: u8,
+    /// Character set of `text` (IANA MIBenum).
     pub character_set_id: u16,
+    /// The displayable text for this attribute or value.
     pub text: String,
 }
 
@@ -573,7 +787,8 @@ pub enum CapabilityList {
 }
 
 impl CapabilityList {
-    pub fn capability_id(&self) -> u8 {
+    /// The GetCapabilities capability ID this list corresponds to.
+    pub(crate) fn capability_id(&self) -> u8 {
         match self {
             CapabilityList::CompanyIds(..) => capability_id::COMPANY_ID,
             CapabilityList::EventIds(..) => capability_id::EVENTS_SUPPORTED,
@@ -590,12 +805,19 @@ impl CapabilityList {
 /// layout, i.e. little-endian integers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaPlayerItem {
+    /// Unique player ID within the target.
     pub player_id: u16,
+    /// Major player type bitmask (see [`major_player_type`]).
     pub major_player_type: u8,
+    /// Player sub-type bitmask (see [`player_sub_type`]).
     pub player_sub_type: u32,
+    /// Current play status of the player (see [`play_status`]).
     pub play_status: u8,
+    /// 128-bit feature bitmask (see [`player_feature`]).
     pub features: u128,
+    /// Character set of `displayable_name` (IANA MIBenum).
     pub character_set_id: u16,
+    /// Human-readable player name.
     pub displayable_name: String,
 }
 
@@ -634,10 +856,15 @@ impl MediaPlayerItem {
 /// A folder entry in the virtual filesystem scope (AVRCP spec 6.10.2.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FolderItem {
+    /// Unique folder UID within the browsed player.
     pub folder_uid: u64,
+    /// Folder type (see [`folder_type`]).
     pub folder_type: u8,
+    /// Whether the folder can be played directly.
     pub is_playable: bool,
+    /// Character set of `displayable_name` (IANA MIBenum).
     pub character_set_id: u16,
+    /// Human-readable folder name.
     pub displayable_name: String,
 }
 
@@ -664,10 +891,15 @@ impl FolderItem {
 /// A media element (track) entry (AVRCP spec 6.10.2.3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaElementItem {
+    /// Unique media element (track) UID.
     pub media_element_uid: u64,
+    /// Media type (see [`media_element_type`]).
     pub media_type: u8,
+    /// Character set of `displayable_name` (IANA MIBenum).
     pub character_set_id: u16,
+    /// Human-readable element name.
     pub displayable_name: String,
+    /// Media attributes attached to this element.
     pub attributes: Vec<MediaAttribute>,
 }
 
@@ -695,8 +927,11 @@ impl MediaElementItem {
 /// the wire (AVRCP spec 6.10.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BrowseableItem {
+    /// A media player entry (player list scope).
     MediaPlayer(MediaPlayerItem),
+    /// A folder entry (virtual filesystem scope).
     Folder(FolderItem),
+    /// A media element (track) entry.
     MediaElement(MediaElementItem),
 }
 
@@ -746,81 +981,81 @@ impl BrowseableItem {
 /// One AVRCP command PDU's parameters (AVRCP spec 6.4-6.13).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    GetCapabilities {
-        capability_id: u8,
-    },
+    /// `GetCapabilities` command PDU (AVRCP spec 6).
+    GetCapabilities { capability_id: u8 },
+    /// `ListPlayerApplicationSettingAttributes` command PDU (AVRCP spec 6).
     ListPlayerApplicationSettingAttributes,
-    ListPlayerApplicationSettingValues {
-        attribute_id: u8,
-    },
-    GetCurrentPlayerApplicationSettingValue {
-        attribute_ids: Vec<u8>,
-    },
-    SetPlayerApplicationSettingValue {
-        settings: Vec<ApplicationSetting>,
-    },
-    GetPlayerApplicationSettingAttributeText {
-        attribute_ids: Vec<u8>,
-    },
+    /// `ListPlayerApplicationSettingValues` command PDU (AVRCP spec 6).
+    ListPlayerApplicationSettingValues { attribute_id: u8 },
+    /// `GetCurrentPlayerApplicationSettingValue` command PDU (AVRCP spec 6).
+    GetCurrentPlayerApplicationSettingValue { attribute_ids: Vec<u8> },
+    /// `SetPlayerApplicationSettingValue` command PDU (AVRCP spec 6).
+    SetPlayerApplicationSettingValue { settings: Vec<ApplicationSetting> },
+    /// `GetPlayerApplicationSettingAttributeText` command PDU (AVRCP spec 6).
+    GetPlayerApplicationSettingAttributeText { attribute_ids: Vec<u8> },
+    /// `GetPlayerApplicationSettingValueText` command PDU (AVRCP spec 6).
     GetPlayerApplicationSettingValueText {
         attribute_id: u8,
         value_ids: Vec<u8>,
     },
-    InformDisplayableCharacterSet {
-        character_set_ids: Vec<u16>,
-    },
-    InformBatteryStatusOfCt {
-        battery_status: u8,
-    },
+    /// `InformDisplayableCharacterSet` command PDU (AVRCP spec 6).
+    InformDisplayableCharacterSet { character_set_ids: Vec<u16> },
+    /// `InformBatteryStatusOfCt` command PDU (AVRCP spec 6).
+    InformBatteryStatusOfCt { battery_status: u8 },
+    /// `GetElementAttributes` command PDU (AVRCP spec 6).
     GetElementAttributes {
         identifier: u64,
         /// Empty means "all attributes" (AVRCP spec 6.6.1).
         attribute_ids: Vec<u32>,
     },
+    /// `GetPlayStatus` command PDU (AVRCP spec 6).
     GetPlayStatus,
+    /// `RegisterNotification` command PDU (AVRCP spec 6).
     RegisterNotification {
         event_id: u8,
         /// Only meaningful for PLAYBACK_POS_CHANGED (seconds).
         playback_interval: u32,
     },
-    SetAbsoluteVolume {
-        volume: u8,
-    },
-    SetAddressedPlayer {
-        player_id: u16,
-    },
-    SetBrowsedPlayer {
-        player_id: u16,
-    },
+    /// `SetAbsoluteVolume` command PDU (AVRCP spec 6).
+    SetAbsoluteVolume { volume: u8 },
+    /// `SetAddressedPlayer` command PDU (AVRCP spec 6).
+    SetAddressedPlayer { player_id: u16 },
+    /// `SetBrowsedPlayer` command PDU (AVRCP spec 6).
+    SetBrowsedPlayer { player_id: u16 },
+    /// `GetFolderItems` command PDU (AVRCP spec 6).
     GetFolderItems {
         scope: u8,
         start_item: u32,
         end_item: u32,
         attribute_ids: Vec<u32>,
     },
+    /// `ChangePath` command PDU (AVRCP spec 6).
     ChangePath {
         uid_counter: u16,
         direction: u8,
         folder_uid: u64,
     },
+    /// `GetItemAttributes` command PDU (AVRCP spec 6).
     GetItemAttributes {
         scope: u8,
         uid: u64,
         uid_counter: u16,
         attribute_ids: Vec<u32>,
     },
-    GetTotalNumberOfItems {
-        scope: u8,
-    },
+    /// `GetTotalNumberOfItems` command PDU (AVRCP spec 6).
+    GetTotalNumberOfItems { scope: u8 },
+    /// `Search` command PDU (AVRCP spec 6).
     Search {
         character_set_id: u16,
         search_string: String,
     },
+    /// `PlayItem` command PDU (AVRCP spec 6).
     PlayItem {
         scope: u8,
         uid: u64,
         uid_counter: u16,
     },
+    /// `AddToNowPlaying` command PDU (AVRCP spec 6).
     AddToNowPlaying {
         scope: u8,
         uid: u64,
@@ -829,6 +1064,7 @@ pub enum Command {
 }
 
 impl Command {
+    /// The AVRCP PDU ID for this command (see [`pdu_id`]).
     pub fn pdu_id(&self) -> u8 {
         use pdu_id as id;
         match self {
@@ -1084,44 +1320,39 @@ impl Command {
 /// response code and handled by [`Protocol`] directly.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Response {
-    GetCapabilities {
-        capabilities: CapabilityList,
-    },
-    ListPlayerApplicationSettingAttributes {
-        attribute_ids: Vec<u8>,
-    },
-    ListPlayerApplicationSettingValues {
-        value_ids: Vec<u8>,
-    },
-    GetCurrentPlayerApplicationSettingValue {
-        settings: Vec<ApplicationSetting>,
-    },
+    /// `GetCapabilities` response PDU (AVRCP spec 6).
+    GetCapabilities { capabilities: CapabilityList },
+    /// `ListPlayerApplicationSettingAttributes` response PDU (AVRCP spec 6).
+    ListPlayerApplicationSettingAttributes { attribute_ids: Vec<u8> },
+    /// `ListPlayerApplicationSettingValues` response PDU (AVRCP spec 6).
+    ListPlayerApplicationSettingValues { value_ids: Vec<u8> },
+    /// `GetCurrentPlayerApplicationSettingValue` response PDU (AVRCP spec 6).
+    GetCurrentPlayerApplicationSettingValue { settings: Vec<ApplicationSetting> },
+    /// `SetPlayerApplicationSettingValue` response PDU (AVRCP spec 6).
     SetPlayerApplicationSettingValue,
-    GetPlayerApplicationSettingAttributeText {
-        entries: Vec<SettingText>,
-    },
-    GetPlayerApplicationSettingValueText {
-        entries: Vec<SettingText>,
-    },
+    /// `GetPlayerApplicationSettingAttributeText` response PDU (AVRCP spec 6).
+    GetPlayerApplicationSettingAttributeText { entries: Vec<SettingText> },
+    /// `GetPlayerApplicationSettingValueText` response PDU (AVRCP spec 6).
+    GetPlayerApplicationSettingValueText { entries: Vec<SettingText> },
+    /// `InformDisplayableCharacterSet` response PDU (AVRCP spec 6).
     InformDisplayableCharacterSet,
+    /// `InformBatteryStatusOfCt` response PDU (AVRCP spec 6).
     InformBatteryStatusOfCt,
-    GetElementAttributes {
-        attributes: Vec<MediaAttribute>,
-    },
+    /// `GetElementAttributes` response PDU (AVRCP spec 6).
+    GetElementAttributes { attributes: Vec<MediaAttribute> },
+    /// `GetPlayStatus` response PDU (AVRCP spec 6).
     GetPlayStatus {
         song_length: u32,
         song_position: u32,
         play_status: u8,
     },
-    RegisterNotification {
-        event: Event,
-    },
-    SetAbsoluteVolume {
-        volume: u8,
-    },
-    SetAddressedPlayer {
-        status: u8,
-    },
+    /// `RegisterNotification` response PDU (AVRCP spec 6).
+    RegisterNotification { event: Event },
+    /// `SetAbsoluteVolume` response PDU (AVRCP spec 6).
+    SetAbsoluteVolume { volume: u8 },
+    /// `SetAddressedPlayer` response PDU (AVRCP spec 6).
+    SetAddressedPlayer { status: u8 },
+    /// `SetBrowsedPlayer` response PDU (AVRCP spec 6).
     SetBrowsedPlayer {
         status: u8,
         uid_counter: u16,
@@ -1129,38 +1360,39 @@ pub enum Response {
         character_set_id: u16,
         folder_names: Vec<String>,
     },
+    /// `GetFolderItems` response PDU (AVRCP spec 6).
     GetFolderItems {
         status: u8,
         uid_counter: u16,
         items: Vec<BrowseableItem>,
     },
-    ChangePath {
-        status: u8,
-        number_of_items: u32,
-    },
+    /// `ChangePath` response PDU (AVRCP spec 6).
+    ChangePath { status: u8, number_of_items: u32 },
+    /// `GetItemAttributes` response PDU (AVRCP spec 6).
     GetItemAttributes {
         status: u8,
         attributes: Vec<MediaAttribute>,
     },
+    /// `GetTotalNumberOfItems` response PDU (AVRCP spec 6).
     GetTotalNumberOfItems {
         status: u8,
         uid_counter: u16,
         number_of_items: u32,
     },
+    /// `Search` response PDU (AVRCP spec 6).
     Search {
         status: u8,
         uid_counter: u16,
         number_of_items: u32,
     },
-    PlayItem {
-        status: u8,
-    },
-    AddToNowPlaying {
-        status: u8,
-    },
+    /// `PlayItem` response PDU (AVRCP spec 6).
+    PlayItem { status: u8 },
+    /// `AddToNowPlaying` response PDU (AVRCP spec 6).
+    AddToNowPlaying { status: u8 },
 }
 
 impl Response {
+    /// The AVRCP PDU ID for this response (see [`pdu_id`]).
     pub fn pdu_id(&self) -> u8 {
         use pdu_id as id;
         match self {
@@ -1430,20 +1662,31 @@ impl Response {
 /// the track boundary events) round-trip through [`Event::Generic`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
+    /// `PlaybackStatusChanged` notification event (AVRCP spec 6.7.2).
     PlaybackStatusChanged { play_status: u8 },
+    /// `TrackChanged` notification event (AVRCP spec 6.7.2).
     TrackChanged { uid: u64 },
+    /// `PlaybackPosChanged` notification event (AVRCP spec 6.7.2).
     PlaybackPosChanged { playback_position: u32 },
+    /// `PlayerApplicationSettingChanged` notification event (AVRCP spec 6.7.2).
     PlayerApplicationSettingChanged { settings: Vec<ApplicationSetting> },
+    /// `NowPlayingContentChanged` notification event (AVRCP spec 6.7.2).
     NowPlayingContentChanged,
+    /// `AvailablePlayersChanged` notification event (AVRCP spec 6.7.2).
     AvailablePlayersChanged,
+    /// `AddressedPlayerChanged` notification event (AVRCP spec 6.7.2).
     AddressedPlayerChanged { player_id: u16, uid_counter: u16 },
+    /// `UidsChanged` notification event (AVRCP spec 6.7.2).
     UidsChanged { uid_counter: u16 },
+    /// `VolumeChanged` notification event (AVRCP spec 6.7.2).
     VolumeChanged { volume: u8 },
+    /// `Generic` notification event (AVRCP spec 6.7.2).
     Generic { event_id: u8, data: Vec<u8> },
 }
 
 impl Event {
-    pub fn event_id(&self) -> u8 {
+    /// The notification event ID (see [`event_id`]) for this event.
+    pub(crate) fn event_id(&self) -> u8 {
         match self {
             Event::PlaybackStatusChanged { .. } => event_id::PLAYBACK_STATUS_CHANGED,
             Event::TrackChanged { .. } => event_id::TRACK_CHANGED,
@@ -1460,6 +1703,8 @@ impl Event {
         }
     }
 
+    /// Serializes this event to its notification parameter bytes (event ID
+    /// followed by event-specific data).
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = vec![self.event_id()];
         match self {
@@ -1488,6 +1733,8 @@ impl Event {
         out
     }
 
+    /// Parses a notification event from its parameter bytes; unknown event
+    /// IDs round-trip through [`Event::Generic`].
     pub fn parse(data: &[u8]) -> Option<Event> {
         let mut r = Reader::new(data);
         let event_id = r.u8()?;
@@ -1573,11 +1820,13 @@ pub struct PduAssembler {
 }
 
 impl PduAssembler {
+    /// Creates an empty assembler with no PDU in progress.
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn reset(&mut self) {
+    /// Discards any partially reassembled PDU.
+    pub(crate) fn reset(&mut self) {
         self.pdu_id = None;
         self.parameters.clear();
     }
@@ -1632,13 +1881,9 @@ pub enum AvrcpEvent {
     },
     /// The controller set our absolute volume (already stored in
     /// [`Protocol::volume`]).
-    VolumeSet {
-        volume: u8,
-    },
+    VolumeSet { volume: u8 },
     /// The controller changed player application settings (already stored).
-    PlayerAppSettingsSet {
-        settings: Vec<ApplicationSetting>,
-    },
+    PlayerAppSettingsSet { settings: Vec<ApplicationSetting> },
     /// The controller asked us to play an item.
     PlayItemRequested {
         scope: u8,
@@ -1647,9 +1892,7 @@ pub enum AvrcpEvent {
     },
     /// The controller registered for a notification; a `notify_*` call for
     /// this event will now produce a CHANGED response.
-    NotificationRegistered {
-        event_id: u8,
-    },
+    NotificationRegistered { event_id: u8 },
 
     // -- Controller role ----------------------------------------------------
     /// The target answered a PASS THROUGH key event.
@@ -1662,11 +1905,13 @@ pub enum AvrcpEvent {
     SupportedEventsReceived(Vec<u8>),
     /// GetCapabilities(COMPANY_ID) response.
     SupportedCompanyIdsReceived(Vec<u32>),
+    /// Play Status Received event.
     PlayStatusReceived {
         song_length: u32,
         song_position: u32,
         play_status: u8,
     },
+    /// Element Attributes Received event.
     ElementAttributesReceived(Vec<MediaAttribute>),
     /// ListPlayerApplicationSettingAttributes response.
     AppSettingAttributesReceived(Vec<u8>),
@@ -1680,36 +1925,20 @@ pub enum AvrcpEvent {
     /// SetPlayerApplicationSettingValue was accepted.
     AppSettingsAccepted,
     /// SetAbsoluteVolume response: the effective volume the target applied.
-    VolumeAccepted {
-        volume: u8,
-    },
+    VolumeAccepted { volume: u8 },
     /// PlayItem response.
-    PlayItemCompleted {
-        status: u8,
-    },
+    PlayItemCompleted { status: u8 },
     /// A notification arrived: the INTERIM snapshot at registration, or the
     /// CHANGED response that consumed the registration.
-    NotificationReceived {
-        event: Event,
-        interim: bool,
-    },
+    NotificationReceived { event: Event, interim: bool },
     /// A response PDU without a dedicated event above.
-    ResponseReceived {
-        response: Response,
-    },
+    ResponseReceived { response: Response },
     /// The target rejected our command PDU.
-    CommandRejected {
-        pdu_id: u8,
-        status_code: u8,
-    },
+    CommandRejected { pdu_id: u8, status_code: u8 },
     /// The target does not implement our command PDU.
-    CommandNotImplemented {
-        pdu_id: u8,
-    },
+    CommandNotImplemented { pdu_id: u8 },
     /// The peer does not support the profile PID at the AVCTP level.
-    InvalidPid {
-        pid: u16,
-    },
+    InvalidPid { pid: u16 },
 }
 
 #[derive(Debug, Clone)]
@@ -1735,18 +1964,26 @@ pub struct Protocol {
     /// Event IDs answered in GetCapabilities and accepted for notification
     /// registration.
     pub supported_events: Vec<u8>,
-    pub supported_company_ids: Vec<u32>,
+    /// Company IDs answered in GetCapabilities(COMPANY_ID).
+    pub(crate) supported_company_ids: Vec<u32>,
     /// Supported player application settings: attribute ID -> value IDs.
     pub supported_player_app_settings: Vec<(u8, Vec<u8>)>,
     /// Current player application settings.
     pub player_app_settings: Vec<ApplicationSetting>,
+    /// Current absolute volume (0 to [`MAXIMUM_VOLUME`]).
     pub volume: u8,
+    /// Current playback status (see [`play_status`]).
     pub playback_status: u8,
-    pub song_length: u32,
-    pub song_position: u32,
-    pub uid_counter: u16,
-    pub addressed_player_id: u16,
-    pub current_track_uid: u64,
+    /// Current track length in milliseconds, served in GetPlayStatus.
+    pub(crate) song_length: u32,
+    /// Current playback position in milliseconds, served in GetPlayStatus.
+    pub(crate) song_position: u32,
+    /// UID counter reported to the browsing channel.
+    pub(crate) uid_counter: u16,
+    /// Currently addressed player ID.
+    pub(crate) addressed_player_id: u16,
+    /// UID of the current track, served in TrackChanged notifications.
+    pub(crate) current_track_uid: u64,
     /// Current track metadata, served in GetElementAttributes responses.
     pub element_attributes: Vec<MediaAttribute>,
     /// The AV/C response code sent for incoming key events (a real player
@@ -1765,6 +2002,8 @@ pub struct Protocol {
 }
 
 impl Protocol {
+    /// Creates a connection state machine (both CT and TG roles) that
+    /// fragments outgoing messages to `peer_mtu`.
     pub fn new(peer_mtu: u16) -> Self {
         let mut avctp = avctp::Protocol::new(peer_mtu);
         avctp.register_pid(AVRCP_PID);
@@ -1833,7 +2072,7 @@ impl Protocol {
     }
 
     /// Sends any AVRCP command PDU with the given AV/C command type.
-    pub fn send_avrcp_command(
+    pub(crate) fn send_avrcp_command(
         &mut self,
         ctype: CommandType,
         command: &Command,
@@ -1987,7 +2226,7 @@ impl Protocol {
 
     /// Sends a CHANGED response for `event` to its registered listener, if
     /// any, consuming the registration.
-    pub fn notify_event(&mut self, event: &Event) -> Vec<Vec<u8>> {
+    pub(crate) fn notify_event(&mut self, event: &Event) -> Vec<Vec<u8>> {
         let Some(label) = self.notification_listeners.remove(&event.event_id()) else {
             return Vec::new();
         };
@@ -2003,18 +2242,22 @@ impl Protocol {
         )
     }
 
+    /// Emits a PLAYBACK_STATUS_CHANGED CHANGED notification.
     pub fn notify_playback_status_changed(&mut self, play_status: u8) -> Vec<Vec<u8>> {
         self.notify_event(&Event::PlaybackStatusChanged { play_status })
     }
 
+    /// Emits a TRACK_CHANGED CHANGED notification.
     pub fn notify_track_changed(&mut self, uid: u64) -> Vec<Vec<u8>> {
         self.notify_event(&Event::TrackChanged { uid })
     }
 
+    /// Emits a PLAYBACK_POS_CHANGED CHANGED notification.
     pub fn notify_playback_position_changed(&mut self, playback_position: u32) -> Vec<Vec<u8>> {
         self.notify_event(&Event::PlaybackPosChanged { playback_position })
     }
 
+    /// Emits a PLAYER_APPLICATION_SETTING_CHANGED CHANGED notification.
     pub fn notify_player_app_settings_changed(
         &mut self,
         settings: &[ApplicationSetting],
@@ -2024,14 +2267,17 @@ impl Protocol {
         })
     }
 
+    /// Emits a NOW_PLAYING_CONTENT_CHANGED CHANGED notification.
     pub fn notify_now_playing_content_changed(&mut self) -> Vec<Vec<u8>> {
         self.notify_event(&Event::NowPlayingContentChanged)
     }
 
+    /// Emits an AVAILABLE_PLAYERS_CHANGED CHANGED notification.
     pub fn notify_available_players_changed(&mut self) -> Vec<Vec<u8>> {
         self.notify_event(&Event::AvailablePlayersChanged)
     }
 
+    /// Emits an ADDRESSED_PLAYER_CHANGED CHANGED notification.
     pub fn notify_addressed_player_changed(
         &mut self,
         player_id: u16,
@@ -2043,10 +2289,12 @@ impl Protocol {
         })
     }
 
+    /// Emits a UIDS_CHANGED CHANGED notification.
     pub fn notify_uids_changed(&mut self, uid_counter: u16) -> Vec<Vec<u8>> {
         self.notify_event(&Event::UidsChanged { uid_counter })
     }
 
+    /// Emits a VOLUME_CHANGED CHANGED notification.
     pub fn notify_volume_changed(&mut self, volume: u8) -> Vec<Vec<u8>> {
         self.notify_event(&Event::VolumeChanged { volume })
     }
@@ -2614,13 +2862,18 @@ fn version_from_u16(value: u16) -> (u8, u8) {
 /// The AVRCP Controller (CT) SDP service record (AVRCP spec 8, Table 8.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ControllerServiceRecord {
+    /// SDP service record handle.
     pub service_record_handle: u32,
+    /// Advertised AVCTP version as `(major, minor)`.
     pub avctp_version: (u8, u8),
+    /// Advertised AVRCP version as `(major, minor)`.
     pub avrcp_version: (u8, u8),
+    /// SupportedFeatures bitmask (see [`controller_features`]).
     pub supported_features: u16,
 }
 
 impl ControllerServiceRecord {
+    /// Builds a controller record with the default AVCTP/AVRCP versions.
     pub fn new(service_record_handle: u32, supported_features: u16) -> Self {
         Self {
             service_record_handle,
@@ -2630,6 +2883,7 @@ impl ControllerServiceRecord {
         }
     }
 
+    /// Renders this record as an SDP service attribute list.
     pub fn to_service_attributes(&self) -> Vec<ServiceAttribute> {
         make_service_attributes(
             self.service_record_handle,
@@ -2648,13 +2902,18 @@ impl ControllerServiceRecord {
 /// The AVRCP Target (TG) SDP service record (AVRCP spec 8, Table 8.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TargetServiceRecord {
+    /// SDP service record handle.
     pub service_record_handle: u32,
+    /// Advertised AVCTP version as `(major, minor)`.
     pub avctp_version: (u8, u8),
+    /// Advertised AVRCP version as `(major, minor)`.
     pub avrcp_version: (u8, u8),
+    /// SupportedFeatures bitmask (see [`target_features`]).
     pub supported_features: u16,
 }
 
 impl TargetServiceRecord {
+    /// Builds a target record with the default AVCTP/AVRCP versions.
     pub fn new(service_record_handle: u32, supported_features: u16) -> Self {
         Self {
             service_record_handle,
@@ -2664,6 +2923,7 @@ impl TargetServiceRecord {
         }
     }
 
+    /// Renders this record as an SDP service attribute list.
     pub fn to_service_attributes(&self) -> Vec<ServiceAttribute> {
         make_service_attributes(
             self.service_record_handle,

@@ -11,8 +11,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum CteType {
+    /// Angle of Arrival CTE.
     AngleOfArrival = 0,
+    /// Angle of Departure CTE with 1us switching/sampling slots.
     AngleOfDepartureOneUs = 1,
+    /// Angle of Departure CTE with 2us switching/sampling slots.
     AngleOfDepartureTwoUs = 2,
 }
 
@@ -20,16 +23,22 @@ pub enum CteType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum SlotDuration {
+    /// 1-microsecond slots.
     OneMicrosecond = 1,
+    /// 2-microsecond slots.
     TwoMicroseconds = 2,
 }
 
 /// Direction Finding configuration for a connection or advertising set.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CteConfig {
+    /// The CTE type to transmit or receive.
     pub cte_type: CteType,
+    /// Antenna switching/sampling slot duration.
     pub slot_duration: SlotDuration,
-    pub cte_length: u8,             // Units of 8us.
+    /// CTE length in units of 8 microseconds.
+    pub cte_length: u8, // Units of 8us.
+    /// Antenna IDs listed in switching order.
     pub switching_pattern: Vec<u8>, // Antenna IDs, in switch order.
 }
 
@@ -47,11 +56,14 @@ impl Default for CteConfig {
 /// A single baseband IQ sample, as reported in an IQ report HCI event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IqSample {
+    /// In-phase component.
     pub i: i8,
+    /// Quadrature component.
     pub q: i8,
 }
 
 impl IqSample {
+    /// Creates a sample from its in-phase and quadrature components.
     pub fn new(i: i8, q: i8) -> Self {
         Self { i, q }
     }
@@ -65,9 +77,13 @@ impl IqSample {
 /// Angle-of-arrival estimation outcome from a switched-antenna IQ capture.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AoaEstimate {
+    /// Estimated angle of arrival in degrees.
     pub estimated_angle_degrees: f64,
+    /// Mean adjacent-antenna phase difference in radians.
     pub mean_phase_difference_radians: f64,
+    /// Number of antennas contributing to the estimate.
     pub num_antennas: usize,
+    /// Number of adjacent antenna pairs averaged.
     pub num_antenna_pairs: usize,
 }
 

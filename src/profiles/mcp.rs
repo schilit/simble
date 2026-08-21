@@ -26,16 +26,27 @@ use std::sync::{Arc, Mutex};
 pub mod mcp_uuid {
     use crate::types::Uuid;
 
+    /// Media Control Service UUID.
     pub const MEDIA_CONTROL_SERVICE: Uuid = Uuid::Uuid16(0x1848);
+    /// Generic Media Control Service UUID.
     pub const GENERIC_MEDIA_CONTROL_SERVICE: Uuid = Uuid::Uuid16(0x1849);
+    /// Media Player Name characteristic UUID.
     pub const MEDIA_PLAYER_NAME: Uuid = Uuid::Uuid16(0x2B93);
+    /// Track Changed characteristic UUID.
     pub const TRACK_CHANGED: Uuid = Uuid::Uuid16(0x2B96);
+    /// Track Title characteristic UUID.
     pub const TRACK_TITLE: Uuid = Uuid::Uuid16(0x2B97);
+    /// Track Duration characteristic UUID.
     pub const TRACK_DURATION: Uuid = Uuid::Uuid16(0x2B98);
+    /// Track Position characteristic UUID.
     pub const TRACK_POSITION: Uuid = Uuid::Uuid16(0x2B99);
+    /// Media State characteristic UUID.
     pub const MEDIA_STATE: Uuid = Uuid::Uuid16(0x2BA3);
+    /// Media Control Point characteristic UUID.
     pub const MEDIA_CONTROL_POINT: Uuid = Uuid::Uuid16(0x2BA4);
+    /// Media Control Point Opcodes Supported characteristic UUID.
     pub const MEDIA_CONTROL_POINT_OPCODES_SUPPORTED: Uuid = Uuid::Uuid16(0x2BA5);
+    /// Content Control Id characteristic UUID.
     pub const CONTENT_CONTROL_ID: Uuid = Uuid::Uuid16(0x2BBA);
 }
 
@@ -54,6 +65,7 @@ pub enum MediaState {
 }
 
 impl MediaState {
+    /// Maps a wire byte to the matching variant, or `None` if unrecognized.
     pub fn from_u8(value: u8) -> Option<Self> {
         Some(match value {
             0x00 => Self::Inactive,
@@ -93,6 +105,7 @@ pub enum MediaControlPointOpcode {
 }
 
 impl MediaControlPointOpcode {
+    /// Maps a wire byte to the matching variant, or `None` if unrecognized.
     pub fn from_u8(value: u8) -> Option<Self> {
         Some(match value {
             0x01 => Self::Play,
@@ -151,35 +164,60 @@ impl MediaControlPointOpcode {
 
 /// Result codes carried in the Media Control Point notification (MCS Section 3.18.2).
 pub mod result_code {
+    /// Success.
     pub const SUCCESS: u8 = 0x01;
+    /// Opcode Not Supported.
     pub const OPCODE_NOT_SUPPORTED: u8 = 0x02;
+    /// Media Player Inactive.
     pub const MEDIA_PLAYER_INACTIVE: u8 = 0x03;
+    /// Command Cannot Be Completed.
     pub const COMMAND_CANNOT_BE_COMPLETED: u8 = 0x04;
 }
 
 /// Media Control Point Opcodes Supported bitmask (MCS Section 3.19).
 pub mod opcodes_supported {
     // fmt: off
+    /// Play.
     pub const PLAY: u32 = 1 << 0;
+    /// Pause.
     pub const PAUSE: u32 = 1 << 1;
+    /// Fast Rewind.
     pub const FAST_REWIND: u32 = 1 << 2;
+    /// Fast Forward.
     pub const FAST_FORWARD: u32 = 1 << 3;
+    /// Stop.
     pub const STOP: u32 = 1 << 4;
+    /// Move Relative.
     pub const MOVE_RELATIVE: u32 = 1 << 5;
+    /// Previous Segment.
     pub const PREVIOUS_SEGMENT: u32 = 1 << 6;
+    /// Next Segment.
     pub const NEXT_SEGMENT: u32 = 1 << 7;
+    /// First Segment.
     pub const FIRST_SEGMENT: u32 = 1 << 8;
+    /// Last Segment.
     pub const LAST_SEGMENT: u32 = 1 << 9;
+    /// Goto Segment.
     pub const GOTO_SEGMENT: u32 = 1 << 10;
+    /// Previous Track.
     pub const PREVIOUS_TRACK: u32 = 1 << 11;
+    /// Next Track.
     pub const NEXT_TRACK: u32 = 1 << 12;
+    /// First Track.
     pub const FIRST_TRACK: u32 = 1 << 13;
+    /// Last Track.
     pub const LAST_TRACK: u32 = 1 << 14;
+    /// Goto Track.
     pub const GOTO_TRACK: u32 = 1 << 15;
+    /// Previous Group.
     pub const PREVIOUS_GROUP: u32 = 1 << 16;
+    /// Next Group.
     pub const NEXT_GROUP: u32 = 1 << 17;
+    /// First Group.
     pub const FIRST_GROUP: u32 = 1 << 18;
+    /// Last Group.
     pub const LAST_GROUP: u32 = 1 << 19;
+    /// Goto Group.
     pub const GOTO_GROUP: u32 = 1 << 20;
     // fmt: on
 
@@ -343,15 +381,25 @@ impl AttributeHandler for MediaControlPointHandler {
 /// Media Control Service GATT container plus the media player state it owns.
 #[derive(Debug)]
 pub struct MediaControlService {
+    /// Attribute handle of the service declaration.
     pub service_handle: u16,
+    /// Value attribute handle of the Media Player Name characteristic.
     pub media_player_name_value_handle: u16,
+    /// Value attribute handle of the Track Changed characteristic.
     pub track_changed_value_handle: u16,
+    /// Value attribute handle of the Track Title characteristic.
     pub track_title_value_handle: u16,
+    /// Value attribute handle of the Track Duration characteristic.
     pub track_duration_value_handle: u16,
+    /// Value attribute handle of the Track Position characteristic.
     pub track_position_value_handle: u16,
+    /// Value attribute handle of the Media State characteristic.
     pub media_state_value_handle: u16,
+    /// Value attribute handle of the Control Point characteristic.
     pub control_point_value_handle: u16,
+    /// Value attribute handle of the Opcodes Supported characteristic.
     pub opcodes_supported_value_handle: u16,
+    /// Value attribute handle of the Content Control Id characteristic.
     pub content_control_id_value_handle: u16,
     state: Arc<Mutex<MediaPlayerState>>,
 }
@@ -495,6 +543,7 @@ impl MediaControlService {
         }
     }
 
+    /// Returns the media state.
     pub fn media_state(&self) -> MediaState {
         self.state
             .lock()

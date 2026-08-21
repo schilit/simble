@@ -18,6 +18,7 @@ pub(crate) struct CidAllocator<T> {
 }
 
 impl<T> CidAllocator<T> {
+    /// Creates an allocator over the inclusive dynamic CID range `min_cid..=max_cid`.
     pub fn new(min_cid: u16, max_cid: u16) -> Self {
         Self {
             min_cid,
@@ -43,18 +44,22 @@ impl<T> CidAllocator<T> {
         None
     }
 
+    /// Registers `channel` under the given `cid` in the channel table.
     pub fn insert(&mut self, cid: u16, channel: T) {
         self.channels.insert(cid, channel);
     }
 
+    /// Returns a shared reference to the channel registered under `cid`.
     pub fn get(&self, cid: u16) -> Option<&T> {
         self.channels.get(&cid)
     }
 
+    /// Returns a mutable reference to the channel registered under `cid`.
     pub fn get_mut(&mut self, cid: u16) -> Option<&mut T> {
         self.channels.get_mut(&cid)
     }
 
+    /// Removes and returns the channel registered under `cid`.
     pub fn remove(&mut self, cid: u16) -> Option<T> {
         self.channels.remove(&cid)
     }

@@ -33,71 +33,114 @@ use std::collections::HashMap;
 /// Well-known PSM for AVDTP signaling (Bluetooth Assigned Numbers).
 pub const AVDTP_PSM: u16 = 0x0019;
 /// A2DP (Advanced Audio Distribution) service class UUID (0x110D).
-pub const ADVANCED_AUDIO_DISTRIBUTION_SERVICE_UUID: SdpUuid = SdpUuid::Uuid16(0x110D);
+pub(crate) const ADVANCED_AUDIO_DISTRIBUTION_SERVICE_UUID: SdpUuid = SdpUuid::Uuid16(0x110D);
 /// AVDTP protocol UUID (0x0019) for SDP protocol descriptor lists.
-pub const AVDTP_PROTOCOL_UUID: SdpUuid = SdpUuid::Uuid16(0x0019);
+pub(crate) const AVDTP_PROTOCOL_UUID: SdpUuid = SdpUuid::Uuid16(0x0019);
 /// Default AVDTP version advertised/assumed: 1.3.
-pub const DEFAULT_VERSION: (u8, u8) = (1, 3);
+pub(crate) const DEFAULT_VERSION: (u8, u8) = (1, 3);
 
 /// Signal identifiers (AVDTP spec 8.5, Signal Command Set).
 pub mod signal_identifier {
-    pub const DISCOVER: u8 = 0x01;
+    /// Discover signal.
+    pub(crate) const DISCOVER: u8 = 0x01;
+    /// Get_Capabilities signal.
     pub const GET_CAPABILITIES: u8 = 0x02;
-    pub const SET_CONFIGURATION: u8 = 0x03;
+    /// Set_Configuration signal.
+    pub(crate) const SET_CONFIGURATION: u8 = 0x03;
+    /// Get_Configuration signal.
     pub const GET_CONFIGURATION: u8 = 0x04;
-    pub const RECONFIGURE: u8 = 0x05;
+    /// Reconfigure signal.
+    pub(crate) const RECONFIGURE: u8 = 0x05;
+    /// Open signal.
     pub const OPEN: u8 = 0x06;
+    /// Start signal.
     pub const START: u8 = 0x07;
+    /// Close signal.
     pub const CLOSE: u8 = 0x08;
-    pub const SUSPEND: u8 = 0x09;
-    pub const ABORT: u8 = 0x0A;
+    /// Suspend signal.
+    pub(crate) const SUSPEND: u8 = 0x09;
+    /// Abort signal.
+    pub(crate) const ABORT: u8 = 0x0A;
+    /// Security_Control signal.
     pub const SECURITY_CONTROL: u8 = 0x0B;
+    /// Get_All_Capabilities signal.
     pub const GET_ALL_CAPABILITIES: u8 = 0x0C;
+    /// DelayReport signal.
     pub const DELAYREPORT: u8 = 0x0D;
 }
 
 /// Error codes (AVDTP spec 8.20.6.2, ERROR_CODE tables).
 pub mod error_code {
+    /// Bad header format.
     pub const BAD_HEADER_FORMAT: u8 = 0x01;
+    /// Bad length.
     pub const BAD_LENGTH: u8 = 0x11;
+    /// Bad ACP SEID.
     pub const BAD_ACP_SEID: u8 = 0x12;
+    /// Stream endpoint in use.
     pub const SEP_IN_USE: u8 = 0x13;
+    /// Stream endpoint not in use.
     pub const SEP_NOT_IN_USE: u8 = 0x14;
+    /// Bad service category.
     pub const BAD_SERV_CATEGORY: u8 = 0x17;
+    /// Bad payload format.
     pub const BAD_PAYLOAD_FORMAT: u8 = 0x18;
+    /// Command not supported.
     pub const NOT_SUPPORTED_COMMAND: u8 = 0x19;
+    /// Invalid capabilities.
     pub const INVALID_CAPABILITIES: u8 = 0x1A;
+    /// Bad recovery type.
     pub const BAD_RECOVERY_TYPE: u8 = 0x22;
+    /// Bad media transport format.
     pub const BAD_MEDIA_TRANSPORT_FORMAT: u8 = 0x23;
+    /// Bad recovery format.
     pub const BAD_RECOVERY_FORMAT: u8 = 0x25;
+    /// Bad ROHC format.
     pub const BAD_ROHC_FORMAT: u8 = 0x26;
+    /// Bad content-protection format.
     pub const BAD_CP_FORMAT: u8 = 0x27;
+    /// Bad multiplexing format.
     pub const BAD_MULTIPLEXING_FORMAT: u8 = 0x28;
+    /// Unsupported configuration.
     pub const UNSUPPORTED_CONFIGURATION: u8 = 0x29;
+    /// Bad state for this command.
     pub const BAD_STATE: u8 = 0x31;
 }
 
 /// Service categories (AVDTP spec Table 8.47).
 pub mod service_category {
+    /// Media Transport service category.
     pub const MEDIA_TRANSPORT: u8 = 0x01;
+    /// Reporting service category.
     pub const REPORTING: u8 = 0x02;
+    /// Recovery service category.
     pub const RECOVERY: u8 = 0x03;
+    /// Content Protection service category.
     pub const CONTENT_PROTECTION: u8 = 0x04;
+    /// Header Compression service category.
     pub const HEADER_COMPRESSION: u8 = 0x05;
+    /// Multiplexing service category.
     pub const MULTIPLEXING: u8 = 0x06;
-    pub const MEDIA_CODEC: u8 = 0x07;
-    pub const DELAY_REPORTING: u8 = 0x08;
+    /// Media Codec service category.
+    pub(crate) const MEDIA_CODEC: u8 = 0x07;
+    /// Delay Reporting service category.
+    pub(crate) const DELAY_REPORTING: u8 = 0x08;
 }
 
+/// Media type of a stream endpoint (AVDTP spec 8.20.6.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaType {
+    /// Audio.
     Audio,
+    /// Video.
     Video,
+    /// Multimedia.
     Multimedia,
 }
 
 impl MediaType {
-    pub fn from_u8(value: u8) -> Option<Self> {
+    /// Decodes from its wire value.
+    pub(crate) fn from_u8(value: u8) -> Option<Self> {
         match value {
             0x00 => Some(MediaType::Audio),
             0x01 => Some(MediaType::Video),
@@ -106,7 +149,8 @@ impl MediaType {
         }
     }
 
-    pub fn as_u8(self) -> u8 {
+    /// Encodes to its wire value.
+    pub(crate) fn as_u8(self) -> u8 {
         match self {
             MediaType::Audio => 0x00,
             MediaType::Video => 0x01,
@@ -118,12 +162,15 @@ impl MediaType {
 /// TSEP (AVDTP spec 8.20.3, Stream End-point Type, Source or Sink).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamEndPointType {
+    /// Source (produces media).
     Source,
+    /// Sink (consumes media).
     Sink,
 }
 
 impl StreamEndPointType {
-    pub fn from_u8(value: u8) -> Option<Self> {
+    /// Decodes from its wire value.
+    pub(crate) fn from_u8(value: u8) -> Option<Self> {
         match value {
             0x00 => Some(StreamEndPointType::Source),
             0x01 => Some(StreamEndPointType::Sink),
@@ -131,7 +178,8 @@ impl StreamEndPointType {
         }
     }
 
-    pub fn as_u8(self) -> u8 {
+    /// Encodes to its wire value.
+    pub(crate) fn as_u8(self) -> u8 {
         match self {
             StreamEndPointType::Source => 0x00,
             StreamEndPointType::Sink => 0x01,
@@ -142,20 +190,31 @@ impl StreamEndPointType {
 /// Stream states (AVDTP spec 9.1, State Definitions).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamState {
+    /// IDLE.
     Idle,
+    /// CONFIGURED.
     Configured,
+    /// OPEN.
     Open,
+    /// STREAMING.
     Streaming,
+    /// CLOSING.
     Closing,
+    /// ABORTING.
     Aborting,
 }
 
+/// AVDTP signaling message type (packet header bits).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MessageType {
     #[default]
+    /// A command.
     Command,
+    /// A general reject.
     GeneralReject,
+    /// An accept response.
     ResponseAccept,
+    /// A reject response.
     ResponseReject,
 }
 
@@ -216,11 +275,14 @@ impl PacketType {
 /// [`MediaCodecCapabilities`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceCapability {
+    /// Service category byte (`service_category::*`).
     pub service_category: u8,
+    /// Category-specific capability bytes.
     pub data: Vec<u8>,
 }
 
 impl ServiceCapability {
+    /// Creates an empty capability for `service_category`.
     pub fn new(service_category: u8) -> Self {
         Self {
             service_category,
@@ -228,16 +290,18 @@ impl ServiceCapability {
         }
     }
 
+    /// Media Transport capability (no parameters).
     pub fn media_transport() -> Self {
         Self::new(service_category::MEDIA_TRANSPORT)
     }
 
+    /// Delay Reporting capability (no parameters).
     pub fn delay_reporting() -> Self {
         Self::new(service_category::DELAY_REPORTING)
     }
 
     /// Parses a concatenated capability list (category, length, data ...).
-    pub fn parse_list(payload: &[u8]) -> Option<Vec<ServiceCapability>> {
+    pub(crate) fn parse_list(payload: &[u8]) -> Option<Vec<ServiceCapability>> {
         let mut capabilities = Vec::new();
         let mut offset = 0;
         while offset < payload.len() {
@@ -253,7 +317,8 @@ impl ServiceCapability {
         Some(capabilities)
     }
 
-    pub fn serialize_list(capabilities: &[ServiceCapability]) -> Vec<u8> {
+    /// Serializes a capability list to its wire form.
+    pub(crate) fn serialize_list(capabilities: &[ServiceCapability]) -> Vec<u8> {
         let mut out = Vec::new();
         for capability in capabilities {
             out.push(capability.service_category);
@@ -269,12 +334,16 @@ impl ServiceCapability {
 /// layer (`crate::classic::a2dp::MediaCodecInformation`) interprets it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MediaCodecCapabilities {
+    /// Media type.
     pub media_type: MediaType,
+    /// Media codec type byte (A2DP `codec_type::*`).
     pub media_codec_type: u8,
+    /// Raw codec-specific information element.
     pub media_codec_information: Vec<u8>,
 }
 
 impl MediaCodecCapabilities {
+    /// Wraps this into a Media Codec service capability.
     pub fn to_capability(&self) -> ServiceCapability {
         let mut data = vec![self.media_type.as_u8(), self.media_codec_type];
         data.extend_from_slice(&self.media_codec_information);
@@ -284,7 +353,8 @@ impl MediaCodecCapabilities {
         }
     }
 
-    pub fn from_capability(capability: &ServiceCapability) -> Option<Self> {
+    /// Extracts a Media Codec capability, or `None` for other categories.
+    pub(crate) fn from_capability(capability: &ServiceCapability) -> Option<Self> {
         if capability.service_category != service_category::MEDIA_CODEC {
             return None;
         }
@@ -299,13 +369,18 @@ impl MediaCodecCapabilities {
 /// One entry of a Discover response (AVDTP spec 8.6.2, SEP information).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SepInfo {
+    /// Stream endpoint ID (SEID).
     pub seid: u8,
+    /// Whether the endpoint is currently in a stream.
     pub in_use: bool,
+    /// Media type.
     pub media_type: MediaType,
+    /// Source or Sink.
     pub tsep: StreamEndPointType,
 }
 
 impl SepInfo {
+    /// Encodes to the 2-byte SEP info.
     pub fn to_bytes(self) -> [u8; 2] {
         [
             (self.seid << 2) | ((self.in_use as u8) << 1),
@@ -313,6 +388,7 @@ impl SepInfo {
         ]
     }
 
+    /// Decodes the 2-byte SEP info.
     pub fn parse(bytes: &[u8]) -> Option<Self> {
         if bytes.len() < 2 {
             return None;
@@ -336,76 +412,78 @@ impl SepInfo {
 /// dedicated variants.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
+    /// Discover command.
     DiscoverCommand,
+    /// Discover response: the peer's SEP list.
     DiscoverResponse(Vec<SepInfo>),
-    GetCapabilitiesCommand {
-        acp_seid: u8,
-    },
+    /// Get_Capabilities command.
+    GetCapabilitiesCommand { acp_seid: u8 },
+    /// Get_Capabilities response.
     GetCapabilitiesResponse(Vec<ServiceCapability>),
-    GetAllCapabilitiesCommand {
-        acp_seid: u8,
-    },
+    /// Get_All_Capabilities command.
+    GetAllCapabilitiesCommand { acp_seid: u8 },
+    /// Get_All_Capabilities response.
     GetAllCapabilitiesResponse(Vec<ServiceCapability>),
+    /// Set_Configuration command.
     SetConfigurationCommand {
         acp_seid: u8,
         int_seid: u8,
         capabilities: Vec<ServiceCapability>,
     },
+    /// Set_Configuration accept.
     SetConfigurationResponse,
+    /// Set_Configuration reject (failing category and error code).
     SetConfigurationReject {
         service_category: u8,
         error_code: u8,
     },
-    GetConfigurationCommand {
-        acp_seid: u8,
-    },
+    /// Get_Configuration command.
+    GetConfigurationCommand { acp_seid: u8 },
+    /// Get_Configuration response.
     GetConfigurationResponse(Vec<ServiceCapability>),
+    /// Reconfigure command.
     ReconfigureCommand {
         acp_seid: u8,
         capabilities: Vec<ServiceCapability>,
     },
+    /// Reconfigure accept.
     ReconfigureResponse,
+    /// Reconfigure reject (failing category and error code).
     ReconfigureReject {
         service_category: u8,
         error_code: u8,
     },
-    OpenCommand {
-        acp_seid: u8,
-    },
+    /// Open command.
+    OpenCommand { acp_seid: u8 },
+    /// Open accept.
     OpenResponse,
-    StartCommand {
-        acp_seids: Vec<u8>,
-    },
+    /// Start command (one or more SEIDs).
+    StartCommand { acp_seids: Vec<u8> },
+    /// Start accept.
     StartResponse,
-    StartReject {
-        acp_seid: u8,
-        error_code: u8,
-    },
-    SuspendCommand {
-        acp_seids: Vec<u8>,
-    },
+    /// Start reject (failing SEID and error code).
+    StartReject { acp_seid: u8, error_code: u8 },
+    /// Suspend command (one or more SEIDs).
+    SuspendCommand { acp_seids: Vec<u8> },
+    /// Suspend accept.
     SuspendResponse,
-    SuspendReject {
-        acp_seid: u8,
-        error_code: u8,
-    },
-    CloseCommand {
-        acp_seid: u8,
-    },
+    /// Suspend reject (failing SEID and error code).
+    SuspendReject { acp_seid: u8, error_code: u8 },
+    /// Close command.
+    CloseCommand { acp_seid: u8 },
+    /// Close accept.
     CloseResponse,
-    AbortCommand {
-        acp_seid: u8,
-    },
+    /// Abort command.
+    AbortCommand { acp_seid: u8 },
+    /// Abort accept.
     AbortResponse,
-    SecurityControlCommand {
-        acp_seid: u8,
-        data: Vec<u8>,
-    },
+    /// Security_Control command.
+    SecurityControlCommand { acp_seid: u8, data: Vec<u8> },
+    /// Security_Control accept.
     SecurityControlResponse,
-    DelayReportCommand {
-        acp_seid: u8,
-        delay: u16,
-    },
+    /// DelayReport command (rendering delay).
+    DelayReportCommand { acp_seid: u8, delay: u16 },
+    /// DelayReport accept.
     DelayReportResponse,
     /// A reject whose payload is a single error code, for any signal.
     Reject {
@@ -413,9 +491,7 @@ pub enum Message {
         error_code: u8,
     },
     /// General Reject (AVDTP spec 8.18), echoing the offending signal.
-    GeneralReject {
-        signal_identifier: u8,
-    },
+    GeneralReject { signal_identifier: u8 },
 }
 
 // SEIDs travel in the top 6 bits of their byte (AVDTP spec 8.20.5).
@@ -428,6 +504,7 @@ fn seid_from_byte(byte: u8) -> u8 {
 }
 
 impl Message {
+    /// Returns the AVDTP signal identifier for this message.
     pub fn signal_identifier(&self) -> u8 {
         use signal_identifier as sig;
         match self {
@@ -467,6 +544,7 @@ impl Message {
         }
     }
 
+    /// Returns the message type (command, accept, or reject).
     pub fn message_type(&self) -> MessageType {
         match self {
             Message::DiscoverCommand
@@ -739,9 +817,13 @@ pub fn write_message(transaction_label: u8, message: &Message, peer_mtu: u16) ->
 /// A fully reassembled signaling message, still in wire form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssembledMessage {
+    /// Transaction label from the signaling header.
     pub transaction_label: u8,
+    /// AVDTP signal identifier.
     pub signal_identifier: u8,
+    /// Message type (command, accept, or reject).
     pub message_type: MessageType,
+    /// Reassembled message payload.
     pub payload: Vec<u8>,
 }
 
@@ -760,6 +842,7 @@ pub struct MessageAssembler {
 }
 
 impl MessageAssembler {
+    /// Creates an empty reassembler.
     pub fn new() -> Self {
         Self::default()
     }
@@ -841,17 +924,24 @@ impl MessageAssembler {
 /// (AVDTP spec 5.3), so a separate stream object would be 1:1 with it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalStreamEndPoint {
+    /// Local stream endpoint ID (SEID).
     pub seid: u8,
+    /// Media type.
     pub media_type: MediaType,
+    /// Source or Sink.
     pub tsep: StreamEndPointType,
+    /// Advertised service capabilities.
     pub capabilities: Vec<ServiceCapability>,
+    /// Configured service capabilities, once set.
     pub configuration: Vec<ServiceCapability>,
+    /// Current stream state.
     pub state: StreamState,
     /// The peer SEID this endpoint is streaming with, once configured.
     pub remote_seid: Option<u8>,
 }
 
 impl LocalStreamEndPoint {
+    /// Whether the endpoint is part of an active stream (not IDLE).
     pub fn in_use(&self) -> bool {
         self.state != StreamState::Idle
     }
@@ -869,10 +959,15 @@ impl LocalStreamEndPoint {
 /// A remote stream endpoint learned through Discover and Get_Capabilities.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveredStreamEndPoint {
+    /// Remote stream endpoint ID (SEID).
     pub seid: u8,
+    /// Media type.
     pub media_type: MediaType,
+    /// Source or Sink.
     pub tsep: StreamEndPointType,
+    /// Whether the remote endpoint is currently in use.
     pub in_use: bool,
+    /// Capabilities learned via Get_Capabilities.
     pub capabilities: Vec<ServiceCapability>,
 }
 
@@ -987,9 +1082,12 @@ impl Pending {
 /// to send back plus events for the caller, mirroring `rfcomm::Multiplexer`.
 #[derive(Debug)]
 pub struct Protocol {
+    /// Negotiated AVDTP version.
     pub version: (u8, u8),
-    pub local_endpoints: Vec<LocalStreamEndPoint>,
-    pub remote_endpoints: HashMap<u8, DiscoveredStreamEndPoint>,
+    /// Local stream endpoints, indexed by SEID minus one.
+    pub(crate) local_endpoints: Vec<LocalStreamEndPoint>,
+    /// Discovered remote endpoints, keyed by SEID.
+    pub(crate) remote_endpoints: HashMap<u8, DiscoveredStreamEndPoint>,
     peer_mtu: u16,
     assembler: MessageAssembler,
     pending: HashMap<u8, Pending>,
@@ -997,11 +1095,13 @@ pub struct Protocol {
 }
 
 impl Protocol {
+    /// Creates a protocol instance at the default AVDTP version.
     pub fn new(peer_mtu: u16) -> Self {
         Self::with_version(DEFAULT_VERSION, peer_mtu)
     }
 
-    pub fn with_version(version: (u8, u8), peer_mtu: u16) -> Self {
+    /// Creates a protocol instance at a specific AVDTP version.
+    pub(crate) fn with_version(version: (u8, u8), peer_mtu: u16) -> Self {
         Self {
             version,
             local_endpoints: Vec::new(),
@@ -1047,6 +1147,7 @@ impl Protocol {
         seid
     }
 
+    /// Returns the local endpoint with the given SEID, if any.
     pub fn get_local_endpoint_by_seid(&self, seid: u8) -> Option<&LocalStreamEndPoint> {
         (seid > 0)
             .then(|| self.local_endpoints.get(seid as usize - 1))
@@ -1167,6 +1268,7 @@ impl Protocol {
     }
 
     /// Requests the current configuration of remote endpoint `seid`.
+    /// Sends a Get_Configuration command for remote endpoint `seid`.
     pub fn get_configuration(&mut self, seid: u8) -> Result<Vec<Vec<u8>>, SimbleError> {
         self.send_command(
             Pending::GetConfiguration { seid },

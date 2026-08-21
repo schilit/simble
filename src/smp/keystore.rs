@@ -13,15 +13,19 @@ use crate::types::SimbleError;
 /// [`KeyStore`]'s `to_json`/`from_json`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PairingKey {
+    /// The 128-bit key material.
     #[serde(
         serialize_with = "serialize_hex_16",
         deserialize_with = "deserialize_hex_16"
     )]
     pub value: [u8; 16],
+    /// Whether the key was produced by an authenticated (MITM-protected) pairing.
     #[serde(default)]
     pub authenticated: bool,
+    /// Encrypted Diversifier associated with a legacy LTK, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ediv: Option<u16>,
+    /// Random value associated with a legacy LTK, if any.
     #[serde(
         skip_serializing_if = "Option::is_none",
         serialize_with = "serialize_opt_hex_8",
@@ -32,6 +36,7 @@ pub struct PairingKey {
 }
 
 impl PairingKey {
+    /// Creates an unauthenticated key from 16 bytes with no EDIV/Rand.
     pub fn new(value: [u8; 16]) -> Self {
         Self {
             value,
@@ -110,18 +115,25 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
 /// Set of security and bonding keys for a connected peer.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PairingKeys {
+    /// The peer's identity address type, if an IRK was distributed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub address_type: Option<u8>,
+    /// Long Term Key for a Secure Connections (symmetric) bond.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ltk: Option<PairingKey>,
+    /// Central-distributed Long Term Key (legacy pairing).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ltk_central: Option<PairingKey>,
+    /// Peripheral-distributed Long Term Key (legacy pairing).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ltk_peripheral: Option<PairingKey>,
+    /// Identity Resolving Key used to resolve the peer's private address.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub irk: Option<PairingKey>,
+    /// Connection Signature Resolving Key for signed writes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub csrk: Option<PairingKey>,
+    /// BR/EDR link key derived via cross-transport key generation.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_key: Option<PairingKey>,
 }
@@ -134,8 +146,10 @@ pub struct KeyStore {
 }
 
 impl KeyStore {
+    /// Namespace used when the caller does not specify one.
     pub const DEFAULT_NAMESPACE: &'static str = "__DEFAULT__";
 
+    /// Creates an empty keystore, optionally under a named namespace.
     pub fn new(default_namespace: Option<&str>) -> Self {
         Self {
             default_namespace: default_namespace

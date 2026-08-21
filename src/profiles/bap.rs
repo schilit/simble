@@ -18,7 +18,9 @@
 pub mod bap_uuid {
     use crate::types::Uuid;
 
+    /// Basic Audio Announcement Service UUID.
     pub const BASIC_AUDIO_ANNOUNCEMENT_SERVICE: Uuid = Uuid::Uuid16(0x1851);
+    /// Broadcast Audio Announcement Service UUID.
     pub const BROADCAST_AUDIO_ANNOUNCEMENT_SERVICE: Uuid = Uuid::Uuid16(0x1852);
 }
 
@@ -29,39 +31,70 @@ pub const LC3_CODEC_ID: [u8; 5] = [0x06, 0x00, 0x00, 0x00, 0x00];
 /// Bluetooth Assigned Numbers, Section 6.12.1 - Audio Location bitmask (32-bit).
 pub mod audio_location {
     // fmt: off
+    /// Not Allowed.
     pub const NOT_ALLOWED: u32 = 0x0000_0000;
+    /// Front Left.
     pub const FRONT_LEFT: u32 = 0x0000_0001;
+    /// Front Right.
     pub const FRONT_RIGHT: u32 = 0x0000_0002;
+    /// Front Center.
     pub const FRONT_CENTER: u32 = 0x0000_0004;
+    /// Low Frequency Effects 1.
     pub const LOW_FREQUENCY_EFFECTS_1: u32 = 0x0000_0008;
+    /// Back Left.
     pub const BACK_LEFT: u32 = 0x0000_0010;
+    /// Back Right.
     pub const BACK_RIGHT: u32 = 0x0000_0020;
+    /// Front Left Of Center.
     pub const FRONT_LEFT_OF_CENTER: u32 = 0x0000_0040;
+    /// Front Right Of Center.
     pub const FRONT_RIGHT_OF_CENTER: u32 = 0x0000_0080;
+    /// Back Center.
     pub const BACK_CENTER: u32 = 0x0000_0100;
+    /// Low Frequency Effects 2.
     pub const LOW_FREQUENCY_EFFECTS_2: u32 = 0x0000_0200;
+    /// Side Left.
     pub const SIDE_LEFT: u32 = 0x0000_0400;
+    /// Side Right.
     pub const SIDE_RIGHT: u32 = 0x0000_0800;
+    /// Top Front Left.
     pub const TOP_FRONT_LEFT: u32 = 0x0000_1000;
+    /// Top Front Right.
     pub const TOP_FRONT_RIGHT: u32 = 0x0000_2000;
+    /// Top Front Center.
     pub const TOP_FRONT_CENTER: u32 = 0x0000_4000;
+    /// Top Center.
     pub const TOP_CENTER: u32 = 0x0000_8000;
+    /// Top Back Left.
     pub const TOP_BACK_LEFT: u32 = 0x0001_0000;
+    /// Top Back Right.
     pub const TOP_BACK_RIGHT: u32 = 0x0002_0000;
+    /// Top Side Left.
     pub const TOP_SIDE_LEFT: u32 = 0x0004_0000;
+    /// Top Side Right.
     pub const TOP_SIDE_RIGHT: u32 = 0x0008_0000;
+    /// Top Back Center.
     pub const TOP_BACK_CENTER: u32 = 0x0010_0000;
+    /// Bottom Front Center.
     pub const BOTTOM_FRONT_CENTER: u32 = 0x0020_0000;
+    /// Bottom Front Left.
     pub const BOTTOM_FRONT_LEFT: u32 = 0x0040_0000;
+    /// Bottom Front Right.
     pub const BOTTOM_FRONT_RIGHT: u32 = 0x0080_0000;
+    /// Front Left Wide.
     pub const FRONT_LEFT_WIDE: u32 = 0x0100_0000;
+    /// Front Right Wide.
     pub const FRONT_RIGHT_WIDE: u32 = 0x0200_0000;
+    /// Left Surround.
     pub const LEFT_SURROUND: u32 = 0x0400_0000;
+    /// Right Surround.
     pub const RIGHT_SURROUND: u32 = 0x0800_0000;
     // fmt: on
 
+    /// Stereo.
     pub const STEREO: u32 = FRONT_LEFT | FRONT_RIGHT;
 
+    /// Returns the channel count.
     pub fn channel_count(locations: u32) -> u32 {
         locations.count_ones()
     }
@@ -70,18 +103,31 @@ pub mod audio_location {
 /// Bluetooth Assigned Numbers, Section 6.12.3 - Context Type bitmask (16-bit).
 pub mod context_type {
     // fmt: off
+    /// Prohibited.
     pub const PROHIBITED: u16 = 0x0000;
+    /// Unspecified.
     pub const UNSPECIFIED: u16 = 0x0001;
+    /// Conversational.
     pub const CONVERSATIONAL: u16 = 0x0002;
+    /// Media.
     pub const MEDIA: u16 = 0x0004;
+    /// Game.
     pub const GAME: u16 = 0x0008;
+    /// Instructional.
     pub const INSTRUCTIONAL: u16 = 0x0010;
+    /// Voice Assistants.
     pub const VOICE_ASSISTANTS: u16 = 0x0020;
+    /// Live.
     pub const LIVE: u16 = 0x0040;
+    /// Sound Effects.
     pub const SOUND_EFFECTS: u16 = 0x0080;
+    /// Notifications.
     pub const NOTIFICATIONS: u16 = 0x0100;
+    /// Ringtone.
     pub const RINGTONE: u16 = 0x0200;
+    /// Alerts.
     pub const ALERTS: u16 = 0x0400;
+    /// Emergency Alarm.
     pub const EMERGENCY_ALARM: u16 = 0x0800;
     // fmt: on
 }
@@ -106,6 +152,7 @@ pub enum SamplingFrequency {
 }
 
 impl SamplingFrequency {
+    /// Maps a wire byte to the matching variant, or `None` if unrecognized.
     pub fn from_u8(value: u8) -> Option<Self> {
         Some(match value {
             0x01 => Self::Freq8000,
@@ -125,6 +172,7 @@ impl SamplingFrequency {
         })
     }
 
+    /// Returns the variant for a sampling frequency in Hz, or `None` if unsupported.
     pub fn from_hz(frequency: u32) -> Option<Self> {
         Some(match frequency {
             8000 => Self::Freq8000,
@@ -144,6 +192,7 @@ impl SamplingFrequency {
         })
     }
 
+    /// Returns the sampling frequency in Hz.
     pub fn hz(self) -> u32 {
         match self {
             Self::Freq8000 => 8000,
@@ -167,18 +216,31 @@ impl SamplingFrequency {
 /// bit `N` = `SamplingFrequency` value `N + 1`.
 pub mod supported_sampling_frequency {
     // fmt: off
+    /// Freq 8000.
     pub const FREQ_8000: u16 = 1 << 0;
+    /// Freq 11025.
     pub const FREQ_11025: u16 = 1 << 1;
+    /// Freq 16000.
     pub const FREQ_16000: u16 = 1 << 2;
+    /// Freq 22050.
     pub const FREQ_22050: u16 = 1 << 3;
+    /// Freq 24000.
     pub const FREQ_24000: u16 = 1 << 4;
+    /// Freq 32000.
     pub const FREQ_32000: u16 = 1 << 5;
+    /// Freq 44100.
     pub const FREQ_44100: u16 = 1 << 6;
+    /// Freq 48000.
     pub const FREQ_48000: u16 = 1 << 7;
+    /// Freq 88200.
     pub const FREQ_88200: u16 = 1 << 8;
+    /// Freq 96000.
     pub const FREQ_96000: u16 = 1 << 9;
+    /// Freq 176400.
     pub const FREQ_176400: u16 = 1 << 10;
+    /// Freq 192000.
     pub const FREQ_192000: u16 = 1 << 11;
+    /// Freq 384000.
     pub const FREQ_384000: u16 = 1 << 12;
     // fmt: on
 }
@@ -192,6 +254,7 @@ pub enum FrameDuration {
 }
 
 impl FrameDuration {
+    /// Maps a wire byte to the matching variant, or `None` if unrecognized.
     pub fn from_u8(value: u8) -> Option<Self> {
         Some(match value {
             0x00 => Self::Duration7500Us,
@@ -200,6 +263,7 @@ impl FrameDuration {
         })
     }
 
+    /// Returns the frame duration in microseconds.
     pub fn us(self) -> u32 {
         match self {
             Self::Duration7500Us => 7500,
@@ -210,7 +274,9 @@ impl FrameDuration {
 
 /// Bluetooth Assigned Numbers, Section 6.12.4.2 - Frame Duration bitmask.
 pub mod supported_frame_duration {
+    /// Duration 7500 Us Supported.
     pub const DURATION_7500_US_SUPPORTED: u8 = 0b0001;
+    /// Duration 10000 Us Supported.
     pub const DURATION_10000_US_SUPPORTED: u8 = 0b0010;
 }
 
@@ -222,10 +288,12 @@ pub enum AnnouncementType {
     Targeted = 0x01,
 }
 
+/// Reads a little-endian 24-bit unsigned integer from the first three bytes of `data`.
 pub(crate) fn read_u24_le(data: &[u8]) -> u32 {
     data[0] as u32 | (data[1] as u32) << 8 | (data[2] as u32) << 16
 }
 
+/// Serializes a 24-bit unsigned integer to three little-endian bytes.
 pub(crate) fn write_u24_le(value: u32) -> [u8; 3] {
     [value as u8, (value >> 8) as u8, (value >> 16) as u8]
 }
@@ -253,25 +321,37 @@ fn le_uint(data: &[u8]) -> u32 {
 }
 
 /// Bluetooth Assigned Numbers, 6.12.4 - Codec Specific Capabilities LTV Structures.
-pub mod codec_capability_type {
-    pub const SAMPLING_FREQUENCY: u8 = 0x01;
-    pub const FRAME_DURATION: u8 = 0x02;
-    pub const AUDIO_CHANNEL_COUNT: u8 = 0x03;
-    pub const OCTETS_PER_FRAME: u8 = 0x04;
-    pub const CODEC_FRAMES_PER_SDU: u8 = 0x05;
+pub(crate) mod codec_capability_type {
+    /// Sampling Frequency.
+    pub(crate) const SAMPLING_FREQUENCY: u8 = 0x01;
+    /// Frame Duration.
+    pub(crate) const FRAME_DURATION: u8 = 0x02;
+    /// Audio Channel Count.
+    pub(crate) const AUDIO_CHANNEL_COUNT: u8 = 0x03;
+    /// Octets Per Frame.
+    pub(crate) const OCTETS_PER_FRAME: u8 = 0x04;
+    /// Codec Frames Per Sdu.
+    pub(crate) const CODEC_FRAMES_PER_SDU: u8 = 0x05;
 }
 
 /// Basic Audio Profile, 4.3.1 - Codec_Specific_Capabilities LTV requirements.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodecSpecificCapabilities {
+    /// Supported Sampling Frequencies.
     pub supported_sampling_frequencies: u16,
+    /// Supported Frame Durations.
     pub supported_frame_durations: u8,
+    /// Supported Audio Channel Counts.
     pub supported_audio_channel_counts: Vec<u8>,
+    /// Min Octets Per Codec Frame.
     pub min_octets_per_codec_frame: u16,
+    /// Max Octets Per Codec Frame.
     pub max_octets_per_codec_frame: u16,
+    /// Supported Max Codec Frames Per Sdu.
     pub supported_max_codec_frames_per_sdu: u8,
 }
 
+/// Expands an Audio_Channel_Counts bitmap into the list of channel counts it encodes.
 pub fn bits_to_channel_counts(data: u8) -> Vec<u8> {
     (0..8u8)
         .filter(|bit| data & (1 << bit) != 0)
@@ -279,6 +359,7 @@ pub fn bits_to_channel_counts(data: u8) -> Vec<u8> {
         .collect()
 }
 
+/// Packs a list of channel counts into an Audio_Channel_Counts bitmap.
 pub fn channel_counts_to_bits(counts: &[u8]) -> u8 {
     counts
         .iter()
@@ -286,6 +367,7 @@ pub fn channel_counts_to_bits(counts: &[u8]) -> u8 {
 }
 
 impl CodecSpecificCapabilities {
+    /// Serializes to the characteristic wire format.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.push(3);
@@ -307,6 +389,7 @@ impl CodecSpecificCapabilities {
         buf
     }
 
+    /// Parses a value from its wire bytes.
     pub fn parse(data: &[u8]) -> Option<Self> {
         let mut supported_sampling_frequencies = None;
         let mut supported_frame_durations = None;
@@ -349,26 +432,37 @@ impl CodecSpecificCapabilities {
 }
 
 /// Bluetooth Assigned Numbers, 6.12.5 - Codec Specific Configuration LTV Structures.
-pub mod codec_config_type {
-    pub const SAMPLING_FREQUENCY: u8 = 0x01;
-    pub const FRAME_DURATION: u8 = 0x02;
-    pub const AUDIO_CHANNEL_ALLOCATION: u8 = 0x03;
-    pub const OCTETS_PER_FRAME: u8 = 0x04;
-    pub const CODEC_FRAMES_PER_SDU: u8 = 0x05;
+pub(crate) mod codec_config_type {
+    /// Sampling Frequency.
+    pub(crate) const SAMPLING_FREQUENCY: u8 = 0x01;
+    /// Frame Duration.
+    pub(crate) const FRAME_DURATION: u8 = 0x02;
+    /// Audio Channel Allocation.
+    pub(crate) const AUDIO_CHANNEL_ALLOCATION: u8 = 0x03;
+    /// Octets Per Frame.
+    pub(crate) const OCTETS_PER_FRAME: u8 = 0x04;
+    /// Codec Frames Per Sdu.
+    pub(crate) const CODEC_FRAMES_PER_SDU: u8 = 0x05;
 }
 
 /// Basic Audio Profile, 4.3.2 - Codec_Specific_Configuration LTV requirements. Every field
 /// is optional per spec: only the tags actually negotiated are present on the wire.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CodecSpecificConfiguration {
+    /// Sampling Frequency.
     pub sampling_frequency: Option<SamplingFrequency>,
+    /// Frame Duration.
     pub frame_duration: Option<FrameDuration>,
+    /// Audio Channel Allocation.
     pub audio_channel_allocation: Option<u32>,
+    /// Octets Per Codec Frame.
     pub octets_per_codec_frame: Option<u16>,
+    /// Codec Frames Per Sdu.
     pub codec_frames_per_sdu: Option<u8>,
 }
 
 impl CodecSpecificConfiguration {
+    /// Serializes to the characteristic wire format.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::new();
         if let Some(v) = self.sampling_frequency {
@@ -393,6 +487,7 @@ impl CodecSpecificConfiguration {
         buf
     }
 
+    /// Parses a value from its wire bytes.
     pub fn parse(data: &[u8]) -> Self {
         let mut config = Self::default();
         for (tag, value) in ltv_entries(data) {
@@ -423,14 +518,17 @@ impl CodecSpecificConfiguration {
 /// Broadcast_ID used to identify a broadcast source before synchronizing to its PA.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BroadcastAudioAnnouncement {
+    /// Broadcast Id.
     pub broadcast_id: u32,
 }
 
 impl BroadcastAudioAnnouncement {
+    /// Serializes to the characteristic wire format.
     pub fn to_bytes(&self) -> [u8; 3] {
         write_u24_le(self.broadcast_id)
     }
 
+    /// Parses a value from its wire bytes.
     pub fn parse(data: &[u8]) -> Option<Self> {
         if data.len() < 3 {
             return None;
@@ -445,11 +543,14 @@ impl BroadcastAudioAnnouncement {
 /// (BAP 3.7.2.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Bis {
+    /// Index.
     pub index: u8,
+    /// Codec Specific Configuration.
     pub codec_specific_configuration: CodecSpecificConfiguration,
 }
 
 impl Bis {
+    /// Serializes to the characteristic wire format.
     pub fn to_bytes(&self) -> Vec<u8> {
         let config_bytes = self.codec_specific_configuration.to_bytes();
         let mut buf = Vec::with_capacity(2 + config_bytes.len());
@@ -463,13 +564,18 @@ impl Bis {
 /// One subgroup of BISes sharing a codec configuration within a `BasicAudioAnnouncement`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Subgroup {
+    /// Codec Id.
     pub codec_id: [u8; 5],
+    /// Codec Specific Configuration.
     pub codec_specific_configuration: CodecSpecificConfiguration,
+    /// Metadata.
     pub metadata: Vec<u8>,
+    /// Bis.
     pub bis: Vec<Bis>,
 }
 
 impl Subgroup {
+    /// Serializes to the characteristic wire format.
     pub fn to_bytes(&self) -> Vec<u8> {
         let config_bytes = self.codec_specific_configuration.to_bytes();
         let mut buf = Vec::new();
@@ -490,11 +596,14 @@ impl Subgroup {
 /// describing a broadcast source's subgroups, codec configuration, and BISes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BasicAudioAnnouncement {
+    /// Presentation Delay.
     pub presentation_delay: u32,
+    /// Subgroups.
     pub subgroups: Vec<Subgroup>,
 }
 
 impl BasicAudioAnnouncement {
+    /// Serializes to the characteristic wire format.
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.extend_from_slice(&write_u24_le(self.presentation_delay));
@@ -505,6 +614,7 @@ impl BasicAudioAnnouncement {
         buf
     }
 
+    /// Parses a value from its wire bytes.
     pub fn parse(data: &[u8]) -> Option<Self> {
         if data.len() < 4 {
             return None;

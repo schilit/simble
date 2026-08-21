@@ -14,48 +14,71 @@ use crate::gatt::{AttributePermissions, CharacteristicProperties, GattDatabase};
 pub mod gmap_uuid {
     use crate::types::Uuid;
 
+    /// Gaming Audio Service UUID.
     pub const GAMING_AUDIO_SERVICE: Uuid = Uuid::Uuid16(0x1858);
+    /// Gmap Role characteristic UUID.
     pub const GMAP_ROLE: Uuid = Uuid::Uuid16(0x2C00);
+    /// Ugg Features characteristic UUID.
     pub const UGG_FEATURES: Uuid = Uuid::Uuid16(0x2C01);
+    /// Ugt Features characteristic UUID.
     pub const UGT_FEATURES: Uuid = Uuid::Uuid16(0x2C02);
+    /// Bgs Features characteristic UUID.
     pub const BGS_FEATURES: Uuid = Uuid::Uuid16(0x2C03);
+    /// Bgr Features characteristic UUID.
     pub const BGR_FEATURES: Uuid = Uuid::Uuid16(0x2C04);
 }
 
 /// GMAP Role bitmask (GMAP Section 3.1).
 pub mod gmap_role {
-    pub const UNICAST_GAME_GATEWAY: u8 = 1 << 0;
-    pub const UNICAST_GAME_TERMINAL: u8 = 1 << 1;
-    pub const BROADCAST_GAME_SENDER: u8 = 1 << 2;
-    pub const BROADCAST_GAME_RECEIVER: u8 = 1 << 3;
+    /// Unicast Game Gateway.
+    pub(crate) const UNICAST_GAME_GATEWAY: u8 = 1 << 0;
+    /// Unicast Game Terminal.
+    pub(crate) const UNICAST_GAME_TERMINAL: u8 = 1 << 1;
+    /// Broadcast Game Sender.
+    pub(crate) const BROADCAST_GAME_SENDER: u8 = 1 << 2;
+    /// Broadcast Game Receiver.
+    pub(crate) const BROADCAST_GAME_RECEIVER: u8 = 1 << 3;
 }
 
 /// UGG Features bitmask (GMAP Section 3.2).
 pub mod ugg_features {
+    /// Multiplex.
     pub const MULTIPLEX: u8 = 1 << 0;
+    /// Source 96 Kbps.
     pub const SOURCE_96_KBPS: u8 = 1 << 1;
+    /// Multisink.
     pub const MULTISINK: u8 = 1 << 2;
 }
 
 /// UGT Features bitmask (GMAP Section 3.3).
 pub mod ugt_features {
+    /// Source.
     pub const SOURCE: u8 = 1 << 0;
+    /// Source 80 Kbps.
     pub const SOURCE_80_KBPS: u8 = 1 << 1;
+    /// Sink.
     pub const SINK: u8 = 1 << 2;
+    /// Sink 64 Kbps.
     pub const SINK_64_KBPS: u8 = 1 << 3;
+    /// Multiplex.
     pub const MULTIPLEX: u8 = 1 << 4;
+    /// Multisink.
     pub const MULTISINK: u8 = 1 << 5;
+    /// Multisource.
     pub const MULTISOURCE: u8 = 1 << 6;
 }
 
 /// BGS Features bitmask (GMAP Section 3.4).
 pub mod bgs_features {
+    /// Bgs 96 Kbps.
     pub const BGS_96_KBPS: u8 = 1 << 0;
 }
 
 /// BGR Features bitmask (GMAP Section 3.5).
 pub mod bgr_features {
+    /// Multisink.
     pub const MULTISINK: u8 = 1 << 0;
+    /// Multiplex.
     pub const MULTIPLEX: u8 = 1 << 1;
 }
 
@@ -63,11 +86,17 @@ pub mod bgr_features {
 /// registered role bitmask doesn't include.
 #[derive(Debug, Clone)]
 pub struct GamingAudioService {
+    /// Attribute handle of the service declaration.
     pub service_handle: u16,
+    /// Value attribute handle of the Gmap Role characteristic.
     pub gmap_role_value_handle: u16,
+    /// Value attribute handle of the Ugg Features characteristic.
     pub ugg_features_value_handle: Option<u16>,
+    /// Value attribute handle of the Ugt Features characteristic.
     pub ugt_features_value_handle: Option<u16>,
+    /// Value attribute handle of the Bgs Features characteristic.
     pub bgs_features_value_handle: Option<u16>,
+    /// Value attribute handle of the Bgr Features characteristic.
     pub bgr_features_value_handle: Option<u16>,
 }
 

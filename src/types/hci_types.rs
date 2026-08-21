@@ -10,7 +10,7 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
     Debug, Copy, Clone, PartialEq, Eq, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
 )]
 #[repr(transparent)]
-pub struct Enable(pub u8);
+pub struct Enable(pub(crate) u8);
 
 impl Enable {
     pub const DISABLED: Self = Self(0x00);
@@ -22,7 +22,7 @@ impl Enable {
     Debug, Copy, Clone, PartialEq, Eq, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
 )]
 #[repr(transparent)]
-pub struct AdvertisingType(pub u8);
+pub struct AdvertisingType(pub(crate) u8);
 
 impl AdvertisingType {
     pub const ADV_IND: Self = Self(0x00);
@@ -37,7 +37,7 @@ impl AdvertisingType {
     Debug, Copy, Clone, PartialEq, Eq, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
 )]
 #[repr(transparent)]
-pub struct OwnAddressType(pub u8);
+pub struct OwnAddressType(pub(crate) u8);
 
 impl OwnAddressType {
     pub const PUBLIC_DEVICE_ADDRESS: Self = Self(0x00);
@@ -51,7 +51,7 @@ impl OwnAddressType {
     Debug, Copy, Clone, PartialEq, Eq, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
 )]
 #[repr(transparent)]
-pub struct PeerAddressType(pub u8);
+pub struct PeerAddressType(pub(crate) u8);
 
 impl PeerAddressType {
     pub const PUBLIC_DEVICE_OR_IDENTITY_ADDRESS: Self = Self(0x00);
@@ -63,7 +63,7 @@ impl PeerAddressType {
     Debug, Copy, Clone, PartialEq, Eq, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
 )]
 #[repr(transparent)]
-pub struct AdvertisingFilterPolicy(pub u8);
+pub struct AdvertisingFilterPolicy(pub(crate) u8);
 
 impl AdvertisingFilterPolicy {
     pub const ALL_DEVICES: Self = Self(0x00);
@@ -77,7 +77,7 @@ impl AdvertisingFilterPolicy {
     Debug, Copy, Clone, PartialEq, Eq, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
 )]
 #[repr(transparent)]
-pub struct LeScanType(pub u8);
+pub struct LeScanType(pub(crate) u8);
 
 impl LeScanType {
     pub const PASSIVE: Self = Self(0x00);
@@ -89,7 +89,7 @@ impl LeScanType {
     Debug, Copy, Clone, PartialEq, Eq, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
 )]
 #[repr(transparent)]
-pub struct LeScanningFilterPolicy(pub u8);
+pub struct LeScanningFilterPolicy(pub(crate) u8);
 
 impl LeScanningFilterPolicy {
     pub const ACCEPT_ALL: Self = Self(0x00);
@@ -393,7 +393,7 @@ impl_display_fromstr_serde!(Uuid);
     Debug, Copy, Clone, PartialEq, Eq, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
 )]
 #[repr(transparent)]
-pub struct LeAdvertisingEventType(pub u8);
+pub struct LeAdvertisingEventType(pub(crate) u8);
 
 impl LeAdvertisingEventType {
     pub const ADV_IND: Self = Self(0x00);
@@ -422,7 +422,7 @@ impl fmt::Display for LeAdvertisingEventType {
     Debug, Copy, Clone, PartialEq, Eq, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
 )]
 #[repr(transparent)]
-pub struct GapDataType(pub u8);
+pub struct GapDataType(pub(crate) u8);
 
 impl GapDataType {
     pub const FLAGS: Self = Self(0x01);
