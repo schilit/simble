@@ -15,23 +15,32 @@
     margin: 0; background: var(--bg); color: var(--text);
     font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
-  main { max-width: 46rem; margin: 0 auto; padding: 2rem; }
-  h1 { font-size: 1.6rem; margin: 0 0 0.25rem; }
-  .sub { color: var(--dim); margin-bottom: 1.5rem; }
+  main { max-width: 54rem; margin: 0 auto; padding: 1.5rem 1.25rem 3rem; }
+  .hero { padding: 1rem 0 0.5rem; }
+  .hero h1 { font-size: 1.9rem; margin: 0 0 0.5rem; letter-spacing: -0.01em; }
+  .hero h1 b { color: var(--accent); }
+  .hero p { color: var(--dim); font-size: 1.05rem; line-height: 1.6; margin: 0 0 0.6rem; max-width: 46rem; }
+  .hero p strong { color: var(--text); font-weight: 600; }
+  .hero code { color: var(--good); background: var(--panel); padding: 0.05rem 0.3rem; border-radius: 4px; font-size: 0.85em; }
+  .group { margin: 1.9rem 0 0; }
+  .group > h2 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.07em;
+    color: var(--dim); margin: 0 0 0.7rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border); }
+  .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
+  @media (max-width: 40rem) { .cards { grid-template-columns: 1fr; } }
   a.card {
     display: block; background: var(--panel); border: 1px solid var(--border);
-    border-radius: 10px; padding: 1rem 1.25rem; margin-bottom: 1rem;
-    color: inherit; text-decoration: none;
+    border-radius: 10px; padding: 0.85rem 1rem; color: inherit; text-decoration: none;
+    transition: border-color 0.12s;
   }
   a.card:hover { border-color: var(--accent); }
-  a.card h2 { margin: 0 0 0.2rem; font-size: 1.05rem; color: var(--accent); }
-  a.card p { margin: 0; color: var(--dim); font-size: 0.9rem; }
-  .tag { display: inline-block; font-size: 0.68rem; text-transform: uppercase;
+  a.card h3 { margin: 0 0 0.2rem; font-size: 1rem; color: var(--accent); }
+  a.card p { margin: 0; color: var(--dim); font-size: 0.86rem; line-height: 1.5; }
+  .tag { display: inline-block; font-size: 0.62rem; text-transform: uppercase;
     letter-spacing: 0.05em; color: var(--good); border: 1px solid var(--border);
-    border-radius: 1rem; padding: 0 0.5rem; margin-left: 0.5rem; vertical-align: middle; }
-  .note { color: var(--dim); font-size: 0.85rem; margin-top: 1.5rem; }
-  code { color: var(--good); background: var(--panel); padding: 0 0.3rem;
-    border-radius: 4px; font-size: 0.85em; }
+    border-radius: 1rem; padding: 0 0.45rem; margin-left: 0.4rem; vertical-align: middle; }
+  code { color: var(--good); background: var(--panel); padding: 0 0.3rem; border-radius: 4px; font-size: 0.85em; }
+  .note { color: var(--dim); font-size: 0.85rem; margin-top: 2rem; padding-top: 1rem;
+    border-top: 1px solid var(--border); }
   .note a { color: var(--accent); }
 </style>
 </head>
@@ -53,86 +62,101 @@
   <a class="ext" href="doc/">Docs</a>
   <a class="ext" href="https://github.com/schilit/simble">GitHub ↗</a>
 </nav>
+
 <main>
-  <h1>SimBLE in the browser</h1>
-  <p class="sub">SimBLE's Rust Bluetooth stack compiled to WebAssembly, connected to the
-    netsim daemon running on <em>your</em> machine — no backend, no interpreter. Everything below
-    runs the real GATT stack in this tab.</p>
+  <div class="hero">
+    <h1>A virtual Bluetooth stack, <b>running in this tab</b></h1>
+    <p>SimBLE is a pure-Rust Bluetooth LE host stack whose devices are short <strong>Rhai scripts</strong>.
+      These demos run the <em>real</em> stack — HCI, L2CAP, ATT/GATT, SMP — compiled to WebAssembly, right
+      in your browser.</p>
+    <p>Most pages need <strong>no netsim and no install</strong>: a built-in <code>in-page controller</code>
+      hosts a whole scene of devices in the tab. Flip a page's backend selector to <strong>WebSocket</strong>
+      to join a real <code>netsim</code> scene — and the Android emulator — when you want radio-level fidelity.
+      The demos below are a guided tour; the tabs above jump straight to any of them.</p>
+  </div>
 
-  <a class="card" href="./playground/">
-    <h2>SimBLE Playground <span class="tag">build</span></h2>
-    <p>A free-form Rhai editor — the script <em>is</em> the device. Run it, watch the live GATT
-       viewer, generate any device with AI, and <strong>Share</strong> a link that encodes your
-       script in the URL. Starts from several examples (heart-rate, battery, a misbehaving device,
-       a test with <code>assert</code>).</p>
-  </a>
-  <a class="card" href="./explorer/">
-    <h2>API Explorer <span class="tag">learn</span></h2>
-    <p>Fill in an <code>android::*</code> method, press Execute, and it emits one line of Rhai against
-       a live session — teaching the syntax as you build a device click by click. Objects you create
-       (<code>svc1</code>, <code>chr1</code>) become inputs to later calls; copy the whole session out
-       as a script for the Playground.</p>
-  </a>
-  <a class="card" href="./lightbulb/">
-    <h2>Color Bulb <span class="tag">showcase</span></h2>
-    <p>A PLAYBULB-style smart light: a Rhai peripheral with a writable <code>[R, G, B]</code> color
-       characteristic on a custom 128-bit service. Pick a color and the glowing bulb reacts — and a
-       connected central is notified. Proof that any device, with any visual, is a few lines of Rhai.</p>
-  </a>
-  <a class="card" href="./scanner/">
-    <h2>Scanner <span class="tag">observe</span></h2>
-    <p>Joins your netsim scene as <code>web-scanner</code> and shows live decoded advertisements:
-       names, RSSI, service UUIDs, manufacturer data. Spins up a few built-in demo advertisers so it
-       shows something on a bare netsimd.</p>
-  </a>
-  <a class="card" href="./hrm/">
-    <h2>Scripted device <span class="tag">showcase</span></h2>
-    <p>A running SimBLE whose device is an editable Rhai script (defaults to a thermometer with a
-       beating-heart view when it's a heart-rate monitor). Edit, press Run, and the device on the air
-       changes. Generate any device with AI.</p>
-  </a>
-  <a class="card" href="./dual/">
-    <h2>Server + Client <span class="tag">showcase</span></h2>
-    <p>Two real devices in one tab, sharing an in-page controller — a scripted <strong>server</strong>
-       (peripheral) and a <strong>client</strong> (central) that connects to it and discovers its GATT,
-       nRF-Connect style. Makes it clear it's a peripheral and a central, not "a device and a UI".</p>
-  </a>
-  <a class="card" href="./scene/">
-    <h2>Scene creator <span class="tag">build</span></h2>
-    <p>Assemble a whole BLE scene on one in-page <code>Link</code> — add scripted <strong>servers</strong>,
-       passive <strong>scanners</strong>, and <strong>clients</strong> that connect and discover — then click
-       any device to inspect its GATT, live advertisement reports, or discovered services. No netsim.</p>
-  </a>
-  <a class="card" href="./shared/">
-    <h2>Shared Scene <span class="tag">showcase</span></h2>
-    <p>One in-page <code>Link</code> hosted in a <strong>SharedWorker</strong>, so every same-origin
-       browser tab joins the same radio scene — a <strong>scanner</strong> in one tab sees an
-       <strong>advertiser</strong> added in another, and a <strong>central</strong> connects across
-       tabs. No netsim, no server; open it in two tabs to watch them meet.</p>
-  </a>
-  <a class="card" href="./emulator/">
-    <h2>Android Emulator workflow <span class="tag">guide</span></h2>
-    <p>Develop and test a BLE app with no hardware: your app in the Android emulator, netsim as the
-       radio, and SimBLE as the simulated GATT devices it talks to. The setup, the pieces, and how the
-       Scene creator becomes a web-based device manager for the emulator's scene.</p>
-  </a>
-  <a class="card" href="./controllers/">
-    <h2>Controller ladder <span class="tag">reference</span></h2>
-    <p>What sits below the host stack, from a built-in pure-Rust LE controller
-       (<code>sim::Link</code>) to <code>rootcanal-ws</code> to full <code>netsim</code> — with
-       reasons to choose each rung and how to build and run it.</p>
-  </a>
-  <a class="card" href="./doc/">
-    <h2>Crate documentation <span class="tag">reference</span></h2>
-    <p>Full API reference — every module, profile, and packet type, generated by
-       <code>cargo doc</code>.</p>
-  </a>
+  <section class="group">
+    <h2>Build a device</h2>
+    <div class="cards">
+      <a class="card" href="./playground/">
+        <h3>Playground <span class="tag">build</span></h3>
+        <p>A free-form Rhai editor — the script <em>is</em> the device. Run it, watch the live GATT viewer,
+           generate one with AI, and Share a link that encodes your script.</p>
+      </a>
+      <a class="card" href="./explorer/">
+        <h3>API Explorer <span class="tag">learn</span></h3>
+        <p>Fill in an <code>android::*</code> method, press Execute, and it emits one line of Rhai against a
+           live session — learning the API as you build a device click by click.</p>
+      </a>
+      <a class="card" href="./scene/">
+        <h3>Scene creator <span class="tag">build</span></h3>
+        <p>Assemble a whole scene on one <code>Link</code> — add scripted servers, scanners, and clients,
+           then click any device to inspect its GATT, reports, or discovered services.</p>
+      </a>
+    </div>
+  </section>
 
-  <p class="note">Every page needs a local <code>netsimd</code> (Android emulator canary channel)
-     started with <code>--ws-port 7681</code>; each page shows the exact command when it can't
-     connect (the Playground and Explorer also build devices offline). Best demo: open the
-     Playground and the Scanner side by side against one netsimd, edit the device, press Run, and
-     watch the scanner update.
+  <section class="group">
+    <h2>Watch a device run</h2>
+    <div class="cards">
+      <a class="card" href="./hrm/">
+        <h3>Scripted device <span class="tag">showcase</span></h3>
+        <p>A running SimBLE whose device is an editable Rhai script (a thermometer by default, with a
+           beating-heart view for a heart-rate monitor). Edit, Run, watch it change.</p>
+      </a>
+      <a class="card" href="./lightbulb/">
+        <h3>Color Bulb <span class="tag">showcase</span></h3>
+        <p>A PLAYBULB-style smart light: a writable <code>[R,G,B]</code> characteristic on a custom 128-bit
+           service. Pick a color, the glowing bulb reacts, and a subscribed central is notified.</p>
+      </a>
+      <a class="card" href="./dual/">
+        <h3>Server + Client <span class="tag">showcase</span></h3>
+        <p>Two real devices in one tab: a scripted <strong>server</strong> and a <strong>client</strong> that
+           connects, discovers its GATT, and reads/writes/subscribes — nRF-Connect style.</p>
+      </a>
+    </div>
+  </section>
+
+  <section class="group">
+    <h2>Observe &amp; go multi-device</h2>
+    <div class="cards">
+      <a class="card" href="./scanner/">
+        <h3>Scanner <span class="tag">observe</span></h3>
+        <p>Live decoded advertisements — names, RSSI, service UUIDs, manufacturer data. Runs in-page with
+           built-in advertisers, or joins a real netsim scene.</p>
+      </a>
+      <a class="card" href="./shared/">
+        <h3>Shared Scene <span class="tag">showcase</span></h3>
+        <p>One <code>Link</code> in a <strong>SharedWorker</strong>, so every same-origin tab joins the same
+           radio scene — a scanner in one tab sees an advertiser added in another. No server.</p>
+      </a>
+    </div>
+  </section>
+
+  <section class="group">
+    <h2>Understand &amp; extend</h2>
+    <div class="cards">
+      <a class="card" href="./controllers/">
+        <h3>Controller ladder <span class="tag">reference</span></h3>
+        <p>What sits below the host stack — from the built-in <code>sim::Link</code> to
+           <code>rootcanal-ws</code> to full <code>netsim</code> — and when to choose each rung.</p>
+      </a>
+      <a class="card" href="./emulator/">
+        <h3>Android Emulator workflow <span class="tag">guide</span></h3>
+        <p>Develop and test a BLE app with no hardware: your app in the emulator, netsim as the radio,
+           SimBLE as the simulated devices — and the Scene creator as the device manager.</p>
+      </a>
+      <a class="card" href="./doc/">
+        <h3>Crate documentation <span class="tag">reference</span></h3>
+        <p>The full Rust API reference — every module, profile, and packet type, generated by
+           <code>cargo doc</code>.</p>
+      </a>
+    </div>
+  </section>
+
+  <p class="note">New here? Open the <a href="./playground/">Playground</a> and the <a href="./scanner/">Scanner</a>
+     in two tabs, edit the device, press Run, and watch the scanner update — all in-page, no setup. For the
+     radio-level path, see the <a href="./emulator/">Emulator workflow</a>.
      Source: <a href="https://github.com/schilit/simble">github.com/schilit/simble</a>.</p>
 </main>
 </body>
