@@ -89,7 +89,7 @@ fn test_set_volume_offset() {
         .unwrap();
 
     assert_eq!(
-        vocs.volume_offset_state,
+        vocs.volume_offset_state(),
         VolumeOffsetState {
             volume_offset: -255,
             change_counter: 1,
@@ -118,8 +118,8 @@ fn test_set_volume_offset_requires_fresh_change_counter_each_time() {
 
     vocs.write_control_point(&mut db, &set_volume_offset_pdu(1, 20))
         .unwrap();
-    assert_eq!(vocs.volume_offset_state.volume_offset, 20);
-    assert_eq!(vocs.volume_offset_state.change_counter, 2);
+    assert_eq!(vocs.volume_offset_state().volume_offset, 20);
+    assert_eq!(vocs.volume_offset_state().change_counter, 2);
 }
 
 #[test]

@@ -7,6 +7,7 @@
 //! Connections) driven through a real `VirtualDevice`.
 
 use simble::VirtualDevice;
+use simble::device::MemoryBondStore;
 use simble::smp::{
     IdentityAddressPreference, KeyStore, PairingConfig, PairingSession, Role,
     SMP_DEBUG_KEY_PUBLIC_X, SMP_DEBUG_KEY_PUBLIC_Y, SmpPairingFailed, SmpPairingPacket,
@@ -171,6 +172,11 @@ fn run_virtual_device_pairing(sc: bool) -> (VirtualDevice, u16, VirtualDevice, u
     let mut central = VirtualDevice::new("central", central_addr, AddressType::Random);
     let mut peripheral = VirtualDevice::new("peripheral", peripheral_addr, AddressType::Random);
 
+    // Both sides carry a bond store so completed pairings are recorded
+    // (NimBLE `ble_store` pattern), letting the tests assert the bond landed.
+    central.bond_store = Some(Box::new(MemoryBondStore::new()));
+    peripheral.bond_store = Some(Box::new(MemoryBondStore::new()));
+
     let conn_c = 0x0001;
     let conn_p = 0x0002;
     central.on_connected(conn_c, peripheral_addr);
@@ -270,6 +276,35 @@ fn test_virtual_device_le_legacy_pairing_end_to_end() {
     keystore.update("peripheral", peripheral_session.pairing_keys());
     let stored = keystore.get("peripheral").expect("keys were stored");
     assert!(stored.ltk_central.is_some() || stored.ltk_peripheral.is_some());
+
+    // Pairing completion also recorded the bond in each device's bond
+    // store, keyed by the peer's distributed identity address (both use
+    // random static addresses, so identity == connection address here).
+    let central_addr = Address::from_be_bytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+    let peripheral_addr = Address::from_be_bytes([0x66, 0x55, 0x44, 0x33, 0x22, 0x11]);
+    let bond = peripheral
+        .bond_store
+        .as_deref()
+        .unwrap()
+        .load_security(central_addr)
+        .expect("peripheral recorded the bond");
+    assert!(!bond.secure_connections);
+    assert_eq!(bond.key_size, 16);
+    // LE Legacy distributes per-role LTKs: the responder holds its own
+    // central-role key (with EDIV/RAND) plus the initiator's.
+    let ltk_central = bond.keys.ltk_central.expect("responder's own legacy LTK");
+    assert!(ltk_central.ediv.is_some());
+    assert!(ltk_central.rand.is_some());
+    assert!(bond.keys.ltk_peripheral.is_some());
+    assert!(
+        central
+            .bond_store
+            .as_deref()
+            .unwrap()
+            .load_security(peripheral_addr)
+            .is_some(),
+        "central recorded the bond too"
+    );
 }
 
 /// Same end-to-end drive as above, but negotiating LE Secure Connections:
@@ -310,4 +345,42 @@ fn test_virtual_device_le_secure_connections_pairing_end_to_end() {
     keystore.update("peripheral", peripheral_session.pairing_keys());
     let stored = keystore.get("peripheral").expect("keys were stored");
     assert!(stored.ltk.is_some());
+
+    // The bond landed in the peripheral's bond store with the link's LTK
+    // and Secure Connections metadata.
+    let central_addr = Address::from_be_bytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+    let link_ltk = central_conn.ltk.expect("link is keyed");
+    let bond = peripheral
+        .bond_store
+        .as_deref()
+        .unwrap()
+        .load_security(central_addr)
+        .expect("peripheral recorded the bond");
+    assert!(bond.secure_connections);
+    assert_eq!(bond.key_size, 16);
+    assert_eq!(
+        bond.keys.ltk.as_ref().expect("SC LTK stored").value,
+        link_ltk
+    );
+
+    // Reconnect: the bond record survives the connection teardown, so the
+    // stored LTK is available to re-encrypt the new link without pairing
+    // again, and the new connection is findable by peer address.
+    let mut peripheral = peripheral;
+    peripheral.on_disconnected(conn_p);
+    peripheral.on_connected(0x0033, central_addr);
+    assert_eq!(
+        peripheral
+            .connection_by_address(central_addr)
+            .expect("reconnected link found by address")
+            .handle,
+        0x0033
+    );
+    let bond = peripheral
+        .bond_store
+        .as_deref()
+        .unwrap()
+        .load_security(central_addr)
+        .expect("bond survives reconnect");
+    assert_eq!(bond.keys.ltk.expect("SC LTK still stored").value, link_ltk);
 }

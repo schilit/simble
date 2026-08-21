@@ -6,6 +6,16 @@
 use crate::smp::PairingSession;
 use crate::types::Address;
 
+/// Which GAP role the local device plays on one connection. Per-connection
+/// rather than device-level, matching NimBLE's `ble_gap_conn_desc.role` — a
+/// device can be Central on one link and Peripheral on another
+/// simultaneously.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionRole {
+    Central,
+    Peripheral,
+}
+
 /// Buffered chunk for queued long writes (PrepareWrite / ExecuteWrite).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrepareWriteChunk {
@@ -19,6 +29,8 @@ pub struct PrepareWriteChunk {
 pub struct ConnectionState {
     pub handle: u16,
     pub peer_address: Address,
+    /// The local device's GAP role on this connection.
+    pub role: ConnectionRole,
     pub mtu: u16,
     pub prepare_write_queue: Vec<PrepareWriteChunk>,
     pub pending_indication: bool,
@@ -34,11 +46,24 @@ pub struct ConnectionState {
 }
 
 impl ConnectionState {
-    /// Creates a new connection state.
+    /// Creates a new connection state in the Peripheral role — the only
+    /// role `VirtualDevice` played before roles existed, so pre-role
+    /// callers keep their behavior unchanged.
     pub fn new(handle: u16, peer_address: Address, mtu: u16) -> Self {
+        Self::new_with_role(handle, peer_address, mtu, ConnectionRole::Peripheral)
+    }
+
+    /// Creates a new connection state with an explicit local role.
+    pub fn new_with_role(
+        handle: u16,
+        peer_address: Address,
+        mtu: u16,
+        role: ConnectionRole,
+    ) -> Self {
         Self {
             handle,
             peer_address,
+            role,
             mtu,
             prepare_write_queue: Vec::new(),
             pending_indication: false,
@@ -59,6 +84,7 @@ mod tests {
         let conn = ConnectionState::new(0x0040, addr, 23);
         assert_eq!(conn.handle, 0x0040);
         assert_eq!(conn.mtu, 23);
+        assert_eq!(conn.role, ConnectionRole::Peripheral);
         assert!(conn.prepare_write_queue.is_empty());
         assert!(!conn.pending_indication);
         assert!(conn.pairing_session.is_none());

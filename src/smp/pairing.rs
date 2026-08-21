@@ -447,6 +447,33 @@ impl PairingSession {
         self.peer_irk
     }
 
+    /// Whether both sides requested bonding (Core Spec Vol 3, Part H,
+    /// Section 3.5.1 AuthReq) — only then is the pairing worth persisting
+    /// in a bond store.
+    pub fn is_bonding(&self) -> bool {
+        self.bonding
+    }
+
+    /// Whether LE Secure Connections was negotiated (vs. LE Legacy).
+    pub fn is_secure_connections(&self) -> bool {
+        self.sc
+    }
+
+    /// Whether the pairing used a MITM-protected association model: both
+    /// sides must have set the MITM AuthReq bit (Core Spec Vol 3, Part H,
+    /// Section 2.3.1) — `preq`/`pres` byte 3 is AuthReq.
+    pub fn is_authenticated(&self) -> bool {
+        (self.preq[3] & auth_req::MITM != 0) && (self.pres[3] & auth_req::MITM != 0)
+    }
+
+    /// The negotiated encryption key size: the minimum of both sides'
+    /// Maximum Encryption Key Size fields (Core Spec Vol 3, Part H,
+    /// Section 2.3.4) — `preq`/`pres` byte 4. Meaningful once the
+    /// Request/Response exchange has happened.
+    pub fn encryption_key_size(&self) -> u8 {
+        self.preq[4].min(self.pres[4])
+    }
+
     pub fn peer_identity_address(&self) -> Option<(u8, Address)> {
         self.peer_identity_address
     }

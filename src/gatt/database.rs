@@ -100,15 +100,14 @@ impl Default for AttributePermissions {
 /// (`crate::device::observer`) does: `GattDatabase` ends up behind
 /// `Arc<Mutex<_>>` via `VirtualDevice` in `service::manager`.
 pub trait AttributeHandler: std::fmt::Debug + Send + Sync {
-    /// Called instead of overwriting the stored value directly. `db` is the
-    /// *rest* of the database (this attribute has already been removed from
-    /// it for the duration of the call, so there's no self-referential
-    /// borrow) — a handler that affects other handles (e.g. ASCS's control
-    /// point updating several ASE characteristics) writes to them via `db`
-    /// directly. If the handled attribute's own stored value should change
-    /// too, the handler must call `db.set_value(own_handle, ...)` itself;
-    /// [`GattDatabase::write`] does not overwrite it automatically once a
-    /// handler is present.
+    /// Called instead of overwriting the stored value directly. The handler
+    /// itself is detached from the attribute for the duration of the call
+    /// (avoiding a self-referential borrow), but the attribute stays in the
+    /// database — so `db.set_value(own_handle, ...)` works, and a handler
+    /// that affects other handles (e.g. ASCS's control point updating
+    /// several ASE characteristics) writes to them via `db` directly.
+    /// [`GattDatabase::write`] never overwrites a handled attribute's value
+    /// automatically; state changes are entirely the handler's job.
     fn on_write(&mut self, db: &mut GattDatabase, value: &[u8]) -> Result<(), u8>;
 }
 
@@ -202,6 +201,33 @@ impl GattDatabase {
         );
 
         handle
+    }
+
+    /// Adds an Include declaration (0x2802) referencing another service's
+    /// attribute group, so one service can pull in another (e.g. a
+    /// secondary battery service) without re-declaring it.
+    pub fn add_include(
+        &mut self,
+        included_service_handle: u16,
+        end_group_handle: u16,
+        service_uuid: Option<Uuid>,
+    ) -> u16 {
+        // Core Spec Vol 3, Part G, Section 3.2: value = included service
+        // attribute handle (LE) + end group handle (LE) + Service UUID,
+        // where the UUID field is present only for 16-bit UUIDs — a
+        // 128-bit included-service UUID is omitted and discovered from the
+        // included service's own declaration instead.
+        let mut value = Vec::with_capacity(6);
+        value.extend_from_slice(&included_service_handle.to_le_bytes());
+        value.extend_from_slice(&end_group_handle.to_le_bytes());
+        if let Some(Uuid::Uuid16(u)) = service_uuid {
+            value.extend_from_slice(&u.to_le_bytes());
+        }
+        self.add_attribute(
+            Uuid::from_u16(service_uuid::INCLUDE),
+            AttributePermissions::read_only(),
+            value,
+        )
     }
 
     /// Adds a Characteristic declaration followed by its Value attribute.
@@ -338,17 +364,21 @@ impl GattDatabase {
             return Ok(());
         }
 
-        // Handler attached: remove the attribute for the duration of the
-        // call so the handler can take `&mut GattDatabase` without a
-        // self-referential borrow, then reinsert it afterward.
-        let mut attr = self
+        // Handler attached: take the handler out (avoiding the
+        // self-referential borrow) but leave the attribute itself in place,
+        // so a handler's `db.set_value(own_handle, ...)` updates the real
+        // stored value — two profile implementations independently relied on
+        // the documented contract and found the earlier remove/reinsert
+        // approach silently discarded their self-writes.
+        let attr = self
             .attributes
-            .remove(&handle)
+            .get_mut(&handle)
             .ok_or(error_code::INVALID_HANDLE)?;
         let mut handler = attr.handler.take().expect("handler checked above");
         let result = handler.on_write(self, value);
-        attr.handler = Some(handler);
-        self.attributes.insert(handle, attr);
+        if let Some(attr) = self.attributes.get_mut(&handle) {
+            attr.handler = Some(handler);
+        }
         result
     }
 

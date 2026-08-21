@@ -7,9 +7,11 @@
 //! shared ASE Control Point characteristic clients write to drive each ASE's state machine
 //! (BAP Section 5): Idle -> Codec Configured -> QoS Configured -> Enabling -> Streaming ->
 //! Disabling/Releasing -> Idle. Unlike the other profiles in this crate, ASCS has real
-//! per-ASE state beyond a static GATT value, so `AudioStreamControlService` owns that state
-//! and `write_control_point` both applies transitions and pushes the resulting ASE value
-//! into the `GattDatabase`.
+//! per-ASE state beyond a static GATT value. That state is shared (`Arc<Mutex<_>>`, the
+//! same bridge shape `crate::android::gatt_server` uses between its server and observer)
+//! between `AudioStreamControlService` and the `AttributeHandler` `register()` attaches to
+//! the ASE Control Point, so a real ATT write arriving through `GattDatabase::write` drives
+//! the state machines and pushes each resulting ASE value into the `GattDatabase`.
 //!
 //! CIS establishment/teardown (which Bumble's `AseStateMachine` drives asynchronously off
 //! controller events, e.g. auto-transitioning a Sink ASE to Streaming once its CIS is
@@ -17,6 +19,9 @@
 //! `on_receiver_start_ready` and `on_release` model the client-driven half of those
 //! transitions synchronously instead.
 
+use std::sync::{Arc, Mutex};
+
+use crate::gatt::database::AttributeHandler;
 use crate::gatt::{AttributePermissions, CharacteristicProperties, GattDatabase};
 use crate::profiles::bap::{LC3_CODEC_ID, read_u24_le, write_u24_le};
 
@@ -325,13 +330,46 @@ impl AudioStreamEndpoint {
     }
 }
 
+/// The mutable half of ASCS, shared between `AudioStreamControlService` (host-side
+/// accessors) and the `AseControlPointHandler` the service registers into the
+/// `GattDatabase`.
+#[derive(Debug)]
+struct AscsState {
+    ases: Vec<AudioStreamEndpoint>,
+    /// The Control Point response payload produced by the most recent write. ASCS 5
+    /// responds via NOTIFICATION rather than the ATT write response, and Simble has no
+    /// notification-dispatch mechanism yet, so the pending payload is parked here for
+    /// callers (and a future dispatch mechanism) to pick up. It can't live in the Control
+    /// Point attribute's stored value: `GattDatabase::write` detaches the handled
+    /// attribute for the duration of `on_write` and reinserts it unchanged afterward, so
+    /// a `set_value` on that handle from inside the handler wouldn't survive.
+    control_point_notification: Vec<u8>,
+}
+
+/// Owns writes to the ASE Control Point value attribute (attached via
+/// `GattDatabase::set_handler`), so a raw ATT write drives the ASE state machines instead
+/// of overwriting the control point's stored bytes.
+#[derive(Debug)]
+struct AseControlPointHandler {
+    state: Arc<Mutex<AscsState>>,
+}
+
+impl AttributeHandler for AseControlPointHandler {
+    fn on_write(&mut self, db: &mut GattDatabase, value: &[u8]) -> Result<(), u8> {
+        self.state.lock().unwrap().apply_control_point(db, value);
+        // ASCS 5: the ATT write itself succeeds even when individual ASE operations are
+        // rejected - per-ASE outcomes ride the Control Point notification instead.
+        Ok(())
+    }
+}
+
 /// Audio Stream Control Service GATT container plus the ASE state machines it owns.
 #[derive(Debug, Clone)]
 pub struct AudioStreamControlService {
     pub service_handle: u16,
     pub control_point_handle: u16,
     pub control_point_value_handle: u16,
-    pub ases: Vec<AudioStreamEndpoint>,
+    state: Arc<Mutex<AscsState>>,
 }
 
 /// Per-ASE Control Point outcome: `(ASE_ID, Response_Code, Reason)` plus,
@@ -393,35 +431,78 @@ impl AudioStreamControlService {
             AttributePermissions::write_only(),
         );
 
+        let state = Arc::new(Mutex::new(AscsState {
+            ases,
+            control_point_notification: Vec::new(),
+        }));
+        db.set_handler(
+            control_point_value_handle,
+            Box::new(AseControlPointHandler {
+                state: state.clone(),
+            }),
+        )
+        .expect("control point handle was just allocated");
+
         Self {
             service_handle,
             control_point_handle,
             control_point_value_handle,
-            ases,
+            state,
         }
     }
 
-    pub fn ase(&self, ase_id: u8) -> Option<&AudioStreamEndpoint> {
-        self.ases.iter().find(|ase| ase.ase_id == ase_id)
+    /// Snapshot of the ASE with `ase_id`, if one was registered.
+    pub fn ase(&self, ase_id: u8) -> Option<AudioStreamEndpoint> {
+        let state = self.state.lock().unwrap();
+        state.ases.iter().find(|ase| ase.ase_id == ase_id).cloned()
     }
 
+    /// The Control Point response payload (`[Opcode, Number_of_ASEs, (ASE_ID,
+    /// Response_Code, Reason)...]`) produced by the most recent Control Point write - the
+    /// bytes ASCS 5 delivers as a Control Point NOTIFICATION, pending until Simble grows a
+    /// notification-dispatch mechanism.
+    pub fn control_point_notification(&self) -> Vec<u8> {
+        self.state
+            .lock()
+            .unwrap()
+            .control_point_notification
+            .clone()
+    }
+
+    #[cfg(test)]
+    fn set_ase_state(&self, ase_id: u8, new_state: AseState) {
+        let mut state = self.state.lock().unwrap();
+        let ase = state
+            .ases
+            .iter_mut()
+            .find(|ase| ase.ase_id == ase_id)
+            .unwrap();
+        ase.state = new_state;
+    }
+
+    /// Host-side convenience for driving the ASE Control Point (ASCS 5): routes `data`
+    /// through the same `GattDatabase::write` path a remote client's ATT write takes
+    /// (dispatching to the handler `register()` attached) and returns the resulting
+    /// Control Point notification payload.
+    pub fn write_control_point(&mut self, db: &mut GattDatabase, data: &[u8]) -> Vec<u8> {
+        let _ = db.write(self.control_point_value_handle, data);
+        self.control_point_notification()
+    }
+}
+
+impl AscsState {
     fn ase_index(&self, ase_id: u8) -> Option<usize> {
         self.ases.iter().position(|ase| ase.ase_id == ase_id)
     }
 
-    #[cfg(test)]
-    fn ase_mut(&mut self, ase_id: u8) -> Option<&mut AudioStreamEndpoint> {
-        self.ases.iter_mut().find(|ase| ase.ase_id == ase_id)
-    }
-
     /// Applies an ASE Control Point write (ASCS 5): parses the opcode and per-ASE
     /// operation list, drives each named ASE's state machine, publishes the resulting ASE
-    /// value(s) into `db`, and returns the Control Point notification payload
-    /// (`[Opcode, Number_of_ASEs, (ASE_ID, Response_Code, Reason)...]`) the caller would
-    /// receive as a notification.
-    pub fn write_control_point(&mut self, db: &mut GattDatabase, data: &[u8]) -> Vec<u8> {
+    /// value(s) into `db`, and parks the Control Point notification payload in
+    /// `control_point_notification`.
+    fn apply_control_point(&mut self, db: &mut GattDatabase, data: &[u8]) {
         let Some((&op, rest)) = data.split_first() else {
-            return Vec::new();
+            self.control_point_notification = Vec::new();
+            return;
         };
 
         let responses = match op {
@@ -463,8 +544,7 @@ impl AudioStreamControlService {
         for (ase_id, code, reason, _) in &responses {
             notification.extend_from_slice(&[*ase_id, *code, *reason]);
         }
-        let _ = db.set_value(self.control_point_value_handle, &notification);
-        notification
+        self.control_point_notification = notification;
     }
 
     /// Shared by Receiver Start/Stop Ready, Disable, and Release: `[N, ASE_ID(1)...N]`.
@@ -809,7 +889,7 @@ mod tests {
         let mut db = GattDatabase::new();
         let mut ascs = AudioStreamControlService::register(&mut db, &[1], &[]);
         ascs.write_control_point(&mut db, &config_codec_pdu(&[1]));
-        ascs.ase_mut(1).unwrap().state = AseState::QosConfigured;
+        ascs.set_ase_state(1, AseState::QosConfigured);
         ascs.write_control_point(&mut db, &[opcode::ENABLE, 1, 1, 0]);
 
         let resp = ascs.write_control_point(&mut db, &[opcode::DISABLE, 1, 1]);
@@ -822,7 +902,7 @@ mod tests {
         let mut db = GattDatabase::new();
         let mut ascs = AudioStreamControlService::register(&mut db, &[], &[2]);
         ascs.write_control_point(&mut db, &config_codec_pdu(&[2]));
-        ascs.ase_mut(2).unwrap().state = AseState::QosConfigured;
+        ascs.set_ase_state(2, AseState::QosConfigured);
         ascs.write_control_point(&mut db, &[opcode::ENABLE, 1, 2, 0]);
 
         let resp = ascs.write_control_point(&mut db, &[opcode::DISABLE, 1, 2]);
@@ -839,7 +919,7 @@ mod tests {
         let mut db = GattDatabase::new();
         let mut ascs = AudioStreamControlService::register(&mut db, &[1], &[]);
         ascs.write_control_point(&mut db, &config_codec_pdu(&[1]));
-        ascs.ase_mut(1).unwrap().state = AseState::QosConfigured;
+        ascs.set_ase_state(1, AseState::QosConfigured);
         ascs.write_control_point(&mut db, &[opcode::ENABLE, 1, 1, 0]);
         ascs.write_control_point(&mut db, &[opcode::DISABLE, 1, 1]);
 

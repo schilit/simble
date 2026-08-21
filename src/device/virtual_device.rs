@@ -7,13 +7,14 @@ use std::collections::HashMap;
 use zerocopy::IntoBytes;
 
 use crate::att::{AttHandleValueHeader, opcode};
-use crate::device::connection::ConnectionState;
-use crate::device::observer::AttServerObserver;
+use crate::device::bond_store::{BondSecurity, BondStore};
+use crate::device::connection::{ConnectionRole, ConnectionState};
+use crate::device::observer::{AttServerObserver, SubscriptionReason};
 use crate::gap::AdvertisingData;
 use crate::gatt::GattDatabase;
 use crate::l2cap::{L2capHeader, cid};
 use crate::smp::{PairingConfig, PairingSession, Role as SmpRole, opcode as smp_opcode};
-use crate::types::{Address, AddressType, SimbleError};
+use crate::types::{Address, AddressType, SimbleError, Uuid};
 
 /// A simulated virtual Bluetooth device.
 pub struct VirtualDevice {
@@ -29,6 +30,22 @@ pub struct VirtualDevice {
     /// state changes, MTU changes, notifications/indications sent). Used by
     /// `crate::android` to make its callback types real, not cosmetic.
     pub observer: Option<Box<dyn AttServerObserver>>,
+    /// Optional bonded-peer record store (NimBLE `ble_store` pattern).
+    /// When present, completed bonding pairings and CCCD subscription
+    /// state are recorded here, keyed by peer identity address, and
+    /// subscriptions are restored when a bonded peer reconnects.
+    pub bond_store: Option<Box<dyn BondStore>>,
+}
+
+/// The address a peer's bond records are keyed by: the identity address it
+/// distributed during pairing (Core Spec Vol 3, Part H, Section 3.6.5), or
+/// the connection address when none was.
+fn bond_key_address(conn: &ConnectionState) -> Address {
+    conn.pairing_session
+        .as_ref()
+        .and_then(|s| s.peer_identity_address())
+        .map(|(_, addr)| addr)
+        .unwrap_or(conn.peer_address)
 }
 
 impl std::fmt::Debug for VirtualDevice {
@@ -43,6 +60,7 @@ impl std::fmt::Debug for VirtualDevice {
             .field("connections", &self.connections)
             .field("default_mtu", &self.default_mtu)
             .field("observer", &self.observer.is_some())
+            .field("bond_store", &self.bond_store.is_some())
             .finish()
     }
 }
@@ -58,8 +76,10 @@ impl Clone for VirtualDevice {
             is_advertising: self.is_advertising,
             connections: self.connections.clone(),
             default_mtu: self.default_mtu,
-            // Trait objects aren't `Clone`; a cloned device starts unobserved.
+            // Trait objects aren't `Clone`; a cloned device starts unobserved
+            // and unbonded.
             observer: None,
+            bond_store: None,
         }
     }
 }
@@ -77,30 +97,214 @@ impl VirtualDevice {
             connections: HashMap::new(),
             default_mtu: 23,
             observer: None,
+            bond_store: None,
         }
     }
 
-    /// Handles a new connection event from the controller.
+    /// Handles a new connection event from the controller, assuming the
+    /// Peripheral role — the only role this device played before
+    /// per-connection roles existed, so existing callers keep their
+    /// behavior. Central-role links use [`Self::on_connected_with_role`].
     pub fn on_connected(&mut self, handle: u16, peer_address: Address) {
+        self.on_connected_with_role(handle, peer_address, ConnectionRole::Peripheral);
+    }
+
+    /// Handles a new connection event with an explicit local GAP role
+    /// (per-connection, matching NimBLE's `ble_gap_conn_desc.role`).
+    pub fn on_connected_with_role(
+        &mut self,
+        handle: u16,
+        peer_address: Address,
+        role: ConnectionRole,
+    ) {
         self.connections.insert(
             handle,
-            ConnectionState::new(handle, peer_address, self.default_mtu),
+            ConnectionState::new_with_role(handle, peer_address, self.default_mtu, role),
         );
-        self.is_advertising = false;
+        // Only a Peripheral was advertising to be connected to; a
+        // Central-role connection says nothing about local advertising.
+        if role == ConnectionRole::Peripheral {
+            self.is_advertising = false;
+        }
         if let Some(observer) = self.observer.as_deref_mut() {
             observer.on_connection_state_changed(handle, peer_address, true);
         }
+        self.restore_bonded_subscriptions(handle, peer_address);
+    }
+
+    /// Looks up the active connection to `peer_address`, if any.
+    pub fn connection_by_address(&self, peer_address: Address) -> Option<&ConnectionState> {
+        self.connections
+            .values()
+            .find(|conn| conn.peer_address == peer_address)
     }
 
     /// Handles a disconnection event.
     pub fn on_disconnected(&mut self, handle: u16) {
-        let peer_address = self.connections.remove(&handle).map(|c| c.peer_address);
+        let removed = self.connections.remove(&handle);
+        if removed.is_some() {
+            // Core Spec Vol 3, Part G, Section 3.3.3.3: CCCD state is
+            // per-client, so a disconnect ends the peer's subscriptions.
+            // The database stores one live value per CCCD (not per-client),
+            // so the sweep attributes all active subscriptions to the
+            // disconnecting peer — exact for the single-connection case.
+            // Bonded peers keep their state in the bond store and get it
+            // back on reconnect via `restore_bonded_subscriptions`.
+            for (cccd_handle, prev) in self.subscribed_cccds() {
+                let _ = self.gatt_db.set_value(cccd_handle, &[0x00, 0x00]);
+                self.notify_subscription(
+                    handle,
+                    cccd_handle,
+                    prev,
+                    0,
+                    SubscriptionReason::Disconnect,
+                );
+            }
+        }
         if let Some(observer) = self.observer.as_deref_mut() {
             observer.on_connection_state_changed(
                 handle,
-                peer_address.unwrap_or(Address::ANY),
+                removed.map(|c| c.peer_address).unwrap_or(Address::ANY),
                 false,
             );
+        }
+    }
+
+    /// Reads the current value of `handle` as a CCCD bitfield, or `None` if
+    /// the attribute isn't a CCCD (0x2902).
+    pub(crate) fn cccd_value(&self, handle: u16) -> Option<u16> {
+        let attr = self.gatt_db.attributes.get(&handle)?;
+        if attr.uuid != Uuid::CCCD {
+            return None;
+        }
+        Some(u16::from_le_bytes([
+            attr.value.first().copied().unwrap_or(0),
+            attr.value.get(1).copied().unwrap_or(0),
+        ]))
+    }
+
+    /// All CCCDs with any subscription bit currently set, collected up
+    /// front so callers can then mutate `self` (bond store, database)
+    /// without an outstanding database borrow.
+    fn subscribed_cccds(&self) -> Vec<(u16, u16)> {
+        self.gatt_db
+            .attributes
+            .keys()
+            .filter_map(|&h| self.cccd_value(h).map(|v| (h, v)))
+            .filter(|&(_, v)| v != 0)
+            .collect()
+    }
+
+    /// Fires the observer's subscription event for a CCCD bit transition
+    /// (NimBLE `BLE_GAP_EVENT_SUBSCRIBE` pattern). Silent when no bit
+    /// actually changed.
+    pub(crate) fn notify_subscription(
+        &mut self,
+        connection_handle: u16,
+        cccd_handle: u16,
+        prev: u16,
+        cur: u16,
+        reason: SubscriptionReason,
+    ) {
+        if prev == cur {
+            return;
+        }
+        // CCCD bit assignments per Core Spec Vol 3, Part G, Section 3.3.3.3.
+        const NOTIFY: u16 = 0x0001;
+        const INDICATE: u16 = 0x0002;
+        if let Some(observer) = self.observer.as_deref_mut() {
+            observer.on_subscription_changed(
+                connection_handle,
+                cccd_handle,
+                prev & NOTIFY != 0,
+                cur & NOTIFY != 0,
+                prev & INDICATE != 0,
+                cur & INDICATE != 0,
+                reason,
+            );
+        }
+    }
+
+    /// Completes a CCCD write from `connection_handle`: reports the bit
+    /// transition and persists the new state for a bonded peer.
+    pub(crate) fn on_cccd_written(&mut self, connection_handle: u16, cccd_handle: u16, prev: u16) {
+        let cur = self.cccd_value(cccd_handle).unwrap_or(prev);
+        self.notify_subscription(
+            connection_handle,
+            cccd_handle,
+            prev,
+            cur,
+            SubscriptionReason::Write,
+        );
+        let Some(conn) = self.connections.get(&connection_handle) else {
+            return;
+        };
+        let peer = bond_key_address(conn);
+        if let Some(store) = self.bond_store.as_deref_mut()
+            && store.is_bonded(peer)
+        {
+            store.store_cccd(peer, cccd_handle, cur);
+        }
+    }
+
+    /// Restores a bonded peer's persisted CCCD subscriptions into the live
+    /// database on reconnect, reporting each with
+    /// [`SubscriptionReason::BondRestore`].
+    fn restore_bonded_subscriptions(&mut self, handle: u16, peer_address: Address) {
+        let restored = match self.bond_store.as_deref() {
+            Some(store) if store.is_bonded(peer_address) => store.load_cccds(peer_address),
+            _ => return,
+        };
+        for (cccd_handle, value) in restored {
+            let prev = self.cccd_value(cccd_handle).unwrap_or(0);
+            if self
+                .gatt_db
+                .set_value(cccd_handle, &value.to_le_bytes())
+                .is_ok()
+            {
+                self.notify_subscription(
+                    handle,
+                    cccd_handle,
+                    prev,
+                    value,
+                    SubscriptionReason::BondRestore,
+                );
+            }
+        }
+    }
+
+    /// Records a completed bonding pairing into the bond store, keyed by
+    /// the peer's distributed identity address (falling back to the
+    /// connection address when no identity was distributed). Idempotent —
+    /// `store_security` replaces — so it's safe to call after every SMP
+    /// PDU without tracking a "recorded" flag.
+    fn maybe_record_bond(&mut self, connection_handle: u16) {
+        let Some(conn) = self.connections.get(&connection_handle) else {
+            return;
+        };
+        let Some(session) = conn.pairing_session.as_ref() else {
+            return;
+        };
+        if !session.is_complete() || !session.is_bonding() {
+            return;
+        }
+        let peer = bond_key_address(conn);
+        let security = BondSecurity {
+            keys: session.pairing_keys(),
+            secure_connections: session.is_secure_connections(),
+            authenticated: session.is_authenticated(),
+            key_size: session.encryption_key_size(),
+        };
+        // Collected before borrowing the store mutably.
+        let subscribed = self.subscribed_cccds();
+        let Some(store) = self.bond_store.as_deref_mut() else {
+            return;
+        };
+        store.store_security(peer, security);
+        // Sweep subscriptions made before the bond completed
+        // (subscribe-then-pair) so they survive the disconnect too.
+        for (cccd_handle, value) in subscribed {
+            store.store_cccd(peer, cccd_handle, value);
         }
     }
 
@@ -162,6 +366,7 @@ impl VirtualDevice {
         let reply = session.handle_pdu(pdu)?;
         conn.is_encrypted = session.is_encrypted();
         conn.ltk = session.ltk();
+        self.maybe_record_bond(connection_handle);
         Ok(reply)
     }
 
@@ -207,6 +412,7 @@ impl VirtualDevice {
         let pdu = session.poll_pending()?;
         conn.is_encrypted = session.is_encrypted();
         conn.ltk = session.ltk();
+        self.maybe_record_bond(connection_handle);
         Some(L2capHeader::serialize(cid::SMP, &pdu))
     }
 

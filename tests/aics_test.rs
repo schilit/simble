@@ -65,9 +65,9 @@ fn test_set_gain_setting_when_manual_updates_state() {
     aics.write_control_point(&mut db, &[opcode::SET_GAIN_SETTING, 0, 120])
         .unwrap();
 
-    assert_eq!(aics.audio_input_state.gain_setting, 120);
+    assert_eq!(aics.audio_input_state().gain_setting, 120);
     // Set Gain Setting never advances Change_Counter - only Mute/Gain Mode do.
-    assert_eq!(aics.audio_input_state.change_counter, 0);
+    assert_eq!(aics.audio_input_state().change_counter, 0);
     assert_eq!(
         db.read(aics.audio_input_state_value_handle, 0).unwrap()[0],
         120
@@ -78,61 +78,61 @@ fn test_set_gain_setting_when_manual_updates_state() {
 fn test_set_gain_setting_when_manual_only_updates_state() {
     let mut db = GattDatabase::new();
     let mut aics = register(&mut db);
-    aics.audio_input_state.gain_mode = GainMode::ManualOnly;
+    aics.audio_input_state_mut().gain_mode = GainMode::ManualOnly;
 
     aics.write_control_point(&mut db, &[opcode::SET_GAIN_SETTING, 0, 120])
         .unwrap();
-    assert_eq!(aics.audio_input_state.gain_setting, 120);
+    assert_eq!(aics.audio_input_state().gain_setting, 120);
 }
 
 #[test]
 fn test_set_gain_setting_when_automatic_is_ignored() {
     let mut db = GattDatabase::new();
     let mut aics = register(&mut db);
-    aics.audio_input_state.gain_mode = GainMode::Automatic;
+    aics.audio_input_state_mut().gain_mode = GainMode::Automatic;
 
     assert_eq!(
         aics.write_control_point(&mut db, &[opcode::SET_GAIN_SETTING, 0, 120]),
         Ok(())
     );
-    assert_eq!(aics.audio_input_state.gain_setting, 0);
+    assert_eq!(aics.audio_input_state().gain_setting, 0);
 }
 
 #[test]
 fn test_set_gain_setting_when_automatic_only_is_ignored() {
     let mut db = GattDatabase::new();
     let mut aics = register(&mut db);
-    aics.audio_input_state.gain_mode = GainMode::AutomaticOnly;
+    aics.audio_input_state_mut().gain_mode = GainMode::AutomaticOnly;
 
     aics.write_control_point(&mut db, &[opcode::SET_GAIN_SETTING, 0, 120])
         .unwrap();
-    assert_eq!(aics.audio_input_state.gain_setting, 0);
+    assert_eq!(aics.audio_input_state().gain_setting, 0);
 }
 
 #[test]
 fn test_unmute_when_muted() {
     let mut db = GattDatabase::new();
     let mut aics = register(&mut db);
-    aics.audio_input_state.mute = Mute::Muted;
+    aics.audio_input_state_mut().mute = Mute::Muted;
 
     aics.write_control_point(&mut db, &[opcode::UNMUTE, 0])
         .unwrap();
-    assert_eq!(aics.audio_input_state.mute, Mute::NotMuted);
-    assert_eq!(aics.audio_input_state.change_counter, 1);
+    assert_eq!(aics.audio_input_state().mute, Mute::NotMuted);
+    assert_eq!(aics.audio_input_state().change_counter, 1);
 }
 
 #[test]
 fn test_unmute_when_mute_disabled_is_rejected() {
     let mut db = GattDatabase::new();
     let mut aics = register(&mut db);
-    aics.audio_input_state.mute = Mute::Disabled;
+    aics.audio_input_state_mut().mute = Mute::Disabled;
 
     assert_eq!(
         aics.write_control_point(&mut db, &[opcode::UNMUTE, 0]),
         Err(error_code::MUTE_DISABLED)
     );
-    assert_eq!(aics.audio_input_state.mute, Mute::Disabled);
-    assert_eq!(aics.audio_input_state.change_counter, 0);
+    assert_eq!(aics.audio_input_state().mute, Mute::Disabled);
+    assert_eq!(aics.audio_input_state().change_counter, 0);
 }
 
 #[test]
@@ -142,23 +142,23 @@ fn test_mute_when_not_muted() {
 
     aics.write_control_point(&mut db, &[opcode::MUTE, 0])
         .unwrap();
-    assert_eq!(aics.audio_input_state.mute, Mute::Muted);
-    assert_eq!(aics.audio_input_state.change_counter, 1);
+    assert_eq!(aics.audio_input_state().mute, Mute::Muted);
+    assert_eq!(aics.audio_input_state().change_counter, 1);
 }
 
 #[test]
 fn test_mute_when_mute_disabled_is_rejected() {
     let mut db = GattDatabase::new();
     let mut aics = register(&mut db);
-    aics.audio_input_state.mute = Mute::Disabled;
-    aics.audio_input_state.change_counter = 0;
+    aics.audio_input_state_mut().mute = Mute::Disabled;
+    aics.audio_input_state_mut().change_counter = 0;
 
     assert_eq!(
         aics.write_control_point(&mut db, &[opcode::MUTE, 0]),
         Err(error_code::MUTE_DISABLED)
     );
-    assert_eq!(aics.audio_input_state.mute, Mute::Disabled);
-    assert_eq!(aics.audio_input_state.change_counter, 0);
+    assert_eq!(aics.audio_input_state().mute, Mute::Disabled);
+    assert_eq!(aics.audio_input_state().change_counter, 0);
 }
 
 #[test]
@@ -170,19 +170,19 @@ fn test_stale_change_counter_rejects_mute() {
         aics.write_control_point(&mut db, &[opcode::MUTE, 1]),
         Err(error_code::INVALID_CHANGE_COUNTER)
     );
-    assert_eq!(aics.audio_input_state.mute, Mute::NotMuted);
+    assert_eq!(aics.audio_input_state().mute, Mute::NotMuted);
 }
 
 #[test]
 fn test_set_manual_gain_mode_when_automatic() {
     let mut db = GattDatabase::new();
     let mut aics = register(&mut db);
-    aics.audio_input_state.gain_mode = GainMode::Automatic;
+    aics.audio_input_state_mut().gain_mode = GainMode::Automatic;
 
     aics.write_control_point(&mut db, &[opcode::SET_MANUAL_GAIN_MODE, 0])
         .unwrap();
-    assert_eq!(aics.audio_input_state.gain_mode, GainMode::Manual);
-    assert_eq!(aics.audio_input_state.change_counter, 1);
+    assert_eq!(aics.audio_input_state().gain_mode, GainMode::Manual);
+    assert_eq!(aics.audio_input_state().change_counter, 1);
 }
 
 #[test]
@@ -192,28 +192,28 @@ fn test_set_manual_gain_mode_when_already_manual_is_noop() {
 
     aics.write_control_point(&mut db, &[opcode::SET_MANUAL_GAIN_MODE, 0])
         .unwrap();
-    assert_eq!(aics.audio_input_state.gain_mode, GainMode::Manual);
-    assert_eq!(aics.audio_input_state.change_counter, 0);
+    assert_eq!(aics.audio_input_state().gain_mode, GainMode::Manual);
+    assert_eq!(aics.audio_input_state().change_counter, 0);
 }
 
 #[test]
 fn test_set_manual_gain_mode_when_manual_only_is_rejected() {
     let mut db = GattDatabase::new();
     let mut aics = register(&mut db);
-    aics.audio_input_state.gain_mode = GainMode::ManualOnly;
+    aics.audio_input_state_mut().gain_mode = GainMode::ManualOnly;
 
     assert_eq!(
         aics.write_control_point(&mut db, &[opcode::SET_MANUAL_GAIN_MODE, 0]),
         Err(error_code::GAIN_MODE_CHANGE_NOT_ALLOWED)
     );
-    assert_eq!(aics.audio_input_state.gain_mode, GainMode::ManualOnly);
+    assert_eq!(aics.audio_input_state().gain_mode, GainMode::ManualOnly);
 }
 
 #[test]
 fn test_set_manual_gain_mode_when_automatic_only_is_rejected() {
     let mut db = GattDatabase::new();
     let mut aics = register(&mut db);
-    aics.audio_input_state.gain_mode = GainMode::AutomaticOnly;
+    aics.audio_input_state_mut().gain_mode = GainMode::AutomaticOnly;
 
     assert_eq!(
         aics.write_control_point(&mut db, &[opcode::SET_MANUAL_GAIN_MODE, 0]),
@@ -228,27 +228,27 @@ fn test_set_automatic_gain_mode_when_manual() {
 
     aics.write_control_point(&mut db, &[opcode::SET_AUTOMATIC_GAIN_MODE, 0])
         .unwrap();
-    assert_eq!(aics.audio_input_state.gain_mode, GainMode::Automatic);
-    assert_eq!(aics.audio_input_state.change_counter, 1);
+    assert_eq!(aics.audio_input_state().gain_mode, GainMode::Automatic);
+    assert_eq!(aics.audio_input_state().change_counter, 1);
 }
 
 #[test]
 fn test_set_automatic_gain_mode_when_already_automatic_is_noop() {
     let mut db = GattDatabase::new();
     let mut aics = register(&mut db);
-    aics.audio_input_state.gain_mode = GainMode::Automatic;
+    aics.audio_input_state_mut().gain_mode = GainMode::Automatic;
 
     aics.write_control_point(&mut db, &[opcode::SET_AUTOMATIC_GAIN_MODE, 0])
         .unwrap();
-    assert_eq!(aics.audio_input_state.gain_mode, GainMode::Automatic);
-    assert_eq!(aics.audio_input_state.change_counter, 0);
+    assert_eq!(aics.audio_input_state().gain_mode, GainMode::Automatic);
+    assert_eq!(aics.audio_input_state().change_counter, 0);
 }
 
 #[test]
 fn test_set_automatic_gain_mode_when_manual_only_is_rejected() {
     let mut db = GattDatabase::new();
     let mut aics = register(&mut db);
-    aics.audio_input_state.gain_mode = GainMode::ManualOnly;
+    aics.audio_input_state_mut().gain_mode = GainMode::ManualOnly;
 
     assert_eq!(
         aics.write_control_point(&mut db, &[opcode::SET_AUTOMATIC_GAIN_MODE, 0]),
@@ -260,7 +260,7 @@ fn test_set_automatic_gain_mode_when_manual_only_is_rejected() {
 fn test_set_automatic_gain_mode_when_automatic_only_is_rejected() {
     let mut db = GattDatabase::new();
     let mut aics = register(&mut db);
-    aics.audio_input_state.gain_mode = GainMode::AutomaticOnly;
+    aics.audio_input_state_mut().gain_mode = GainMode::AutomaticOnly;
 
     assert_eq!(
         aics.write_control_point(&mut db, &[opcode::SET_AUTOMATIC_GAIN_MODE, 0]),

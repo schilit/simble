@@ -11,14 +11,17 @@
 //! Volume Control Service (VCS); Simble has no GATT "Include" declaration support yet, so
 //! `register()` just adds AICS as its own service and leaves that relationship unmodeled.
 //!
-//! Like ASCS, AICS has real internal state beyond a static GATT value, so
-//! `AudioInputControlService` owns an `AudioInputState` and `write_control_point` both
-//! applies the requested operation and pushes the resulting state into the `GattDatabase`.
-//! Unlike ASCS's per-item notification vector, an Audio Input Control Point write only ever
-//! targets the single Audio Input State this service owns, so a write either succeeds or
-//! fails atomically - `write_control_point` returns `Result<(), u8>` (an ATT application
-//! error code on failure), matching how a real AICS server rejects a write at the ATT layer
-//! rather than notifying a per-operation response back on the control point itself.
+//! Like ASCS, AICS has real internal state beyond a static GATT value. The
+//! `AudioInputState` is shared (`Arc<Mutex<_>>`, the same bridge shape
+//! `crate::android::gatt_server` uses between its server and observer) between
+//! `AudioInputControlService` and the `AttributeHandler` `register()` attaches to the Audio
+//! Input Control Point, so a real ATT write arriving through `GattDatabase::write` drives
+//! the same validation host-side callers get. Unlike ASCS's per-item notification vector,
+//! an Audio Input Control Point write only ever targets the single Audio Input State this
+//! service owns, so a write either succeeds or fails atomically - a rejection surfaces as
+//! an ATT application error code (becoming a real ATT Error Response on the wire), matching
+//! how a real AICS server rejects a write at the ATT layer rather than notifying a
+//! per-operation response back on the control point itself.
 //!
 //! Every operation's wire format reserves a Change_Counter byte (AICS Section 3.5.1: "the
 //! server shall not perform the requested operation" when it doesn't match), so this
@@ -27,7 +30,10 @@
 //! that's inconsistent with the field the wire format actually reserves for every opcode, so
 //! validation here is uniform across all five instead.
 
+use std::sync::{Arc, Mutex, MutexGuard};
+
 use crate::att::error_code as att_error_code;
+use crate::gatt::database::AttributeHandler;
 use crate::gatt::{AttributePermissions, CharacteristicProperties, GattDatabase};
 
 /// AICS Service and characteristic UUIDs.
@@ -130,6 +136,140 @@ impl AudioInputState {
     fn increment_change_counter(&mut self) {
         self.change_counter = self.change_counter.wrapping_add(1);
     }
+
+    /// AICS 3.5.1 - every Control Point operand carries the client's view of the change
+    /// counter; a stale value is rejected with Invalid Change Counter.
+    fn check_change_counter(&self, change_counter: u8) -> Result<(), u8> {
+        if change_counter != self.change_counter {
+            return Err(error_code::INVALID_CHANGE_COUNTER);
+        }
+        Ok(())
+    }
+
+    /// AICS 3.5.2.1 - Set Gain Setting. Silently ignored (not an error) while Gain Mode is
+    /// Automatic or Automatic Only, matching AICS 3.5.2.1's "shall not perform the
+    /// operation" without a Control Point rejection code, and doesn't advance the change
+    /// counter even on success (only Mute/Gain Mode transitions do, per 3.5).
+    fn apply_set_gain_setting(
+        &mut self,
+        properties: &GainSettingsProperties,
+        change_counter: u8,
+        gain_setting: u8,
+    ) -> Result<(), u8> {
+        self.check_change_counter(change_counter)?;
+        if !matches!(self.gain_mode, GainMode::Manual | GainMode::ManualOnly) {
+            return Ok(());
+        }
+        if !(properties.gain_settings_minimum..=properties.gain_settings_maximum)
+            .contains(&gain_setting)
+        {
+            return Err(error_code::VALUE_OUT_OF_RANGE);
+        }
+        self.gain_setting = gain_setting;
+        Ok(())
+    }
+
+    /// AICS 3.5.2.2 - Unmute.
+    fn apply_unmute(&mut self, change_counter: u8) -> Result<(), u8> {
+        if self.mute == Mute::Disabled {
+            return Err(error_code::MUTE_DISABLED);
+        }
+        self.check_change_counter(change_counter)?;
+        if self.mute == Mute::NotMuted {
+            return Ok(());
+        }
+        self.mute = Mute::NotMuted;
+        self.increment_change_counter();
+        Ok(())
+    }
+
+    /// AICS 3.5.2.3 - Mute.
+    fn apply_mute(&mut self, change_counter: u8) -> Result<(), u8> {
+        if self.mute == Mute::Disabled {
+            return Err(error_code::MUTE_DISABLED);
+        }
+        self.check_change_counter(change_counter)?;
+        if self.mute == Mute::Muted {
+            return Ok(());
+        }
+        self.mute = Mute::Muted;
+        self.increment_change_counter();
+        Ok(())
+    }
+
+    /// AICS 3.5.2.4 - Set Manual Gain Mode. Rejected when Gain Mode is Manual Only or
+    /// Automatic Only (those modes forbid client-driven mode changes).
+    fn apply_set_manual_gain_mode(&mut self, change_counter: u8) -> Result<(), u8> {
+        self.check_change_counter(change_counter)?;
+        match self.gain_mode {
+            GainMode::AutomaticOnly | GainMode::ManualOnly => {
+                Err(error_code::GAIN_MODE_CHANGE_NOT_ALLOWED)
+            }
+            GainMode::Manual => Ok(()),
+            GainMode::Automatic => {
+                self.gain_mode = GainMode::Manual;
+                self.increment_change_counter();
+                Ok(())
+            }
+        }
+    }
+
+    /// AICS 3.5.2.5 - Set Automatic Gain Mode. Rejected under the same Manual/Automatic-Only
+    /// restriction as Set Manual Gain Mode.
+    fn apply_set_automatic_gain_mode(&mut self, change_counter: u8) -> Result<(), u8> {
+        self.check_change_counter(change_counter)?;
+        match self.gain_mode {
+            GainMode::AutomaticOnly | GainMode::ManualOnly => {
+                Err(error_code::GAIN_MODE_CHANGE_NOT_ALLOWED)
+            }
+            GainMode::Automatic => Ok(()),
+            GainMode::Manual => {
+                self.gain_mode = GainMode::Automatic;
+                self.increment_change_counter();
+                Ok(())
+            }
+        }
+    }
+
+    /// Applies an Audio Input Control Point write (AICS 3.5). Returns the ATT application
+    /// error code to respond with on failure (Section 1.6), rather than a notification
+    /// payload - unlike ASCS's batched per-ASE opcodes, every AICS opcode targets this
+    /// service's single Audio Input State and either fully applies or is fully rejected.
+    fn apply_control_point(
+        &mut self,
+        properties: &GainSettingsProperties,
+        data: &[u8],
+    ) -> Result<(), u8> {
+        let Some((&op, rest)) = data.split_first() else {
+            return Err(att_error_code::INVALID_ATTRIBUTE_VALUE_LENGTH);
+        };
+
+        match op {
+            opcode::SET_GAIN_SETTING => match rest {
+                &[change_counter, gain_setting] => {
+                    self.apply_set_gain_setting(properties, change_counter, gain_setting)
+                }
+                _ => Err(att_error_code::INVALID_ATTRIBUTE_VALUE_LENGTH),
+            },
+            opcode::UNMUTE => match rest {
+                &[change_counter] => self.apply_unmute(change_counter),
+                _ => Err(att_error_code::INVALID_ATTRIBUTE_VALUE_LENGTH),
+            },
+            opcode::MUTE => match rest {
+                &[change_counter] => self.apply_mute(change_counter),
+                _ => Err(att_error_code::INVALID_ATTRIBUTE_VALUE_LENGTH),
+            },
+            opcode::SET_MANUAL_GAIN_MODE => match rest {
+                &[change_counter] => self.apply_set_manual_gain_mode(change_counter),
+                _ => Err(att_error_code::INVALID_ATTRIBUTE_VALUE_LENGTH),
+            },
+            opcode::SET_AUTOMATIC_GAIN_MODE => match rest {
+                &[change_counter] => self.apply_set_automatic_gain_mode(change_counter),
+                _ => Err(att_error_code::INVALID_ATTRIBUTE_VALUE_LENGTH),
+            },
+            _ => Err(error_code::OPCODE_NOT_SUPPORTED),
+        }
+    }
 }
 
 /// AICS Section 3.2 - Gain Settings Properties characteristic value.
@@ -160,6 +300,27 @@ impl GainSettingsProperties {
     }
 }
 
+/// Owns writes to the Audio Input Control Point value attribute (attached via
+/// `GattDatabase::set_handler`), so a raw ATT write drives the state machine instead of
+/// overwriting the control point's stored bytes.
+#[derive(Debug)]
+struct AudioInputControlPointHandler {
+    state: Arc<Mutex<AudioInputState>>,
+    // Registration-time constants, copied here so the handler needs no back-reference to
+    // the service that registered it.
+    gain_settings_properties: GainSettingsProperties,
+    audio_input_state_value_handle: u16,
+}
+
+impl AttributeHandler for AudioInputControlPointHandler {
+    fn on_write(&mut self, db: &mut GattDatabase, value: &[u8]) -> Result<(), u8> {
+        let mut state = self.state.lock().unwrap();
+        state.apply_control_point(&self.gain_settings_properties, value)?;
+        let _ = db.set_value(self.audio_input_state_value_handle, &state.to_bytes());
+        Ok(())
+    }
+}
+
 /// Audio Input Control Service GATT container plus the Audio Input State it owns.
 #[derive(Debug, Clone)]
 pub struct AudioInputControlService {
@@ -170,8 +331,8 @@ pub struct AudioInputControlService {
     pub audio_input_status_value_handle: u16,
     pub control_point_value_handle: u16,
     pub audio_input_description_value_handle: u16,
-    pub audio_input_state: AudioInputState,
     pub gain_settings_properties: GainSettingsProperties,
+    state: Arc<Mutex<AudioInputState>>,
 }
 
 impl AudioInputControlService {
@@ -235,6 +396,17 @@ impl AudioInputControlService {
             AttributePermissions::default(),
         );
 
+        let state = Arc::new(Mutex::new(audio_input_state));
+        db.set_handler(
+            control_point_value_handle,
+            Box::new(AudioInputControlPointHandler {
+                state: state.clone(),
+                gain_settings_properties,
+                audio_input_state_value_handle,
+            }),
+        )
+        .expect("control point handle was just allocated");
+
         Self {
             service_handle,
             audio_input_state_value_handle,
@@ -243,143 +415,29 @@ impl AudioInputControlService {
             audio_input_status_value_handle,
             control_point_value_handle,
             audio_input_description_value_handle,
-            audio_input_state,
             gain_settings_properties,
+            state,
         }
     }
 
-    /// AICS 3.5.1 - every Control Point operand carries the client's view of the change
-    /// counter; a stale value is rejected with Invalid Change Counter.
-    fn check_change_counter(&self, change_counter: u8) -> Result<(), u8> {
-        if change_counter != self.audio_input_state.change_counter {
-            return Err(error_code::INVALID_CHANGE_COUNTER);
-        }
-        Ok(())
+    /// Snapshot of the current Audio Input State.
+    pub fn audio_input_state(&self) -> AudioInputState {
+        *self.state.lock().unwrap()
     }
 
-    /// AICS 3.5.2.1 - Set Gain Setting. Silently ignored (not an error) while Gain Mode is
-    /// Automatic or Automatic Only, matching AICS 3.5.2.1's "shall not perform the
-    /// operation" without a Control Point rejection code, and doesn't advance the change
-    /// counter even on success (only Mute/Gain Mode transitions do, per 3.5).
-    fn apply_set_gain_setting(&mut self, change_counter: u8, gain_setting: u8) -> Result<(), u8> {
-        self.check_change_counter(change_counter)?;
-        if !matches!(
-            self.audio_input_state.gain_mode,
-            GainMode::Manual | GainMode::ManualOnly
-        ) {
-            return Ok(());
-        }
-        if !(self.gain_settings_properties.gain_settings_minimum
-            ..=self.gain_settings_properties.gain_settings_maximum)
-            .contains(&gain_setting)
-        {
-            return Err(error_code::VALUE_OUT_OF_RANGE);
-        }
-        self.audio_input_state.gain_setting = gain_setting;
-        Ok(())
+    /// Host-side mutable access to the Audio Input State, for simulation scenarios the
+    /// Control Point can't reach (e.g. forcing `Mute::Disabled` or a non-default Gain
+    /// Mode). Bypasses Control Point validation and doesn't republish the GATT value.
+    pub fn audio_input_state_mut(&self) -> MutexGuard<'_, AudioInputState> {
+        self.state.lock().unwrap()
     }
 
-    /// AICS 3.5.2.2 - Unmute.
-    fn apply_unmute(&mut self, change_counter: u8) -> Result<(), u8> {
-        if self.audio_input_state.mute == Mute::Disabled {
-            return Err(error_code::MUTE_DISABLED);
-        }
-        self.check_change_counter(change_counter)?;
-        if self.audio_input_state.mute == Mute::NotMuted {
-            return Ok(());
-        }
-        self.audio_input_state.mute = Mute::NotMuted;
-        self.audio_input_state.increment_change_counter();
-        Ok(())
-    }
-
-    /// AICS 3.5.2.3 - Mute.
-    fn apply_mute(&mut self, change_counter: u8) -> Result<(), u8> {
-        if self.audio_input_state.mute == Mute::Disabled {
-            return Err(error_code::MUTE_DISABLED);
-        }
-        self.check_change_counter(change_counter)?;
-        if self.audio_input_state.mute == Mute::Muted {
-            return Ok(());
-        }
-        self.audio_input_state.mute = Mute::Muted;
-        self.audio_input_state.increment_change_counter();
-        Ok(())
-    }
-
-    /// AICS 3.5.2.4 - Set Manual Gain Mode. Rejected when Gain Mode is Manual Only or
-    /// Automatic Only (those modes forbid client-driven mode changes).
-    fn apply_set_manual_gain_mode(&mut self, change_counter: u8) -> Result<(), u8> {
-        self.check_change_counter(change_counter)?;
-        match self.audio_input_state.gain_mode {
-            GainMode::AutomaticOnly | GainMode::ManualOnly => {
-                Err(error_code::GAIN_MODE_CHANGE_NOT_ALLOWED)
-            }
-            GainMode::Manual => Ok(()),
-            GainMode::Automatic => {
-                self.audio_input_state.gain_mode = GainMode::Manual;
-                self.audio_input_state.increment_change_counter();
-                Ok(())
-            }
-        }
-    }
-
-    /// AICS 3.5.2.5 - Set Automatic Gain Mode. Rejected under the same Manual/Automatic-Only
-    /// restriction as Set Manual Gain Mode.
-    fn apply_set_automatic_gain_mode(&mut self, change_counter: u8) -> Result<(), u8> {
-        self.check_change_counter(change_counter)?;
-        match self.audio_input_state.gain_mode {
-            GainMode::AutomaticOnly | GainMode::ManualOnly => {
-                Err(error_code::GAIN_MODE_CHANGE_NOT_ALLOWED)
-            }
-            GainMode::Automatic => Ok(()),
-            GainMode::Manual => {
-                self.audio_input_state.gain_mode = GainMode::Automatic;
-                self.audio_input_state.increment_change_counter();
-                Ok(())
-            }
-        }
-    }
-
-    /// Applies an Audio Input Control Point write (AICS 3.5), publishing the resulting Audio
-    /// Input State into `db` on success. Returns the ATT application error code to respond
-    /// with on failure (Section 1.6), rather than a notification payload - unlike ASCS's
-    /// batched per-ASE opcodes, every AICS opcode targets this service's single Audio Input
-    /// State and either fully applies or is fully rejected.
+    /// Host-side convenience for driving the Audio Input Control Point (AICS 3.5): routes
+    /// `data` through the same `GattDatabase::write` path a remote client's ATT write
+    /// takes, dispatching to the handler `register()` attached. Returns the ATT
+    /// application error code a real server would put in its Error Response (Section 1.6).
     pub fn write_control_point(&mut self, db: &mut GattDatabase, data: &[u8]) -> Result<(), u8> {
-        let Some((&op, rest)) = data.split_first() else {
-            return Err(att_error_code::INVALID_ATTRIBUTE_VALUE_LENGTH);
-        };
-
-        match op {
-            opcode::SET_GAIN_SETTING => match rest {
-                &[change_counter, gain_setting] => {
-                    self.apply_set_gain_setting(change_counter, gain_setting)?
-                }
-                _ => return Err(att_error_code::INVALID_ATTRIBUTE_VALUE_LENGTH),
-            },
-            opcode::UNMUTE => match rest {
-                &[change_counter] => self.apply_unmute(change_counter)?,
-                _ => return Err(att_error_code::INVALID_ATTRIBUTE_VALUE_LENGTH),
-            },
-            opcode::MUTE => match rest {
-                &[change_counter] => self.apply_mute(change_counter)?,
-                _ => return Err(att_error_code::INVALID_ATTRIBUTE_VALUE_LENGTH),
-            },
-            opcode::SET_MANUAL_GAIN_MODE => match rest {
-                &[change_counter] => self.apply_set_manual_gain_mode(change_counter)?,
-                _ => return Err(att_error_code::INVALID_ATTRIBUTE_VALUE_LENGTH),
-            },
-            opcode::SET_AUTOMATIC_GAIN_MODE => match rest {
-                &[change_counter] => self.apply_set_automatic_gain_mode(change_counter)?,
-                _ => return Err(att_error_code::INVALID_ATTRIBUTE_VALUE_LENGTH),
-            },
-            _ => return Err(error_code::OPCODE_NOT_SUPPORTED),
-        }
-
-        let value = self.audio_input_state.to_bytes();
-        let _ = db.set_value(self.audio_input_state_value_handle, &value);
-        Ok(())
+        db.write(self.control_point_value_handle, data)
     }
 }
 
@@ -401,7 +459,7 @@ mod tests {
     fn test_initial_state() {
         let mut db = GattDatabase::new();
         let aics = new_service(&mut db);
-        assert_eq!(aics.audio_input_state, AudioInputState::default());
+        assert_eq!(aics.audio_input_state(), AudioInputState::default());
         assert_eq!(
             db.read(aics.audio_input_state_value_handle, 0).unwrap(),
             &[0, Mute::NotMuted as u8, GainMode::Manual as u8, 0]
@@ -426,25 +484,25 @@ mod tests {
     fn test_set_gain_setting_ignored_when_automatic_only() {
         let mut db = GattDatabase::new();
         let mut aics = new_service(&mut db);
-        aics.audio_input_state.gain_mode = GainMode::AutomaticOnly;
+        aics.audio_input_state_mut().gain_mode = GainMode::AutomaticOnly;
 
         assert_eq!(
             aics.write_control_point(&mut db, &[opcode::SET_GAIN_SETTING, 0, 120]),
             Ok(())
         );
-        assert_eq!(aics.audio_input_state.gain_setting, 0);
-        assert_eq!(aics.audio_input_state.change_counter, 0);
+        assert_eq!(aics.audio_input_state().gain_setting, 0);
+        assert_eq!(aics.audio_input_state().change_counter, 0);
     }
 
     #[test]
     fn test_set_gain_setting_ignored_when_automatic() {
         let mut db = GattDatabase::new();
         let mut aics = new_service(&mut db);
-        aics.audio_input_state.gain_mode = GainMode::Automatic;
+        aics.audio_input_state_mut().gain_mode = GainMode::Automatic;
 
         aics.write_control_point(&mut db, &[opcode::SET_GAIN_SETTING, 0, 120])
             .unwrap();
-        assert_eq!(aics.audio_input_state.gain_setting, 0);
+        assert_eq!(aics.audio_input_state().gain_setting, 0);
     }
 
     #[test]
@@ -454,9 +512,9 @@ mod tests {
 
         aics.write_control_point(&mut db, &[opcode::SET_GAIN_SETTING, 0, 120])
             .unwrap();
-        assert_eq!(aics.audio_input_state.gain_setting, 120);
+        assert_eq!(aics.audio_input_state().gain_setting, 120);
         // Set Gain Setting never advances the change counter.
-        assert_eq!(aics.audio_input_state.change_counter, 0);
+        assert_eq!(aics.audio_input_state().change_counter, 0);
         assert_eq!(
             db.read(aics.audio_input_state_value_handle, 0).unwrap()[0],
             120
@@ -467,11 +525,11 @@ mod tests {
     fn test_set_gain_setting_when_manual_only() {
         let mut db = GattDatabase::new();
         let mut aics = new_service(&mut db);
-        aics.audio_input_state.gain_mode = GainMode::ManualOnly;
+        aics.audio_input_state_mut().gain_mode = GainMode::ManualOnly;
 
         aics.write_control_point(&mut db, &[opcode::SET_GAIN_SETTING, 0, 120])
             .unwrap();
-        assert_eq!(aics.audio_input_state.gain_setting, 120);
+        assert_eq!(aics.audio_input_state().gain_setting, 120);
     }
 
     #[test]
@@ -493,33 +551,33 @@ mod tests {
             aics.write_control_point(&mut db, &[opcode::SET_GAIN_SETTING, 0, 5]),
             Err(error_code::VALUE_OUT_OF_RANGE)
         );
-        assert_eq!(aics.audio_input_state.gain_setting, 0);
+        assert_eq!(aics.audio_input_state().gain_setting, 0);
     }
 
     #[test]
     fn test_unmute_when_muted() {
         let mut db = GattDatabase::new();
         let mut aics = new_service(&mut db);
-        aics.audio_input_state.mute = Mute::Muted;
+        aics.audio_input_state_mut().mute = Mute::Muted;
 
         aics.write_control_point(&mut db, &[opcode::UNMUTE, 0])
             .unwrap();
-        assert_eq!(aics.audio_input_state.mute, Mute::NotMuted);
-        assert_eq!(aics.audio_input_state.change_counter, 1);
+        assert_eq!(aics.audio_input_state().mute, Mute::NotMuted);
+        assert_eq!(aics.audio_input_state().change_counter, 1);
     }
 
     #[test]
     fn test_unmute_when_mute_disabled_is_rejected() {
         let mut db = GattDatabase::new();
         let mut aics = new_service(&mut db);
-        aics.audio_input_state.mute = Mute::Disabled;
+        aics.audio_input_state_mut().mute = Mute::Disabled;
 
         assert_eq!(
             aics.write_control_point(&mut db, &[opcode::UNMUTE, 0]),
             Err(error_code::MUTE_DISABLED)
         );
-        assert_eq!(aics.audio_input_state.mute, Mute::Disabled);
-        assert_eq!(aics.audio_input_state.change_counter, 0);
+        assert_eq!(aics.audio_input_state().mute, Mute::Disabled);
+        assert_eq!(aics.audio_input_state().change_counter, 0);
     }
 
     #[test]
@@ -529,15 +587,15 @@ mod tests {
 
         aics.write_control_point(&mut db, &[opcode::MUTE, 0])
             .unwrap();
-        assert_eq!(aics.audio_input_state.mute, Mute::Muted);
-        assert_eq!(aics.audio_input_state.change_counter, 1);
+        assert_eq!(aics.audio_input_state().mute, Mute::Muted);
+        assert_eq!(aics.audio_input_state().change_counter, 1);
     }
 
     #[test]
     fn test_mute_when_mute_disabled_is_rejected() {
         let mut db = GattDatabase::new();
         let mut aics = new_service(&mut db);
-        aics.audio_input_state.mute = Mute::Disabled;
+        aics.audio_input_state_mut().mute = Mute::Disabled;
 
         assert_eq!(
             aics.write_control_point(&mut db, &[opcode::MUTE, 0]),
@@ -554,20 +612,20 @@ mod tests {
             aics.write_control_point(&mut db, &[opcode::MUTE, 1]),
             Err(error_code::INVALID_CHANGE_COUNTER)
         );
-        assert_eq!(aics.audio_input_state.mute, Mute::NotMuted);
-        assert_eq!(aics.audio_input_state.change_counter, 0);
+        assert_eq!(aics.audio_input_state().mute, Mute::NotMuted);
+        assert_eq!(aics.audio_input_state().change_counter, 0);
     }
 
     #[test]
     fn test_set_manual_gain_mode_when_automatic() {
         let mut db = GattDatabase::new();
         let mut aics = new_service(&mut db);
-        aics.audio_input_state.gain_mode = GainMode::Automatic;
+        aics.audio_input_state_mut().gain_mode = GainMode::Automatic;
 
         aics.write_control_point(&mut db, &[opcode::SET_MANUAL_GAIN_MODE, 0])
             .unwrap();
-        assert_eq!(aics.audio_input_state.gain_mode, GainMode::Manual);
-        assert_eq!(aics.audio_input_state.change_counter, 1);
+        assert_eq!(aics.audio_input_state().gain_mode, GainMode::Manual);
+        assert_eq!(aics.audio_input_state().change_counter, 1);
     }
 
     #[test]
@@ -577,15 +635,15 @@ mod tests {
 
         aics.write_control_point(&mut db, &[opcode::SET_MANUAL_GAIN_MODE, 0])
             .unwrap();
-        assert_eq!(aics.audio_input_state.gain_mode, GainMode::Manual);
-        assert_eq!(aics.audio_input_state.change_counter, 0);
+        assert_eq!(aics.audio_input_state().gain_mode, GainMode::Manual);
+        assert_eq!(aics.audio_input_state().change_counter, 0);
     }
 
     #[test]
     fn test_set_manual_gain_mode_when_manual_only_is_rejected() {
         let mut db = GattDatabase::new();
         let mut aics = new_service(&mut db);
-        aics.audio_input_state.gain_mode = GainMode::ManualOnly;
+        aics.audio_input_state_mut().gain_mode = GainMode::ManualOnly;
 
         assert_eq!(
             aics.write_control_point(&mut db, &[opcode::SET_MANUAL_GAIN_MODE, 0]),
@@ -597,7 +655,7 @@ mod tests {
     fn test_set_manual_gain_mode_when_automatic_only_is_rejected() {
         let mut db = GattDatabase::new();
         let mut aics = new_service(&mut db);
-        aics.audio_input_state.gain_mode = GainMode::AutomaticOnly;
+        aics.audio_input_state_mut().gain_mode = GainMode::AutomaticOnly;
 
         assert_eq!(
             aics.write_control_point(&mut db, &[opcode::SET_MANUAL_GAIN_MODE, 0]),
@@ -612,15 +670,15 @@ mod tests {
 
         aics.write_control_point(&mut db, &[opcode::SET_AUTOMATIC_GAIN_MODE, 0])
             .unwrap();
-        assert_eq!(aics.audio_input_state.gain_mode, GainMode::Automatic);
-        assert_eq!(aics.audio_input_state.change_counter, 1);
+        assert_eq!(aics.audio_input_state().gain_mode, GainMode::Automatic);
+        assert_eq!(aics.audio_input_state().change_counter, 1);
     }
 
     #[test]
     fn test_set_automatic_gain_mode_when_manual_only_is_rejected() {
         let mut db = GattDatabase::new();
         let mut aics = new_service(&mut db);
-        aics.audio_input_state.gain_mode = GainMode::ManualOnly;
+        aics.audio_input_state_mut().gain_mode = GainMode::ManualOnly;
 
         assert_eq!(
             aics.write_control_point(&mut db, &[opcode::SET_AUTOMATIC_GAIN_MODE, 0]),
@@ -632,7 +690,7 @@ mod tests {
     fn test_set_automatic_gain_mode_when_automatic_only_is_rejected() {
         let mut db = GattDatabase::new();
         let mut aics = new_service(&mut db);
-        aics.audio_input_state.gain_mode = GainMode::AutomaticOnly;
+        aics.audio_input_state_mut().gain_mode = GainMode::AutomaticOnly;
 
         assert_eq!(
             aics.write_control_point(&mut db, &[opcode::SET_AUTOMATIC_GAIN_MODE, 0]),

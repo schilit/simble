@@ -1,11 +1,20 @@
 // Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
-//! Integration tests for LE Audio PACS (Published Audio Capabilities) and VCP (Volume Control).
+//! Integration tests for LE Audio PACS (Published Audio Capabilities) and VCP (Volume Control),
+//! plus end-to-end ASCS Control Point dispatch through a real device's ATT write path.
 
+use simble::VirtualDevice;
+use simble::att::opcode as att_opcode;
 use simble::gatt::GattDatabase;
+use simble::l2cap::{L2capHeader, cid};
+use simble::profiles::ascs::{
+    AseState, AudioStreamControlService, opcode as ascs_opcode, reason_code, response_code,
+};
+use simble::profiles::bap::LC3_CODEC_ID;
 use simble::profiles::pacs::audio_location;
 use simble::profiles::{PublishedAudioCapabilitiesService, VolumeControlService};
+use simble::types::{Address, AddressType};
 
 #[test]
 fn test_pacs_service_audio_capabilities_registration() {
@@ -51,4 +60,52 @@ fn test_vcp_volume_control_service() {
     let updated = db.read(vcp.volume_state_value_handle, 0).unwrap();
     assert_eq!(updated[0], 150);
     assert_eq!(updated[1], 1);
+}
+
+// A raw ATT Write Request to the ASE Control Point must reach the ASE state machine via
+// the AttributeHandler ASCS registers - before that handler existed, a write arriving
+// through `VirtualDevice::process_l2cap_packet` silently overwrote the control point's
+// stored bytes and no ASE ever left Idle.
+#[test]
+fn test_ascs_control_point_dispatch_through_att_write() {
+    let addr = Address::from_be_bytes([0xC0, 0xFF, 0xEE, 0x01, 0x02, 0x03]);
+    let mut dev = VirtualDevice::new("LeAudioSink", addr, AddressType::Random);
+    let ascs = AudioStreamControlService::register(&mut dev.gatt_db, &[1], &[]);
+    assert_eq!(ascs.ase(1).unwrap().state, AseState::Idle);
+
+    let conn_h = 0x0040;
+    dev.on_connected(conn_h, Address::ANY);
+
+    let mut write_req = vec![att_opcode::WRITE_REQ];
+    write_req.extend_from_slice(&ascs.control_point_value_handle.to_le_bytes());
+    write_req.push(ascs_opcode::CONFIG_CODEC);
+    write_req.push(1); // one ASE operation
+    write_req.push(1); // ase_id
+    write_req.push(3); // target_latency
+    write_req.push(1); // target_phy
+    write_req.extend_from_slice(&LC3_CODEC_ID);
+    write_req.push(0); // codec_specific_configuration length
+
+    let l2cap = L2capHeader::serialize(cid::ATT, &write_req);
+    let resp = dev.process_l2cap_packet(conn_h, &l2cap).unwrap().unwrap();
+    let (_, payload) = L2capHeader::parse(&resp).unwrap();
+    assert_eq!(payload[0], att_opcode::WRITE_RSP);
+
+    let ase = ascs.ase(1).unwrap();
+    assert_eq!(ase.state, AseState::CodecConfigured);
+    assert_eq!(ase.codec_id, LC3_CODEC_ID);
+    assert_eq!(
+        dev.gatt_db.read(ase.value_handle, 0).unwrap()[..2],
+        [1, AseState::CodecConfigured as u8]
+    );
+    assert_eq!(
+        ascs.control_point_notification(),
+        vec![
+            ascs_opcode::CONFIG_CODEC,
+            1,
+            1,
+            response_code::SUCCESS,
+            reason_code::NONE
+        ]
+    );
 }

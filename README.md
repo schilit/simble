@@ -108,22 +108,26 @@ no gRPC dependency:
 ws://localhost:7681/v1/websocket/bt?name=<device-name>&address=<mac-address>
 ```
 
-**Requires Android Studio Canary**, not Stable. `netsimd`'s WebSocket frontend (and the separate
-`netsim` CLI for inspecting live connections) is missing from the emulator package bundled with
-Stable-channel Android Studio &mdash; confirmed by testing against a Stable install, where
-`netsimd` opens only its gRPC (device-management) and raw HCI-socket ports, with no log line for
-the WebSocket frontend server at all. Canary has the fix.
+**Requires the canary-channel emulator package (37.2.5+)**, not the stable one. The stable
+emulator's `netsimd` (33.x) has no WebSocket frontend at all; the canary build is a rewritten
+`netsimd` that supports it via an explicit `--ws-port` flag (off by default), plus a separate
+`netsim` CLI for inspecting live devices. Verified working end-to-end with Simble's
+`NetsimTransport` (see `examples/netsim_smoke.rs`):
 
 ```bash
-# Install Android Studio Canary (installs alongside an existing Stable install)
-brew install --cask android-studio-preview@canary
+# Install the canary-channel emulator package
+~/Library/Android/sdk/cmdline-tools/latest/bin/sdkmanager --channel=3 emulator
 
-# Launch the emulator's netsimd (path may vary by install location)
-~/Library/Android/sdk/emulator/netsimd --logtostderr
+# Start netsimd with the WebSocket frontend enabled
+# (--no-shutdown prevents the 15s no-devices startup timeout during development)
+~/Library/Android/sdk/emulator/netsimd --logtostderr --no-shutdown --ws-port 7681
+
+# Run the live smoke test: HCI Reset -> Command Complete over WebSocket
+cargo run --example netsim_smoke
+
+# Inspect connected devices (names come from the ?name= URI parameter)
+~/Library/Android/sdk/emulator/netsim devices
 ```
-
-`netsimd` logs its actual gRPC and HCI-socket ports on startup; the WebSocket frontend defaults
-to port `7681`. Point `NetsimTransport::connect(...)` at the URL above once `netsimd` is running.
 
 ---
 

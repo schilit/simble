@@ -108,8 +108,17 @@ impl VirtualDevice {
                 if let Some(observer) = self.observer.as_deref_mut() {
                     observer.on_characteristic_write(connection_handle, handle, value, true);
                 }
+                // Captured before the write so the subscription event can
+                // report the prev -> cur bit transition (NimBLE
+                // `BLE_GAP_EVENT_SUBSCRIBE` pattern).
+                let cccd_prev = self.cccd_value(handle);
                 match self.gatt_db.write(handle, value) {
-                    Ok(()) => Ok(Some(vec![opcode::WRITE_RSP])),
+                    Ok(()) => {
+                        if let Some(prev) = cccd_prev {
+                            self.on_cccd_written(connection_handle, handle, prev);
+                        }
+                        Ok(Some(vec![opcode::WRITE_RSP]))
+                    }
                     Err(code) => Ok(Some(att_error(opcode::WRITE_REQ, handle, code))),
                 }
             }
@@ -118,7 +127,12 @@ impl VirtualDevice {
                 if let Some(observer) = self.observer.as_deref_mut() {
                     observer.on_characteristic_write(connection_handle, handle, value, false);
                 }
-                let _ = self.gatt_db.write(handle, value);
+                let cccd_prev = self.cccd_value(handle);
+                if self.gatt_db.write(handle, value).is_ok()
+                    && let Some(prev) = cccd_prev
+                {
+                    self.on_cccd_written(connection_handle, handle, prev);
+                }
                 Ok(None)
             }
             AttPdu::PrepareWriteReq { header, part_value } => {

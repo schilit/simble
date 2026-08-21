@@ -7,7 +7,10 @@
 
 pub mod a2dp;
 pub mod at;
+pub mod avc;
+pub mod avctp;
 pub mod avdtp;
+pub mod avrcp;
 pub mod hfp;
 pub mod hid;
 pub mod rfcomm;
