@@ -19,6 +19,7 @@
 use std::collections::HashMap;
 
 use crate::android::gatt_service::BluetoothGattCharacteristic;
+use crate::controller::sim::Link;
 use crate::gap::{AdvertisingData, ad_type, flags};
 use crate::l2cap::{AclPacketBoundary, AclReassembler, HciAclHeader};
 use crate::scripting::bindings::{dynamic_to_bytes, runtime_error};
@@ -987,6 +988,191 @@ fn find_cccd_after(db: &crate::gatt::GattDatabase, value_handle: u16) -> Option<
         .map(|(&handle, _)| handle)
 }
 
+/// The role a device plays in a [`SceneEngine`].
+enum SceneRole {
+    /// A scripted GATT peripheral that advertises and serves. Boxed because a
+    /// `ScriptedPeripheral` is much larger than the scanner variant.
+    Peripheral(Box<ScriptedPeripheral>),
+    /// A scanner accumulating the advertising reports it has seen.
+    Scanner(Vec<ScanReport>),
+}
+
+/// One device in a scene: the controller-side [`HciChannel`] it shares with the
+/// [`Link`], its role, and whether its HCI bring-up has been queued yet.
+struct SceneDevice {
+    channel: std::sync::Arc<HciChannel>,
+    role: SceneRole,
+    started: bool,
+}
+
+/// An in-process scene of Rhai devices sharing one [`Link`] — the browser's
+/// "in-page controller" backend, and a native, netsim-free way to run many
+/// devices together. Peripherals advertise and serve GATT; scanners collect
+/// advertising reports; the shared [`Link`] routes between them. Transport-free
+/// (no WebSocket, no netsim), so it runs identically native and on wasm32, and
+/// a single page can host a whole scene.
+pub struct SceneEngine {
+    link: Link,
+    devices: Vec<SceneDevice>,
+}
+
+impl Default for SceneEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SceneEngine {
+    /// Creates an empty scene.
+    pub fn new() -> Self {
+        Self {
+            link: Link::new(),
+            devices: Vec::new(),
+        }
+    }
+
+    /// Adds a scripted peripheral at `address`; returns its device index (or the
+    /// script error).
+    pub fn add_peripheral(&mut self, address: Address, script: &str) -> Result<usize, String> {
+        let peripheral = ScriptedPeripheral::run_script(script)?;
+        let channel = self.link.add_device(address);
+        let index = self.devices.len();
+        self.devices.push(SceneDevice {
+            channel,
+            role: SceneRole::Peripheral(Box::new(peripheral)),
+            started: false,
+        });
+        Ok(index)
+    }
+
+    /// Adds a scanner at `address`; returns its device index.
+    pub fn add_scanner(&mut self, address: Address) -> usize {
+        let channel = self.link.add_device(address);
+        let index = self.devices.len();
+        self.devices.push(SceneDevice {
+            channel,
+            role: SceneRole::Scanner(Vec::new()),
+            started: false,
+        });
+        index
+    }
+
+    /// The number of devices in the scene.
+    pub fn device_count(&self) -> usize {
+        self.devices.len()
+    }
+
+    /// Advances the whole scene one step at simulated time `t_seconds`: queues
+    /// each device's bring-up on its first tick, lets peripherals run their
+    /// scripts and emit notifications, routes advertising and data across the
+    /// shared [`Link`], then delivers the results back to each device.
+    pub fn tick(&mut self, t_seconds: f64) {
+        for device in &mut self.devices {
+            if !device.started {
+                let _ = match &device.role {
+                    SceneRole::Peripheral(p) => p.queue_start(&device.channel),
+                    SceneRole::Scanner(_) => queue_scanner_start(&device.channel),
+                };
+                device.started = true;
+            }
+        }
+        // Peripherals produce (script tick + notifications).
+        for device in &mut self.devices {
+            if let SceneRole::Peripheral(p) = &mut device.role
+                && let Err(e) = p.tick(&device.channel, t_seconds)
+            {
+                p.record_error(e.to_string());
+            }
+        }
+        // Route across the shared medium.
+        self.link.tick();
+        // Consume the delivered events.
+        for device in &mut self.devices {
+            match &mut device.role {
+                SceneRole::Peripheral(p) => {
+                    while let Some(pkt) = device.channel.poll_controller_packet() {
+                        if let Err(e) = p.handle_packet(&device.channel, &pkt) {
+                            p.record_error(e.to_string());
+                        }
+                    }
+                }
+                SceneRole::Scanner(reports) => {
+                    while let Some(pkt) = device.channel.poll_controller_packet() {
+                        reports.extend(parse_scan_reports(&pkt));
+                    }
+                }
+            }
+        }
+    }
+
+    /// The GATT status JSON of peripheral `index` (see
+    /// [`ScriptedPeripheral::status_json`]), or `None` if it isn't a peripheral.
+    pub fn peripheral_status_json(&self, index: usize) -> Option<String> {
+        match self.devices.get(index)?.role {
+            SceneRole::Peripheral(ref p) => Some(p.status_json()),
+            SceneRole::Scanner(_) => None,
+        }
+    }
+
+    /// The scan reports scanner `index` has collected as a JSON array, draining
+    /// them so each call returns only what's new.
+    pub fn scanner_reports_json(&mut self, index: usize) -> String {
+        match self.devices.get_mut(index).map(|d| &mut d.role) {
+            Some(SceneRole::Scanner(reports)) => {
+                let json = serde_json::to_string(&reports).unwrap_or_else(|_| "[]".to_string());
+                reports.clear();
+                json
+            }
+            _ => "[]".to_string(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod scene_tests {
+    use super::*;
+
+    #[test]
+    fn test_scene_scanner_sees_scripted_peripheral() {
+        let mut scene = SceneEngine::new();
+        let script = r#"
+            let server = android::BluetoothGattServer("SceneHRM");
+            let hrs = android::BluetoothGattService(uuid::HEART_RATE_SERVICE, android::SERVICE_TYPE_PRIMARY);
+            let hr = android::BluetoothGattCharacteristic(
+                uuid::HEART_RATE_MEASUREMENT,
+                android::PROPERTY_READ | android::PROPERTY_NOTIFY,
+                android::PERMISSION_READ,
+            );
+            hr.set_value([0x00, 72]);
+            hrs.add_characteristic(hr);
+            server.add_service(hrs);
+        "#;
+        scene
+            .add_peripheral("AA:BB:CC:00:00:01".parse().unwrap(), script)
+            .unwrap();
+        let scanner = scene.add_scanner("AA:BB:CC:00:00:02".parse().unwrap());
+        assert_eq!(scene.device_count(), 2);
+
+        // A few ticks: bring-up, advertise, route.
+        for _ in 0..3 {
+            scene.tick(0.1);
+        }
+
+        let reports = scene.scanner_reports_json(scanner);
+        assert!(
+            reports.contains("SceneHRM"),
+            "scanner should have seen the peripheral by name; got {reports}"
+        );
+        // The peripheral's own GATT status is available for a server view.
+        assert!(
+            scene
+                .peripheral_status_json(0)
+                .unwrap()
+                .contains("SceneHRM")
+        );
+    }
+}
+
 #[cfg(target_arch = "wasm32")]
 mod web {
     //! The browser half: `web_sys::WebSocket` pumping and the wasm-bindgen
@@ -1128,6 +1314,62 @@ mod web {
                 reports.extend(parse_scan_reports(&packet));
             }
             serde_json::to_string(&reports).map_err(js_error)
+        }
+    }
+
+    /// The **in-page controller** backend: a whole scene of scripted devices
+    /// sharing one in-process [`Link`](crate::controller::sim::Link), with no
+    /// WebSocket and no netsim. Add peripherals and scanners, `tick()` on a
+    /// timer, and read each device's state — the browser pages use this when
+    /// the backend selector is set to "in-page". Wraps [`SceneEngine`].
+    #[wasm_bindgen]
+    pub struct WebLink {
+        scene: super::SceneEngine,
+    }
+
+    #[wasm_bindgen]
+    impl WebLink {
+        /// Creates an empty in-page scene.
+        #[wasm_bindgen(constructor)]
+        pub fn new() -> WebLink {
+            install_panic_hook();
+            Self {
+                scene: super::SceneEngine::new(),
+            }
+        }
+
+        /// Adds a scripted peripheral at `address` (e.g. `"AA:BB:CC:00:00:01"`);
+        /// returns its device index, or the script/address error.
+        pub fn add_peripheral(&mut self, address: &str, script: &str) -> Result<usize, JsValue> {
+            let address = address.parse().map_err(js_error)?;
+            self.scene.add_peripheral(address, script).map_err(js_error)
+        }
+
+        /// Adds a scanner at `address`; returns its device index.
+        pub fn add_scanner(&mut self, address: &str) -> Result<usize, JsValue> {
+            let address = address.parse().map_err(js_error)?;
+            Ok(self.scene.add_scanner(address))
+        }
+
+        /// The number of devices in the scene.
+        pub fn device_count(&self) -> usize {
+            self.scene.device_count()
+        }
+
+        /// Advances the whole scene one step at simulated time `t_seconds`.
+        pub fn tick(&mut self, t_seconds: f64) {
+            self.scene.tick(t_seconds);
+        }
+
+        /// The GATT status JSON of peripheral `index`, or `undefined` if that
+        /// device isn't a peripheral.
+        pub fn peripheral_status_json(&self, index: usize) -> Option<String> {
+            self.scene.peripheral_status_json(index)
+        }
+
+        /// New scan reports for scanner `index` as a JSON array (drained on read).
+        pub fn scanner_reports_json(&mut self, index: usize) -> String {
+            self.scene.scanner_reports_json(index)
         }
     }
 
