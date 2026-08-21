@@ -118,7 +118,6 @@
             <th>Fidelity</th>
             <th>Native</th>
             <th>Browser</th>
-            <th>Cross-process</th>
             <th>External process</th>
             <th>Choose when</th>
           </tr>
@@ -129,7 +128,6 @@
             <td>Minimal — no real PHY, timing, encryption, ISO, or ranging</td>
             <td><span class="yes">Yes</span></td>
             <td><span class="yes">Yes</span> (wasm)</td>
-            <td><span class="part">Same origin</span> — a SharedWorker shares one Link across tabs; nothing off-machine</td>
             <td><span class="no">None</span></td>
             <td>Tests, CI, quick single-page or multi-tab browser scenes</td>
           </tr>
@@ -138,7 +136,6 @@
             <td>High — full Link Layer/LMP, BR/EDR + LE + ISO, ext/periodic adv, encryption</td>
             <td><span class="yes">Yes</span></td>
             <td><span class="yes">Yes</span> (via WebSocket)</td>
-            <td><span class="yes">Yes</span></td>
             <td><span class="part">Binary</span> (rootcanal-ws)</td>
             <td>Full controller behavior; no spatial/ranging modeling</td>
           </tr>
@@ -147,7 +144,6 @@
             <td>Highest <em>simulated</em> — Rootcanal + 3D position/ranging + multi-radio (BLE/Wi-Fi/UWB)</td>
             <td><span class="yes">Yes</span></td>
             <td><span class="yes">Yes</span> (via WebSocket)</td>
-            <td><span class="yes">Yes</span></td>
             <td><span class="part">Daemon</span> + emulator</td>
             <td>Movement, distance/ranging (Channel Sounding), or a real Android app in the emulator</td>
           </tr>
@@ -156,7 +152,6 @@
             <td><strong>Real</strong> — an actual Bluetooth controller and radio; no model at all</td>
             <td><span class="yes">Yes</span></td>
             <td><span class="no">No</span></td>
-            <td><span class="yes">Yes</span> (real RF)</td>
             <td><span class="part">Hardware</span> — a physical dongle</td>
             <td>Final interop against real phones/laptops over the air</td>
           </tr>
