@@ -436,6 +436,7 @@ function loop() {
 // --- boot ------------------------------------------------------------------
 await init();
 renderMethods();
+refreshObjrefs(); // render placeholders in the (empty) objref/receiver selects on load
 
 $("copy-script").addEventListener("click", async () => {
   const header = "// Assembled in the SimBLE API Explorer — paste into the Playground.\n";
