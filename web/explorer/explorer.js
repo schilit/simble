@@ -339,14 +339,21 @@ function wireMethod(m, el) {
   refresh();
 }
 
-// Repopulate every objref/receiver <select> from the registry.
+// Repopulate every objref/receiver <select> from the registry. When no object
+// of that type exists yet, show a visible placeholder (an empty <select> looks
+// like a missing control) that names what to create first.
 function refreshObjrefs() {
   for (const sel of $("methods").querySelectorAll('[data-role=objref], [data-role=receiver]')) {
     const type = sel.dataset.objtype;
     const prev = sel.value;
-    sel.innerHTML = registry[type].map((n) => `<option>${n}</option>`).join("");
-    if (registry[type].includes(prev)) sel.value = prev;
-    else if (registry[type].length) sel.value = registry[type][registry[type].length - 1];
+    if (registry[type].length) {
+      sel.innerHTML = registry[type].map((n) => `<option>${n}</option>`).join("");
+      sel.value = registry[type].includes(prev) ? prev : registry[type][registry[type].length - 1];
+      sel.disabled = false;
+    } else {
+      sel.innerHTML = `<option value="" disabled selected>— create a ${type} first —</option>`;
+      sel.disabled = true;
+    }
   }
   for (const el of $("methods").querySelectorAll(".method")) el._refresh && el._refresh();
 }
