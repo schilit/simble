@@ -4,7 +4,7 @@
 // the right panel renders what the client discovered — the nRF-Connect flow.
 
 import init, { WebLink } from "../pkg/simble.js";
-import { renderGatt, nameFor, propChips, escapeHtml } from "../common/viewer.js";
+import { renderGatt, nameFor, propChips, escapeHtml, decodeValue } from "../common/viewer.js";
 
 const $ = (id) => document.getElementById(id);
 const SERVER_ADDR = "AA:BB:CC:00:00:01";
@@ -86,8 +86,22 @@ function renderClient(status) {
         ? `<span class="chr-name">${escapeHtml(cName)}</span><span class="chr-uuid">0x${c.uuid}</span>`
         : `<span class="chr-name chr-uuid">0x${c.uuid}</span>`;
       const handle = "0x" + c.value_handle.toString(16).padStart(4, "0");
-      return `<div class="chr"><div class="chr-top">${nameHtml} ${propChips(c.properties, false)}
-        <span class="chr-h">handle ${handle}</span></div></div>`;
+      const p = c.properties;
+      const decoded = c.value ? decodeValue(c.uuid, c.value) : null;
+      const valHtml = c.value
+        ? `${decoded ? `<span class="decoded">${escapeHtml(decoded)}</span>` : ""}<span class="raw">${c.value}</span>`
+        : `<span class="raw">— not read —</span>`;
+      const actions = [];
+      if (p & 0x02) actions.push(`<button data-op="read" data-h="${c.value_handle}">read ↓</button>`);
+      if (p & 0x0c) actions.push(`<button data-op="write" data-h="${c.value_handle}">write ↑</button>`);
+      if (p & 0x30) actions.push(
+        `<button data-op="sub" data-h="${c.value_handle}" class="${c.subscribed ? "on" : ""}">${c.subscribed ? "🔔 subscribed" : "subscribe 🔔"}</button>`);
+      return `<div class="chr">
+        <div class="chr-top">${nameHtml} ${propChips(p, c.subscribed)}
+          <span class="chr-h">handle ${handle}</span></div>
+        <div class="chr-val">${valHtml}</div>
+        ${actions.length ? `<div class="chr-actions">${actions.join(" ")}</div>` : ""}
+      </div>`;
     }).join("");
     return `<div class="svc"><div class="svc-head">${head}</div>${chrs}</div>`;
   }).join("");
@@ -110,6 +124,23 @@ function loop() {
 await init();
 const editor = $("script");
 editor.value = DEFAULT_SCRIPT;
+
+// Client read / write / subscribe controls (delegated; the tree re-renders).
+$("client-gatt").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-op]");
+  if (!btn || !link) return;
+  const handle = parseInt(btn.dataset.h, 10);
+  if (btn.dataset.op === "read") {
+    link.central_read(clientIndex, handle);
+  } else if (btn.dataset.op === "sub") {
+    link.central_subscribe(clientIndex, handle);
+  } else if (btn.dataset.op === "write") {
+    const input = prompt("Bytes to write (hex, space-separated, e.g. 00 5A):", "00");
+    if (input == null) return;
+    const bytes = input.trim().split(/\s+/).map((x) => parseInt(x, 16)).filter((n) => !Number.isNaN(n));
+    link.central_write(clientIndex, handle, new Uint8Array(bytes));
+  }
+});
 $("run").addEventListener("click", () => {
   try {
     build(editor.value);

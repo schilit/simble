@@ -46,6 +46,17 @@
   .prop { display: inline-block; border: 1px solid var(--border); border-radius: 4px; padding: 0 0.3rem;
     font-size: 0.66rem; color: var(--dim); font-family: ui-monospace, Menlo, monospace; }
   .prop.n, .prop.i { color: var(--good); border-color: var(--good); }
+  .chr-val { margin-top: 0.2rem; font-size: 0.85rem; }
+  .chr-val .decoded { font-weight: 600; }
+  .chr-val .raw { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
+    font-size: 0.76rem; margin-left: 0.4rem; }
+  .chr-actions { margin-top: 0.35rem; display: flex; gap: 0.35rem; flex-wrap: wrap; }
+  .chr-actions button {
+    background: #21262d; color: var(--text); border: 1px solid var(--border); border-radius: 5px;
+    padding: 0.12rem 0.5rem; font-size: 0.74rem; cursor: pointer;
+  }
+  .chr-actions button:hover { border-color: var(--accent); }
+  .chr-actions button.on { color: var(--good); border-color: var(--good); }
   .empty { color: var(--dim); font-size: 0.85rem; }
   footer { color: var(--dim); font-size: 0.78rem; padding: 1.25rem 1.25rem 0; max-width: 78rem; margin: 0 auto; }
 </style>
