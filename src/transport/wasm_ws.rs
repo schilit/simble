@@ -990,6 +990,26 @@ fn find_cccd_after(db: &crate::gatt::GattDatabase, value_handle: u16) -> Option<
         .map(|(&handle, _)| handle)
 }
 
+/// Runs a Rhai *test* script — one that builds devices and calls `assert(...)`
+/// — in a fresh engine, returning `Ok(())` if every assertion passed or the
+/// error message (a failed assert, or a compile/runtime error) otherwise.
+///
+/// Unlike [`ScriptedPeripheral::run_script`] this does not require the script to
+/// build a server: a pure-assertion test is valid. The same script is a device,
+/// a test, and a CI fixture — this is the runner for the "test" role.
+pub fn run_test_script(script: &str) -> Result<(), String> {
+    let mut engine = new_engine();
+    register_web_extensions(&mut engine);
+    let ast = engine
+        .compile(script)
+        .map_err(|e| format!("compile error: {e}"))?;
+    let mut scope = Scope::new();
+    engine
+        .run_ast_with_scope(&mut scope, &ast)
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// The central's connect → discover progression.
 #[derive(Clone, Copy, PartialEq)]
 enum CentralPhase {
@@ -1613,6 +1633,25 @@ mod scene_tests {
             "should discover HR Measurement char; got {json}"
         );
     }
+
+    #[test]
+    fn test_run_test_script_pass_fail_and_compile_error() {
+        // A passing assertion.
+        assert!(
+            run_test_script(
+                "let s = android::BluetoothGattServer(\"t\"); assert(s.name == \"t\", \"name\");"
+            )
+            .is_ok()
+        );
+        // A failing assertion surfaces its message.
+        let err = run_test_script("assert(1 == 2, \"one is not two\");").unwrap_err();
+        assert!(
+            err.contains("one is not two") || err.to_lowercase().contains("assert"),
+            "got {err}"
+        );
+        // A compile error is reported as such.
+        assert!(run_test_script("@@ not rhai @@").is_err());
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -2086,10 +2125,26 @@ mod web {
     pub fn default_heart_rate_script() -> String {
         DEFAULT_HEART_RATE_SCRIPT.to_string()
     }
+
+    /// Runs a Rhai test script (device-building + `assert(...)`) and returns
+    /// `{"ok":true}` if every assertion passed, or `{"ok":false,"error":"…"}`
+    /// with the failure message.
+    #[wasm_bindgen]
+    pub fn run_test(script: &str) -> String {
+        match super::run_test_script(script) {
+            Ok(()) => "{\"ok\":true,\"error\":\"\"}".to_string(),
+            Err(e) => {
+                let msg = serde_json::to_string(&e).unwrap_or_else(|_| "\"error\"".to_string());
+                format!("{{\"ok\":false,\"error\":{msg}}}")
+            }
+        }
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use web::{WebAdvertiser, WebPeripheral, WebScanner, WebSession, default_heart_rate_script};
+pub use web::{
+    WebAdvertiser, WebPeripheral, WebScanner, WebSession, default_heart_rate_script, run_test,
+};
 
 #[cfg(test)]
 mod tests {
