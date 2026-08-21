@@ -101,6 +101,13 @@
   <!-- Comparison -->
   <section class="tier">
     <h2>At a glance</h2>
+    <p style="color:var(--dim);font-size:0.88rem;margin:0 0 0.7rem;max-width:56rem">
+      SimBLE compiles both <strong>natively</strong> (the Rust crate — tests, CLIs, real hardware) and to
+      <strong>WebAssembly</strong> (these demo pages). The <em>Native</em> and <em>Browser</em> columns say
+      whether each rung is reachable from each: a browser page runs <code class="inl">sim::Link</code>
+      in-process and reaches <code class="inl">rootcanal-ws</code> / <code class="inl">netsim</code> over
+      WebSocket, but can't drive a USB dongle.
+    </p>
     <div class="tablewrap">
       <table class="cmp">
         <thead>

@@ -40,6 +40,19 @@
     margin: 1.6rem 0 0.5rem; }
   .aside { color: var(--dim); font-size: 0.88rem; line-height: 1.6; }
   .aside code { color: var(--good); }
+  .lead { margin: 1.6rem 0 0.6rem; font-size: 0.92rem; }
+  .lead strong { color: var(--text); }
+  .worlds { display: grid; grid-template-columns: 1fr 1fr; gap: 0.7rem; }
+  @media (max-width: 42rem) { .worlds { grid-template-columns: 1fr; } }
+  .world { border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem 0.85rem; background: var(--panel); }
+  .world .wlabel { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim); margin: 0 0 0.4rem; }
+  .world p { margin: 0 0 0.5rem; font-size: 0.85rem; }
+  .world p:last-child { margin-bottom: 0; }
+  .world pre { margin: 0; background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.45rem 0.6rem; overflow-x: auto; font-size: 0.78rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .world pre code { color: var(--good); }
+  .world .runs-ci { color: var(--good); font-weight: 600; }
   footer { color: var(--dim); font-size: 0.78rem; padding: 1.4rem 1.25rem 0; max-width: 60rem; margin: 0 auto; }
 </style>
 </head>
@@ -69,10 +82,9 @@
 </header>
 
 <main>
-  <p class="intro">A SimBLE device is a Rhai script; add <code>assert(...)</code> and the same script becomes a
-    <strong>test</strong>. It runs <strong>deterministically</strong> — no radio, no timing flakiness — so a
-    failure is reproducible and the AI generate-check-fix loop actually converges. And the validated script is the
-    artifact: it ships into netsim as a CI fixture <em>unchanged</em>. Edit below and press <strong>Run test</strong>.</p>
+  <p class="intro">A SimBLE device is a Rhai script; add <code>assert(...)</code> and the same script is a
+    <strong>test</strong>. It runs <strong>deterministically</strong> — no radio, no timing — so a failure is
+    reproducible and the AI generate-check-fix loop converges. Edit below and press <strong>Run test</strong>.</p>
 
   <div class="toolbar">
     <button id="run" class="primary">▶ Run test</button>
@@ -93,10 +105,28 @@
     <div id="result-msg" class="msg"></div>
   </div>
 
+  <h2 class="sub">One stack, two ways to run it</h2>
+  <p class="lead">SimBLE is a <strong>Rust crate</strong> that also compiles to <strong>WebAssembly</strong>.
+    This page is the wasm build — but <strong>you don't run CI on a web page</strong>. The identical script
+    runs natively, where your tests actually live. Same engine, same result.</p>
+  <div class="worlds">
+    <div class="world">
+      <p class="wlabel">In the browser · this page</p>
+      <p>The wasm build. Author a script, tweak it, and see pass/fail instantly — nothing to install.
+        Good for exploring and for the AI loop.</p>
+    </div>
+    <div class="world">
+      <p class="wlabel">Natively · <span class="runs-ci">where CI runs</span></p>
+      <p>The same <code>.rhai</code> file through the native <code>simble-test</code> CLI (exit 0 pass / 1 fail),
+        or a Rust <code>#[test]</code>. No browser, no netsim.</p>
+      <pre><code>simble-test device.rhai   # exit 0 / 1</code></pre>
+    </div>
+  </div>
+
   <h2 class="sub">Why this matters</h2>
   <p class="aside">Every assertion runs at <strong>build time</strong> in a fresh engine, against SimBLE's real
     GATT stack — so it checks the device your app will actually meet, not a mock. Because the run is deterministic,
-    the exact same script an LLM writes, that you check here, and that CI runs against netsim are one file — no
+    the exact same script an LLM writes, that you check here, and that CI runs natively are one file — no
     hand-translation between "the test" and "the fixture". Behavioural tests (connect, subscribe, assert a
     notification over time) build on the same primitive with <code>wait_for</code> and the scene APIs.</p>
 </main>
