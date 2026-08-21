@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimBLE Scene creator</title>
+<link rel="stylesheet" href="../common/simble.css">
+<link rel="stylesheet" href="../common/nav.css">
+<style>
+  main { max-width: 82rem; margin: 0 auto; padding: 1rem 1.25rem 2rem; }
+  .intro { color: var(--dim); font-size: 0.9rem; margin: 0 0 1rem; max-width: 62rem; }
+
+  .two { display: grid; grid-template-columns: 22rem 1fr; gap: 1.1rem; align-items: start; }
+  @media (max-width: 60rem) { .two { grid-template-columns: 1fr; } }
+
+  /* Scene panel (left) */
+  .scene-head { display: flex; align-items: baseline; justify-content: space-between; }
+  .scene-head h2 { margin: 0; }
+  .scene-head .count { color: var(--dim); font-size: 0.78rem; }
+  .add-bar { display: flex; gap: 0.4rem; flex-wrap: wrap; margin: 0.7rem 0 0.9rem; }
+  .dev-list { list-style: none; margin: 0; padding: 0; }
+  .dev-item {
+    display: flex; align-items: center; gap: 0.55rem; padding: 0.5rem 0.6rem;
+    border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.5rem;
+    cursor: pointer; background: var(--bg);
+  }
+  .dev-item:hover { border-color: var(--dim); }
+  .dev-item.open { border-color: var(--accent); background: #1c2230; }
+  .dev-item .role-dot { font-size: 0.8rem; line-height: 1; }
+  .dev-item.peripheral .role-dot { color: var(--good); }
+  .dev-item.scanner .role-dot { color: var(--warn); }
+  .dev-item.central .role-dot { color: var(--accent); }
+  .dev-item .meta { flex: 1; min-width: 0; }
+  .dev-item .role { font-weight: 600; font-size: 0.85rem; }
+  .dev-item .role small { color: var(--dim); font-weight: 400; margin-left: 0.35rem; }
+  .dev-item .addr { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
+    font-size: 0.74rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dev-item .rm {
+    background: transparent; border: 1px solid var(--border); color: var(--dim);
+    border-radius: 6px; padding: 0.05rem 0.45rem; font-size: 0.9rem; line-height: 1.2;
+  }
+  .dev-item .rm:hover { border-color: var(--bad); color: var(--bad); }
+  .empty { color: var(--dim); font-size: 0.85rem; }
+
+  /* Inspect panel (right) */
+  #inspect { min-height: 20rem; }
+  #inspect .insp-head {
+    display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+    border-bottom: 1px solid var(--border); padding-bottom: 0.7rem; margin-bottom: 0.9rem;
+  }
+  #inspect .insp-head .role { font-weight: 700; }
+  #inspect .insp-head .kind { color: var(--dim); font-size: 0.8rem; }
+  #inspect .insp-head .addr { margin-left: auto; font-family: ui-monospace, Menlo, monospace;
+    color: var(--dim); font-size: 0.78rem; }
+  .peripheral-role { color: var(--good); }
+  .scanner-role { color: var(--warn); }
+  .central-role { color: var(--accent); }
+  h3.sub { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--dim); margin: 1rem 0 0.5rem; }
+  textarea.code { width: 100%; height: 15rem; }
+  .phase { font-size: 0.82rem; color: var(--dim); margin-bottom: 0.3rem; }
+  .phase b { color: var(--accent); }
+  .chr-h { color: var(--dim); font-size: 0.72rem; margin-left: auto;
+    font-family: ui-monospace, Menlo, monospace; }
+
+  /* Scanner report rows (inspect view) */
+  .rpt { border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.7rem;
+    margin-bottom: 0.5rem; display: grid; grid-template-columns: 1fr auto; gap: 0.15rem 1rem; }
+  .rpt.stale { opacity: 0.4; }
+  .rpt .name { font-weight: 600; font-size: 0.9rem; }
+  .rpt .name .anon { color: var(--dim); font-weight: 400; font-style: italic; }
+  .rpt .addr { font-family: ui-monospace, Menlo, monospace; color: var(--dim); font-size: 0.76rem; }
+  .rpt .db { text-align: right; font-family: ui-monospace, Menlo, monospace; color: var(--dim); font-size: 0.78rem; }
+  .rpt .chips { grid-column: 1 / -1; }
+  .rpt .chip { display: inline-block; border: 1px solid var(--border); border-radius: 1rem;
+    padding: 0 0.5rem; margin: 0.2rem 0.3rem 0 0; font-size: 0.7rem; color: var(--accent); }
+
+  footer { max-width: 82rem; }
+</style>
+</head>
+<body>
+<nav class="sitenav">
+  <a class="brand" href="../">Sim<b>BLE</b></a>
+  <div class="tabs">
+    <a href="../playground/">Playground</a>
+    <a href="../explorer/">API Explorer</a>
+    <a href="../scanner/">Scanner</a>
+    <a href="../hrm/">Scripted device</a>
+    <a href="../lightbulb/">Color Bulb</a>
+    <a href="../dual/">Server + Client</a>
+    <a href="../scene/" aria-current="page">Scene</a>
+  </div>
+  <span class="spacer"></span>
+  <a class="ext" href="../doc/">Docs</a>
+  <a class="ext" href="https://github.com/schilit/simble">GitHub ↗</a>
+</nav>
+<header style="border-bottom:none;padding-top:0.9rem">
+  <h1>Scene creator</h1>
+  <span class="sub">Assemble a whole BLE scene on one in-page Link and inspect every device</span>
+  <span id="conn" class="pill" style="margin-left:auto">starting…</span>
+</header>
+
+<main>
+  <p class="intro">Build a Bluetooth scene device by device — scripted <strong class="peripheral-role">servers</strong>
+    (peripherals), passive <strong class="scanner-role">scanners</strong>, and <strong class="central-role">clients</strong>
+    (centrals) that connect to a server and discover its GATT. Everything runs on a single in-page
+    <a href="../controllers/">controller</a> in this tab — no netsim. Click any device on the left to inspect it.</p>
+
+  <div class="two">
+    <section class="panel">
+      <div class="scene-head">
+        <h2>Scene</h2>
+        <span class="count" id="scene-count"></span>
+      </div>
+      <div class="add-bar">
+        <button id="add-server">+ Server</button>
+        <button id="add-scanner">+ Scanner</button>
+        <button id="add-client">+ Client</button>
+      </div>
+      <ul class="dev-list" id="dev-list"></ul>
+      <p class="empty" id="scene-empty">No devices yet — add a server to get started.</p>
+    </section>
+
+    <section class="panel" id="inspect">
+      <p class="empty">Select a device on the left to inspect it.</p>
+    </section>
+  </div>
+</main>
+
+<footer>
+  The whole scene is hosted by one wasm <code>Link</code> in this tab. Adding or removing a device rebuilds
+  the Link from an array of device specs — SimBLE's real GATT server, scanner, and central roles talking over
+  the shared in-process medium. Peripherals advertise; centrals connect, exchange MTU and discover; scanners
+  decode the advertisements — all the real Rust stack compiled to WebAssembly.
+</footer>
+
+<script type="module" src="./scene.js"></script>
+</body>
+</html>
