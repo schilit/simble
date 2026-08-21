@@ -9,10 +9,12 @@
 // connected central is notified. The script is the device; the page supplies
 // the "write" a phone app would send (central-role scripting doesn't exist yet).
 
-import init, { WebPeripheral } from "../pkg/simble.js";
+import init, { WebPeripheral, WebLink } from "../pkg/simble.js";
 import { renderGatt } from "../common/viewer.js";
 import { attachHighlightedEditor } from "../common/highlight.js";
+import { createBackendSelector } from "../common/backend.js";
 
+const IN_PAGE_ADDR = "CC:1E:57:00:00:05";
 const WS_URL =
   "ws://localhost:7681/v1/websocket/bt?name=web-lightbulb&address=CC:1E:57:00:00:05";
 
@@ -57,7 +59,10 @@ const connPill = $("conn");
 const setupPanel = $("setup");
 const picker = $("picker");
 
-let peripheral = null;
+let mode = "in-page"; // "in-page" (a wasm WebLink in this tab) | "websocket" (netsim)
+let peripheral = null; // WebPeripheral, WebSocket backend only
+let link = null; // WebLink, in-page backend only
+let linkIndex = -1; // peripheral index within the in-page link
 let runStart = performance.now();
 let lastConnectAttempt = 0;
 let openedOnce = false;
@@ -75,10 +80,39 @@ function createPeripheral(script) {
   runStart = performance.now();
 }
 
+// In-page backend: host the bulb on a wasm WebLink in this tab — no netsim. A
+// WebLink has no "remove peripheral" and no live set_value, so both re-running
+// and picking a color rebuild the whole link from a fresh script; the new link
+// only replaces the old one once the script parses.
+function buildInPage(script) {
+  const next = new WebLink();
+  let idx;
+  try { idx = next.add_peripheral(IN_PAGE_ADDR, script); }
+  catch (e) { try { next.free(); } catch (_) { /* gone */ } throw e; }
+  if (link) { try { link.free(); } catch (_) { /* gone */ } }
+  link = next;
+  linkIndex = idx;
+  runStart = performance.now();
+}
+
+// Rewrite the color characteristic's initial value in `script` — the in-page
+// equivalent of a set_value write (WebLink peripherals expose no set_value).
+function scriptWithColor(script, r, g, b) {
+  const hx = (n) => clamp(n).toString(16).toUpperCase().padStart(2, "0");
+  const triple = `[0x${hx(r)}, 0x${hx(g)}, 0x${hx(b)}]`;
+  return script.replace(/set_value\(\s*\[[^\]]*\]\s*\)/, `set_value(${triple})`);
+}
+
+function teardownDevices() {
+  if (peripheral) { try { peripheral.free(); } catch (_) { /* gone */ } peripheral = null; }
+  if (link) { try { link.free(); } catch (_) { /* gone */ } link = null; linkIndex = -1; }
+}
+
 function run() {
   showScriptError(null);
   try {
-    if (peripheral) { peripheral.run_script(editor.value); runStart = performance.now(); }
+    if (mode === "in-page") buildInPage(editor.value);
+    else if (peripheral) { peripheral.run_script(editor.value); runStart = performance.now(); }
     else createPeripheral(editor.value);
     prevValues.clear();
     $("run-state").textContent = "device rebuilt from script";
@@ -103,8 +137,15 @@ function applyBulb(r, g, b) {
   $("rgb").textContent = `RGB ${r},${g},${b}`;
 }
 
-// Writes the picked color into the device's live GATT database (host glue).
+// Writes the picked color into the device (host glue). WebSocket peripherals
+// take a live set_value; in-page ones have none, so we rebuild the WebLink from
+// a script carrying the new color — the resulting GATT value reflects the pick.
 function writeColor(r, g, b) {
+  if (mode === "in-page") {
+    try { buildInPage(scriptWithColor(editor.value, r, g, b)); }
+    catch (e) { showScriptError(e); }
+    return;
+  }
   if (!peripheral) return;
   try {
     peripheral.set_value(COLOR_CHAR, new Uint8Array([clamp(r), clamp(g), clamp(b)]));
@@ -139,6 +180,21 @@ function render(status) {
 }
 
 function loop() {
+  if (mode === "in-page") {
+    if (!link || linkIndex < 0) {
+      try { buildInPage(editor.value); } catch (e) { showScriptError(e); }
+      return;
+    }
+    try {
+      link.tick((performance.now() - runStart) / 1000);
+      const json = link.peripheral_status_json(linkIndex);
+      if (json) {
+        setPill("in-page · advertising", "ok");
+        render(JSON.parse(json));
+      }
+    } catch (e) { showScriptError(e); }
+    return;
+  }
   if (!peripheral) {
     const now = performance.now();
     if (now - lastConnectAttempt > 3000) {
@@ -201,5 +257,36 @@ $("run").addEventListener("click", run);
 const initial = hexToRgb(picker.value);
 if (initial) applyBulb(...initial);
 
-try { createPeripheral(editor.value); } catch (e) { showScriptError(e); }
+// Controller backend: "in-page" (a wasm WebLink in this tab, no netsim) or
+// "websocket" (a real netsim scene). In-page drives the bulb's color by
+// rebuilding the device on each pick; WebSocket writes it live via set_value.
+function setModeHint() {
+  $("mode-hint").textContent = mode === "in-page"
+    ? "In-page controller — no netsim. Color picks rebuild the local WebLink device " +
+      "(its peripherals have no live set_value); switch to WebSocket to write a live " +
+      "central and notify subscribers."
+    : "";
+}
+function switchBackend() {
+  teardownDevices();
+  openedOnce = false;
+  setupPanel.classList.remove("visible");
+  setModeHint();
+  if (mode === "in-page") {
+    try { buildInPage(editor.value); } catch (e) { showScriptError(e); }
+  } else {
+    setPill("starting…", "");
+    try { createPeripheral(editor.value); } catch (e) { showScriptError(e); }
+  }
+}
+mode = createBackendSelector($("backend"), {
+  onChange: (m) => { mode = m; switchBackend(); },
+});
+setModeHint();
+
+if (mode === "in-page") {
+  try { buildInPage(editor.value); } catch (e) { showScriptError(e); }
+} else {
+  try { createPeripheral(editor.value); } catch (e) { showScriptError(e); }
+}
 setInterval(loop, 100);

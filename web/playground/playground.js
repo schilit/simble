@@ -5,12 +5,14 @@
 // scripted-device page, adds URL-sharing (deflate + base64url), an Examples
 // menu of starter scripts, and the shared AI authoring aid.
 
-import init, { WebPeripheral, default_heart_rate_script } from "../pkg/simble.js";
+import init, { WebPeripheral, WebLink, default_heart_rate_script } from "../pkg/simble.js";
 import { renderGatt } from "../common/viewer.js";
 import { wireAi } from "../common/ai.js";
 import { encodeScript, decodeScript } from "../common/share.js";
 import { attachHighlightedEditor } from "../common/highlight.js";
+import { createBackendSelector } from "../common/backend.js";
 
+const IN_PAGE_ADDR = "CC:1E:57:00:00:03";
 const WS_URL =
   "ws://localhost:7681/v1/websocket/bt?name=web-playground&address=CC:1E:57:00:00:03";
 
@@ -143,7 +145,10 @@ const setupPanel = $("setup");
 const runBtn = $("run");
 const stopBtn = $("stop");
 
-let peripheral = null;
+let mode = "in-page"; // "in-page" (a wasm WebLink in this tab) | "websocket" (netsim)
+let peripheral = null; // WebPeripheral, WebSocket backend only
+let link = null; // WebLink, in-page backend only
+let linkIndex = -1; // peripheral index within the in-page link
 let runStart = performance.now();
 let lastConnectAttempt = 0;
 let openedOnce = false;
@@ -178,11 +183,34 @@ function createPeripheral(script) {
   runStart = performance.now();
 }
 
+// In-page backend: host the device on a wasm WebLink in this tab — no netsim.
+// A WebLink has no "remove peripheral", so re-running rebuilds the whole link;
+// the fresh link only replaces the old one once the new script parses, so a
+// script error leaves the previous in-page device running (as WebSocket does).
+function buildInPage(script) {
+  const next = new WebLink();
+  let idx;
+  try { idx = next.add_peripheral(IN_PAGE_ADDR, script); } // throws on script errors
+  catch (e) { try { next.free(); } catch (_) { /* gone */ } throw e; }
+  if (link) { try { link.free(); } catch (_) { /* gone */ } }
+  link = next;
+  linkIndex = idx;
+  runStart = performance.now();
+}
+
+// Tear down whichever backend is live.
+function teardownDevices() {
+  if (peripheral) { try { peripheral.free(); } catch (_) { /* gone */ } peripheral = null; }
+  if (link) { try { link.free(); } catch (_) { /* gone */ } link = null; linkIndex = -1; }
+}
+
 function run() {
   showScriptError(null);
   stopped = false;
   try {
-    if (peripheral) {
+    if (mode === "in-page") {
+      buildInPage(editor.value);
+    } else if (peripheral) {
       peripheral.run_script(editor.value); // same socket, new device
       runStart = performance.now();
     } else {
@@ -194,17 +222,15 @@ function run() {
   } catch (e) {
     showScriptError(e); // the previous device keeps running
     log("Script error — see below. The previous device (if any) keeps running.");
-    if (!peripheral) { stopped = true; setRunning(false); } // nothing running to stop
+    const running = mode === "in-page" ? !!link : !!peripheral;
+    if (!running) { stopped = true; setRunning(false); } // nothing running to stop
   }
 }
 
 // Tear the device down and hold it stopped until Run is pressed again.
 function stop() {
   stopped = true;
-  if (peripheral) {
-    try { peripheral.free(); } catch (_) { /* already gone */ }
-    peripheral = null;
-  }
+  teardownDevices();
   prevValues.clear();
   renderGatt($("gatt"), { services: [] }, prevValues);
   $("dev-name").textContent = "—";
@@ -235,6 +261,21 @@ function render(status) {
 
 function loop() {
   if (stopped) return; // Stop pressed (or not started): stay torn down until Run
+  if (mode === "in-page") {
+    if (!link || linkIndex < 0) return; // built only on Run
+    try {
+      link.tick((performance.now() - runStart) / 1000);
+      const json = link.peripheral_status_json(linkIndex);
+      if (json) {
+        const status = JSON.parse(json);
+        setPill("in-page · advertising", "ok");
+        render(status);
+      }
+    } catch (e) {
+      showScriptError(e);
+    }
+    return;
+  }
   if (!peripheral) {
     const now = performance.now();
     if (now - lastConnectAttempt > 3000) {
@@ -325,6 +366,16 @@ $("reset").addEventListener("click", () => {
 });
 wireExamples();
 wireAi();
+
+// Controller backend: "in-page" (a wasm WebLink in this tab, no netsim) or
+// "websocket" (a real netsim scene). Switching resets to the stopped state.
+mode = createBackendSelector($("backend"), {
+  onChange: (m) => {
+    mode = m;
+    openedOnce = false;
+    stop(); // tears down both backends, hides the setup panel, holds stopped
+  },
+});
 
 // Start stopped: the editor holds the script, the device runs only on Run.
 setRunning(false);
