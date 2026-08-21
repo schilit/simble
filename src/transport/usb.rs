@@ -296,7 +296,7 @@ pub struct UsbTransport {
 
 impl UsbTransport {
     /// Opens the first USB device whose descriptors identify it as a
-    /// Bluetooth HCI controller (see [`is_bluetooth_hci`]).
+    /// Bluetooth HCI controller (Wireless Controller / RF / Bluetooth class).
     pub fn open_first() -> Result<Self, SimbleError> {
         let info = list_usb_devices()?
             .into_iter()

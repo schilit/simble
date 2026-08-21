@@ -1,5 +1,9 @@
 /target
 Cargo.lock
+
+# Generated in CI for the Pages deploy, never committed.
+/web/pkg/
+/web/doc/
 **/*.rs.bk
 .DS_Store
 *.swp

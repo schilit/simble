@@ -45,6 +45,21 @@ jobs:
           wasm-bindgen --target web --no-typescript --out-dir web/pkg
           target/wasm32-unknown-unknown/release/simble.wasm
 
+      # Crate API documentation, served alongside the demos at /doc/simble/.
+      # Warnings are denied so a broken intra-doc link fails the deploy rather
+      # than shipping a docs site with dead links.
+      - name: Build the crate docs
+        run: cargo doc --no-deps --lib
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+      - name: Fold the docs into the site
+        run: |
+          cp -r target/doc web/doc
+          # Redirect /doc/ to the crate's own index so the link needn't
+          # hardcode the crate name.
+          printf '<!doctype html><meta http-equiv="refresh" content="0; url=./simble/">\n' > web/doc/index.html
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web

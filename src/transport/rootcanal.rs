@@ -9,7 +9,8 @@
 //! carrying H4-framed HCI packets in both directions, no additional envelope.
 //! [`H4FrameReader`] turns that raw byte stream into complete H4 packets;
 //! [`RootcanalTransport`] owns the stream and a reader, and [`pump`] moves
-//! packets between the stream and an [`HciChannel`] so the rest of Simble
+//! packets between the stream and an [`HciChannel`](crate::transport::HciChannel)
+//! so the rest of Simble
 //! never has to know whether it's talking to the in-memory bridge or a real
 //! Rootcanal process.
 //!
