@@ -47,6 +47,11 @@
 }
 .sitenav .ext:hover { color: var(--accent, #58a6ff); }
 
+/* Body links use the accent in both states — never the browser's default
+   visited-purple, which is unreadable on the dark ground. Page-specific and
+   nav links (higher specificity) still win. */
+a:link, a:visited { color: var(--accent, #58a6ff); }
+
 @media (max-width: 40rem) {
   .sitenav { gap: 0.1rem 0.2rem; padding: 0.4rem 0.6rem; }
   .sitenav .tabs a { padding: 0.3rem 0.45rem; }

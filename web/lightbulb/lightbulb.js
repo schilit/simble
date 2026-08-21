@@ -80,10 +80,10 @@ function createPeripheral(script) {
   runStart = performance.now();
 }
 
-// In-page backend: host the bulb on a wasm WebLink in this tab — no netsim. A
-// WebLink has no "remove peripheral" and no live set_value, so both re-running
-// and picking a color rebuild the whole link from a fresh script; the new link
-// only replaces the old one once the script parses.
+// In-page backend: host the bulb on a wasm WebLink in this tab — no netsim.
+// A WebLink has no "remove peripheral", so re-running rebuilds the whole link
+// from a fresh script; the new link only replaces the old once the script
+// parses. Color picks write live via peripheral_set_value (see writeColor).
 function buildInPage(script) {
   const next = new WebLink();
   let idx;
@@ -93,14 +93,6 @@ function buildInPage(script) {
   link = next;
   linkIndex = idx;
   runStart = performance.now();
-}
-
-// Rewrite the color characteristic's initial value in `script` — the in-page
-// equivalent of a set_value write (WebLink peripherals expose no set_value).
-function scriptWithColor(script, r, g, b) {
-  const hx = (n) => clamp(n).toString(16).toUpperCase().padStart(2, "0");
-  const triple = `[0x${hx(r)}, 0x${hx(g)}, 0x${hx(b)}]`;
-  return script.replace(/set_value\(\s*\[[^\]]*\]\s*\)/, `set_value(${triple})`);
 }
 
 function teardownDevices() {
@@ -137,18 +129,17 @@ function applyBulb(r, g, b) {
   $("rgb").textContent = `RGB ${r},${g},${b}`;
 }
 
-// Writes the picked color into the device (host glue). WebSocket peripherals
-// take a live set_value; in-page ones have none, so we rebuild the WebLink from
-// a script carrying the new color — the resulting GATT value reflects the pick.
+// Writes the picked color into the device's live GATT database (host glue), and
+// a subscribed central is notified. Both backends now write live: WebSocket via
+// WebPeripheral.set_value, in-page via WebLink.peripheral_set_value.
 function writeColor(r, g, b) {
-  if (mode === "in-page") {
-    try { buildInPage(scriptWithColor(editor.value, r, g, b)); }
-    catch (e) { showScriptError(e); }
-    return;
-  }
-  if (!peripheral) return;
+  const bytes = new Uint8Array([clamp(r), clamp(g), clamp(b)]);
   try {
-    peripheral.set_value(COLOR_CHAR, new Uint8Array([clamp(r), clamp(g), clamp(b)]));
+    if (mode === "in-page") {
+      if (link && linkIndex >= 0) link.peripheral_set_value(linkIndex, COLOR_CHAR, bytes);
+    } else if (peripheral) {
+      peripheral.set_value(COLOR_CHAR, bytes);
+    }
   } catch (e) {
     showScriptError(e);
   }
@@ -258,13 +249,12 @@ const initial = hexToRgb(picker.value);
 if (initial) applyBulb(...initial);
 
 // Controller backend: "in-page" (a wasm WebLink in this tab, no netsim) or
-// "websocket" (a real netsim scene). In-page drives the bulb's color by
-// rebuilding the device on each pick; WebSocket writes it live via set_value.
+// "websocket" (a real netsim scene). Both write the color live into the GATT
+// database and notify subscribers; websocket also puts the bulb on the air for
+// a real central (e.g. the emulator) to connect and subscribe.
 function setModeHint() {
   $("mode-hint").textContent = mode === "in-page"
-    ? "In-page controller — no netsim. Color picks rebuild the local WebLink device " +
-      "(its peripherals have no live set_value); switch to WebSocket to write a live " +
-      "central and notify subscribers."
+    ? "In-page controller — no netsim; the bulb runs entirely in this tab."
     : "";
 }
 function switchBackend() {
