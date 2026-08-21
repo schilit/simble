@@ -19,9 +19,11 @@
 use std::collections::HashMap;
 
 use crate::android::gatt_service::BluetoothGattCharacteristic;
+use crate::client::gatt_client::GattClient;
 use crate::controller::sim::Link;
 use crate::gap::{AdvertisingData, ad_type, flags};
-use crate::l2cap::{AclPacketBoundary, AclReassembler, HciAclHeader};
+use crate::l2cap::{AclPacketBoundary, AclReassembler, HciAclHeader, L2capHeader};
+use crate::packets::att::opcode as att_op;
 use crate::scripting::bindings::{dynamic_to_bytes, runtime_error};
 use crate::scripting::{ScriptGattServer, new_engine};
 use crate::types::{Address, SimbleError, Uuid};
@@ -988,6 +990,238 @@ fn find_cccd_after(db: &crate::gatt::GattDatabase, value_handle: u16) -> Option<
         .map(|(&handle, _)| handle)
 }
 
+/// The central's connect → discover progression.
+#[derive(Clone, Copy, PartialEq)]
+enum CentralPhase {
+    /// Waiting to connect to the target advertiser.
+    Connecting,
+    /// Connected; exchanging ATT MTU.
+    ExchangingMtu,
+    /// Reading the peer's primary services.
+    DiscoveringServices,
+    /// Reading characteristics of `services[i]`.
+    DiscoveringCharacteristics(usize),
+    /// Discovery complete.
+    Ready,
+}
+
+impl CentralPhase {
+    /// A short human label for the current phase.
+    fn label(self) -> &'static str {
+        match self {
+            CentralPhase::Connecting => "connecting",
+            CentralPhase::ExchangingMtu => "exchanging MTU",
+            CentralPhase::DiscoveringServices => "discovering services",
+            CentralPhase::DiscoveringCharacteristics(_) => "discovering characteristics",
+            CentralPhase::Ready => "ready",
+        }
+    }
+}
+
+/// A scene central: connects to a peripheral by address over the shared
+/// [`Link`], exchanges MTU, and discovers its GATT — the *client* half of the
+/// server/client view. It drives a [`GattClient`], framing ATT over L2CAP over
+/// ACL, the mirror of the peripheral's inbound path.
+struct CentralDevice {
+    target: Address,
+    client: GattClient,
+    reassembler: AclReassembler,
+    phase: CentralPhase,
+    connect_requested: bool,
+}
+
+impl CentralDevice {
+    fn new(target: Address) -> Self {
+        Self {
+            target,
+            client: GattClient::new(0, target),
+            reassembler: AclReassembler::new(),
+            phase: CentralPhase::Connecting,
+            connect_requested: false,
+        }
+    }
+
+    /// On the first tick, request a connection to the target advertiser.
+    fn produce(&mut self, channel: &HciChannel) {
+        if !self.connect_requested && self.phase == CentralPhase::Connecting {
+            let mut params = vec![0x10, 0x00, 0x10, 0x00, 0x00, 0x00];
+            let mut peer = self.target.to_be_bytes();
+            peer.reverse(); // little-endian on the wire
+            params.extend_from_slice(&peer);
+            let _ = queue_command(channel, [0x0D, 0x20], &params); // LE Create Connection
+            self.connect_requested = true;
+        }
+    }
+
+    /// Consume one controller→host packet: a connection completion starts the
+    /// discovery flow; ATT responses advance it.
+    fn consume(&mut self, channel: &HciChannel, packet: &[u8]) {
+        match packet.first() {
+            Some(&h4_type::HCI_EVENT) => {
+                if packet.len() >= 15
+                    && packet[1] == event::LE_META
+                    && packet[3] == 0x01
+                    && packet[4] == 0x00
+                {
+                    let handle = u16::from_le_bytes([packet[5], packet[6]]) & 0x0FFF;
+                    self.client = GattClient::new(handle, self.target);
+                    self.phase = CentralPhase::ExchangingMtu;
+                    let req = self.client.create_exchange_mtu_request(517);
+                    let _ = send_acl(channel, handle, &req);
+                }
+            }
+            Some(&h4_type::HCI_ACL_DATA) => {
+                if let Some((header, payload)) = HciAclHeader::parse(&packet[1..]) {
+                    let handle = header.handle();
+                    let is_first = header.is_first_fragment();
+                    if let Ok(Some(frame)) =
+                        self.reassembler.push_fragment(handle, is_first, payload)
+                        && let Some((_, att)) = L2capHeader::parse(&frame)
+                    {
+                        self.dispatch_att(channel, att);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Advance the discovery state machine on one ATT response.
+    fn dispatch_att(&mut self, channel: &HciChannel, att: &[u8]) {
+        let handle = self.client.connection_handle;
+        let Some(&op) = att.first() else { return };
+        let is_error = op == att_op::ERROR_RSP;
+        match self.phase {
+            CentralPhase::ExchangingMtu => {
+                if op == att_op::EXCHANGE_MTU_RSP && att.len() >= 3 {
+                    let server_mtu = u16::from_le_bytes([att[1], att[2]]);
+                    self.client.on_exchange_mtu_response(server_mtu, 517);
+                }
+                self.phase = CentralPhase::DiscoveringServices;
+                let req = self.client.create_discover_services_request(0x0001, 0xFFFF);
+                let _ = send_acl(channel, handle, &req);
+            }
+            CentralPhase::DiscoveringServices => {
+                if is_error {
+                    self.start_characteristic_discovery(channel);
+                } else if op == att_op::READ_BY_GROUP_TYPE_RSP {
+                    let _ = self.client.on_discover_services_response(att);
+                    let last_end = self.client.services.last().map_or(0xFFFF, |s| s.end_handle);
+                    if last_end < 0xFFFF {
+                        let req = self
+                            .client
+                            .create_discover_services_request(last_end + 1, 0xFFFF);
+                        let _ = send_acl(channel, handle, &req);
+                    } else {
+                        self.start_characteristic_discovery(channel);
+                    }
+                }
+            }
+            CentralPhase::DiscoveringCharacteristics(i) => {
+                if is_error {
+                    self.next_characteristic_service(channel, i);
+                } else if op == att_op::READ_BY_TYPE_RSP {
+                    let svc_uuid = self.client.services[i].uuid;
+                    let _ = self
+                        .client
+                        .on_discover_characteristics_response(svc_uuid, att);
+                    let svc = &self.client.services[i];
+                    let end = svc.end_handle;
+                    let last = svc
+                        .characteristics
+                        .last()
+                        .map_or(svc.start_handle, |c| c.value_handle);
+                    if last < end {
+                        let req = self
+                            .client
+                            .create_discover_characteristics_request(last + 1, end);
+                        let _ = send_acl(channel, handle, &req);
+                    } else {
+                        self.next_characteristic_service(channel, i);
+                    }
+                }
+            }
+            CentralPhase::Connecting | CentralPhase::Ready => {}
+        }
+    }
+
+    /// Begin characteristic discovery on the first service (or finish).
+    fn start_characteristic_discovery(&mut self, channel: &HciChannel) {
+        if self.client.services.is_empty() {
+            self.phase = CentralPhase::Ready;
+        } else {
+            self.phase = CentralPhase::DiscoveringCharacteristics(0);
+            self.discover_characteristics_for(channel, 0);
+        }
+    }
+
+    /// Move to the next service's characteristics (or finish).
+    fn next_characteristic_service(&mut self, channel: &HciChannel, i: usize) {
+        let next = i + 1;
+        if next < self.client.services.len() {
+            self.phase = CentralPhase::DiscoveringCharacteristics(next);
+            self.discover_characteristics_for(channel, next);
+        } else {
+            self.phase = CentralPhase::Ready;
+        }
+    }
+
+    /// Send the characteristic-discovery request for `services[i]`.
+    fn discover_characteristics_for(&mut self, channel: &HciChannel, i: usize) {
+        let handle = self.client.connection_handle;
+        let svc = &self.client.services[i];
+        let req = self
+            .client
+            .create_discover_characteristics_request(svc.start_handle, svc.end_handle);
+        let _ = send_acl(channel, handle, &req);
+    }
+
+    /// The discovered GATT as JSON: `{connected, peer, phase, services:[…]}`.
+    fn status_json(&self) -> String {
+        #[derive(serde::Serialize)]
+        struct View {
+            connected: bool,
+            peer: String,
+            phase: &'static str,
+            services: Vec<Svc>,
+        }
+        #[derive(serde::Serialize)]
+        struct Svc {
+            uuid: String,
+            characteristics: Vec<Chr>,
+        }
+        #[derive(serde::Serialize)]
+        struct Chr {
+            uuid: String,
+            value_handle: u16,
+            properties: u8,
+        }
+        let view = View {
+            connected: self.client.connection_handle != 0,
+            peer: self.target.to_string(),
+            phase: self.phase.label(),
+            services: self
+                .client
+                .services
+                .iter()
+                .map(|s| Svc {
+                    uuid: s.uuid.to_string(),
+                    characteristics: s
+                        .characteristics
+                        .iter()
+                        .map(|c| Chr {
+                            uuid: c.uuid.to_string(),
+                            value_handle: c.value_handle,
+                            properties: c.properties,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        };
+        serde_json::to_string(&view).unwrap_or_else(|_| "{}".to_string())
+    }
+}
+
 /// The role a device plays in a [`SceneEngine`].
 enum SceneRole {
     /// A scripted GATT peripheral that advertises and serves. Boxed because a
@@ -995,6 +1229,8 @@ enum SceneRole {
     Peripheral(Box<ScriptedPeripheral>),
     /// A scanner accumulating the advertising reports it has seen.
     Scanner(Vec<ScanReport>),
+    /// A central that connects to a peripheral and discovers its GATT.
+    Central(Box<CentralDevice>),
 }
 
 /// One device in a scene: the controller-side [`HciChannel`] it shares with the
@@ -1057,6 +1293,19 @@ impl SceneEngine {
         index
     }
 
+    /// Adds a central at `address` that connects to and discovers the peripheral
+    /// at `target`; returns its device index.
+    pub fn add_central(&mut self, address: Address, target: Address) -> usize {
+        let channel = self.link.add_device(address);
+        let index = self.devices.len();
+        self.devices.push(SceneDevice {
+            channel,
+            role: SceneRole::Central(Box::new(CentralDevice::new(target))),
+            started: false,
+        });
+        index
+    }
+
     /// The number of devices in the scene.
     pub fn device_count(&self) -> usize {
         self.devices.len()
@@ -1072,16 +1321,22 @@ impl SceneEngine {
                 let _ = match &device.role {
                     SceneRole::Peripheral(p) => p.queue_start(&device.channel),
                     SceneRole::Scanner(_) => queue_scanner_start(&device.channel),
+                    SceneRole::Central(_) => Ok(()),
                 };
                 device.started = true;
             }
         }
-        // Peripherals produce (script tick + notifications).
+        // Devices produce (peripherals: script tick + notifications; centrals:
+        // the connection request and discovery flow).
         for device in &mut self.devices {
-            if let SceneRole::Peripheral(p) = &mut device.role
-                && let Err(e) = p.tick(&device.channel, t_seconds)
-            {
-                p.record_error(e.to_string());
+            match &mut device.role {
+                SceneRole::Peripheral(p) => {
+                    if let Err(e) = p.tick(&device.channel, t_seconds) {
+                        p.record_error(e.to_string());
+                    }
+                }
+                SceneRole::Central(c) => c.produce(&device.channel),
+                SceneRole::Scanner(_) => {}
             }
         }
         // Route across the shared medium.
@@ -1101,6 +1356,11 @@ impl SceneEngine {
                         reports.extend(parse_scan_reports(&pkt));
                     }
                 }
+                SceneRole::Central(c) => {
+                    while let Some(pkt) = device.channel.poll_controller_packet() {
+                        c.consume(&device.channel, &pkt);
+                    }
+                }
             }
         }
     }
@@ -1110,7 +1370,16 @@ impl SceneEngine {
     pub fn peripheral_status_json(&self, index: usize) -> Option<String> {
         match self.devices.get(index)?.role {
             SceneRole::Peripheral(ref p) => Some(p.status_json()),
-            SceneRole::Scanner(_) => None,
+            SceneRole::Scanner(_) | SceneRole::Central(_) => None,
+        }
+    }
+
+    /// The discovered-GATT JSON of central `index`, or `None` if it isn't a
+    /// central.
+    pub fn central_status_json(&self, index: usize) -> Option<String> {
+        match self.devices.get(index)?.role {
+            SceneRole::Central(ref c) => Some(c.status_json()),
+            SceneRole::Peripheral(_) | SceneRole::Scanner(_) => None,
         }
     }
 
@@ -1169,6 +1438,48 @@ mod scene_tests {
                 .peripheral_status_json(0)
                 .unwrap()
                 .contains("SceneHRM")
+        );
+    }
+
+    #[test]
+    fn test_central_connects_and_discovers_peripheral() {
+        let mut scene = SceneEngine::new();
+        let script = r#"
+            let server = android::BluetoothGattServer("SceneHRM");
+            let hrs = android::BluetoothGattService(uuid::HEART_RATE_SERVICE, android::SERVICE_TYPE_PRIMARY);
+            let hr = android::BluetoothGattCharacteristic(
+                uuid::HEART_RATE_MEASUREMENT,
+                android::PROPERTY_READ | android::PROPERTY_NOTIFY,
+                android::PERMISSION_READ,
+            );
+            hr.set_value([0x00, 72]);
+            hrs.add_characteristic(hr);
+            server.add_service(hrs);
+        "#;
+        let peripheral_addr = "AA:BB:CC:00:00:01".parse().unwrap();
+        scene.add_peripheral(peripheral_addr, script).unwrap();
+        let central = scene.add_central("AA:BB:CC:00:00:02".parse().unwrap(), peripheral_addr);
+
+        // Connect + MTU + service/characteristic discovery is a handful of
+        // round-trips; each takes a couple of ticks through the Link.
+        for _ in 0..40 {
+            scene.tick(0.1);
+        }
+
+        let json = scene.central_status_json(central).unwrap();
+        // The central discovered the Heart Rate service and its measurement
+        // characteristic on the peer — two real devices, connected in-process.
+        assert!(
+            json.contains("\"connected\":true"),
+            "central should be connected; got {json}"
+        );
+        assert!(
+            json.contains("180D"),
+            "should discover Heart Rate service; got {json}"
+        );
+        assert!(
+            json.contains("2A37"),
+            "should discover HR Measurement char; got {json}"
         );
     }
 }
@@ -1349,6 +1660,20 @@ mod web {
         pub fn add_scanner(&mut self, address: &str) -> Result<usize, JsValue> {
             let address = address.parse().map_err(js_error)?;
             Ok(self.scene.add_scanner(address))
+        }
+
+        /// Adds a central at `address` that connects to and discovers the
+        /// peripheral at `target`; returns its device index.
+        pub fn add_central(&mut self, address: &str, target: &str) -> Result<usize, JsValue> {
+            let address = address.parse().map_err(js_error)?;
+            let target = target.parse().map_err(js_error)?;
+            Ok(self.scene.add_central(address, target))
+        }
+
+        /// The discovered-GATT JSON of central `index` (`undefined` if not a
+        /// central).
+        pub fn central_status_json(&self, index: usize) -> Option<String> {
+            self.scene.central_status_json(index)
         }
 
         /// The number of devices in the scene.
