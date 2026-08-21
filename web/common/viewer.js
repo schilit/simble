@@ -180,10 +180,5 @@ export function renderGatt(gattEl, status, prevValues) {
     }
   }
 
-  // Don't pulse on the tick the row was just built, or it flashes on load.
-  if (changedKey && !rebuilt) {
-    const el = gattEl.querySelector(`.chr[data-key="${CSS.escape(changedKey)}"]`);
-    if (el) { el.classList.remove("pulse"); void el.offsetWidth; el.classList.add("pulse"); }
-  }
   return changedKey;
 }

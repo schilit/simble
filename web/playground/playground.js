@@ -140,16 +140,26 @@ const $ = (id) => document.getElementById(id);
 const editor = $("script");
 const connPill = $("conn");
 const setupPanel = $("setup");
+const runBtn = $("run");
+const stopBtn = $("stop");
 
 let peripheral = null;
 let runStart = performance.now();
 let lastConnectAttempt = 0;
 let openedOnce = false;
+let stopped = true; // start stopped: the device runs only after Run is pressed
 const prevValues = new Map();
 
 function setPill(text, cls) {
   connPill.textContent = text;
   connPill.className = "pill" + (cls ? " " + cls : "");
+}
+
+// Reflect run/stop state in the controls: Run is highlighted only when stopped
+// (it's the call to action), and Stop is enabled only while running.
+function setRunning(on) {
+  runBtn.classList.toggle("primary", !on);
+  stopBtn.disabled = !on;
 }
 
 function log(msg) {
@@ -170,6 +180,7 @@ function createPeripheral(script) {
 
 function run() {
   showScriptError(null);
+  stopped = false;
   try {
     if (peripheral) {
       peripheral.run_script(editor.value); // same socket, new device
@@ -178,11 +189,31 @@ function run() {
       createPeripheral(editor.value);
     }
     prevValues.clear();
+    setRunning(true);
     log("Device rebuilt from script. Advertising as its declared name.");
   } catch (e) {
     showScriptError(e); // the previous device keeps running
     log("Script error — see below. The previous device (if any) keeps running.");
+    if (!peripheral) { stopped = true; setRunning(false); } // nothing running to stop
   }
+}
+
+// Tear the device down and hold it stopped until Run is pressed again.
+function stop() {
+  stopped = true;
+  if (peripheral) {
+    try { peripheral.free(); } catch (_) { /* already gone */ }
+    peripheral = null;
+  }
+  prevValues.clear();
+  renderGatt($("gatt"), { services: [] }, prevValues);
+  $("dev-name").textContent = "—";
+  $("dev-conn").textContent = "stopped";
+  $("dev-sub").textContent = "—";
+  setupPanel.classList.remove("visible");
+  setPill("stopped", "");
+  setRunning(false);
+  log("Stopped. Press Run to start the device again.");
 }
 
 // --- live rendering --------------------------------------------------------
@@ -203,6 +234,7 @@ function render(status) {
 }
 
 function loop() {
+  if (stopped) return; // Stop pressed (or not started): stay torn down until Run
   if (!peripheral) {
     const now = performance.now();
     if (now - lastConnectAttempt > 3000) {
@@ -265,8 +297,8 @@ function wireExamples() {
     if (!ex) return;
     editor.value = ex.script;
     sel.value = "";
+    stop(); // load into the editor but leave it to the user to Run
     log(`Loaded example: ${ex.label} — press Run.`);
-    run();
   });
 }
 
@@ -280,19 +312,23 @@ EXAMPLES.thermometer.script = default_heart_rate_script();
 const shared = await decodeScript(location.search);
 editor.value = shared || default_heart_rate_script();
 attachHighlightedEditor(editor); // syntax highlighting overlay (degrades to plain)
-if (shared) log("Loaded a shared script from the URL — press Run (or it runs on connect).");
 
 $("run").addEventListener("click", run);
+$("stop").addEventListener("click", stop);
 $("share").addEventListener("click", share);
 $("reset").addEventListener("click", () => {
   editor.value = default_heart_rate_script();
   history.replaceState(null, "", location.pathname);
   showScriptError(null);
-  prevValues.clear();
+  stop(); // restore the default script and leave the device stopped
   log("Reset to the default script — press Run.");
-  run();
 });
 wireExamples();
 wireAi();
-try { createPeripheral(editor.value); } catch (e) { showScriptError(e); }
+
+// Start stopped: the editor holds the script, the device runs only on Run.
+setRunning(false);
+renderGatt($("gatt"), { services: [] }, prevValues);
+setPill("ready — press Run", "");
+if (shared) log("Loaded a shared script from the URL — press Run.");
 setInterval(loop, 100);

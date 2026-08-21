@@ -120,7 +120,7 @@ let peripheral = null;
 let runStart = performance.now();
 let lastConnectAttempt = 0;
 let openedOnce = false;
-let stopped = false; // Stop pressed: hold the device torn down, don't auto-reconnect
+let stopped = true; // start stopped: the device runs only after Run is pressed
 const prevValues = new Map(); // "service/char" -> last value hex, for the pulse
 
 // Flicker guard: the GATT structure is rebuilt only when it actually changes
@@ -160,7 +160,7 @@ function run() {
       createPeripheral(editor.value);
     }
     prevValues.clear();
-    setStopEnabled(true);
+    setRunning(true);
     $("run-state").textContent = "device rebuilt from script";
     setTimeout(() => ($("run-state").textContent = ""), 2500);
   } catch (e) {
@@ -185,14 +185,16 @@ function stop() {
   $("hr-box").hidden = true;
   setupPanel.classList.remove("visible");
   setPill("stopped", "");
-  setStopEnabled(false);
+  setRunning(false);
   $("run-state").textContent = "device stopped";
   setTimeout(() => ($("run-state").textContent = ""), 2500);
 }
 
-function setStopEnabled(on) {
-  const btn = $("stop");
-  if (btn) btn.disabled = !on;
+// Run is highlighted only when stopped (the call to action); Stop is enabled
+// only while running.
+function setRunning(on) {
+  $("run").classList.toggle("primary", !on);
+  $("stop").disabled = !on;
 }
 
 // --- decoding helpers ------------------------------------------------------
@@ -386,11 +388,6 @@ function render(status) {
     }
   } else {
     hrBox.hidden = true;
-    // Don't pulse on the same tick the row was just created, or it flashes on load.
-    if (changedKey && !rebuilt) {
-      const el = document.querySelector(`.chr[data-key="${CSS.escape(changedKey)}"]`);
-      if (el) { el.classList.remove("pulse"); void el.offsetWidth; el.classList.add("pulse"); }
-    }
   }
 
   if (status.last_error) showScriptError(`tick error: ${status.last_error}`);
@@ -491,5 +488,10 @@ editor.value = default_heart_rate_script();
 $("run").addEventListener("click", run);
 $("stop").addEventListener("click", stop);
 wireAi();
-try { createPeripheral(editor.value); } catch (e) { showScriptError(e); }
+
+// Start stopped: the editor holds the script; the device runs only on Run.
+setRunning(false);
+setPill("ready — press Run", "");
+$("dev-conn").textContent = "not started";
+$("dev-sub").textContent = "—";
 setInterval(loop, 100);
