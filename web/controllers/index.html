@@ -95,6 +95,55 @@
     answers your question.
   </p>
 
+  <!-- Comparison -->
+  <section class="tier">
+    <h2>At a glance</h2>
+    <div class="tablewrap">
+      <table class="cmp">
+        <thead>
+          <tr>
+            <th>Tier</th>
+            <th>Fidelity</th>
+            <th>Native</th>
+            <th>Browser</th>
+            <th>Cross-device</th>
+            <th>External process</th>
+            <th>Choose when</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th>In-process<br><code class="inl">sim::Link</code></th>
+            <td>Minimal — no real PHY, timing, encryption, ISO, or ranging</td>
+            <td><span class="yes">Yes</span></td>
+            <td><span class="yes">Yes</span> (wasm)</td>
+            <td><span class="no">No</span></td>
+            <td><span class="no">None</span></td>
+            <td>Tests, CI, quick single-page or multi-tab browser scenes</td>
+          </tr>
+          <tr>
+            <th>rootcanal-ws</th>
+            <td>High — full Link Layer/LMP, BR/EDR + LE + ISO, ext/periodic adv, encryption</td>
+            <td><span class="yes">Yes</span></td>
+            <td><span class="yes">Yes</span> (via WS)</td>
+            <td><span class="yes">Yes</span></td>
+            <td><span class="part">Binary</span> (rootcanal-ws)</td>
+            <td>Faithful controller behavior without spatial/ranging modeling</td>
+          </tr>
+          <tr>
+            <th>netsim</th>
+            <td>Highest — Rootcanal + 3D position/ranging + multi-radio (BLE/Wi-Fi/UWB)</td>
+            <td><span class="yes">Yes</span></td>
+            <td><span class="yes">Yes</span> (via WS)</td>
+            <td><span class="yes">Yes</span></td>
+            <td><span class="part">Daemon</span> + emulator</td>
+            <td>Movement, distance/ranging (Channel Sounding), or a real Android app in the emulator</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
   <!-- Tier 1 -->
   <section class="tier">
     <h2>1 · In-process controller <span class="tag">micro</span></h2>
@@ -192,54 +241,6 @@
     </div>
   </section>
 
-  <!-- Comparison -->
-  <section class="tier">
-    <h2>At a glance</h2>
-    <div class="tablewrap">
-      <table class="cmp">
-        <thead>
-          <tr>
-            <th>Tier</th>
-            <th>Fidelity</th>
-            <th>Native</th>
-            <th>Browser</th>
-            <th>Cross-device</th>
-            <th>External process</th>
-            <th>Choose when</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <th>In-process<br><code class="inl">sim::Link</code></th>
-            <td>Minimal — no real PHY, timing, encryption, ISO, or ranging</td>
-            <td><span class="yes">Yes</span></td>
-            <td><span class="yes">Yes</span> (wasm)</td>
-            <td><span class="no">No</span></td>
-            <td><span class="no">None</span></td>
-            <td>Tests, CI, quick single-page or multi-tab browser scenes</td>
-          </tr>
-          <tr>
-            <th>rootcanal-ws</th>
-            <td>High — full Link Layer/LMP, BR/EDR + LE + ISO, ext/periodic adv, encryption</td>
-            <td><span class="yes">Yes</span></td>
-            <td><span class="yes">Yes</span> (via WS)</td>
-            <td><span class="yes">Yes</span></td>
-            <td><span class="part">Binary</span> (rootcanal-ws)</td>
-            <td>Faithful controller behavior without spatial/ranging modeling</td>
-          </tr>
-          <tr>
-            <th>netsim</th>
-            <td>Highest — Rootcanal + 3D position/ranging + multi-radio (BLE/Wi-Fi/UWB)</td>
-            <td><span class="yes">Yes</span></td>
-            <td><span class="yes">Yes</span> (via WS)</td>
-            <td><span class="yes">Yes</span></td>
-            <td><span class="part">Daemon</span> + emulator</td>
-            <td>Movement, distance/ranging (Channel Sounding), or a real Android app in the emulator</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </section>
 </main>
 
 <footer>
