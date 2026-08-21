@@ -1,7 +1,7 @@
 // Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
-//! A minimal in-process LE controller ([`SimController`]) and shared medium
+//! A minimal in-process LE controller (`SimController`) and shared medium
 //! ([`Link`]) — enough of the Link Layer, modeled at the HCI boundary, to let
 //! several Simble host stacks discover, connect to, and exchange data with one
 //! another **in a single process, with no netsim, no Rootcanal, and no radio**.
@@ -278,7 +278,7 @@ enum Action {
     },
 }
 
-/// The shared medium. Holds every [`SimController`] on the "air" and, on each
+/// The shared medium. Holds every `SimController` on the "air" and, on each
 /// [`tick`](Self::tick), drains their hosts' HCI, routes advertising and data
 /// between them, and delivers the resulting events — the same role as Bumble's
 /// `LocalLink`, sized for an in-process scene of any number of devices.

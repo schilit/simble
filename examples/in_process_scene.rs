@@ -11,6 +11,30 @@
 use simble::controller::sim::Link;
 use simble::transport::HciChannel;
 use simble::types::Address;
+use zerocopy::byteorder::little_endian::U16;
+use zerocopy::{FromBytes, Immutable, KnownLayout, Ref, Unaligned};
+
+/// LE Advertising Report subevent header (one report), before the variable
+/// advertising data — parsed zero-copy straight out of the event bytes.
+#[repr(C)]
+#[derive(FromBytes, Immutable, KnownLayout, Unaligned)]
+struct AdvReportHeader {
+    subevent_code: u8,
+    num_reports: u8,
+    event_type: u8,
+    address_type: u8,
+    address: [u8; 6],
+    data_length: u8,
+}
+
+/// Leading fields of an LE Connection Complete subevent — enough for the handle.
+#[repr(C)]
+#[derive(FromBytes, Immutable, KnownLayout, Unaligned)]
+struct ConnCompleteHeader {
+    subevent_code: u8,
+    status: u8,
+    connection_handle: U16,
+}
 
 /// Queue an HCI command (opcode + parameters) on a device's host channel.
 fn cmd(ch: &HciChannel, opcode: [u8; 2], params: &[u8]) {
@@ -31,11 +55,26 @@ fn advertise_as(ch: &HciChannel, name: &str) {
     cmd(ch, [0x0A, 0x20], &[0x01]); // LE Set Advertising Enable
 }
 
-/// Pull the Complete Local Name out of an LE Advertising Report event.
-fn name_from_report(pkt: &[u8]) -> Option<String> {
-    // 04 3E len | 02 num evt addr_type | addr(6) | data_len data… rssi
-    let data_len = *pkt.get(13)? as usize;
-    let data = pkt.get(14..14 + data_len)?;
+/// The LE Meta event body (after `04 3E len`), if this packet is one.
+fn le_meta_body(pkt: &[u8]) -> Option<&[u8]> {
+    (pkt.first() == Some(&0x04) && pkt.get(1) == Some(&0x3E)).then(|| pkt.get(3..))?
+}
+
+/// Parse an LE Advertising Report into (advertiser address, Complete Local Name).
+fn parse_advertiser(pkt: &[u8]) -> Option<(Address, String)> {
+    let (hdr, data) = Ref::<_, AdvReportHeader>::from_prefix(le_meta_body(pkt)?).ok()?;
+    if hdr.subevent_code != 0x02 {
+        return None;
+    }
+    let data = data.get(..hdr.data_length as usize)?;
+    let name = name_from_ad(data)?;
+    let mut be = hdr.address;
+    be.reverse(); // little-endian on the wire; Address is big-endian
+    Some((Address::from_be_bytes(be), name))
+}
+
+/// Pull the Complete Local Name (AD type 0x09) out of advertising data.
+fn name_from_ad(data: &[u8]) -> Option<String> {
     let mut i = 0;
     while i + 1 < data.len() {
         let len = data[i] as usize;
@@ -68,11 +107,11 @@ fn main() {
 
     println!("Scene has {} devices. Scanner sees:", link.device_count());
     while let Some(pkt) = scanner.poll_controller_packet() {
-        if let Some(name) = name_from_report(&pkt) {
-            let addr = &pkt[7..13]; // little-endian on the wire
+        if let Some((addr, name)) = parse_advertiser(&pkt) {
+            let b = addr.to_be_bytes();
             println!(
                 "  {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}  {name}",
-                addr[5], addr[4], addr[3], addr[2], addr[1], addr[0]
+                b[0], b[1], b[2], b[3], b[4], b[5]
             );
         }
     }
@@ -88,8 +127,11 @@ fn main() {
     // queue may also hold advertising reports from the still-on-air devices).
     let mut handle = None;
     while let Some(p) = scanner.poll_controller_packet() {
-        if p.len() >= 7 && p[0] == 0x04 && p[1] == 0x3E && p[3] == 0x01 {
-            handle = Some(u16::from_le_bytes([p[5], p[6]]));
+        if let Some(body) = le_meta_body(&p)
+            && let Ok((cc, _)) = Ref::<_, ConnCompleteHeader>::from_prefix(body)
+            && cc.subevent_code == 0x01
+        {
+            handle = Some(cc.connection_handle.get());
         }
     }
     match handle {

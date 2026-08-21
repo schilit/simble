@@ -18,6 +18,10 @@ categories = ["emulators", "network-programming", "embedded"]
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[dev-dependencies]
+# Used by the in_process_scene example to parse HCI events zero-copy.
+zerocopy = { version = "0.8", features = ["derive"] }
+
 [dependencies]
 rhai = "1.25"
 serde = { version = "1.0", features = ["derive"] }
