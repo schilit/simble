@@ -93,9 +93,9 @@
     Link Layer, the physical channel, timing, encryption, the radio — is the job of a
     <strong>controller</strong>. SimBLE keeps its own footprint below HCI deliberately small: a single
     tiny built-in controller, <code class="inl">sim::Link</code>, that needs no setup. Every heavier
-    rung is a controller you plug in underneath — from a faithful software controller to a real USB
-    radio — forming a <strong>ladder</strong> that trades weight for fidelity. Pick the lowest rung
-    that still answers your question.
+    rung is a controller you plug in underneath — from a software controller to a real USB radio —
+    forming a <strong>ladder</strong> that trades weight for fidelity. Pick the lowest rung that
+    still answers your question.
   </p>
 
   <!-- Comparison -->
@@ -131,7 +131,7 @@
             <td><span class="yes">Yes</span> (via WS)</td>
             <td><span class="yes">Yes</span></td>
             <td><span class="part">Binary</span> (rootcanal-ws)</td>
-            <td>Faithful controller behavior without spatial/ranging modeling</td>
+            <td>Full controller behavior; no spatial/ranging modeling</td>
           </tr>
           <tr>
             <th>netsim</th>
@@ -198,19 +198,21 @@
   <!-- Tier 2 -->
   <section class="tier">
     <h2>2 · rootcanal-ws <span class="tag">high fidelity</span></h2>
-    <p class="tier-sub">real AOSP Rootcanal · Simble netsim-style WebSocket</p>
+    <p class="tier-sub">Rootcanal (rootcanal-rs) · netsim-style WebSocket</p>
     <div class="panel">
       <span class="lbl">What it is</span>
       <p>
-        The real <strong>AOSP Rootcanal</strong> controller — a full, faithful Link Layer and LMP
-        implementation covering BR/EDR + LE + ISO, extended and periodic advertising, and encryption
-        — wrapped in a standalone binary that speaks SimBLE's netsim-style WebSocket protocol. You
-        get genuine controller behavior without the weight of spatial or ranging modeling.
+        <strong>Rootcanal</strong> — AOSP's virtual Bluetooth controller — via the
+        <a href="https://github.com/schilit/rootcanal-rs"><code class="inl">rootcanal-rs</code></a>
+        Rust crate, wrapped in a binary that speaks SimBLE's
+        netsim-style WebSocket protocol. It implements the Link Layer and LMP for BR/EDR, LE, and ISO,
+        including extended and periodic advertising and encryption, without netsim's spatial or
+        ranging modeling.
       </p>
 
       <span class="lbl">Choose it when</span>
       <ul class="reasons">
-        <li>You need faithful, spec-accurate controller behavior (real Link Layer, LMP, encryption, ISO).</li>
+        <li>You need spec-accurate controller behavior (Link Layer, LMP, encryption, ISO).</li>
         <li>You are exercising extended or periodic advertising, or BR/EDR alongside LE.</li>
         <li>You do <em>not</em> need device positions, movement, or distance/ranging modeling.</li>
       </ul>
@@ -220,8 +222,9 @@
       <pre class="run"><code>bazel run //:rootcanal-ws -- --ws-port 7681
 # then point SimBLE at ws://localhost:7681</code></pre>
       <p class="callout">
-        The <code>rootcanal-ws</code> binary is newly added and lives in the
-        <code>rootcanal-rs</code> companion repository, not in the SimBLE crate itself.
+        The <code>rootcanal-ws</code> binary lives in the
+        <a href="https://github.com/schilit/rootcanal-rs"><code>rootcanal-rs</code></a> companion
+        repository, not in the SimBLE crate itself.
       </p>
     </div>
   </section>
@@ -265,15 +268,14 @@
         Bluetooth controller</strong> over the Bluetooth USB transport (control/interrupt/bulk
         endpoints) using the pure-Rust <code class="inl">nusb</code> crate — no libusb, no C. SimBLE's
         host stack now runs over a <strong>real controller and radio</strong>, so a SimBLE peripheral
-        is discoverable and connectable by real phones and laptops <strong>over the air</strong>. It
-        is the top of the fidelity ladder because there is no model left to be faithful to — it <em>is</em>
-        Bluetooth.
+        is discoverable and connectable by real phones and laptops <strong>over the air</strong> — the
+        top of the ladder, with nothing modeled.
       </p>
 
       <span class="lbl">Choose it when</span>
       <ul class="reasons">
         <li>You are doing final interop against real phones, laptops, or accessories.</li>
-        <li>You need true RF behavior — real timing, encryption, and coexistence — not a model of it.</li>
+        <li>You need real RF behavior — timing, encryption, coexistence — not a model of it.</li>
         <li>You want to demonstrate a scripted SimBLE device to a physical scanner across the room.</li>
       </ul>
 
