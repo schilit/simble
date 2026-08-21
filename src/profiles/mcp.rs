@@ -10,8 +10,8 @@
 //! device-wide player as GMCS ([`MediaControlService::register_generic`]); app-specific
 //! players use MCS proper ([`MediaControlService::register`]).
 //!
-//! The Media Control Point is wired through [`AttributeHandler`], so an ordinary
-//! [`GattDatabase::write`] to it runs the opcode. Per MCS Section 3.18.2 the write
+//! The Media Control Point is wired through `AttributeHandler`, so an ordinary
+//! `GattDatabase::write` to it runs the opcode. Per MCS Section 3.18.2 the write
 //! itself always succeeds and the outcome is reported in a `[Requested_Opcode,
 //! Result_Code]` notification; Simble exposes that payload via
 //! [`MediaControlService::last_control_point_notification`], so `on_write` returns `Ok`
@@ -345,7 +345,7 @@ impl MediaPlayerState {
     }
 }
 
-/// [`AttributeHandler`] for the Media Control Point.
+/// `AttributeHandler` for the Media Control Point.
 #[derive(Debug)]
 struct MediaControlPointHandler {
     state: Arc<Mutex<MediaPlayerState>>,

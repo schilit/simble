@@ -5,7 +5,7 @@
 //! `web/`: Simble compiled to WebAssembly, talking to the visitor's local
 //! netsimd over the browser's native `WebSocket` (the same
 //! `ws://localhost:7681/v1/websocket/bt?name=<n>&address=<mac>` endpoint as
-//! [`super::netsim`], but with the browser doing all RFC 6455 framing).
+//! `netsim`, but with the browser doing all RFC 6455 framing).
 //!
 //! Split in two so the demo logic stays natively testable:
 //! - The pure-Rust engines in this module body ([`queue_scanner_start`],

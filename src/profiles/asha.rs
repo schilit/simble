@@ -10,8 +10,8 @@
 //! characteristic, and LE_PSM_OUT naming the PSM of the L2CAP CoC channel that carries
 //! the actual audio frames.
 //!
-//! The control point and Volume are wired through [`AttributeHandler`], so ordinary
-//! [`GattDatabase::write`] calls drive them. Per the ASHA protocol the control point
+//! The control point and Volume are wired through `AttributeHandler`, so ordinary
+//! `GattDatabase::write` calls drive them. Per the ASHA protocol the control point
 //! write itself succeeds and the outcome lands in the AudioStatus characteristic, which
 //! the peripheral notifies after Start/Stop; Simble republishes the AudioStatus
 //! attribute value instead of sending a notification. Audio-data transport is out of
@@ -200,7 +200,7 @@ struct AshaState {
     audio_status_value_handle: u16,
 }
 
-/// [`AttributeHandler`] for the AudioControlPoint.
+/// `AttributeHandler` for the AudioControlPoint.
 #[derive(Debug)]
 struct AudioControlPointHandler {
     state: Arc<Mutex<AshaState>>,
@@ -252,7 +252,7 @@ impl AttributeHandler for AudioControlPointHandler {
     }
 }
 
-/// [`AttributeHandler`] for the Volume characteristic (write-without-response only, so
+/// `AttributeHandler` for the Volume characteristic (write-without-response only, so
 /// the shared state — not the unreadable attribute value — is where the volume lives).
 #[derive(Debug)]
 struct VolumeHandler {

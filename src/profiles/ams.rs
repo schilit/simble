@@ -5,7 +5,7 @@
 //!
 //! AMS is Apple's proprietary 128-bit-UUID GATT service through which an iOS device
 //! (the Media Source, MS) exposes media playback to an accessory (the Media Remote,
-//! MR). Simble simulates the iPhone side: [`MediaService`] registers the MS's three
+//! MR). Simble simulates the iPhone side: `MediaControlService` registers the MS's three
 //! characteristics (AMS Specification, "Apple Media Service"):
 //!
 //! - **Remote Command** (write + notify): the MR writes a RemoteCommandID to control
@@ -17,10 +17,10 @@
 //!   to select an attribute, then reads back its full (untruncated) value.
 //!
 //! Media state (player / queue / track) lives in shared state; Remote Command
-//! writes drive a small playback state machine through an [`AttributeHandler`], and
-//! host-side setters ([`MediaService::set_track`] etc.) produce Entity Update
+//! writes drive a small playback state machine through an `AttributeHandler`, and
+//! host-side setters (`MediaControlService::set_track` etc.) produce Entity Update
 //! payloads only for attributes the accessory subscribed to, parked for retrieval
-//! via [`MediaService::take_entity_updates`] (the `mcp.rs`
+//! via `MediaControlService::take_entity_updates` (the `mcp.rs`
 //! `last_control_point_notification` convention, queued because one change can fan
 //! out into several updates).
 //!
@@ -530,7 +530,7 @@ impl AmsState {
     }
 }
 
-/// [`AttributeHandler`] for the Remote Command characteristic.
+/// `AttributeHandler` for the Remote Command characteristic.
 #[derive(Debug)]
 struct RemoteCommandHandler {
     state: Arc<Mutex<AmsState>>,
@@ -550,7 +550,7 @@ impl AttributeHandler for RemoteCommandHandler {
     }
 }
 
-/// [`AttributeHandler`] for the Entity Update characteristic (subscription writes).
+/// `AttributeHandler` for the Entity Update characteristic (subscription writes).
 #[derive(Debug)]
 struct EntityUpdateHandler {
     state: Arc<Mutex<AmsState>>,
@@ -579,7 +579,7 @@ impl AttributeHandler for EntityUpdateHandler {
     }
 }
 
-/// [`AttributeHandler`] for the Entity Attribute characteristic: a write selects
+/// `AttributeHandler` for the Entity Attribute characteristic: a write selects
 /// `[EntityID, AttributeID]` and stores the full value for a follow-up read.
 #[derive(Debug)]
 struct EntityAttributeHandler {

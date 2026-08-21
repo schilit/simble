@@ -8,8 +8,8 @@
 //! driven through the Hearing Aid Preset Control Point (HAS Section 3.2), and the Active
 //! Preset Index characteristic (HAS Section 3.4).
 //!
-//! The Preset Control Point is wired through [`AttributeHandler`], so an ordinary
-//! [`GattDatabase::write`] to it runs the operation. Read Presets Request responses and
+//! The Preset Control Point is wired through `AttributeHandler`, so an ordinary
+//! `GattDatabase::write` to it runs the operation. Read Presets Request responses and
 //! Preset Changed operations are indications of the Control Point itself (HAS Section
 //! 3.2.2); Simble has no ATT bearer to carry them, so the service queues each indication
 //! payload and tests/hosts drain them via
@@ -361,7 +361,7 @@ impl HearingAccessState {
     }
 }
 
-/// [`AttributeHandler`] for the Hearing Aid Preset Control Point.
+/// `AttributeHandler` for the Hearing Aid Preset Control Point.
 #[derive(Debug)]
 struct PresetControlPointHandler {
     state: Arc<Mutex<HearingAccessState>>,

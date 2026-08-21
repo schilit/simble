@@ -7,7 +7,7 @@
 //! [`tokenize_parameters`]/[`parse_parameters`] split a comma/parenthesis
 //! separated parameter list into a tree of [`AtParameter`] values, honoring
 //! double-quoted string constants (spaces inside quotes are preserved,
-//! elsewhere ignored). [`AtCommand`] and [`AtResponse`] build on top of that
+//! elsewhere ignored). `AtCommand` and [`AtResponse`] build on top of that
 //! to parse a full line: a basic `ATxxx` command, an extended `AT+XXX=...`
 //! set/read/test form, or an unsolicited/status `+XXX: ...` response.
 

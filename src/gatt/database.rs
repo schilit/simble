@@ -117,7 +117,7 @@ impl Default for AttributePermissions {
 /// AICS, VOCS) registers one of these instead of exposing a bespoke
 /// `write_control_point`-shaped method that callers must know to invoke
 /// outside the normal ATT write path — any write to a handled attribute
-/// flows through the same [`GattDatabase::write`] every other attribute
+/// flows through the same `GattDatabase::write` every other attribute
 /// uses.
 ///
 /// Requires `Send + Sync` for the same reason `AttServerObserver`
@@ -130,7 +130,7 @@ pub trait AttributeHandler: std::fmt::Debug + Send + Sync {
     /// database — so `db.set_value(own_handle, ...)` works, and a handler
     /// that affects other handles (e.g. ASCS's control point updating
     /// several ASE characteristics) writes to them via `db` directly.
-    /// [`GattDatabase::write`] never overwrites a handled attribute's value
+    /// `GattDatabase::write` never overwrites a handled attribute's value
     /// automatically; state changes are entirely the handler's job.
     fn on_write(&mut self, db: &mut GattDatabase, value: &[u8]) -> Result<(), u8>;
 }
@@ -147,7 +147,7 @@ pub struct Attribute {
     /// Access permissions governing reads and writes.
     pub permissions: AttributePermissions,
     /// Optional owner of this attribute's write behavior. See
-    /// [`AttributeHandler`].
+    /// `AttributeHandler`.
     pub handler: Option<Box<dyn AttributeHandler>>,
 }
 
@@ -411,7 +411,7 @@ impl GattDatabase {
         result
     }
 
-    /// Attaches an [`AttributeHandler`] to `handle`, so future writes to it
+    /// Attaches an `AttributeHandler` to `handle`, so future writes to it
     /// (via [`Self::write`]) dispatch to the handler instead of overwriting
     /// the stored value directly.
     pub fn set_handler(

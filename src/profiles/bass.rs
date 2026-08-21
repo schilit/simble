@@ -9,8 +9,8 @@
 //! (BASS Section 3.2) and accepts Add/Modify/Remove Source operations on the Broadcast
 //! Audio Scan Control Point (BASS Section 3.1).
 //!
-//! The Control Point is wired through [`AttributeHandler`], so an ordinary
-//! [`GattDatabase::write`] to it runs the operation and republishes the affected
+//! The Control Point is wired through `AttributeHandler`, so an ordinary
+//! `GattDatabase::write` to it runs the operation and republishes the affected
 //! Broadcast Receive State value — there is no bespoke `write_control_point` method to
 //! call. Simble's controller doesn't model periodic-advertising or BIG synchronization,
 //! so a requested sync is treated as immediately achieved: the simulated Delegator
@@ -382,7 +382,7 @@ struct ScanDelegatorState {
     next_source_id: u8,
 }
 
-/// [`AttributeHandler`] for the Broadcast Audio Scan Control Point. Owns the operation
+/// `AttributeHandler` for the Broadcast Audio Scan Control Point. Owns the operation
 /// semantics; shares the delegator state with [`BroadcastAudioScanService`] via
 /// `Arc<Mutex<_>>` because `GattDatabase` takes ownership of the handler box.
 #[derive(Debug)]

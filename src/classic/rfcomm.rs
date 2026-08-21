@@ -5,7 +5,7 @@
 //! 07.10 as adapted by the Bluetooth Core Spec (Vol 3, Part F).
 //!
 //! Wire format: a 2-byte fixed address/control header (see
-//! [`RfcommFrameHeader`]), a 1- or 2-byte EA-encoded length field, a
+//! `RfcommFrameHeader`), a 1- or 2-byte EA-encoded length field, a
 //! variable-length information payload, and a trailing 1-byte FCS —
 //! variable-length like `sdp::DataElement`, so only the fixed 2-byte prefix
 //! is zerocopy and the rest is hand-parsed in [`RfcommFrame::parse`].

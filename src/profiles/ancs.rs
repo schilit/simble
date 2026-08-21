@@ -13,7 +13,7 @@
 //!   CategoryID, CategoryCount, NotificationUID]` records announcing added / modified /
 //!   removed notifications.
 //! - **Control Point** (write): Get Notification Attributes, Get App Attributes and
-//!   Perform Notification Action commands, dispatched through an [`AttributeHandler`].
+//!   Perform Notification Action commands, dispatched through an `AttributeHandler`.
 //! - **Data Source** (notify-only): responses to Control Point commands, carrying the
 //!   requested attributes as `[AttributeID, Length (u16), Value]` tuples.
 //!
@@ -504,7 +504,7 @@ impl AncsState {
     }
 }
 
-/// [`AttributeHandler`] for the ANCS Control Point.
+/// `AttributeHandler` for the ANCS Control Point.
 #[derive(Debug)]
 struct ControlPointHandler {
     state: Arc<Mutex<AncsState>>,
