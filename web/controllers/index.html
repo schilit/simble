@@ -91,10 +91,11 @@
     A SimBLE host stack produces and consumes <strong>HCI</strong> — the Host Controller Interface.
     Everything above HCI (GAP, GATT, ATT, L2CAP, SMP) is SimBLE. Everything <em>below</em> it — the
     Link Layer, the physical channel, timing, encryption, the radio — is the job of a
-    <strong>controller</strong>. SimBLE deliberately ships none of its own beyond a tiny built-in
-    model, keeping the crate compact. Instead it offers a <strong>ladder</strong> of controller
-    backends you plug in underneath, trading fidelity for weight. Pick the lowest rung that still
-    answers your question.
+    <strong>controller</strong>. SimBLE keeps its own footprint below HCI deliberately small: a single
+    tiny built-in controller, <code class="inl">sim::Link</code>, that needs no setup. Every heavier
+    rung is a controller you plug in underneath — from a faithful software controller to a real USB
+    radio — forming a <strong>ladder</strong> that trades weight for fidelity. Pick the lowest rung
+    that still answers your question.
   </p>
 
   <!-- Comparison -->
@@ -108,7 +109,7 @@
             <th>Fidelity</th>
             <th>Native</th>
             <th>Browser</th>
-            <th>Cross-device</th>
+            <th>Cross-process</th>
             <th>External process</th>
             <th>Choose when</th>
           </tr>
@@ -119,7 +120,7 @@
             <td>Minimal — no real PHY, timing, encryption, ISO, or ranging</td>
             <td><span class="yes">Yes</span></td>
             <td><span class="yes">Yes</span> (wasm)</td>
-            <td><span class="no">No</span></td>
+            <td><span class="part">Same origin</span> — one process; a SharedWorker shares it across tabs</td>
             <td><span class="no">None</span></td>
             <td>Tests, CI, quick single-page or multi-tab browser scenes</td>
           </tr>
@@ -134,12 +135,21 @@
           </tr>
           <tr>
             <th>netsim</th>
-            <td>Highest — Rootcanal + 3D position/ranging + multi-radio (BLE/Wi-Fi/UWB)</td>
+            <td>Highest <em>simulated</em> — Rootcanal + 3D position/ranging + multi-radio (BLE/Wi-Fi/UWB)</td>
             <td><span class="yes">Yes</span></td>
             <td><span class="yes">Yes</span> (via WS)</td>
             <td><span class="yes">Yes</span></td>
             <td><span class="part">Daemon</span> + emulator</td>
             <td>Movement, distance/ranging (Channel Sounding), or a real Android app in the emulator</td>
+          </tr>
+          <tr>
+            <th>USB dongle<br><code class="inl">UsbTransport</code></th>
+            <td><strong>Real</strong> — an actual Bluetooth controller and radio; no model at all</td>
+            <td><span class="yes">Yes</span></td>
+            <td><span class="no">No</span> (needs a USB↔WS bridge, not yet built)</td>
+            <td><span class="yes">Yes</span> (real RF)</td>
+            <td><span class="part">Hardware</span> — a physical dongle</td>
+            <td>Final interop against real phones/laptops over the air</td>
           </tr>
         </tbody>
       </table>
@@ -175,7 +185,7 @@
       <span class="lbl">Limits</span>
       <ul class="reasons limits">
         <li>Models no real PHY — no channel hopping, no timing, no encryption, no ISO, no Channel Sounding.</li>
-        <li>No cross-device or cross-browser reach; everything lives inside one process (or one origin).</li>
+        <li>Devices talk to each other, but only <em>within one process</em> — no cross-process or cross-machine reach (a <code class="inl">SharedWorker</code> extends one <code class="inl">Link</code> to same-origin tabs).</li>
       </ul>
 
       <span class="lbl">Build &amp; run</span>
@@ -243,13 +253,48 @@
     </div>
   </section>
 
+  <!-- Tier 4 -->
+  <section class="tier">
+    <h2>4 · USB dongle <span class="tag">real hardware</span></h2>
+    <p class="tier-sub">simble::transport::UsbTransport · a physical Bluetooth controller</p>
+    <div class="panel">
+      <span class="lbl">What it is</span>
+      <p>
+        Not a simulation at all: <code class="inl">UsbTransport</code> drives a <strong>physical USB
+        Bluetooth controller</strong> over the Bluetooth USB transport (control/interrupt/bulk
+        endpoints) using the pure-Rust <code class="inl">nusb</code> crate — no libusb, no C. SimBLE's
+        host stack now runs over a <strong>real controller and radio</strong>, so a SimBLE peripheral
+        is discoverable and connectable by real phones and laptops <strong>over the air</strong>. It
+        is the top of the fidelity ladder because there is no model left to be faithful to — it <em>is</em>
+        Bluetooth.
+      </p>
+
+      <span class="lbl">Choose it when</span>
+      <ul class="reasons">
+        <li>You are doing final interop against real phones, laptops, or accessories.</li>
+        <li>You need true RF behavior — real timing, encryption, and coexistence — not a model of it.</li>
+        <li>You want to demonstrate a scripted SimBLE device to a physical scanner across the room.</li>
+      </ul>
+
+      <span class="lbl">Limits</span>
+      <ul class="reasons limits">
+        <li>Needs a physical USB Bluetooth dongle whose interface SimBLE can claim (native only).</li>
+        <li>No browser path yet — that would need a <code class="inl">ble-usb-ws</code> bridge (WebUSB → WebSocket), which is not built.</li>
+        <li>Real RF is non-deterministic: great for interop, wrong for CI — use <code class="inl">sim::Link</code> there.</li>
+      </ul>
+
+      <span class="lbl">Build &amp; run</span>
+      <p>Plug in a supported dongle and open it with <code class="inl">UsbTransport</code> instead of a WebSocket transport; the rest of SimBLE sees the same H4 packet flow.</p>
+    </div>
+  </section>
+
 </main>
 
 <footer>
   Everything above HCI is SimBLE; a controller supplies the Link Layer and PHY below it. Climb the
   ladder only as far as your question requires — <code>sim::Link</code> for tests and browser scenes,
   <code>rootcanal-ws</code> for faithful radio behavior, <code>netsim</code> for space, ranging, and
-  Android-emulator interop.
+  Android-emulator interop, and <code>UsbTransport</code> for real hardware over the air.
 </footer>
 </body>
 </html>
