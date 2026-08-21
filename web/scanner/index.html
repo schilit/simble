@@ -68,6 +68,10 @@
     margin-top: 0.35rem; overflow: hidden; }
   .bar span { display: block; height: 100%; background: var(--good); border-radius: 3px; }
   #empty { color: var(--dim); font-size: 0.9rem; }
+  .controls { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+    margin-bottom: 0.9rem; font-size: 0.85rem; }
+  .controls label { display: flex; align-items: center; gap: 0.4rem; cursor: pointer; }
+  .controls .note { color: var(--dim); font-size: 0.78rem; }
   footer { color: var(--dim); font-size: 0.78rem; padding: 0 1.5rem 1.5rem;
     max-width: 68rem; margin: 0 auto; }
   footer code { color: var(--good); }
@@ -78,28 +82,29 @@
   <h1>Simble Web Scanner</h1>
   <span class="sub">Simble's real HCI + GAP stack, compiled to WebAssembly, scanning your local netsim scene</span>
   <span id="conn" class="pill">starting…</span>
-  <a href="../hrm/">open the scripted HRM ↗</a>
+  <a href="../hrm/">open the scripted device ↗</a>
 </header>
 
 <main>
   <section id="setup" class="panel">
-    <h2>netsimd is not reachable</h2>
-    <p>This page is served from the cloud, but the Bluetooth scene runs <strong>on your machine</strong>:
-       the wasm build of Simble in this tab connects to a local
-       <code>netsimd</code> over <code>ws://localhost:7681</code>. Start it (the
-       <code>--test-beacons</code> flag puts two beacons on the air immediately), and this page
-       connects by itself:</p>
-    <pre><code># One-time: install the canary-channel emulator package (stable netsimd has no WebSocket endpoint)
-~/Library/Android/sdk/cmdline-tools/latest/bin/sdkmanager --channel=3 emulator
-
-# Start netsim with the WebSocket endpoint on
-~/Library/Android/sdk/emulator/netsimd --logtostderr --no-shutdown --ws-port 7681 --test-beacons</code></pre>
-    <p>Tip: open <a href="../hrm/">the scripted HRM</a> in a second tab — both tabs join the same
-       netsim scene. Edit the HRM's Rhai script there, press Run, and watch its advertisement
-       change in this list.</p>
+    <h2>netsim is not reachable</h2>
+    <p>Could not reach netsim at <code>localhost:7681</code> — is <code>netsimd</code> running with its
+       WebSocket frontend enabled? This page is served from the cloud, but the Bluetooth scene runs
+       <strong>on your machine</strong>: the wasm build of Simble in this tab connects to a local
+       <code>netsimd</code> over <code>ws://localhost:7681</code>. Start it with:</p>
+    <pre><code>netsimd --logtostderr --no-shutdown --ws-port 7681</code></pre>
+    <p>Needs the canary-channel emulator (see the README's <em>Testing Against netsim</em> section).
+       Tip: open <a href="../hrm/">the scripted device</a> in a second tab — both tabs join the same
+       netsim scene. Edit its Rhai script there, press Run, and watch its advertisement change in
+       this list.</p>
   </section>
 
   <section>
+    <div class="controls">
+      <label><input type="checkbox" id="demo-toggle" checked> Show built-in demo devices</label>
+      <span class="note">self-spun advertisers so the scanner shows something with just a bare
+        <code>netsimd</code> — turn off to scan only real scene traffic</span>
+    </div>
     <div id="devices"></div>
     <p id="empty">No advertisements yet — scanning…</p>
   </section>

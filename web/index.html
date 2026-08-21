@@ -41,19 +41,20 @@
   <a class="card" href="./scanner/">
     <h2>Scanner</h2>
     <p>Joins your netsim scene as <code>web-scanner</code> and shows live decoded
-       advertisements: names, RSSI, service UUIDs, manufacturer data.</p>
+       advertisements: names, RSSI, service UUIDs, manufacturer data. Spins up a few
+       built-in demo advertisers so it shows something on a bare netsimd.</p>
   </a>
   <a class="card" href="./hrm/">
-    <h2>Scripted heart-rate monitor</h2>
+    <h2>Scripted device</h2>
     <p>A running Simble whose device is defined by an editable Rhai script — edit it,
-       press Run, and the device on the air changes. The page's beating heart follows the
-       script-driven GATT value.</p>
+       press Run, and the device on the air changes. The live viewer renders whatever GATT
+       structure the script builds (defaults to a thermometer); generate any device with AI.</p>
   </a>
 
   <p class="note">Both pages need a local <code>netsimd</code> (Android emulator canary channel)
      started with <code>--ws-port 7681</code>; each page shows the exact commands when it can't
-     connect. Best demo: open both pages side by side against one netsimd, rename the device in
-     the HRM's script, press Run, and watch the scanner update.
+     connect. Best demo: open both pages side by side against one netsimd, edit the device in
+     the scripted-device script, press Run, and watch the scanner update.
      Source: <a href="https://github.com/schilit/simble">github.com/schilit/simble</a>.</p>
 </main>
 </body>

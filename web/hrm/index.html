@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Simble Web HRM — a scripted device</title>
+<title>Simble scripted device</title>
 <style>
   :root {
     --bg: #0d1117; --panel: #161b22; --border: #30363d; --text: #e6edf3;
@@ -64,10 +64,21 @@
     max-height: 18rem; overflow: auto; background: var(--bg); border: 1px solid var(--border);
     border-radius: 6px; padding: 0.6rem; font-size: 11.5px; white-space: pre-wrap;
   }
-  /* Heart */
-  .heart-box { text-align: center; padding: 1rem 0 0.5rem; }
+  /* Suggestion chips that seed the AI request */
+  .suggest { margin-top: 0.5rem; }
+  .suggest .chip {
+    display: inline-block; border: 1px solid var(--border); border-radius: 1rem;
+    padding: 0.15rem 0.7rem; margin: 0.2rem 0.3rem 0 0; font-size: 0.78rem;
+    cursor: pointer; background: #21262d; color: var(--text);
+  }
+  .suggest .chip:hover { border-color: var(--accent); }
+  .suggest .chip.active { border-color: var(--accent); color: var(--accent); }
+  #req-echo { margin-top: 0.45rem; font-size: 0.8rem; color: var(--dim); }
+  #req-echo b { color: var(--text); font-weight: 500; }
+  /* Heart (only shown for a Heart Rate Measurement characteristic) */
+  .heart-box { text-align: center; padding: 0.5rem 0 0.75rem; }
   .heart {
-    display: inline-block; font-size: 5rem; color: var(--heart);
+    display: inline-block; font-size: 4rem; color: var(--heart);
     transform-origin: center; animation: beat 0.83s ease-in-out infinite;
   }
   .heart.flat { animation: none; opacity: 0.3; }
@@ -78,15 +89,37 @@
     36% { transform: scale(1.12); }
     50% { transform: scale(1); }
   }
-  .bpm { font-size: 2rem; font-weight: 600; }
+  .bpm { font-size: 1.8rem; font-weight: 600; }
   .bpm small { color: var(--dim); font-size: 0.9rem; font-weight: 400; }
-  table.gatt { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
-  table.gatt td { padding: 0.25rem 0.4rem; border-top: 1px solid var(--border); }
-  table.gatt td.mono { font-family: ui-monospace, Menlo, monospace; color: var(--dim); }
-  .tag { color: var(--good); }
+  /* Generic GATT viewer */
   .kv { display: grid; grid-template-columns: auto 1fr; gap: 0.15rem 0.9rem;
     font-size: 0.85rem; margin-bottom: 0.75rem; }
-  .kv dt { color: var(--dim); } .kv dd { margin: 0; font-family: ui-monospace, Menlo, monospace; }
+  .kv dt { color: var(--dim); } .kv dd { margin: 0; }
+  .svc { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.7rem;
+    overflow: hidden; }
+  .svc-head { background: #1c2230; padding: 0.4rem 0.7rem; font-size: 0.82rem; }
+  .svc-head .u { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
+    font-size: 0.76rem; margin-left: 0.4rem; }
+  .chr { padding: 0.5rem 0.7rem; border-top: 1px solid var(--border); }
+  .chr.pulse { animation: pulse 0.9s ease-out; }
+  @keyframes pulse {
+    0% { background: rgba(88,166,255,0.28); }
+    100% { background: transparent; }
+  }
+  .chr-top { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
+  .chr-name { font-weight: 500; }
+  .chr-uuid { font-family: ui-monospace, Menlo, monospace; color: var(--dim); font-size: 0.75rem; }
+  .prop {
+    display: inline-block; border: 1px solid var(--border); border-radius: 4px;
+    padding: 0 0.3rem; font-size: 0.68rem; color: var(--dim);
+    font-family: ui-monospace, Menlo, monospace;
+  }
+  .prop.sub { color: var(--good); border-color: var(--good); }
+  .chr-val { margin-top: 0.25rem; font-size: 0.9rem; }
+  .chr-val .decoded { font-weight: 600; }
+  .chr-val .raw { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
+    font-size: 0.76rem; margin-left: 0.4rem; }
+  .sub-note { color: var(--good); font-size: 0.72rem; margin-left: 0.4rem; }
   #setup { display: none; grid-column: 1 / -1; border-color: var(--warn); }
   #setup.visible { display: block; }
   #setup pre {
@@ -94,33 +127,30 @@
     padding: 0.6rem; overflow-x: auto; font-size: 0.8rem;
   }
   #setup code { color: var(--good); }
+  #setup a { color: var(--accent); }
   footer { color: var(--dim); font-size: 0.78rem; padding: 0 1.5rem 1.5rem;
     max-width: 75rem; margin: 0 auto; }
 </style>
 </head>
 <body>
 <header>
-  <h1>Simble Web HRM</h1>
-  <span class="sub">this page opened a running Simble — the script below <em>is</em> the device</span>
+  <h1>Simble scripted device</h1>
+  <span class="sub">this page opened a running Simble — the Rhai script below <em>is</em> the device</span>
   <span id="conn" class="pill">starting…</span>
   <a href="../scanner/">open the scanner ↗</a>
 </header>
 
 <main>
   <section id="setup" class="panel">
-    <h2>netsimd is not reachable</h2>
-    <p>This page is served from the cloud, but the Bluetooth scene runs <strong>on your machine</strong>:
-       the wasm build of Simble in this tab connects to a local
-       <code>netsimd</code> over <code>ws://localhost:7681</code>. Start it, and this page connects
-       by itself:</p>
-    <pre><code># One-time: install the canary-channel emulator package (stable netsimd has no WebSocket endpoint)
-~/Library/Android/sdk/cmdline-tools/latest/bin/sdkmanager --channel=3 emulator
-
-# Start netsim with the WebSocket endpoint on
-~/Library/Android/sdk/emulator/netsimd --logtostderr --no-shutdown --ws-port 7681 --test-beacons</code></pre>
-    <p class="hint">Tip: open <a href="../scanner/" style="color:var(--accent)">the scanner</a> in a second tab —
-       both tabs join the same netsim scene. Edit the script here, press Run, and watch the
-       scanner tab pick up the change.</p>
+    <h2>netsim is not reachable</h2>
+    <p>Could not reach netsim at <code>localhost:7681</code> — is <code>netsimd</code> running with its
+       WebSocket frontend enabled? This page is served from the cloud, but the Bluetooth scene runs
+       <strong>on your machine</strong>: the wasm build of Simble in this tab connects to a local
+       <code>netsimd</code> over <code>ws://localhost:7681</code>. Start it with:</p>
+    <pre><code>netsimd --logtostderr --no-shutdown --ws-port 7681</code></pre>
+    <p class="hint">Needs the canary-channel emulator (see the README's <em>Testing Against netsim</em>
+       section). Tip: open <a href="../scanner/">the scanner</a> in a second tab — both tabs join the
+       same netsim scene. Edit the script here, press Run, and watch the scanner tab pick up the change.</p>
   </section>
 
   <section class="panel">
@@ -138,6 +168,8 @@
       <button id="ai-gemini">Gemini</button>
       <button id="ai-copy">Copy prompt</button>
     </div>
+    <div class="suggest" id="suggest"></div>
+    <div id="req-echo"></div>
     <div id="ai-hint" class="hint"></div>
     <details>
       <summary>view the AI prompt</summary>
@@ -154,25 +186,26 @@
 
   <section class="panel">
     <h2>Live device</h2>
-    <div class="heart-box">
-      <span id="heart" class="heart flat">❤</span>
-      <div class="bpm"><span id="bpm">—</span> <small>bpm</small></div>
-    </div>
     <dl class="kv">
       <dt>advertising as</dt><dd id="dev-name">—</dd>
       <dt>connection</dt><dd id="dev-conn">—</dd>
       <dt>subscription</dt><dd id="dev-sub">—</dd>
     </dl>
-    <table class="gatt"><tbody id="gatt-body"></tbody></table>
-    <p class="hint">A central on the scene can connect and subscribe — e.g. from an emulator, or
-       just watch the advertisement with the scanner tab. GATT values above are read live from
-       the wasm stack's real attribute database.</p>
+    <div id="hr-box" class="heart-box" hidden>
+      <span id="heart" class="heart flat">❤</span>
+      <div class="bpm"><span id="bpm">—</span> <small>bpm</small></div>
+    </div>
+    <div id="gatt"></div>
+    <p class="hint">This viewer renders whatever GATT structure the running script builds — every
+       service and characteristic, with properties, live values, and subscription state read from
+       the wasm stack's real attribute database. A central on the scene can connect and subscribe
+       (an emulator, or just watch the advertisement with the scanner tab).</p>
   </section>
 </main>
 
 <footer>
   Simble compiled to WebAssembly — no server-side interpreter, no backend. The page joins netsim
-  as <code>web-hrm</code>; the advertised name comes from your script.
+  as <code>web-device</code>; the advertised name comes from your script.
 </footer>
 
 <script type="module" src="./hrm.js"></script>

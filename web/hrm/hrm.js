@@ -1,17 +1,20 @@
-// Simble Web HRM page glue: a running Simble (wasm) whose device is defined
-// by the editable Rhai script. All Bluetooth logic is in Rust/wasm; this file
-// only wires DOM <-> WebPeripheral.
+// Simble scripted-device page glue: a running Simble (wasm) whose device is
+// defined by the editable Rhai script. All Bluetooth logic is in Rust/wasm;
+// this file only wires DOM <-> WebPeripheral and renders the live GATT
+// database the script builds — whatever kind of device that is.
 
 import init, { WebPeripheral, default_heart_rate_script } from "../pkg/simble.js";
 
 const WS_URL =
-  "ws://localhost:7681/v1/websocket/bt?name=web-hrm&address=CC:1E:57:00:00:02";
+  "ws://localhost:7681/v1/websocket/bt?name=web-device&address=CC:1E:57:00:00:02";
 
 // ---------------------------------------------------------------------------
 // The "Generate with AI" prompt. Teaches the exact scripting surface shipped
 // in simble::scripting (bindings.rs / constants.rs) plus this page's web
-// runtime conventions. The worked example is the page's default script shape,
-// which is exercised by a native unit test in src/transport/wasm_ws.rs.
+// runtime conventions. The worked example builds a HEART-RATE MONITOR — on
+// purpose a DIFFERENT device from this page's on-screen default (a
+// thermometer), so pasting the AI's result yields something visibly different
+// from what's already running.
 const AI_PROMPT = `You write Rhai scripts that define virtual Bluetooth LE peripherals for Simble (a Rust BLE simulator that runs the script in a web page). Reply with ONLY a Rhai script in a single code block — no explanations.
 
 RHAI IS NOT RUST:
@@ -46,13 +49,17 @@ CONSTANTS:
 - android::PERMISSION_READ, PERMISSION_WRITE (plus _ENCRYPTED / _MITM variants)
 - android::SERVICE_TYPE_PRIMARY, SERVICE_TYPE_SECONDARY; android::GATT_SUCCESS, GATT_FAILURE
 - uuid::HEART_RATE_SERVICE, uuid::HEART_RATE_MEASUREMENT, uuid::BODY_SENSOR_LOCATION, uuid::BATTERY_SERVICE, uuid::BATTERY_LEVEL, uuid::CLIENT_CHARACTERISTIC_CONFIGURATION, uuid::MANUFACTURER_NAME, uuid::MODEL_NUMBER, uuid::SERIAL_NUMBER (Device Information), and more.
-- Any other UUID: uuid::of("2A38") for a 16-bit assigned number, or uuid::of("12345678-1234-5678-1234-56789abcdef0") for a custom 128-bit UUID.
+- Any other UUID: uuid::of("2A6E") for a 16-bit assigned number, or uuid::of("12345678-1234-5678-1234-56789abcdef0") for a custom 128-bit UUID. Use uuid::of for anything without a named constant (e.g. Environmental Sensing 181A, Temperature 2A6E, Humidity 2A6F, Cycling Speed and Cadence 1816 / CSC Measurement 2A5B).
 
 RULES:
 - Every notify-capable characteristic MUST attach a CCCD descriptor, or centrals cannot subscribe and the runtime will not notify:
     let cccd = android::BluetoothGattDescriptor(uuid::CLIENT_CHARACTERISTIC_CONFIGURATION, android::PERMISSION_READ | android::PERMISSION_WRITE);
     chr.add_descriptor(cccd);
-- Standard encodings: Heart Rate Measurement = [flags, bpm] with flags 0x00 for an 8-bit bpm. Battery Level = one byte 0-100.
+- Standard encodings:
+    Heart Rate Measurement (2A37) = [flags, bpm], flags 0x00 for an 8-bit bpm.
+    Battery Level (2A19) = one byte, 0-100.
+    Temperature (2A6E, Environmental Sensing) = signed 16-bit little-endian, hundredths of a degree C: 21.5C -> value 2150 -> [2150 & 0xFF, (2150 >> 8) & 0xFF].
+    Humidity (2A6F) = unsigned 16-bit little-endian, hundredths of a percent.
 
 COMPLETE WORKED EXAMPLE (a heart-rate monitor whose bpm breathes over time):
 \`\`\`rhai
@@ -82,6 +89,27 @@ fn tick(server, t) {
 MY DEVICE REQUEST:
 `;
 
+// Clickable suggestions that seed the "MY DEVICE REQUEST:" line. Each is
+// buildable with the bindings above (named uuid::* consts, or uuid::of for the
+// rest). One is picked at random on load so a first-time visitor always has an
+// interesting, non-default device to generate in a single click.
+const SUGGESTIONS = [
+  { label: "🔋 battery monitor",
+    request: "a battery monitor: a Battery Service with a Battery Level characteristic (uuid::BATTERY_LEVEL, notify + a CCCD) whose percentage slowly drains from 100 toward 5 and then jumps back to full." },
+  { label: "🚴 cycling speed sensor",
+    request: "a cycling speed and cadence sensor: service uuid::of(\"1816\") with a CSC Measurement characteristic uuid::of(\"2A5B\") (notify + a CCCD) whose cumulative wheel revolutions increase steadily over time." },
+  { label: "💡 RGB smart light",
+    request: "an RGB smart light: a custom 128-bit service via uuid::of(\"f0000001-1234-5678-1234-56789abcdef0\") with a writable+notify color characteristic holding [R, G, B] bytes that cycle through the rainbow over time." },
+  { label: "❤️ heart-rate monitor",
+    request: "a heart-rate monitor whose bpm rises and falls like exercise intervals (uuid::HEART_RATE_MEASUREMENT, notify + a CCCD, payload [0x00, bpm])." },
+  { label: "🌫 humidity sensor",
+    request: "a humidity sensor: Environmental Sensing service uuid::of(\"181A\") with a Humidity characteristic uuid::of(\"2A6F\") (notify + a CCCD), an unsigned 16-bit little-endian value in hundredths of a percent drifting around 45%." },
+  { label: "🎲 surprise me",
+    request: "a surprising, fun made-up BLE device of your choice — pick something delightful and make its values animate over time." },
+];
+
+let currentRequest = "";
+
 // --- DOM handles -----------------------------------------------------------
 const $ = (id) => document.getElementById(id);
 const editor = $("script");
@@ -92,6 +120,7 @@ let peripheral = null;
 let runStart = performance.now();
 let lastConnectAttempt = 0;
 let openedOnce = false;
+const prevValues = new Map(); // "service/char" -> last value hex, for the pulse
 
 function setPill(text, cls) {
   connPill.textContent = text;
@@ -121,6 +150,7 @@ function run() {
     } else {
       createPeripheral(editor.value);
     }
+    prevValues.clear();
     $("run-state").textContent = "device rebuilt from script";
     setTimeout(() => ($("run-state").textContent = ""), 2500);
   } catch (e) {
@@ -128,7 +158,31 @@ function run() {
   }
 }
 
-// --- rendering -------------------------------------------------------------
+// --- decoding helpers ------------------------------------------------------
+const escapeHtml = (s) =>
+  String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+// A small assigned-number -> friendly-name table for the viewer. Keys are the
+// uppercase 16-bit hex forms Simble emits (uuid.to_string()).
+const UUID_NAMES = {
+  "180D": "Heart Rate", "2A37": "Heart Rate Measurement", "2A38": "Body Sensor Location",
+  "180F": "Battery", "2A19": "Battery Level",
+  "181A": "Environmental Sensing", "2A6E": "Temperature", "2A6F": "Humidity",
+  "1809": "Health Thermometer", "2A1C": "Temperature Measurement",
+  "1816": "Cycling Speed and Cadence", "2A5B": "CSC Measurement", "2A5C": "CSC Feature",
+  "180A": "Device Information", "2A29": "Manufacturer Name", "2A24": "Model Number",
+  "2A25": "Serial Number", "2A26": "Firmware Revision",
+  "1800": "Generic Access", "2A00": "Device Name", "1801": "Generic Attribute",
+  "2902": "Client Characteristic Configuration",
+};
+const nameFor = (uuid) => UUID_NAMES[uuid] || null;
+
+function bytesFromHex(hex) {
+  const out = [];
+  for (let i = 0; i + 1 < hex.length; i += 2) out.push(parseInt(hex.slice(i, i + 2), 16));
+  return out;
+}
+
 function bpmFromHex(hex) {
   // Heart Rate Measurement (0x2A37): flags byte, then u8 or LE u16 bpm.
   if (!hex || hex.length < 4) return null;
@@ -140,6 +194,54 @@ function bpmFromHex(hex) {
   return parseInt(hex.slice(2, 4), 16);
 }
 
+// Returns a human string for a known characteristic type, or null to fall back
+// to hex / auto text.
+function decodeValue(uuid, hex) {
+  if (!hex) return null;
+  const b = bytesFromHex(hex);
+  switch (uuid) {
+    case "2A37": { const bpm = bpmFromHex(hex); return bpm == null ? null : `${bpm} bpm`; }
+    case "2A19": return b.length ? `${b[0]}%` : null;
+    case "2A38": return b.length ? bodySensorLocation(b[0]) : null;
+    case "2A6E": { // Temperature, sint16 LE, 0.01 C
+      if (b.length < 2) return null;
+      let v = b[0] | (b[1] << 8); if (v & 0x8000) v -= 0x10000;
+      return `${(v / 100).toFixed(2)} °C`;
+    }
+    case "2A6F": { // Humidity, uint16 LE, 0.01 %
+      if (b.length < 2) return null;
+      return `${((b[0] | (b[1] << 8)) / 100).toFixed(1)} %`;
+    }
+    default: return autoText(b);
+  }
+}
+
+function bodySensorLocation(n) {
+  return ["Other", "Chest", "Wrist", "Finger", "Hand", "Ear Lobe", "Foot"][n] ?? `location ${n}`;
+}
+
+// If every byte is printable ASCII, show it as text (manufacturer/model names).
+function autoText(bytes) {
+  if (!bytes.length) return null;
+  if (bytes.every((c) => c >= 0x20 && c <= 0x7e)) {
+    return `"${String.fromCharCode(...bytes)}"`;
+  }
+  return null;
+}
+
+function propChips(props, subscribed) {
+  const chips = [];
+  if (props & 0x02) chips.push("R");
+  if (props & (0x08 | 0x04)) chips.push("W");
+  if (props & 0x10) chips.push("N");
+  if (props & 0x20) chips.push("I");
+  if (props & 0x01) chips.push("B");
+  return chips
+    .map((c) => `<span class="prop${subscribed && (c === "N" || c === "I") ? " sub" : ""}">${c}</span>`)
+    .join(" ");
+}
+
+// --- rendering -------------------------------------------------------------
 function render(status) {
   $("dev-name").textContent = `${status.name} (${status.address})`;
   $("dev-conn").textContent = status.connected
@@ -151,32 +253,66 @@ function render(status) {
     ? "central subscribed — notifications flowing"
     : "no subscriber yet";
 
-  const rows = [];
+  // Which characteristic changed most recently this tick? Drives the generic
+  // "value pulse" indicator (the heart animation is the HR special case).
+  let changedKey = null;
+  const cards = [];
   for (const service of status.services) {
-    rows.push(`<tr><td class="tag" colspan="2">service ${service.uuid}</td></tr>`);
+    const sName = nameFor(service.uuid);
+    const head = sName
+      ? `${escapeHtml(sName)}<span class="u">0x${service.uuid}</span>`
+      : `<span class="u">Service 0x${service.uuid}</span>`;
+    const rows = [];
     for (const c of service.characteristics) {
-      const sub = c.subscribed ? " ⚡" : "";
+      const key = `${service.uuid}/${c.uuid}`;
+      if (prevValues.has(key) && prevValues.get(key) !== c.value) changedKey = key;
+      prevValues.set(key, c.value);
+
+      const cName = nameFor(c.uuid);
+      const nameHtml = cName
+        ? `<span class="chr-name">${escapeHtml(cName)}</span><span class="chr-uuid">0x${c.uuid}</span>`
+        : `<span class="chr-name chr-uuid">0x${c.uuid}</span>`;
+      const decoded = decodeValue(c.uuid, c.value);
+      const valHtml = c.value
+        ? `${decoded ? `<span class="decoded">${escapeHtml(decoded)}</span>` : ""}<span class="raw">${c.value}</span>`
+        : `<span class="raw">—</span>`;
+      const subNote = c.subscribed ? `<span class="sub-note">⚡ subscribed</span>` : "";
       rows.push(
-        `<tr><td class="mono">${c.uuid}${sub}</td><td class="mono">${c.value || "—"}</td></tr>`
+        `<div class="chr" data-key="${key}">
+          <div class="chr-top">${nameHtml} ${propChips(c.properties, c.subscribed)}${subNote}</div>
+          <div class="chr-val">${valHtml}</div>
+        </div>`
       );
     }
+    cards.push(`<div class="svc"><div class="svc-head">${head}</div>${rows.join("")}</div>`);
   }
-  $("gatt-body").innerHTML = rows.join("");
+  $("gatt").innerHTML = cards.join("");
 
-  // Heart animation from the GATT database, not from page state: the script
-  // owns the behavior, the UI just reflects the attribute value.
+  // Heart animation is a special case: only when an HR Measurement (0x2A37)
+  // characteristic exists. Otherwise a generic pulse flashes on whichever
+  // characteristic most recently notified.
   const hrChar = status.services
     .flatMap((s) => s.characteristics)
     .find((c) => c.uuid === "2A37");
-  const bpm = hrChar ? bpmFromHex(hrChar.value) : null;
-  const heart = $("heart");
-  if (bpm && bpm > 0) {
-    $("bpm").textContent = bpm;
-    heart.classList.remove("flat");
-    heart.style.animationDuration = `${(60 / bpm).toFixed(3)}s`;
+  const hrBox = $("hr-box");
+  if (hrChar) {
+    hrBox.hidden = false;
+    const bpm = bpmFromHex(hrChar.value);
+    const heart = $("heart");
+    if (bpm && bpm > 0) {
+      $("bpm").textContent = bpm;
+      heart.classList.remove("flat");
+      heart.style.animationDuration = `${(60 / bpm).toFixed(3)}s`;
+    } else {
+      $("bpm").textContent = "—";
+      heart.classList.add("flat");
+    }
   } else {
-    $("bpm").textContent = "—";
-    heart.classList.add("flat");
+    hrBox.hidden = true;
+    if (changedKey) {
+      const el = document.querySelector(`.chr[data-key="${CSS.escape(changedKey)}"]`);
+      if (el) { el.classList.remove("pulse"); void el.offsetWidth; el.classList.add("pulse"); }
+    }
   }
 
   if (status.last_error) showScriptError(`tick error: ${status.last_error}`);
@@ -194,8 +330,14 @@ function loop() {
   }
   const state = peripheral.ready_state(); // 0 connecting 1 open 2 closing 3 closed
   if (state === 3) {
-    setPill("netsimd not reachable", "bad");
-    setupPanel.classList.add("visible");
+    // Distinguish "never reached netsim" (connection refused) from a
+    // mid-session drop: only the former shows the setup instructions.
+    if (openedOnce) {
+      setPill("connection lost — reconnecting…", "bad");
+    } else {
+      setPill("netsim not reachable", "bad");
+      setupPanel.classList.add("visible");
+    }
     try { peripheral.free(); } catch (_) { /* already gone */ }
     peripheral = null; // the next loop pass schedules a reconnect
     return;
@@ -217,20 +359,50 @@ function loop() {
 }
 
 // --- AI affordance ---------------------------------------------------------
-function wireAi() {
-  const encoded = encodeURIComponent(AI_PROMPT);
+function effectivePrompt() {
+  return AI_PROMPT + (currentRequest ? currentRequest + "\n" : "");
+}
+
+function refreshAi() {
+  const encoded = encodeURIComponent(effectivePrompt());
   $("ai-claude").href = `https://claude.ai/new?q=${encoded}`;
   $("ai-chatgpt").href = `https://chatgpt.com/?q=${encoded}`;
-  $("ai-prompt-view").textContent = AI_PROMPT;
+  $("ai-prompt-view").textContent = effectivePrompt();
+  $("req-echo").innerHTML = currentRequest
+    ? `Request: <b>${escapeHtml(currentRequest)}</b>`
+    : "Pick a suggestion above, or type your own after “MY DEVICE REQUEST:”.";
+}
+
+function setRequest(request, chipEl) {
+  currentRequest = request;
+  for (const el of document.querySelectorAll("#suggest .chip")) el.classList.remove("active");
+  if (chipEl) chipEl.classList.add("active");
+  refreshAi();
+}
+
+function wireAi() {
+  const suggest = $("suggest");
+  suggest.innerHTML = SUGGESTIONS
+    .map((s, i) => `<span class="chip" data-i="${i}">${escapeHtml(s.label)}</span>`)
+    .join("");
+  for (const chip of suggest.querySelectorAll(".chip")) {
+    chip.addEventListener("click", () =>
+      setRequest(SUGGESTIONS[+chip.dataset.i].request, chip));
+  }
+  // Rotating seed: a random suggestion is pre-filled so the prompt is
+  // immediately useful, and it's a non-default device type.
+  const seed = Math.floor(Math.random() * SUGGESTIONS.length);
+  setRequest(SUGGESTIONS[seed].request, suggest.querySelector(`.chip[data-i="${seed}"]`));
+
   const hint = (t) => { $("ai-hint").textContent = t; setTimeout(() => ($("ai-hint").textContent = ""), 4000); };
   $("ai-gemini").addEventListener("click", async () => {
-    await navigator.clipboard.writeText(AI_PROMPT);
+    await navigator.clipboard.writeText(effectivePrompt());
     window.open("https://gemini.google.com/app", "_blank", "noopener");
-    hint("prompt copied — paste it into Gemini, add your device description, and send");
+    hint("prompt copied — paste it into Gemini and send");
   });
   $("ai-copy").addEventListener("click", async () => {
-    await navigator.clipboard.writeText(AI_PROMPT);
-    hint("prompt copied — paste into any LLM, append your device description, then paste the returned Rhai here and press Run");
+    await navigator.clipboard.writeText(effectivePrompt());
+    hint("prompt copied — paste into any LLM, then paste the returned Rhai here and press Run");
   });
 }
 

@@ -30,9 +30,11 @@ use zerocopy::IntoBytes;
 
 use super::hci_adapter::{HciChannel, h4_type};
 
-/// The default script served by the HRM demo page — a single source of truth
-/// shared by the page (via `default_heart_rate_script`) and the native unit
-/// tests below, so what ships is what's tested.
+/// The default script served by the scripted-device page — a single source of
+/// truth shared by the page (via `default_heart_rate_script`) and the native
+/// unit tests below, so what ships is what's tested. (The file keeps its
+/// legacy `heart_rate.rhai` name but now builds a thermometer; the export name
+/// is likewise kept for the page's stable wasm import.)
 pub const DEFAULT_HEART_RATE_SCRIPT: &str = include_str!("../../web/hrm/heart_rate.rhai");
 
 mod event {
@@ -257,6 +259,80 @@ fn adv_data_param(payload: &[u8]) -> Vec<u8> {
     param
 }
 
+/// Builds the advertising payload for a lightweight demo advertiser (used by
+/// the scanner page to populate an otherwise-empty scene): flags, an optional
+/// 16-bit service UUID, optional manufacturer data, then the name. Extras are
+/// dropped and the name trimmed if the 31-byte legacy limit is exceeded — the
+/// name is the demo's identity, so it survives longest.
+pub fn build_demo_adv_payload(
+    name: &str,
+    service_uuid: u16,
+    mfg_company: u16,
+    mfg_data: &[u8],
+) -> Vec<u8> {
+    const MAX_ADV_LEN: usize = 31;
+    let build = |name: &str, with_extras: bool| {
+        let mut ad = AdvertisingData::new()
+            .with_flags(flags::LE_GENERAL_DISCOVERABLE | flags::BR_EDR_NOT_SUPPORTED);
+        if with_extras {
+            if service_uuid != 0 {
+                ad = ad.with_service_uuid_16(service_uuid);
+            }
+            if !mfg_data.is_empty() {
+                ad = ad.with_manufacturer_data(mfg_company, mfg_data);
+            }
+        }
+        ad.with_name(name).to_bytes()
+    };
+    let mut bytes = build(name, true);
+    if bytes.len() > MAX_ADV_LEN {
+        bytes = build(name, false);
+    }
+    let mut trimmed = name.to_string();
+    while bytes.len() > MAX_ADV_LEN && trimmed.pop().is_some() {
+        bytes = build(&trimmed, false);
+    }
+    bytes
+}
+
+/// Queues a demo advertiser's full HCI bring-up: reset, event masks,
+/// advertising parameters, advertising data (name + optional service UUID +
+/// optional manufacturer data) and scan response, then advertising enable.
+/// Advertise-only — no GATT server — so the scanner page can cheaply put a few
+/// named devices on the air.
+pub fn queue_advertiser_start(
+    channel: &HciChannel,
+    name: &str,
+    service_uuid: u16,
+    mfg_company: u16,
+    mfg_data: &[u8],
+) -> Result<(), SimbleError> {
+    queue_common_init(channel)?;
+    // LE Set Advertising Parameters: 100ms interval, ADV_IND, public own
+    // address, all channels, no filter (same shape as ScriptedPeripheral).
+    queue_command(
+        channel,
+        [0x06, 0x20],
+        &[
+            0xA0, 0x00, 0xA0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07,
+            0x00,
+        ],
+    )?;
+    queue_command(
+        channel,
+        [0x08, 0x20],
+        &adv_data_param(&build_demo_adv_payload(
+            name,
+            service_uuid,
+            mfg_company,
+            mfg_data,
+        )),
+    )?;
+    let scan_rsp = AdvertisingData::new().with_name(name).to_bytes();
+    queue_command(channel, [0x09, 0x20], &adv_data_param(&scan_rsp))?;
+    queue_command(channel, [0x0A, 0x20], &[0x01]) // LE Set Advertising Enable
+}
+
 fn send_acl(channel: &HciChannel, handle: u16, l2cap: &[u8]) -> Result<(), SimbleError> {
     let header = HciAclHeader::new(
         handle,
@@ -331,6 +407,10 @@ struct ServiceStatus {
 #[derive(Serialize)]
 struct CharacteristicStatus {
     uuid: String,
+    /// The GATT property bitmask (READ/WRITE/NOTIFY/INDICATE/…), so the page
+    /// can render the generic R/W/N/I chips for any script-built device, not
+    /// just the ones it recognizes.
+    properties: i64,
     value: String,
     subscribed: bool,
 }
@@ -670,6 +750,7 @@ impl ScriptedPeripheral {
                                 .is_some_and(|h| subscribed_handles.contains(&h));
                             CharacteristicStatus {
                                 uuid: characteristic.uuid.to_string(),
+                                properties: characteristic.properties as i64,
                                 value,
                                 subscribed,
                             }
@@ -724,7 +805,8 @@ mod web {
 
     use super::super::hci_adapter::HciChannel;
     use super::{
-        DEFAULT_HEART_RATE_SCRIPT, ScriptedPeripheral, parse_scan_reports, queue_scanner_start,
+        DEFAULT_HEART_RATE_SCRIPT, ScriptedPeripheral, parse_scan_reports, queue_advertiser_start,
+        queue_scanner_start,
     };
 
     /// Panics otherwise vanish into an opaque `unreachable` trap; route them
@@ -849,6 +931,72 @@ mod web {
         }
     }
 
+    /// A lightweight, advertise-only device the scanner page spins up to
+    /// populate an otherwise-empty netsim scene (no GATT server, no script —
+    /// just a name, an optional 16-bit service UUID, and optional manufacturer
+    /// data on the air). Several of these run on their own sockets so the
+    /// scanner demos something on first open.
+    #[wasm_bindgen]
+    pub struct WebAdvertiser {
+        transport: WasmWsTransport,
+        channel: HciChannel,
+        started: bool,
+        name: String,
+        service_uuid: u16,
+        mfg_company: u16,
+        mfg_data: Vec<u8>,
+    }
+
+    #[wasm_bindgen]
+    impl WebAdvertiser {
+        /// `service_uuid` of 0 means "no service UUID"; an empty `mfg_data`
+        /// means "no manufacturer data".
+        #[wasm_bindgen(constructor)]
+        pub fn new(
+            url: &str,
+            name: &str,
+            service_uuid: u16,
+            mfg_company: u16,
+            mfg_data: Vec<u8>,
+        ) -> Result<WebAdvertiser, JsValue> {
+            install_panic_hook();
+            Ok(Self {
+                transport: WasmWsTransport::connect(url)?,
+                channel: HciChannel::new(),
+                started: false,
+                name: name.to_string(),
+                service_uuid,
+                mfg_company,
+                mfg_data,
+            })
+        }
+
+        pub fn ready_state(&self) -> u16 {
+            self.transport.ready_state()
+        }
+
+        /// One pump: on first open, issues the advertising bring-up; then keeps
+        /// the socket drained. Advertise-only, so any inbound controller
+        /// packets (a central probing) are discarded.
+        pub fn tick(&mut self) -> Result<(), JsValue> {
+            self.transport.pump(&self.channel)?;
+            if !self.started && self.transport.is_open() {
+                queue_advertiser_start(
+                    &self.channel,
+                    &self.name,
+                    self.service_uuid,
+                    self.mfg_company,
+                    &self.mfg_data,
+                )
+                .map_err(js_error)?;
+                self.started = true;
+            }
+            while self.channel.poll_controller_packet().is_some() {}
+            self.transport.pump(&self.channel)?;
+            Ok(())
+        }
+    }
+
     /// The HRM page's engine: a running Simble whose device is defined by an
     /// editable Rhai script (see [`ScriptedPeripheral`]).
     #[wasm_bindgen]
@@ -920,7 +1068,7 @@ mod web {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub use web::{WebPeripheral, WebScanner, default_heart_rate_script};
+pub use web::{WebAdvertiser, WebPeripheral, WebScanner, default_heart_rate_script};
 
 #[cfg(test)]
 mod tests {
@@ -1085,7 +1233,7 @@ mod tests {
     fn test_default_script_full_lifecycle() {
         let mut peripheral =
             ScriptedPeripheral::run_script(DEFAULT_HEART_RATE_SCRIPT).expect("default script runs");
-        assert_eq!(peripheral.device_name(), "web-hrm");
+        assert_eq!(peripheral.device_name(), "web-thermometer");
         assert!(peripheral.tick_defined);
 
         let channel = HciChannel::new();
@@ -1096,11 +1244,11 @@ mod tests {
             opcodes,
             vec![0x0C03, 0x0C01, 0x2001, 0x2006, 0x2008, 0x2009, 0x200A]
         );
-        // Advertising data carries the script device's name and the Heart
-        // Rate service UUID the script declared.
+        // Advertising data carries the script device's name and the
+        // Environmental Sensing service UUID (0x181A) the script declared.
         let adv_data = &commands[4];
-        assert!(adv_data.windows(7).any(|w| w == b"web-hrm"));
-        assert!(adv_data.windows(2).any(|w| w == [0x0D, 0x18]));
+        assert!(adv_data.windows(15).any(|w| w == b"web-thermometer"));
+        assert!(adv_data.windows(2).any(|w| w == [0x1A, 0x18]));
 
         // Central connects.
         let peer = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
@@ -1131,7 +1279,7 @@ mod tests {
         );
         assert!(peripheral.cccd_notify_enabled(&watch));
 
-        // Script tick updates the measurement, which becomes a notification.
+        // Script tick updates the temperature, which becomes a notification.
         peripheral.tick(&channel, 2.0).unwrap();
         assert!(
             peripheral.last_error.is_none(),
@@ -1143,9 +1291,11 @@ mod tests {
             .iter()
             .find(|p| p[0] == h4_type::HCI_ACL_DATA && p.contains(&opcode::HANDLE_VALUE_NTF))
             .expect("tick produced a notification");
-        // 8-bit measurement: flags 0x00, then a plausible bpm.
-        let bpm = *notification.last().unwrap();
-        assert!((60..=90).contains(&bpm), "bpm {bpm}");
+        // Temperature (0x2A6E): a signed 16-bit little-endian value in
+        // hundredths of a degree C — the last two bytes of the notification.
+        let value = &notification[notification.len() - 2..];
+        let centi = i16::from_le_bytes([value[0], value[1]]);
+        assert!((2000..=2300).contains(&centi), "centi {centi}");
 
         // Same value on the next tick at the same t: no duplicate notification.
         peripheral.tick(&channel, 2.0).unwrap();
@@ -1211,5 +1361,58 @@ mod tests {
         let peripheral = ScriptedPeripheral::run_script(script).unwrap();
         let watch = &peripheral.watched[0];
         assert_eq!(peripheral.attribute_value(watch).unwrap(), vec![0x00, 99]);
+    }
+
+    #[test]
+    fn test_status_json_reports_characteristic_properties() {
+        // The generic viewer renders R/W/N/I chips from the raw property
+        // bitmask, so the status snapshot must expose it per characteristic.
+        let peripheral =
+            ScriptedPeripheral::run_script(DEFAULT_HEART_RATE_SCRIPT).expect("default script runs");
+        let status = peripheral.status_json();
+        assert!(status.contains("\"properties\":"), "{status}");
+        // The Temperature characteristic is READ (0x02) | NOTIFY (0x10) = 0x12.
+        let expected = (BluetoothGattCharacteristic::PROPERTY_READ
+            | BluetoothGattCharacteristic::PROPERTY_NOTIFY) as i64;
+        assert!(
+            status.contains(&format!("\"properties\":{expected}")),
+            "{status}"
+        );
+    }
+
+    #[test]
+    fn test_demo_advertiser_bring_up() {
+        // The scanner page's self-spun demo devices advertise via this path;
+        // verify the HCI sequence and that the payload carries the name,
+        // service UUID, and manufacturer data.
+        let channel = HciChannel::new();
+        queue_advertiser_start(
+            &channel,
+            "Simble Beacon",
+            0x180F,
+            0x0059,
+            &[0x01, 0x02, 0x03, 0x04],
+        )
+        .unwrap();
+        let commands = drain_host_packets(&channel);
+        let opcodes: Vec<u16> = commands.iter().map(|c| opcode_of(c)).collect();
+        assert_eq!(
+            opcodes,
+            vec![0x0C03, 0x0C01, 0x2001, 0x2006, 0x2008, 0x2009, 0x200A]
+        );
+        let adv_data = &commands[4];
+        assert!(adv_data.windows(13).any(|w| w == b"Simble Beacon"));
+        assert!(adv_data.windows(2).any(|w| w == [0x0F, 0x18])); // service 0x180F
+        assert!(adv_data.windows(4).any(|w| w == [0x01, 0x02, 0x03, 0x04])); // mfg data
+        // Enable advertising is the last command, with the enable flag set.
+        assert_eq!(commands[6][4], 0x01);
+    }
+
+    #[test]
+    fn test_demo_adv_payload_trims_to_limit() {
+        // A very long name still yields a legal (<= 31-byte) payload.
+        let long = "a-demo-advertiser-name-well-past-the-legacy-advertising-limit";
+        let payload = build_demo_adv_payload(long, 0x181A, 0, &[]);
+        assert!(payload.len() <= 31, "payload {} bytes", payload.len());
     }
 }

@@ -23,15 +23,23 @@ fn drain(t: &mut NetsimTransport<std::net::TcpStream>, ch: &HciChannel) -> Vec<V
     out
 }
 
+fn connect_or_exit(url: &str) -> NetsimTransport<std::net::TcpStream> {
+    match NetsimTransport::connect(url) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn main() {
-    let mut adv_t = NetsimTransport::connect(
+    let mut adv_t = connect_or_exit(
         "ws://127.0.0.1:7681/v1/websocket/bt?name=simble-adv&address=11:22:33:44:55:01",
-    )
-    .expect("connect adv");
-    let mut scan_t = NetsimTransport::connect(
+    );
+    let mut scan_t = connect_or_exit(
         "ws://127.0.0.1:7681/v1/websocket/bt?name=simble-scan&address=11:22:33:44:55:02",
-    )
-    .expect("connect scan");
+    );
     let adv = HciChannel::new();
     let scan = HciChannel::new();
 

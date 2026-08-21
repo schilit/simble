@@ -1,18 +1,34 @@
 // Simble Web Scanner page glue. All HCI/GAP work (scan bring-up, advertising
 // report parsing, AD-structure decoding) happens in Rust compiled to wasm;
-// this file only aggregates reports per address and renders DOM.
+// this file aggregates reports per address, renders DOM, and — so the scanner
+// demos something on a bare netsimd — spins up a few built-in advertiser
+// devices of its own (each a separate WebSocket into the same netsim scene).
 
-import init, { WebScanner } from "../pkg/simble.js";
+import init, { WebScanner, WebAdvertiser } from "../pkg/simble.js";
 
 const WS_URL =
   "ws://localhost:7681/v1/websocket/bt?name=web-scanner&address=CC:1E:57:00:00:01";
+
+// Built-in demo advertisers: name shown on the air, netsim node name + address
+// (unique per device), optional 16-bit service UUID (0 = none), and optional
+// manufacturer data (company id + bytes; empty = none).
+const DEMO_DEVICES = [
+  { node: "demo-beacon", address: "CC:1E:57:00:00:11", name: "Simble Beacon",
+    service: 0x0000, company: 0x0059, data: [0x01, 0x02, 0x03, 0x04] },
+  { node: "demo-thermo", address: "CC:1E:57:00:00:12", name: "Simble Thermometer",
+    service: 0x181a, company: 0x0000, data: [] },
+  { node: "demo-hrm", address: "CC:1E:57:00:00:13", name: "Simble Heart Rate",
+    service: 0x180d, company: 0x0000, data: [] },
+];
 
 const $ = (id) => document.getElementById(id);
 const devices = new Map(); // address -> merged report + lastSeen
 
 let scanner = null;
+let advertisers = []; // live WebAdvertiser handles when demos are on
 let lastConnectAttempt = 0;
 let openedOnce = false;
+let demosOn = true;
 
 function setPill(text, cls) {
   const pill = $("conn");
@@ -29,6 +45,38 @@ function connect() {
   }
 }
 
+// --- built-in demo advertisers ---------------------------------------------
+function startDemos() {
+  if (advertisers.length) return;
+  for (const d of DEMO_DEVICES) {
+    const url = `ws://localhost:7681/v1/websocket/bt?name=${encodeURIComponent(d.node)}&address=${d.address}`;
+    try {
+      advertisers.push(new WebAdvertiser(url, d.name, d.service, d.company, new Uint8Array(d.data)));
+    } catch (e) {
+      console.error("WebAdvertiser:", d.name, e);
+    }
+  }
+}
+
+function stopDemos() {
+  for (const a of advertisers) { try { a.free(); } catch (_) { /* gone */ } }
+  advertisers = [];
+  // Drop the demo cards so they don't linger as stale entries.
+  for (const d of DEMO_DEVICES) devices.delete(d.address.toUpperCase());
+}
+
+function pumpDemos() {
+  for (const a of advertisers) {
+    try {
+      if (a.ready_state() === 3) continue; // closed; loop will not revive it
+      a.tick();
+    } catch (e) {
+      console.error("advertiser tick:", e);
+    }
+  }
+}
+
+// --- report aggregation + rendering ----------------------------------------
 function merge(report) {
   const existing = devices.get(report.address) ?? {};
   const merged = { ...existing };
@@ -86,7 +134,11 @@ function render() {
     (a, b) => (a.name ? 0 : 1) - (b.name ? 0 : 1) || b.rssi - a.rssi
   );
   $("devices").innerHTML = list.map(deviceHtml).join("");
-  $("empty").style.display = list.length ? "none" : "block";
+  const empty = $("empty");
+  empty.style.display = list.length ? "none" : "block";
+  empty.textContent = demosOn
+    ? "No advertisements yet — scanning…"
+    : "No devices advertising — turn on demo devices above, run netsimd with --test-beacons, or open the scripted-device page in another tab.";
 }
 
 function loop() {
@@ -100,10 +152,17 @@ function loop() {
   }
   const state = scanner.ready_state(); // 0 connecting 1 open 2 closing 3 closed
   if (state === 3) {
-    setPill("netsimd not reachable", "bad");
-    $("setup").classList.add("visible");
+    // Never opened => connection refused (show setup instructions); a
+    // mid-session drop just reconnects quietly.
+    if (openedOnce) {
+      setPill("connection lost — reconnecting…", "bad");
+    } else {
+      setPill("netsim not reachable", "bad");
+      $("setup").classList.add("visible");
+    }
     try { scanner.free(); } catch (_) { /* already gone */ }
     scanner = null; // next pass schedules a reconnect
+    stopDemos();
     render();
     return;
   }
@@ -113,6 +172,7 @@ function loop() {
   }
   openedOnce = true;
   $("setup").classList.remove("visible");
+  if (demosOn) { startDemos(); pumpDemos(); }
   try {
     for (const report of JSON.parse(scanner.tick())) merge(report);
     setPill(`scanning · ${devices.size} device${devices.size === 1 ? "" : "s"}`, "ok");
@@ -123,5 +183,10 @@ function loop() {
 }
 
 await init();
+$("demo-toggle").addEventListener("change", (e) => {
+  demosOn = e.target.checked;
+  if (!demosOn) stopDemos();
+  render();
+});
 connect();
 setInterval(loop, 250);

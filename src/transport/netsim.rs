@@ -531,8 +531,23 @@ impl NetsimTransport<TcpStream> {
     /// then puts the socket in non-blocking mode so `pump` never stalls.
     pub fn connect(url: &str) -> Result<Self, SimbleError> {
         let parsed = parse_ws_url(url)?;
-        let mut stream = TcpStream::connect((parsed.host.as_str(), parsed.port))
-            .map_err(|e| SimbleError::Transport(e.to_string()))?;
+        let mut stream = TcpStream::connect((parsed.host.as_str(), parsed.port)).map_err(|e| {
+            // A refused connection almost always means netsimd isn't running
+            // (or was started without its WebSocket frontend). Turn the bare
+            // OS error into an actionable hint rather than "os error 61".
+            if e.kind() == ErrorKind::ConnectionRefused {
+                SimbleError::Transport(format!(
+                    "could not reach netsim at {}:{} — is netsimd running with its \
+                     WebSocket frontend enabled? Start it with:\n    \
+                     netsimd --logtostderr --no-shutdown --ws-port {}\n  \
+                     (needs the canary-channel emulator; see the README's \"Testing \
+                     Against netsim\" section). Underlying error: {e}",
+                    parsed.host, parsed.port, parsed.port
+                ))
+            } else {
+                SimbleError::Transport(e.to_string())
+            }
+        })?;
         perform_handshake(&mut stream, &parsed.host, parsed.port, &parsed.path)?;
         stream
             .set_nonblocking(true)

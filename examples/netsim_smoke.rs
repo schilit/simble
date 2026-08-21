@@ -9,7 +9,13 @@ use simble::transport::{HciChannel, NetsimTransport, h4_type};
 
 fn main() {
     let url = "ws://127.0.0.1:7681/v1/websocket/bt?name=simble-smoke";
-    let mut transport = NetsimTransport::connect(url).expect("connect to netsimd");
+    let mut transport = match NetsimTransport::connect(url) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
     println!("connected: {url}");
 
     let channel = HciChannel::new();
