@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>SimBLE Car Kit</title>
+<link rel="stylesheet" href="../common/simble.css">
+<link rel="stylesheet" href="../common/nav.css">
+</head>
+<body>
+<nav class="sitenav">
+  <a class="brand" href="../">Sim<b>BLE</b></a>
+  <span class="spacer"></span>
+  <a class="ext" href="../doc/">Docs</a>
+  <a class="ext" href="https://github.com/schilit/simble">GitHub ↗</a>
+</nav>
+<header>
+  <h1>SimBLE Car Kit</h1>
+  <span class="sub">a phone and a hands-free head unit, and the AT dialogue between them</span>
+</header>
+
+<!-- The domain module builds everything into this container. Keeping the page
+     itself empty is what lets the same module be mounted as a tab in the
+     domain shell without changing a line of it. -->
+<main></main>
+
+<footer>
+  SimBLE compiled to WebAssembly. Both endpoints run in this one page on one timer:
+  <code>AgProtocol</code> and an <code>SdpServer</code> for the phone,
+  <code>HfProtocol</code> and an <code>SdpClient</code> for the head unit, with two RFCOMM
+  multiplexers handing frames to each other. Nothing here is recorded or replayed — the AT
+  lines are what the protocol layers produced this run.
+</footer>
+
+<script type="module">
+  import { mount } from "./car.js";
+  mount(document.querySelector("main"));
+</script>
+</body>
+</html>
