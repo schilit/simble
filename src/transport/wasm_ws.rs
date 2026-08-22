@@ -2866,6 +2866,19 @@ mod web {
             self.transport.ready_state()
         }
 
+        /// Drains the isochronous SDUs this device has received, as an array
+        /// of byte arrays — the netsim counterpart of
+        /// `WebLink.peripheral_take_audio`, so a page-hosted sink can play
+        /// audio streamed to it by a real peer rather than only by an
+        /// in-page source.
+        pub fn take_audio(&mut self) -> js_sys::Array {
+            let out = js_sys::Array::new();
+            for sdu in self.peripheral.take_audio() {
+                out.push(&js_sys::Uint8Array::from(&sdu[..]).into());
+            }
+            out
+        }
+
         /// Writes a characteristic's value from the page (the lightbulb's
         /// colour picker). `uuid` is the string form; on the next tick a
         /// subscribed central is notified of the change.

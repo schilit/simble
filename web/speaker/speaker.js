@@ -56,6 +56,19 @@ const DEFAULT_SCRIPT = `// SimBLE Speaker — LE Audio Volume Control Service.
 // applies it, updates its state and bumps the change counter. Nothing writes
 // the volume directly.
 let server = android::BluetoothGattServer("web-speaker");
+
+// A real LE Audio sink: PACS declares what this device can decode and
+// ASCS carries the endpoint a peer configures. Without them a phone (or
+// Bumble) has nothing to set a stream up against, however good the
+// volume control is.
+server.add_pacs(0x03, 0x00);   // sink locations: front left + front right
+server.add_ascs([0x01], []);   // one sink ASE
+server.advertise_service_uuid(0x1850);
+server.advertise_service_uuid(0x184E);
+// The targeted announcement LeAudioService scans for:
+// [type, available contexts (4 octets), metadata length]
+server.advertise_service_data(0x184E, [0x01, 0x06, 0x00, 0x00, 0x00, 0x00]);
+
 let vcs = android::BluetoothGattService(uuid::VOLUME_CONTROL_SERVICE, android::SERVICE_TYPE_PRIMARY);
 
 let state = android::BluetoothGattCharacteristic(uuid::VOLUME_STATE,
@@ -263,10 +276,19 @@ function pumpSource(now) {
 // audio scaled by the device's Volume State characteristic.
 let playCursor = 0;
 function playReceivedSdus() {
-  if (!audio || !masterGain || mode !== "in-page" || !link || linkIndex < 0) return;
+  if (!audio || !masterGain) return;
+  // Either backend can receive audio: an in-page source streams over the
+  // wasm link, and over netsim a real peer streams over a real CIS.
   let sdus;
-  try { sdus = link.peripheral_take_audio(linkIndex); }
-  catch (e) { return; }
+  try {
+    if (mode === "in-page") {
+      if (!link || linkIndex < 0) return;
+      sdus = link.peripheral_take_audio(linkIndex);
+    } else {
+      if (!peripheral) return;
+      sdus = peripheral.take_audio();
+    }
+  } catch (e) { return; }
   if (!sdus || sdus.length === 0) return;
   for (const bytes of sdus) {
     let pcm;
@@ -402,6 +424,7 @@ function loop() {
   setupPanel.classList.remove("visible");
   try {
     const status = JSON.parse(peripheral.tick((performance.now() - runStart) / 1000));
+    playReceivedSdus();
     setPill(status.connected ? "on air · central connected" : "on air · advertising", "ok");
     render(status);
   } catch (e) { showScriptError(e); }
