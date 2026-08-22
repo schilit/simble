@@ -107,8 +107,32 @@ fn signaling_pdu(code: u8, identifier: u8, payload: &[u8]) -> Vec<u8> {
 pub trait ProtocolHandler: std::fmt::Debug {
     /// The PSM this handler serves.
     fn psm(&self) -> u16;
-    /// Handles one inbound SDU; returns the SDU to reply with, if any.
-    fn on_data(&mut self, data: &[u8], peer_mtu: u16) -> Option<Vec<u8>>;
+
+    /// Handles one inbound SDU; returns the SDUs to reply with, in order.
+    ///
+    /// A reply is a *list* because a single inbound frame can oblige a
+    /// profile to send several: an RFCOMM PN command is answered with a PN
+    /// response, and an MSC exchange crosses in both directions, so one SDU
+    /// in can mean two or three out.
+    fn on_data(&mut self, data: &[u8], peer_mtu: u16) -> Vec<Vec<u8>>;
+
+    /// SDUs the profile wants to send without having been prompted by the
+    /// peer — a device writing bytes to an open serial port, say. The host
+    /// drains this after every packet and whenever it is polled, so data a
+    /// device queues is not stuck waiting for the peer to speak first.
+    fn poll_output(&mut self) -> Vec<Vec<u8>> {
+        Vec::new()
+    }
+
+    /// The L2CAP channel this profile was speaking on has gone away — the
+    /// peer disconnected it, or the ACL dropped underneath it.
+    ///
+    /// A profile that keeps per-session state must discard it here. RFCOMM
+    /// is the reason this exists: a multiplexer session is bound to the
+    /// L2CAP connection that carries it (RFCOMM spec §5.1), so a session
+    /// left over from a departed peer would swallow the next peer's SABM on
+    /// DLCI 0 and the device would answer nothing at all.
+    fn on_channel_closed(&mut self) {}
 }
 
 /// The SDP server as a channel handler — the one profile every other
@@ -143,8 +167,196 @@ impl ProtocolHandler for SdpHandler {
         SDP_PSM
     }
 
-    fn on_data(&mut self, data: &[u8], peer_mtu: u16) -> Option<Vec<u8>> {
-        Some(self.server.handle_request(data, peer_mtu))
+    fn on_data(&mut self, data: &[u8], peer_mtu: u16) -> Vec<Vec<u8>> {
+        vec![self.server.handle_request(data, peer_mtu)]
+    }
+}
+
+/// The device-facing end of an RFCOMM serial port: what arrived from the
+/// peer, and what the device wants to send back.
+///
+/// This mirrors the LE side's `VirtualDevice::audio_rx` — a queue plus an
+/// accessor — but lives behind an [`Arc<Mutex<_>>`] because the handler
+/// itself is owned as a `Box<dyn ProtocolHandler>` inside the host, where a
+/// caller cannot reach it. Holding a clone of the port is how a scripted
+/// device, a test, or an example talks to the serial connection.
+#[derive(Debug, Default)]
+pub struct RfcommPort {
+    /// Payloads received from the peer, oldest first.
+    received: std::collections::VecDeque<Vec<u8>>,
+    /// Payloads the device wants to send, oldest first.
+    outbound: std::collections::VecDeque<Vec<u8>>,
+    /// The DLCI of the open data link, once the peer has opened one.
+    open_dlci: Option<u8>,
+    /// When set, every received payload is queued straight back — the
+    /// simplest demonstrable behaviour for a serial port, and what a
+    /// terminal app on a phone will show working.
+    echo: bool,
+    /// Total payloads received, which survives draining so a test or a UI
+    /// can tell "nothing yet" from "nothing since I last looked".
+    received_count: usize,
+}
+
+impl RfcommPort {
+    /// A port that echoes everything it receives.
+    pub fn echoing() -> Self {
+        Self {
+            echo: true,
+            ..Self::default()
+        }
+    }
+
+    /// Whether a peer currently has a data link open.
+    pub fn is_open(&self) -> bool {
+        self.open_dlci.is_some()
+    }
+
+    /// How many payloads have arrived in total, including drained ones.
+    pub fn received_count(&self) -> usize {
+        self.received_count
+    }
+
+    /// Drains what the peer sent, oldest first.
+    pub fn take_received(&mut self) -> Vec<Vec<u8>> {
+        self.received.drain(..).collect()
+    }
+
+    /// Queues `data` to send to the peer. It leaves on the next host packet
+    /// or poll; nothing is sent if no data link is open.
+    pub fn write(&mut self, data: impl Into<Vec<u8>>) {
+        self.outbound.push_back(data.into());
+    }
+}
+
+/// A shared [`RfcommPort`]: the handler holds one clone, the device another.
+pub type SharedRfcommPort = std::sync::Arc<std::sync::Mutex<RfcommPort>>;
+
+/// RFCOMM as a channel handler — the serial transport that SPP, and every
+/// other RFCOMM-based profile, rides on (ETSI TS 07.10; Bluetooth RFCOMM
+/// 1.1).
+///
+/// The multiplexer is created lazily on the first frame because it must be
+/// sized to the L2CAP channel's negotiated MTU, which is not known until the
+/// channel is open.
+#[derive(Debug)]
+pub struct RfcommHandler {
+    multiplexer: Option<crate::classic::rfcomm::Multiplexer>,
+    /// Server channel numbers to accept DLC opens on, with their frame size
+    /// and initial credits.
+    listen: Vec<(u8, u16, u8)>,
+    port: SharedRfcommPort,
+}
+
+impl RfcommHandler {
+    /// Listens on `channel` (a server channel number, 1-30) — the same
+    /// number the SDP record advertises, or a peer will open a DLC that is
+    /// refused with DM.
+    pub fn new(channel: u8, port: SharedRfcommPort) -> Self {
+        Self {
+            multiplexer: None,
+            // 127-byte frames and 7 credits: within the smallest L2CAP MTU a
+            // peer may negotiate, so a DLC never has to fragment.
+            listen: vec![(channel, 127, 7)],
+            port,
+        }
+    }
+
+    /// A handler and the port it serves, for the common case where the
+    /// caller wants both.
+    pub fn echoing(channel: u8) -> (Self, SharedRfcommPort) {
+        let port: SharedRfcommPort =
+            std::sync::Arc::new(std::sync::Mutex::new(RfcommPort::echoing()));
+        (Self::new(channel, port.clone()), port)
+    }
+
+    /// Applies the multiplexer's events to the port, returning any frames
+    /// the events themselves oblige us to send.
+    fn apply_events(&mut self, events: Vec<crate::classic::rfcomm::MultiplexerEvent>) {
+        use crate::classic::rfcomm::MultiplexerEvent;
+        let Ok(mut port) = self.port.lock() else {
+            return;
+        };
+        for event in events {
+            match event {
+                MultiplexerEvent::DlcOpened(dlci) => port.open_dlci = Some(dlci),
+                MultiplexerEvent::DlcClosed(dlci) if port.open_dlci == Some(dlci) => {
+                    port.open_dlci = None;
+                }
+                MultiplexerEvent::Disconnected => port.open_dlci = None,
+                MultiplexerEvent::DataReceived(_, data) => {
+                    port.received_count += 1;
+                    if port.echo {
+                        port.outbound.push_back(data.clone());
+                    }
+                    port.received.push_back(data);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Turns whatever the device queued into UIH frames on the open DLC.
+    fn drain_outbound(&mut self) -> Vec<Vec<u8>> {
+        let Some(multiplexer) = self.multiplexer.as_mut() else {
+            return Vec::new();
+        };
+        let (dlci, payloads) = {
+            let Ok(mut port) = self.port.lock() else {
+                return Vec::new();
+            };
+            // Without an open data link there is nowhere to send; the data
+            // stays queued rather than being dropped.
+            let Some(dlci) = port.open_dlci else {
+                return Vec::new();
+            };
+            (dlci, port.outbound.drain(..).collect::<Vec<_>>())
+        };
+        payloads
+            .iter()
+            .filter_map(|payload| multiplexer.write(dlci, payload).ok())
+            .flatten()
+            .collect()
+    }
+}
+
+impl ProtocolHandler for RfcommHandler {
+    fn psm(&self) -> u16 {
+        crate::classic::rfcomm::RFCOMM_PSM
+    }
+
+    fn on_data(&mut self, data: &[u8], peer_mtu: u16) -> Vec<Vec<u8>> {
+        use crate::classic::rfcomm::{Multiplexer, Role};
+        let multiplexer = self.multiplexer.get_or_insert_with(|| {
+            // The peer paged us, so it drives the multiplexer: we respond.
+            let mut multiplexer = Multiplexer::new(Role::Responder, peer_mtu);
+            for &(channel, max_frame_size, credits) in &self.listen {
+                multiplexer.listen(channel, max_frame_size, credits);
+            }
+            multiplexer
+        });
+        // A malformed frame or FCS mismatch is the peer's problem: drop it
+        // rather than tearing down a working session.
+        let Ok((mut frames, events)) = multiplexer.receive(data) else {
+            return Vec::new();
+        };
+        self.apply_events(events);
+        frames.extend(self.drain_outbound());
+        frames
+    }
+
+    fn poll_output(&mut self) -> Vec<Vec<u8>> {
+        self.drain_outbound()
+    }
+
+    fn on_channel_closed(&mut self) {
+        // Drop the session so the next peer's SABM builds a fresh one. The
+        // port survives: it is the device's, not the peer's, and anything a
+        // device queued while nobody was connected stays queued for whoever
+        // connects next.
+        self.multiplexer = None;
+        if let Ok(mut port) = self.port.lock() {
+            port.open_dlci = None;
+        }
     }
 }
 
@@ -275,11 +487,15 @@ impl ClassicHost {
 
     /// Handles one H4 packet from the controller, returning what to send back.
     pub fn handle_packet(&mut self, packet: &[u8]) -> Result<Vec<Vec<u8>>, SimbleError> {
-        match packet.first() {
-            Some(&crate::transport::h4_type::HCI_EVENT) => Ok(self.handle_event(packet)),
-            Some(&crate::transport::h4_type::HCI_ACL_DATA) => self.handle_acl(packet),
-            _ => Ok(Vec::new()),
-        }
+        let mut out = match packet.first() {
+            Some(&crate::transport::h4_type::HCI_EVENT) => self.handle_event(packet),
+            Some(&crate::transport::h4_type::HCI_ACL_DATA) => self.handle_acl(packet)?,
+            _ => Vec::new(),
+        };
+        // Anything a profile queued while handling this packet leaves with
+        // it, so a device that replies to a peer does so in one round trip.
+        out.extend(self.poll());
+        Ok(out)
     }
 
     fn handle_event(&mut self, packet: &[u8]) -> Vec<Vec<u8>> {
@@ -305,6 +521,15 @@ impl ClassicHost {
             }
             HciEvent::DisconnectionComplete(_) => {
                 self.connection = None;
+                // The ACL is gone, so every channel riding it is gone too —
+                // and a profile holding session state must be told, or it
+                // meets the next peer still believing the last one is there.
+                for cid in std::mem::take(&mut self.local_cids) {
+                    self.channels.remove_channel(cid);
+                }
+                for handler in &mut self.handlers {
+                    handler.on_channel_closed();
+                }
                 // Re-enable scanning so the device is findable again after
                 // the peer goes away.
                 vec![command(
@@ -419,8 +644,14 @@ impl ClassicHost {
             signaling_code::DISCONNECTION_REQUEST if params.len() >= 4 => {
                 {
                     let local_cid = u16::from_le_bytes([params[0], params[1]]);
+                    let psm = self.channels.get_channel(local_cid).map(|c| c.psm);
                     self.channels.remove_channel(local_cid);
                     self.local_cids.retain(|cid| *cid != local_cid);
+                    if let Some(psm) = psm
+                        && let Some(handler) = self.handlers.iter_mut().find(|h| h.psm() == psm)
+                    {
+                        handler.on_channel_closed();
+                    }
                     out.push(acl_packet(
                         handle,
                         &signaling_pdu(
@@ -445,12 +676,47 @@ impl ClassicHost {
         let Some(handler) = self.handlers.iter_mut().find(|h| h.psm() == psm) else {
             return Vec::new();
         };
-        match handler.on_data(data, peer_mtu) {
-            Some(reply) if !reply.is_empty() => {
-                vec![acl_packet(handle, &L2capHeader::serialize(peer_cid, &reply))]
+        handler
+            .on_data(data, peer_mtu)
+            .into_iter()
+            .filter(|reply| !reply.is_empty())
+            .map(|reply| acl_packet(handle, &L2capHeader::serialize(peer_cid, &reply)))
+            .collect()
+    }
+
+    /// Collects anything the profiles want to send unprompted — bytes a
+    /// device wrote to an open RFCOMM port, say — as H4 packets.
+    ///
+    /// [`Self::handle_packet`] already drains this after each inbound
+    /// packet; a runtime that ticks should also call it directly, or a
+    /// device that speaks first waits for the peer to speak.
+    pub fn poll(&mut self) -> Vec<Vec<u8>> {
+        let Some((handle, _)) = self.connection else {
+            return Vec::new();
+        };
+        // Map each open channel to its handler once, so a handler is polled
+        // against the channel it actually serves.
+        let open: Vec<(u16, u16)> = self
+            .local_cids
+            .iter()
+            .filter_map(|cid| self.channels.get_channel(*cid))
+            .filter(|channel| channel.is_open())
+            .map(|channel| (channel.psm, channel.peer_cid))
+            .collect();
+
+        let mut out = Vec::new();
+        for (psm, peer_cid) in open {
+            let Some(handler) = self.handlers.iter_mut().find(|h| h.psm() == psm) else {
+                continue;
+            };
+            for sdu in handler.poll_output() {
+                if sdu.is_empty() {
+                    continue;
+                }
+                out.push(acl_packet(handle, &L2capHeader::serialize(peer_cid, &sdu)));
             }
-            _ => Vec::new(),
         }
+        out
     }
 
     fn take_identifier(&mut self) -> u8 {
@@ -667,5 +933,396 @@ mod tests {
         assert!(host.connection().is_none());
         assert_eq!(&out[0][1..3], &opcode::WRITE_SCAN_ENABLE);
         assert_eq!(out[0][4], scan_enable::INQUIRY_AND_PAGE);
+    }
+
+    // ---------------------------------------------------------------------
+    // RFCOMM / SPP
+    // ---------------------------------------------------------------------
+
+    use crate::classic::rfcomm::{Multiplexer, MultiplexerEvent, RFCOMM_PSM, Role};
+
+    /// Shuttles RFCOMM frames between a peer multiplexer and our handler
+    /// until neither has anything more to say, returning the events the peer
+    /// saw. Both sides are synchronous, so a bounded loop settles.
+    fn shuttle(
+        peer: &mut Multiplexer,
+        handler: &mut RfcommHandler,
+        start: Vec<Vec<u8>>,
+    ) -> Vec<MultiplexerEvent> {
+        let mut to_handler = start;
+        let mut peer_events = Vec::new();
+        for _ in 0..8 {
+            if to_handler.is_empty() {
+                break;
+            }
+            let mut to_peer = Vec::new();
+            for frame in to_handler.drain(..) {
+                to_peer.extend(handler.on_data(&frame, 672));
+            }
+            for frame in to_peer {
+                if let Ok((out, events)) = peer.receive(&frame) {
+                    to_handler.extend(out);
+                    peer_events.extend(events);
+                }
+            }
+        }
+        peer_events
+    }
+
+    /// Opens a multiplexer session and a DLC on `channel`, the way a peer
+    /// does: SABM(0), then PN, then SABM on the data DLCI.
+    fn open_session(channel: u8) -> (Multiplexer, RfcommHandler, SharedRfcommPort) {
+        let (mut handler, port) = RfcommHandler::echoing(channel);
+        let mut peer = Multiplexer::new(Role::Initiator, 672);
+        let sabm = peer.start().expect("initiator starts the multiplexer");
+        shuttle(&mut peer, &mut handler, vec![sabm]);
+        let pn = peer.open_dlc(channel, 127, 7).expect("PN for the channel");
+        shuttle(&mut peer, &mut handler, vec![pn]);
+        (peer, handler, port)
+    }
+
+    #[test]
+    fn test_rfcomm_handler_serves_the_rfcomm_psm() {
+        let (handler, _port) = RfcommHandler::echoing(3);
+        assert_eq!(handler.psm(), RFCOMM_PSM, "SPP rides RFCOMM on PSM 3");
+    }
+
+    #[test]
+    fn test_rfcomm_session_and_dlc_open() {
+        let (peer, _handler, port) = open_session(3);
+        assert!(peer.is_connected(), "the multiplexer session must come up");
+        assert!(
+            port.lock().unwrap().is_open(),
+            "the DLC the SDP record advertises must open"
+        );
+    }
+
+    #[test]
+    fn test_rfcomm_dlc_open_is_refused_on_an_unadvertised_channel() {
+        // A peer that opens a channel we never listened on must get DM, not
+        // a half-open DLC — otherwise the SDP record and reality diverge.
+        let (mut peer, mut handler, port) = open_session(3);
+        let pn = peer.open_dlc(9, 127, 7).expect("PN for a stray channel");
+        let events = shuttle(&mut peer, &mut handler, vec![pn]);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, MultiplexerEvent::DlcOpenRejected(_))),
+            "an unlistened channel must be rejected: {events:?}"
+        );
+        // The channel we do serve is unaffected.
+        assert!(port.lock().unwrap().is_open());
+    }
+
+    #[test]
+    fn test_rfcomm_carries_data_from_the_peer_to_the_device() {
+        let (mut peer, mut handler, port) = open_session(3);
+        let dlci = port.lock().unwrap().open_dlci.expect("a DLC is open");
+
+        let frames = peer.write(dlci, b"AT+HELLO\r").expect("peer writes");
+        shuttle(&mut peer, &mut handler, frames);
+
+        let received = port.lock().unwrap().take_received();
+        assert_eq!(
+            received,
+            vec![b"AT+HELLO\r".to_vec()],
+            "the device must see exactly what the peer sent"
+        );
+        assert_eq!(port.lock().unwrap().received_count(), 1);
+        assert!(
+            port.lock().unwrap().take_received().is_empty(),
+            "draining is destructive"
+        );
+    }
+
+    #[test]
+    fn test_rfcomm_carries_data_from_the_device_to_the_peer() {
+        let (mut peer, mut handler, port) = open_session(3);
+
+        // The device speaks first: nothing inbound prompted this.
+        port.lock().unwrap().write(b"READY\r\n".to_vec());
+        let frames = handler.poll_output();
+        assert!(!frames.is_empty(), "queued data must leave on a poll");
+
+        let events = shuttle(&mut peer, &mut handler, frames);
+        let delivered: Vec<Vec<u8>> = events
+            .iter()
+            .filter_map(|e| match e {
+                MultiplexerEvent::DataReceived(_, data) => Some(data.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            delivered,
+            vec![b"READY\r\n".to_vec()],
+            "the peer must receive what the device wrote"
+        );
+    }
+
+    #[test]
+    fn test_rfcomm_echo_answers_the_peer() {
+        // The default port behaviour, and what a terminal app on a phone
+        // sees: type a line, get it back.
+        let (mut peer, mut handler, port) = open_session(3);
+        let dlci = port.lock().unwrap().open_dlci.unwrap();
+
+        let frames = peer.write(dlci, b"ping").expect("peer writes");
+        let events = shuttle(&mut peer, &mut handler, frames);
+
+        let echoed: Vec<Vec<u8>> = events
+            .iter()
+            .filter_map(|e| match e {
+                MultiplexerEvent::DataReceived(_, data) => Some(data.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(echoed, vec![b"ping".to_vec()], "the port echoes: {events:?}");
+    }
+
+    #[test]
+    fn test_rfcomm_data_queued_before_the_dlc_opens_is_not_lost() {
+        // A device may write before a peer has opened the port; that data
+        // must wait rather than being dropped on the floor.
+        let (mut handler, port) = RfcommHandler::echoing(3);
+        port.lock().unwrap().write(b"early".to_vec());
+        assert!(
+            handler.poll_output().is_empty(),
+            "nothing can be sent with no DLC open"
+        );
+
+        let mut peer = Multiplexer::new(Role::Initiator, 672);
+        let sabm = peer.start().unwrap();
+        shuttle(&mut peer, &mut handler, vec![sabm]);
+        let pn = peer.open_dlc(3, 127, 7).unwrap();
+        let events = shuttle(&mut peer, &mut handler, vec![pn]);
+
+        // Opening the DLC flushes what was waiting.
+        let delivered: Vec<Vec<u8>> = events
+            .iter()
+            .filter_map(|e| match e {
+                MultiplexerEvent::DataReceived(_, data) => Some(data.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(delivered, vec![b"early".to_vec()], "queued data survives");
+    }
+
+    /// The whole path an Android terminal app takes: page the device, open
+    /// the RFCOMM L2CAP channel, run the multiplexer handshake, exchange
+    /// data, and disconnect — driven through [`ClassicHost`] as H4 packets
+    /// rather than by calling the handler directly.
+    #[test]
+    fn test_spp_end_to_end_through_the_host() {
+        let mut host = ClassicHost::new("SimbleClassic", [0x04, 0x04, 0x24]);
+        host.register_handler(Box::new(SdpHandler::default()))
+            .unwrap();
+        let (rfcomm, port) = RfcommHandler::echoing(3);
+        host.register_handler(Box::new(rfcomm)).unwrap();
+
+        let addr = [0x22; 6];
+        let handle = 0x0081;
+        let peer_cid = 0x0041u16;
+        host.handle_packet(&connection_request_event(addr)).unwrap();
+        host.handle_packet(&connection_complete_event(handle, addr))
+            .unwrap();
+
+        // L2CAP: connect to the RFCOMM PSM, then configure in both directions.
+        let request = ConnectionRequestHeader {
+            psm: RFCOMM_PSM.into(),
+            source_cid: peer_cid.into(),
+        };
+        let out = host
+            .handle_packet(&acl_packet(
+                handle,
+                &signaling_pdu(signaling_code::CONNECTION_REQUEST, 1, request.as_bytes()),
+            ))
+            .unwrap();
+        let (response, _) = ConnectionResponseHeader::ref_from_prefix(&out[0][13..]).unwrap();
+        assert_eq!(response.result.get(), 0x0000, "RFCOMM PSM must be accepted");
+        let local_cid = response.destination_cid.get();
+
+        let mut config = ConfigurationRequestHeader {
+            destination_cid: local_cid.into(),
+            flags: 0u16.into(),
+        }
+        .as_bytes()
+        .to_vec();
+        config.extend_from_slice(&[0x01, 0x02, 0xA0, 0x02]); // MTU 672
+        host.handle_packet(&acl_packet(
+            handle,
+            &signaling_pdu(signaling_code::CONFIGURATION_REQUEST, 2, &config),
+        ))
+        .unwrap();
+        let ack = ConfigurationResponseHeader {
+            source_cid: local_cid.into(),
+            flags: 0u16.into(),
+            result: 0u16.into(),
+        };
+        host.handle_packet(&acl_packet(
+            handle,
+            &signaling_pdu(signaling_code::CONFIGURATION_RESPONSE, 1, ack.as_bytes()),
+        ))
+        .unwrap();
+        assert!(host.has_open_channel(), "the RFCOMM channel must be open");
+
+        // RFCOMM over that channel: peer frames go in as ACL packets and the
+        // host's replies come back the same way. Strip H4 + ACL + L2CAP
+        // headers (1 + 4 + 4) to recover each SDU.
+        let mut peer = Multiplexer::new(Role::Initiator, 672);
+        let feed = |host: &mut ClassicHost, peer: &mut Multiplexer, sdus: Vec<Vec<u8>>| {
+            let mut events = Vec::new();
+            let mut next = Vec::new();
+            for sdu in sdus {
+                // An inbound frame is addressed to *our* CID; the host looks
+                // the channel up by it.
+                let out = host
+                    .handle_packet(&acl_packet(
+                        handle,
+                        &L2capHeader::serialize(local_cid, &sdu),
+                    ))
+                    .unwrap();
+                for packet in out {
+                    if let Ok((frames, evts)) = peer.receive(&packet[9..]) {
+                        next.extend(frames);
+                        events.extend(evts);
+                    }
+                }
+            }
+            (next, events)
+        };
+
+        // Multiplexer up.
+        let start = peer.start().unwrap();
+        let (mut pending, _) = feed(&mut host, &mut peer, vec![start]);
+        assert!(peer.is_connected(), "multiplexer up through the real host");
+        assert!(pending.is_empty(), "UA(0) needs no further reply");
+
+        // DLC open on the advertised channel; the handshake settles in a few
+        // exchanges (PN response, SABM, UA + MSC).
+        pending.push(peer.open_dlc(3, 127, 7).unwrap());
+        for _ in 0..6 {
+            if pending.is_empty() {
+                break;
+            }
+            let (next, _) = feed(&mut host, &mut peer, std::mem::take(&mut pending));
+            pending = next;
+        }
+        let dlci = port
+            .lock()
+            .unwrap()
+            .open_dlci
+            .expect("the DLC must open through the host");
+
+        // Data from the peer reaches the device, and the echo comes back.
+        let frames = peer.write(dlci, b"hello serial").unwrap();
+        let (_, events) = feed(&mut host, &mut peer, frames);
+        assert_eq!(
+            port.lock().unwrap().take_received(),
+            vec![b"hello serial".to_vec()],
+            "the device sees the peer's bytes through the full stack"
+        );
+        let echoed: Vec<Vec<u8>> = events
+            .iter()
+            .filter_map(|e| match e {
+                MultiplexerEvent::DataReceived(_, data) => Some(data.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            echoed,
+            vec![b"hello serial".to_vec()],
+            "and the echo returns over the same path"
+        );
+
+        // Tearing down the ACL link closes everything.
+        host.handle_packet(&[0x04, 0x05, 0x04, 0x00, 0x81, 0x00, 0x13])
+            .unwrap();
+        assert!(host.connection().is_none());
+    }
+
+    #[test]
+    fn test_rfcomm_dlc_close_marks_the_port_closed() {
+        let (mut peer, mut handler, port) = open_session(3);
+        let dlci = port.lock().unwrap().open_dlci.unwrap();
+
+        let disc = peer.close_dlc(dlci).expect("peer closes the DLC");
+        shuttle(&mut peer, &mut handler, vec![disc]);
+
+        assert!(
+            !port.lock().unwrap().is_open(),
+            "the port must close when the peer disconnects the DLC"
+        );
+    }
+
+    /// A multiplexer session belongs to the L2CAP channel carrying it
+    /// (RFCOMM spec §5.1). Keeping one past the channel's death makes the
+    /// device look dead to the *next* peer: the stale session drops the new
+    /// SABM on DLCI 0 and nothing is ever answered. Caught live — a second
+    /// Bumble client could not open a session until the handler was reset.
+    #[test]
+    fn test_rfcomm_session_is_reset_when_the_channel_closes() {
+        let (mut first, mut handler, port) = open_session(3);
+        assert!(first.is_connected(), "the first peer's session comes up");
+        let disconnect = first.disconnect().expect("first peer tears down");
+        shuttle(&mut first, &mut handler, vec![disconnect]);
+
+        // What the host does when the channel or the ACL goes away.
+        handler.on_channel_closed();
+        assert!(
+            !port.lock().unwrap().is_open(),
+            "no DLC survives the channel that carried it"
+        );
+
+        // A second peer, arriving on a fresh channel, must be answered.
+        let mut second = Multiplexer::new(Role::Initiator, 672);
+        let sabm = second.start().expect("second peer starts a session");
+        shuttle(&mut second, &mut handler, vec![sabm]);
+        assert!(
+            second.is_connected(),
+            "a new peer must get a session after the previous one left"
+        );
+
+        let pn = second.open_dlc(3, 127, 7).expect("PN for the channel");
+        shuttle(&mut second, &mut handler, vec![pn]);
+        assert!(
+            port.lock().unwrap().is_open(),
+            "and must be able to open the advertised DLC again"
+        );
+    }
+
+    /// The mirror of the reset: a device that queued bytes with nobody
+    /// connected still has them when someone does connect. The port outlives
+    /// the session because it belongs to the device, not to the peer.
+    #[test]
+    fn test_a_write_survives_the_session_that_was_not_there_to_carry_it() {
+        let (mut peer, mut handler, port) = open_session(3);
+        let disconnect = peer.disconnect().expect("peer tears down");
+        shuttle(&mut peer, &mut handler, vec![disconnect]);
+        handler.on_channel_closed();
+
+        port.lock().unwrap().write(b"queued while alone".to_vec());
+        assert!(
+            handler.poll_output().is_empty(),
+            "with no DLC open there is nowhere to send it, so it waits"
+        );
+
+        let mut next = Multiplexer::new(Role::Initiator, 672);
+        let sabm = next.start().expect("a new peer arrives");
+        shuttle(&mut next, &mut handler, vec![sabm]);
+        let pn = next.open_dlc(3, 127, 7).expect("PN for the channel");
+        let events = shuttle(&mut next, &mut handler, vec![pn]);
+
+        let delivered: Vec<Vec<u8>> = events
+            .into_iter()
+            .filter_map(|event| match event {
+                MultiplexerEvent::DataReceived(_, data) => Some(data),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            delivered,
+            vec![b"queued while alone".to_vec()],
+            "the queued write reaches the peer that eventually connects"
+        );
     }
 }

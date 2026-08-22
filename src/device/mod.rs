@@ -12,7 +12,9 @@ pub(crate) mod observer;
 pub(crate) mod virtual_device;
 
 pub use bond_store::{BondSecurity, BondStore, MemoryBondStore};
-pub use classic_host::{ClassicHost, ProtocolHandler, SdpHandler};
+pub use classic_host::{
+    ClassicHost, ProtocolHandler, RfcommHandler, RfcommPort, SdpHandler, SharedRfcommPort,
+};
 pub use host::LeHost;
 pub use connection::{ConnectionRole, ConnectionState, PrepareWriteChunk};
 pub use observer::{AttServerObserver, SubscriptionReason};
