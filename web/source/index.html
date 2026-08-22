@@ -1,151 +1,24 @@
 <!DOCTYPE html>
+<!-- The Audio Source page and the Speaker page became one page, /audio/: a
+     source in one tab and a sink in another cannot hold a stream up, because
+     Chrome throttles whichever tab is hidden. Both URLs are still in the site
+     nav, so they redirect rather than 404. -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="0; url=../audio/">
+<link rel="canonical" href="../audio/">
 <meta name="color-scheme" content="light">
-<title>SimBLE Audio Source</title>
+<title>Moved to SimBLE Audio</title>
 <link rel="stylesheet" href="../common/simble.css">
-<link rel="stylesheet" href="../common/nav.css">
-<style>
-  main { display: grid; grid-template-columns: minmax(20rem, 1fr) minmax(18rem, 1fr);
-    gap: 1.25rem; padding: 1.25rem 1.5rem; max-width: 72rem; margin: 0 auto; }
-  @media (max-width: 56rem) { main { grid-template-columns: 1fr; } }
-  .drop { border: 2px dashed var(--line); border-radius: 10px; padding: 1.6rem 1rem;
-    text-align: center; color: var(--dim); transition: border-color .15s, background .15s; }
-  .drop.over { border-color: #33cc77; background: rgba(51,204,119,0.06); }
-  .drop input { display: block; margin: 0.7rem auto 0; }
-  .readout { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
-    font-size: 0.85rem; margin-top: 0.6rem; }
-  .stages { list-style: none; padding: 0; margin: 0.8rem 0 0; }
-  .stages li { padding: 0.32rem 0 0.32rem 1.5rem; position: relative; color: var(--dim);
-    font-size: 0.9rem; }
-  .stages li::before { content: "○"; position: absolute; left: 0.25rem; }
-  .stages li.done { color: var(--fg); }
-  .stages li.done::before { content: "●"; color: #33cc77; }
-  .stages li.active { color: var(--fg); font-weight: 600; }
-  .stages li.active::before { content: "◐"; color: #33cc77; }
-  .bar { height: 8px; background: var(--line); border-radius: 4px; overflow: hidden;
-    margin-top: 0.7rem; }
-  .bar > div { height: 100%; width: 0; background: #33cc77; transition: width .1s linear; }
-  .controls { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap;
-    margin-top: 0.9rem; }
-  label.addr { display: block; margin-top: 0.9rem; font-size: 0.85rem; color: var(--dim); }
-  input[type=text] { font-family: ui-monospace, Menlo, monospace; padding: 0.35rem 0.5rem;
-    border: 1px solid var(--line); border-radius: 6px; width: 15rem; }
-</style>
 </head>
 <body>
-<nav class="sitenav">
-  <a class="brand" href="../">Sim<b>BLE</b></a>
-  <div class="tabs">
-    <a href="../playground/">Playground</a>
-    <a href="../explorer/">API Explorer</a>
-    <a href="../scanner/">Scanner</a>
-    <a href="../hrm/">Scripted device</a>
-    <a href="../lightbulb/">Color Bulb</a>
-    <a href="../speaker/">Speaker</a>
-    <a href="../source/" aria-current="page">Audio Source</a>
-    <a href="../dual/">Server + Client</a>
-    <a href="../scene/">Scene</a>
-    <a href="../testing/">Testing</a>
-    <a href="../shared/">Shared</a>
-    <a href="../controllers/">Controllers</a>
-  </div>
-  <span class="spacer"></span>
-  <a class="ext" href="../doc/">Docs</a>
-  <a class="ext" href="https://github.com/schilit/simble">GitHub ↗</a>
-</nav>
 <header>
-  <h1>SimBLE Audio Source</h1>
-  <span class="sub">the central half of LE Audio — pick a file, and it streams to a sink over a real CIS</span>
-  <span id="conn" class="pill">starting…</span>
+  <h1>The Audio Source page is now SimBLE Audio</h1>
+  <span class="sub">the source and the sink share one page, and one timer</span>
 </header>
-
-<main>
-  <section class="panel">
-    <h2>The source</h2>
-
-    <div id="drop" class="drop">
-      <strong>Drop an audio file here</strong><br>
-      <span class="readout">mp3, m4a, wav, flac — whatever your browser can decode</span>
-      <input type="file" id="file" accept="audio/*">
-    </div>
-
-    <label class="addr" for="target">Sink address
-      — the built-in sink below is <code>CC:1E:57:00:00:08</code>; the standalone
-      Speaker page is <code>CC:1E:57:00:00:06</code></label>
-    <input type="text" id="target" value="CC:1E:57:00:00:08">
-
-    <div class="controls">
-      <button id="play" class="primary" disabled>▶ stream</button>
-      <button id="stop" disabled>■ stop</button>
-    </div>
-
-    <div class="bar"><div id="progress"></div></div>
-    <div class="readout" id="track">no file loaded</div>
-    <div class="hint" id="hidden-warning" hidden
-         style="margin-top:0.5rem;color:#b8860b">
-      ⚠ This tab is in the background. Chrome throttles hidden tabs, so the
-      stream is no longer real-time — keep this window visible while streaming.
-    </div>
-    <div id="error" class="error"></div>
-
-    <p class="hint" style="margin-top:1rem">
-      This page is a <strong>Unicast Client</strong>: it connects to the sink, writes
-      <code>Config Codec</code>, <code>Config QoS</code> and <code>Enable</code> to its
-      ASE Control Point, opens a <strong>real CIS</strong>, and streams LC3 frames it
-      encodes from your file.
-    </p>
-  </section>
-
-  <section class="panel">
-    <h2>The sink</h2>
-    <p class="hint" style="margin-top:0">
-      A second device, hosted on this same page with its own netsim socket — its own
-      controller, as a separate machine would have. The audio below arrives over the CIS
-      the source opened, so what you hear has crossed the simulated radio.
-    </p>
-
-    <div class="bar"><div id="meter"></div></div>
-    <div class="readout" id="sink-volume">volume 128 · unmuted</div>
-    <div class="readout" id="sink-status">starting…</div>
-
-    <div class="controls">
-      <button id="sound">🔊 Enable sound</button>
-    </div>
-
-    <p class="hint" style="margin-top:1rem">
-      Both devices are on one page on purpose. Chrome intensively throttles a hidden tab
-      that makes no sound of its own, so a source in a background tab stops feeding its
-      stream within seconds — measured here as 256 SDUs delivered out of 2000. One
-      visible page and one timer removes the problem. The standalone
-      <a href="../speaker/">Speaker</a> page is still the one to use when a phone or
-      Bumble is the source.
-    </p>
-  </section>
-
-  <section class="panel">
-    <h2>Handshake</h2>
-    <ul class="stages">
-      <li data-stage="connecting">Connect to the sink</li>
-      <li data-stage="discovered">Discover its GATT</li>
-      <li data-stage="configuring the endpoint">Configure the ASE</li>
-      <li data-stage="opening the stream">Open the CIS</li>
-      <li data-stage="streaming">Stream</li>
-    </ul>
-    <div class="readout" id="status">offline</div>
-
-    <p class="hint" style="margin-top:1rem">
-      Every step here is real protocol, not a simulation of one: the ASE operations are
-      the bytes ASCS defines, and the stream is established with
-      <code>LE Set CIG Parameters</code> → <code>LE Create CIS</code> →
-      <code>LE Setup ISO Data Path</code>. If the sink is not an LE Audio device, the
-      handshake stops at "Configure the ASE" — there is no control point to write to.
-    </p>
-  </section>
+<main style="padding:1.25rem 1.5rem">
+  <p><a href="../audio/">Continue to SimBLE Audio →</a></p>
 </main>
-
-<script type="module" src="./source.js"></script>
 </body>
 </html>
