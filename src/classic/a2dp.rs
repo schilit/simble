@@ -11,11 +11,23 @@
 //! codec type). The codec-specific information elements here encode to and
 //! decode from the raw bytes AVDTP transports.
 //!
-//! Scope: capability/configuration negotiation only. RTP packetization and
-//! media container parsing (Bumble's `SbcPacketSource`/`AacPacketSource`/
-//! `OpusParser` Ogg pipeline) belong to the audio path, which Simble does
-//! not simulate; only the SBC and ADTS frame-header parsers are ported
-//! since they carry the codec parameters negotiation is about.
+//! Scope: this module is negotiation and framing. It parses and writes the
+//! frame *headers* — SBC's and ADTS's — because those carry the codec
+//! parameters negotiation is about, and because a sink has to be able to
+//! find frame boundaries in an RTP payload.
+//!
+//! The codecs themselves live elsewhere, and only one of them exists:
+//!
+//! - **SBC**, the mandatory codec, is implemented in
+//!   [`crate::audio::sbc`] — a real encoder and decoder, verified against
+//!   bluez's `libsbc` in both directions. [`SbcFrame`] parses a frame's
+//!   header and hands back its bytes; `SbcDecoder` turns those bytes into
+//!   PCM.
+//! - **AAC** is framing only. [`AacFrame`] reads and writes ADTS headers and
+//!   treats the raw data blocks as opaque; simble has no AAC codec and
+//!   deliberately does not plan one (`docs/sbc-evaluation.md` section 6).
+//! - **Opus** and the other vendor-specific codecs are capability structures
+//!   only.
 
 use crate::classic::avdtp::{
     ADVANCED_AUDIO_DISTRIBUTION_SERVICE_UUID, AVDTP_PROTOCOL_UUID, AVDTP_PSM, DEFAULT_VERSION,
@@ -448,20 +460,20 @@ impl MediaCodecInformation {
 // ---------------------------------------------------------------------------
 
 /// SBC frame sync word.
-pub(crate) const SBC_SYNC_WORD: u8 = 0x9C;
+pub const SBC_SYNC_WORD: u8 = 0x9C;
 
 /// SBC frame-header sampling frequencies (SBC spec, indexed by the 2-bit
 /// header field). Distinct from the A2DP capability bitmask ordering.
-pub(crate) const SBC_SAMPLING_FREQUENCIES: [u32; 4] = [16000, 32000, 44100, 48000];
+pub const SBC_SAMPLING_FREQUENCIES: [u32; 4] = [16000, 32000, 44100, 48000];
 
 /// SBC frame-header mono channel mode.
 pub const SBC_MONO_CHANNEL_MODE: u8 = 0x00;
 /// SBC frame-header dual-channel mode.
-pub(crate) const SBC_DUAL_CHANNEL_MODE: u8 = 0x01;
+pub const SBC_DUAL_CHANNEL_MODE: u8 = 0x01;
 /// SBC frame-header stereo channel mode.
 pub const SBC_STEREO_CHANNEL_MODE: u8 = 0x02;
 /// SBC frame-header joint-stereo channel mode.
-pub(crate) const SBC_JOINT_STEREO_CHANNEL_MODE: u8 = 0x03;
+pub const SBC_JOINT_STEREO_CHANNEL_MODE: u8 = 0x03;
 
 /// One SBC frame with its decoded header parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -541,11 +553,26 @@ impl SbcFrame {
 }
 
 /// AAC frame-header sampling frequencies (ADTS, indexed by the 4-bit
-/// sampling frequency index field; 0 marks reserved entries).
-pub(crate) const ADTS_AAC_SAMPLING_FREQUENCIES: [u32; 16] = [
+/// sampling frequency index field). Indices 13-15 are reserved and marked
+/// with 0; [`AacFrame::parse`] rejects them rather than reporting 0 Hz.
+pub const ADTS_AAC_SAMPLING_FREQUENCIES: [u32; 16] = [
     96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350, 0, 0,
     0,
 ];
+
+/// The ADTS sync word: twelve set bits opening every frame.
+pub const ADTS_SYNC_WORD: u16 = 0xFFF;
+
+/// Bytes in a `adts_fixed_header` plus `adts_variable_header`
+/// (ISO/IEC 13818-7 6.2), before the optional CRC.
+pub const ADTS_HEADER_LEN: usize = 7;
+
+/// Bytes the header CRC adds when `protection_absent` is 0.
+pub const ADTS_CRC_LEN: usize = 2;
+
+/// Samples one AAC raw data block decodes to. Fixed for the profiles ADTS
+/// can express.
+pub const AAC_SAMPLES_PER_RAW_DATA_BLOCK: u32 = 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// AAC profile carried in the ADTS header.
@@ -560,58 +587,222 @@ pub enum AacProfile {
     Ltp,
 }
 
-/// One AAC frame extracted from an ADTS stream.
+impl AacProfile {
+    /// The 2-bit `profile` field value.
+    pub fn to_bits(self) -> u8 {
+        match self {
+            Self::Main => 0,
+            Self::Lc => 1,
+            Self::Ssr => 2,
+            Self::Ltp => 3,
+        }
+    }
+
+    fn from_bits(bits: u8) -> Self {
+        match bits & 0b11 {
+            0 => Self::Main,
+            1 => Self::Lc,
+            2 => Self::Ssr,
+            _ => Self::Ltp,
+        }
+    }
+}
+
+/// Which MPEG audio standard the ADTS header declares, the `ID` bit
+/// (ISO/IEC 13818-7 6.2.1). A2DP's MPEG-2/4 AAC codec covers both, and the
+/// bit changes nothing else about the framing — but a decoder needs it, and
+/// it is the field most often left at the wrong value by a hand-built
+/// header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdtsMpegVersion {
+    /// MPEG-4 (`ID` = 0).
+    Mpeg4,
+    /// MPEG-2 (`ID` = 1).
+    Mpeg2,
+}
+
+/// One AAC frame extracted from an ADTS stream, with everything the header
+/// declared about it.
+///
+/// **Framing only.** Simble parses and builds ADTS headers; it does not
+/// decode AAC. [`payload`](Self::payload) is the raw data block(s) as they
+/// arrived, opaque bytes for something else to decode.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AacFrame {
     /// AAC profile.
     pub profile: AacProfile,
+    /// MPEG-2 or MPEG-4, from the `ID` bit.
+    pub mpeg_version: AdtsMpegVersion,
     /// Sampling frequency in Hz.
     pub sampling_frequency: u32,
-    /// ADTS channel configuration.
+    /// ADTS channel configuration. Zero means the channel layout is in a
+    /// `program_config_element` inside the payload rather than the header —
+    /// see [`Self::has_program_config_element`].
     pub channel_configuration: u8,
-    /// Raw AAC payload, excluding the ADTS header.
+    /// The header CRC, present only when `protection_absent` is 0. Simble
+    /// does not verify it: the polynomial covers the raw data blocks too,
+    /// which means decoding AAC, which simble does not do.
+    pub crc: Option<u16>,
+    /// Raw data blocks in this frame, 1 to 4
+    /// (`number_of_raw_data_blocks_in_frame` + 1).
+    pub raw_data_block_count: u8,
+    /// Raw AAC payload, excluding the ADTS header and its CRC.
     pub payload: Vec<u8>,
 }
 
 impl AacFrame {
     /// Parses one ADTS-framed AAC frame from the front of `data`, returning
-    /// the frame (payload excludes the 7-byte ADTS header) and the
-    /// unconsumed remainder.
+    /// the frame and the unconsumed remainder.
+    ///
+    /// Returns `None` for anything that is not a well-formed frame: a bad
+    /// sync word, a non-zero `layer`, a reserved sampling-frequency index, a
+    /// `aac_frame_length` shorter than its own header, or a buffer that ends
+    /// before the frame does. A stream that has lost sync can be re-acquired
+    /// with [`Self::find_sync`].
     pub fn parse(data: &[u8]) -> Option<(AacFrame, &[u8])> {
-        if data.len() < 7 {
+        if data.len() < ADTS_HEADER_LEN {
             return None;
         }
-        let sync_word = ((data[0] as u16) << 4) | ((data[1] >> 4) as u16);
-        if sync_word != 0xFFF {
+        let sync_word = (u16::from(data[0]) << 4) | u16::from(data[1] >> 4);
+        if sync_word != ADTS_SYNC_WORD {
             return None;
         }
         let layer = (data[1] >> 1) & 0b11;
         if layer != 0 {
             return None;
         }
-        let profile = match (data[2] >> 6) & 0b11 {
-            0 => AacProfile::Main,
-            1 => AacProfile::Lc,
-            2 => AacProfile::Ssr,
-            _ => AacProfile::Ltp,
+        let mpeg_version = if data[1] & 0b1000 != 0 {
+            AdtsMpegVersion::Mpeg2
+        } else {
+            AdtsMpegVersion::Mpeg4
         };
-        let sampling_frequency = ADTS_AAC_SAMPLING_FREQUENCIES[((data[2] >> 2) & 0b1111) as usize];
-        let channel_configuration = ((data[2] & 0b1) << 2) | (data[3] >> 6);
-        let frame_length = (((data[3] & 0b11) as usize) << 11)
-            | ((data[4] as usize) << 3)
-            | (data[5] >> 5) as usize;
-        if frame_length < 7 || data.len() < frame_length {
+        // protection_absent is *inverted*: 0 means a CRC follows the header.
+        // Missing this is how the two CRC bytes end up at the front of what a
+        // decoder is told is AAC payload.
+        let protection_absent = data[1] & 0b1 != 0;
+        let header_len = if protection_absent {
+            ADTS_HEADER_LEN
+        } else {
+            ADTS_HEADER_LEN + ADTS_CRC_LEN
+        };
+
+        let profile = AacProfile::from_bits(data[2] >> 6);
+        let frequency_index = (data[2] >> 2) & 0b1111;
+        let sampling_frequency = ADTS_AAC_SAMPLING_FREQUENCIES[usize::from(frequency_index)];
+        if sampling_frequency == 0 {
+            // Indices 13-15 are reserved. Reporting 0 Hz would make every
+            // duration and sample-rate calculation downstream divide by zero.
             return None;
         }
+        let channel_configuration = ((data[2] & 0b1) << 2) | (data[3] >> 6);
+        let frame_length = (usize::from(data[3] & 0b11) << 11)
+            | (usize::from(data[4]) << 3)
+            | usize::from(data[5] >> 5);
+        if frame_length < header_len || data.len() < frame_length {
+            return None;
+        }
+        let crc = if protection_absent {
+            None
+        } else {
+            Some(u16::from_be_bytes([data[7], data[8]]))
+        };
+        let raw_data_block_count = (data[6] & 0b11) + 1;
+
         Some((
             AacFrame {
                 profile,
+                mpeg_version,
                 sampling_frequency,
                 channel_configuration,
-                payload: data[7..frame_length].to_vec(),
+                crc,
+                raw_data_block_count,
+                payload: data[header_len..frame_length].to_vec(),
             },
             &data[frame_length..],
         ))
+    }
+
+    /// Finds the offset of the next plausible ADTS frame in `data`, or
+    /// `None`.
+    ///
+    /// A2DP media arrives over a lossy transport, so a sink that drops a
+    /// packet has to re-acquire the stream. The sync word alone is a weak
+    /// signal — 0xFFF turns up inside compressed audio — so a candidate only
+    /// counts if [`Self::parse`] accepts it there.
+    pub fn find_sync(data: &[u8]) -> Option<usize> {
+        (0..data.len().saturating_sub(1)).find(|&offset| {
+            data[offset] == 0xFF
+                && data[offset + 1] & 0xF0 == 0xF0
+                && Self::parse(&data[offset..]).is_some()
+        })
+    }
+
+    /// PCM samples per channel this frame decodes to.
+    ///
+    /// A frame carries `number_of_raw_data_blocks_in_frame + 1` blocks of
+    /// 1024 samples, not always one — which is why this is not a constant.
+    pub fn sample_count(&self) -> u32 {
+        AAC_SAMPLES_PER_RAW_DATA_BLOCK * u32::from(self.raw_data_block_count)
+    }
+
+    /// How long this frame plays for, in microseconds.
+    pub fn duration_us(&self) -> u32 {
+        (self.sample_count() as u64 * 1_000_000 / u64::from(self.sampling_frequency)) as u32
+    }
+
+    /// True when the channel layout is carried in a `program_config_element`
+    /// inside the payload rather than in the header's
+    /// `channel_configuration` field. A sink that only reads the header
+    /// cannot know the channel count of such a frame.
+    pub fn has_program_config_element(&self) -> bool {
+        self.channel_configuration == 0
+    }
+
+    /// Encodes this frame back to ADTS: header, optional CRC, payload.
+    ///
+    /// The round trip is exact for anything [`Self::parse`] accepted, which
+    /// is what makes an A2DP *source* possible — a scripted device can carry
+    /// frames it was handed without re-deriving the header.
+    pub fn to_bytes(&self) -> Option<Vec<u8>> {
+        let frequency_index = ADTS_AAC_SAMPLING_FREQUENCIES
+            .iter()
+            .take(13)
+            .position(|&f| f == self.sampling_frequency)? as u8;
+        if self.channel_configuration > 7 || !(1..=4).contains(&self.raw_data_block_count) {
+            return None;
+        }
+        let header_len = if self.crc.is_some() {
+            ADTS_HEADER_LEN + ADTS_CRC_LEN
+        } else {
+            ADTS_HEADER_LEN
+        };
+        let frame_length = header_len + self.payload.len();
+        // aac_frame_length is 13 bits.
+        if frame_length >= 1 << 13 {
+            return None;
+        }
+
+        let mut out = Vec::with_capacity(frame_length);
+        out.push(0xFF);
+        out.push(
+            0xF0 | (u8::from(self.mpeg_version == AdtsMpegVersion::Mpeg2) << 3)
+                | u8::from(self.crc.is_none()),
+        );
+        out.push(
+            (self.profile.to_bits() << 6) | (frequency_index << 2) | (self.channel_configuration >> 2),
+        );
+        out.push(((self.channel_configuration & 0b11) << 6) | ((frame_length >> 11) as u8 & 0b11));
+        out.push((frame_length >> 3) as u8);
+        // The low 3 bits of the length, then the top 5 bits of
+        // adts_buffer_fullness. 0x1F everywhere means "variable rate", which
+        // is what a stored stream carries.
+        out.push((((frame_length & 0b111) as u8) << 5) | 0x1F);
+        out.push(0xFC | (self.raw_data_block_count - 1));
+        if let Some(crc) = self.crc {
+            out.extend_from_slice(&crc.to_be_bytes());
+        }
+        out.extend_from_slice(&self.payload);
+        Some(out)
     }
 }
 
