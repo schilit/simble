@@ -8,11 +8,9 @@
 //! address) through to completion, plus the `h6`/`h7`-based LTK<->link-key
 //! conversion used for BR/EDR<->LE cross-transport key derivation.
 //!
-//! LE Secure Connections' key exchange requires real P-256 Diffie-Hellman
-//! point multiplication; Simble has no elliptic-curve dependency (and, as a
-//! protocol simulator, doesn't need real DH security for the surrounding
-//! state machine to be exercised correctly) — see `stub_dh_shared_secret`
-//! below for the documented placeholder used in its place. Only Just
+//! LE Secure Connections runs real P-256 ECDH (`crypto::ecdh`), with peer
+//! public keys validated to be on the curve — required to pair against
+//! real stacks, which reject invalid points (CVE-2018-5383). Only Just
 //! Works / Numeric Comparison association (auto-confirmed, no user prompt)
 //! is implemented; OOB and Passkey Entry are out of scope for a headless
 //! simulator with no display/keyboard to model.
@@ -22,7 +20,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use zerocopy::IntoBytes;
 
-use crate::crypto::{aes_cmac, c1, f4, f5, f6, h6, h7, s1};
+use crate::crypto::{P256Keypair, c1, f4, f5, f6, h6, h7, s1};
 use crate::packets::{
     smp_auth_req as auth_req, smp_error_code as error_code,
     smp_key_distribution as key_distribution,
@@ -43,6 +41,13 @@ pub const SMP_DEBUG_KEY_PUBLIC_X: [u8; 32] = [
 pub const SMP_DEBUG_KEY_PUBLIC_Y: [u8; 32] = [
     0xDC, 0x80, 0x9C, 0x49, 0x65, 0x2A, 0xEB, 0x6D, 0x63, 0x32, 0x9A, 0xBF, 0x5A, 0x52, 0x15, 0x5C,
     0x76, 0x63, 0x45, 0xC2, 0x8F, 0xED, 0x30, 0x24, 0x74, 0x1C, 0x8E, 0xD0, 0x15, 0x89, 0xD2, 0x8B,
+];
+/// The Debug Mode private scalar (big-endian, as the spec prints it) that
+/// [`SMP_DEBUG_KEY_PUBLIC_X`]/`_Y` derive from — real ECDH runs with it in
+/// debug mode so traces are reproducible AND cryptographically valid.
+pub const SMP_DEBUG_KEY_PRIVATE_BE: [u8; 32] = [
+    0x3F, 0x49, 0xF6, 0xD4, 0xA3, 0xC5, 0x5F, 0x38, 0x74, 0xC9, 0xB3, 0xE3, 0xD2, 0x10, 0x3F, 0x50,
+    0x4A, 0xFF, 0x60, 0x7B, 0xEB, 0x40, 0xB7, 0x99, 0x58, 0x99, 0xB8, 0xA6, 0xCD, 0x3C, 0x1A, 0xBD,
 ];
 
 /// `h7` salts for cross-transport key derivation (CTKD), Bluetooth Core Spec
@@ -99,6 +104,13 @@ pub struct PairingConfig {
     pub sc: bool,
     /// Whether to use the fixed Debug Mode key pair for reproducible traces.
     pub debug_mode: bool,
+    /// Whether to hold phase-3 key distribution until the link is actually
+    /// encrypted ([`PairingSession::on_link_encrypted`]). The spec requires
+    /// it, and real stacks (Bumble: "received key distribution on a
+    /// non-encrypted connection") reject early keys — but only runtimes
+    /// with a real controller see an Encryption Change event, so the scene
+    /// arms this and bare in-process sessions keep distributing eagerly.
+    pub defer_key_distribution: bool,
     /// Key-distribution flags this side offers as initiator.
     pub initiator_key_distribution: u8,
     /// Key-distribution flags this side offers as responder.
@@ -115,6 +127,7 @@ impl Default for PairingConfig {
             mitm: false,
             sc: true,
             debug_mode: false,
+            defer_key_distribution: false,
             initiator_key_distribution: key_distribution::ENC_KEY | key_distribution::ID_KEY,
             responder_key_distribution: key_distribution::ENC_KEY | key_distribution::ID_KEY,
             identity_address_preference: None,
@@ -157,35 +170,6 @@ fn random_bytes<const N: usize>() -> [u8; N] {
     out
 }
 
-/// Placeholder for real P-256 ECDH point multiplication (Bumble's
-/// `EccKey.dh`). Each side's "public key" here is an opaque random 64-byte
-/// value (or the fixed debug-mode constant); the "shared secret" is a
-/// deterministic, order-independent combination of both sides' public keys
-/// via AES-CMAC, so both peers land on the same value exactly as real ECDH
-/// would — without any elliptic-curve math, keeping Simble dependency-free.
-fn stub_dh_shared_secret(local: (&[u8; 32], &[u8; 32]), peer: (&[u8; 32], &[u8; 32])) -> [u8; 32] {
-    let mut local_bytes = local.0.to_vec();
-    local_bytes.extend_from_slice(local.1);
-    let mut peer_bytes = peer.0.to_vec();
-    peer_bytes.extend_from_slice(peer.1);
-
-    let (mut msg, second) = if local_bytes <= peer_bytes {
-        (local_bytes, peer_bytes)
-    } else {
-        (peer_bytes, local_bytes)
-    };
-    msg.extend_from_slice(&second);
-
-    let key = [0u8; 16];
-    let block0 = aes_cmac(&key, &msg);
-    msg.push(0x01);
-    let block1 = aes_cmac(&key, &msg);
-
-    let mut out = [0u8; 32];
-    out[..16].copy_from_slice(&block0);
-    out[16..].copy_from_slice(&block1);
-    out
-}
 
 fn build_16(op: u8, val: &[u8; 16]) -> Vec<u8> {
     let mut v = Vec::with_capacity(17);
@@ -261,6 +245,8 @@ pub struct PairingSession {
     bonding: bool,
     mitm: bool,
     sc: bool,
+    defer_key_distribution: bool,
+    link_encrypted: bool,
     initiator_key_distribution: u8,
     responder_key_distribution: u8,
     preq: [u8; 7],
@@ -280,6 +266,7 @@ pub struct PairingSession {
     peer_ltk: Option<[u8; 16]>,
     peer_ediv: Option<u16>,
     peer_rand: Option<[u8; 8]>,
+    ecdh: P256Keypair,
     local_pub_x: [u8; 32],
     local_pub_y: [u8; 32],
     peer_pub_x: [u8; 32],
@@ -339,11 +326,13 @@ impl PairingSession {
             AddressType::Random | AddressType::RandomIdentity => (Address::ANY, local_address),
         };
 
-        let (local_pub_x, local_pub_y) = if config.debug_mode {
-            (SMP_DEBUG_KEY_PUBLIC_X, SMP_DEBUG_KEY_PUBLIC_Y)
+        let ecdh = if config.debug_mode {
+            P256Keypair::from_private_be(&SMP_DEBUG_KEY_PRIVATE_BE)
+                .expect("the spec debug scalar is valid")
         } else {
-            (random_bytes::<32>(), random_bytes::<32>())
+            P256Keypair::generate()
         };
+        let (local_pub_x, local_pub_y) = (ecdh.x_le, ecdh.y_le);
 
         Self {
             role,
@@ -353,6 +342,8 @@ impl PairingSession {
             bonding: config.bonding,
             mitm: config.mitm,
             sc: config.sc,
+            defer_key_distribution: config.defer_key_distribution,
+            link_encrypted: false,
             initiator_key_distribution: config.initiator_key_distribution,
             responder_key_distribution: config.responder_key_distribution,
             preq: [0; 7],
@@ -372,6 +363,7 @@ impl PairingSession {
             peer_ltk: None,
             peer_ediv: None,
             peer_rand: None,
+            ecdh,
             local_pub_x,
             local_pub_y,
             peer_pub_x: [0; 32],
@@ -806,10 +798,13 @@ impl PairingSession {
         };
         self.peer_pub_x = x;
         self.peer_pub_y = y;
-        self.dh_key = Some(stub_dh_shared_secret(
-            (&self.local_pub_x, &self.local_pub_y),
-            (&x, &y),
-        ));
+        // Real ECDH — and real point validation: a peer key that is not on
+        // the P-256 curve fails the pairing (mandatory since CVE-2018-5383;
+        // Android enforces the same on our key).
+        let Some(dh_key) = self.ecdh.shared_x_le(&x, &y) else {
+            return self.fail(error_code::INVALID_PARAMETERS);
+        };
+        self.dh_key = Some(dh_key);
         match self.role {
             Role::Initiator => {
                 self.phase = Phase::WaitPeerConfirm;
@@ -854,11 +849,24 @@ impl PairingSession {
     fn on_encrypted(&mut self) {
         self.is_encrypted = true;
         self.phase = Phase::Complete;
-        if self.role == Role::Responder {
+        // Phase-3 keys belong on the encrypted link. With a real controller
+        // the Encryption Change event triggers them (on_link_encrypted);
+        // bare in-process sessions have no such event and distribute now.
+        if self.role == Role::Responder && (!self.defer_key_distribution || self.link_encrypted) {
             self.distribute_keys();
         }
         if self.peer_expected.is_empty() {
             self.on_peer_distribution_complete();
+        }
+    }
+
+    /// Tells the session the link is now actually encrypted (HCI Encryption
+    /// Change). If key distribution was deferred (see
+    /// [`PairingConfig::defer_key_distribution`]), it starts here.
+    pub fn on_link_encrypted(&mut self) {
+        self.link_encrypted = true;
+        if self.phase == Phase::Complete && self.role == Role::Responder {
+            self.distribute_keys();
         }
     }
 
@@ -1079,9 +1087,14 @@ mod tests {
             Address::ANY,
             AddressType::Random,
         );
+        // The consts are the spec's big-endian print; the session stores
+        // wire order (little-endian) — the reverse.
         assert_eq!(
             debug.local_public_key(),
-            (SMP_DEBUG_KEY_PUBLIC_X, SMP_DEBUG_KEY_PUBLIC_Y)
+            (
+                crate::crypto::smp_crypto::rev(&SMP_DEBUG_KEY_PUBLIC_X),
+                crate::crypto::smp_crypto::rev(&SMP_DEBUG_KEY_PUBLIC_Y)
+            )
         );
 
         let non_debug = PairingSession::new(

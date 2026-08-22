@@ -7,6 +7,7 @@
 //! Connections) driven through a real `VirtualDevice`.
 
 use simble::VirtualDevice;
+use simble::crypto::smp_crypto::rev;
 use simble::device::MemoryBondStore;
 use simble::smp::{
     IdentityAddressPreference, KeyStore, PairingConfig, PairingSession, Role,
@@ -141,7 +142,8 @@ fn test_smp_debug_mode() {
     );
     assert_eq!(
         debug_session.local_public_key(),
-        (SMP_DEBUG_KEY_PUBLIC_X, SMP_DEBUG_KEY_PUBLIC_Y)
+        (rev(&SMP_DEBUG_KEY_PUBLIC_X), rev(&SMP_DEBUG_KEY_PUBLIC_Y)),
+        "the session holds the debug key in SMP wire order (little-endian)"
     );
 
     let normal_session = PairingSession::new(
@@ -157,7 +159,8 @@ fn test_smp_debug_mode() {
     );
     assert_ne!(
         normal_session.local_public_key(),
-        (SMP_DEBUG_KEY_PUBLIC_X, SMP_DEBUG_KEY_PUBLIC_Y)
+        (rev(&SMP_DEBUG_KEY_PUBLIC_X), rev(&SMP_DEBUG_KEY_PUBLIC_Y)),
+        "the session holds the debug key in SMP wire order (little-endian)"
     );
 }
 
@@ -181,6 +184,10 @@ fn run_virtual_device_pairing(sc: bool) -> (VirtualDevice, u16, VirtualDevice, u
     let conn_p = 0x0002;
     central.on_connected(conn_c, peripheral_addr);
     peripheral.on_connected(conn_p, central_addr);
+    // SMP mixes the peer's address type into its crypto, so both sides must
+    // record what the (simulated) LE Connection Complete would have carried.
+    central.set_peer_address_type(conn_c, AddressType::Random);
+    peripheral.set_peer_address_type(conn_p, AddressType::Random);
 
     let config = PairingConfig {
         sc,

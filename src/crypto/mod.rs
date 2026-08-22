@@ -5,8 +5,10 @@
 
 pub(crate) mod aes;
 pub(crate) mod ccm;
+pub mod ecdh;
 pub mod smp_crypto;
 
 pub use aes::{aes_128_encrypt_block, aes_cmac};
 pub use ccm::{ccm_decrypt, ccm_encrypt};
+pub use ecdh::P256Keypair;
 pub use smp_crypto::{ah, c1, f4, f5, f6, g2, h6, h7, s1, xor16};

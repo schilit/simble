@@ -4,7 +4,7 @@
 //! LE Connection state tracking and write buffer queue.
 
 use crate::smp::PairingSession;
-use crate::types::Address;
+use crate::types::{Address, AddressType};
 
 /// Which GAP role the local device plays on one connection. Per-connection
 /// rather than device-level, matching NimBLE's `ble_gap_conn_desc.role` — a
@@ -53,6 +53,10 @@ pub struct ConnectionState {
     /// The key currently securing the link, mirrored from
     /// `pairing_session` once encryption is established.
     pub ltk: Option<[u8; 16]>,
+    /// The peer's address type from the LE Connection Complete event. SMP
+    /// mixes it into the pairing crypto (legacy `c1`, Secure Connections
+    /// `f5`/`f6`), so a wrong value fails pairing against a real stack.
+    pub peer_address_type: AddressType,
 }
 
 impl ConnectionState {
@@ -80,6 +84,7 @@ impl ConnectionState {
             pairing_session: None,
             is_encrypted: false,
             ltk: None,
+            peer_address_type: AddressType::Public,
         }
     }
 }
