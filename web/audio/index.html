@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>SimBLE Audio</title>
+<link rel="stylesheet" href="../common/simble.css">
+<link rel="stylesheet" href="../common/nav.css">
+</head>
+<body>
+<nav class="sitenav">
+  <a class="brand" href="../">Sim<b>BLE</b></a>
+  <div class="tabs">
+    <a href="../playground/">Playground</a>
+    <a href="../explorer/">API Explorer</a>
+    <a href="../scanner/">Scanner</a>
+    <a href="../hrm/">Scripted device</a>
+    <a href="../lightbulb/">Color Bulb</a>
+    <a href="../speaker/">Speaker</a>
+    <a href="../source/">Audio Source</a>
+    <a href="../dual/">Server + Client</a>
+    <a href="../scene/">Scene</a>
+    <a href="../testing/">Testing</a>
+    <a href="../shared/">Shared</a>
+    <a href="../controllers/">Controllers</a>
+  </div>
+  <span class="spacer"></span>
+  <a class="ext" href="../doc/">Docs</a>
+  <a class="ext" href="https://github.com/schilit/simble">GitHub ↗</a>
+</nav>
+
+<!-- Everything below the nav is built by the module, so the same code can be
+     mounted as one tab of the domain shell or loaded standalone at this URL. -->
+<main></main>
+
+<footer>
+  SimBLE compiled to WebAssembly. Two devices, one page, one timer: an LE Audio
+  <strong>source</strong> (Unicast Client) and an LE Audio <strong>sink</strong> — a Rhai-scripted
+  peripheral with PACS, ASCS and the Volume Control Service (<code>1844</code>): Volume State
+  <code>2B7D</code> (read/notify), Volume Control Point <code>2B7E</code> (write), Volume Flags
+  <code>2B7F</code>. On netsim they join as <code>web-audio-source</code>,
+  <code>web-audio-sink</code> and <code>web-audio-scan</code>.
+</footer>
+
+<script type="module">
+  import { mount } from "./audio.js";
+  mount(document.querySelector("main"));
+</script>
+</body>
+</html>

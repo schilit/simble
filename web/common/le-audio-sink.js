@@ -2,9 +2,9 @@
 //
 // The LE Audio sink device, as a Rhai script.
 //
-// Shared by the Speaker page (where it is editable) and the combined LE Audio
-// page (where it is fixed), so there is one definition of what simble's sink
-// actually is rather than two that drift.
+// Lives in common/ so there is exactly one definition of what simble's LE Audio
+// sink is — the Audio page runs it and lets you edit it, and the interop
+// scripts in tests/interop/ aim at the device it describes.
 
 export const LE_AUDIO_SINK_SCRIPT = `// SimBLE Speaker — LE Audio Volume Control Service.
 // The control-point idiom: a peer WRITES a command opcode, and the device
