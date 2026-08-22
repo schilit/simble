@@ -155,6 +155,10 @@ fn test_sbc_parser_rejects_bad_sync_or_truncation() {
 
 #[test]
 fn test_aac_parser() {
+    // 0xf0 in byte 1 means protection_absent = 0 — a two-byte CRC follows the
+    // seven-byte header, so the payload starts at offset 9, not 7. This test
+    // asserted a six-byte payload until `tests/adts_interop_test.rs` was
+    // written; it was reading the CRC as audio.
     let mut data = vec![0xff, 0xf0, 0x10, 0x00, 0x01, 0xa0, 0x00];
     data.extend_from_slice(&[0x00; 6]);
 
@@ -162,7 +166,8 @@ fn test_aac_parser() {
     assert_eq!(frame.profile, AacProfile::Main);
     assert_eq!(frame.sampling_frequency, 44100);
     assert_eq!(frame.channel_configuration, 0);
-    assert_eq!(frame.payload, [0x00; 6]);
+    assert_eq!(frame.crc, Some(0x0000));
+    assert_eq!(frame.payload, [0x00; 4]);
     assert!(rest.is_empty());
 }
 
