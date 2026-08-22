@@ -175,9 +175,10 @@ LE Audio (BAP, ASCS, PACS, volume/input control, broadcast scan, media control, 
 access, and the coordinator profiles), Apple ANCS/AMS, and Bluetooth 6.0 **Channel
 Sounding** distance ranging with **AoA/AoD** direction finding.
 
-Two honest caveats. **LE Audio streaming is incomplete** — the control plane (PACS, ASCS,
-volume control) works and is reachable, but CIS establishment and the LC3 codec are not
-implemented, so no audio flows yet. **Classic (BR/EDR) profiles** — A2DP, AVRCP, HFP,
+Two honest caveats. **LE Audio streaming works but has only been driven from simble and
+Bumble** — the control plane (PACS, ASCS, volume control), CIS establishment and LC3 are all
+implemented, and the [Audio page](https://schilit.github.io/simble/audio/) streams a file
+over a real CIS end to end; a phone as the source is untested. **Classic (BR/EDR) profiles** — A2DP, AVRCP, HFP,
 HID, SDP, RFCOMM — are implemented and well tested as libraries, but are not yet on the
 air. [`docs/android-peripherals.md`](docs/android-peripherals.md) tracks exactly what is
 reachable versus library-only.
@@ -263,6 +264,9 @@ in the page (compiled to WebAssembly) and joins the simulation. Start at the
   scanner tab
 - **[Color Bulb](https://schilit.github.io/simble/lightbulb/)** — a PLAYBULB-style light: a
   Rhai peripheral with a writable RGB characteristic and a glowing bulb that reacts
+- **[Audio](https://schilit.github.io/simble/audio/)** — both halves of an LE Audio stream:
+  drop in an audio file, watch the ASE handshake and CIS establishment, and hear the LC3
+  frames the sink actually received, at the volume its GATT says
 
 Open the Playground and the Scanner side by side for the full loop: rename the device in the
 Playground script and see the new name appear in the scanner.

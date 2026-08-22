@@ -21,9 +21,11 @@ same implementation Android ships — so the sink is decoding foreign audio,
 not its own encoder's output.
 
 ```bash
-# with web/speaker/ open in a browser on the netsim (WebSocket) controller:
-.venv/bin/python tests/interop/lea_source.py CC:1E:57:00:00:06/P
+# with web/audio/ open in a browser on the netsim (WebSocket) controller,
+# and its "Enable sound" button clicked:
+.venv/bin/python tests/interop/lea_source.py CC:1E:57:00:00:08/P
 ```
 
-Expect the page's SDU counter to climb at ~100/s (10 ms SDUs) and the audio
-to play at the device's live volume.
+The address is the page's built-in sink. Expect its SDU counter to climb at
+~100/s (10 ms SDUs) and the audio to play at the device's live volume — this
+is the interesting direction, a *foreign* source feeding simble's sink.
