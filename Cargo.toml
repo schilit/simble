@@ -23,11 +23,27 @@ crate-type = ["cdylib", "rlib"]
 zerocopy = { version = "0.8", features = ["derive"] }
 
 [dependencies]
-rhai = "1.25"
+# Optional: see the `lc3` feature. Its own tests assert against golden
+# output the author captured, not ETSI/SIG reference vectors, so this is
+# good enough to make a demo audible and not a conformance claim
+# (docs/lc3-evaluation.md).
+lc3-codec = { version = "0.2", optional = true }
+p256 = { version = "0.13", features = ["ecdh"] }
+# `serde` gives rhai::serde::{to_dynamic, from_dynamic}: the bridge between
+# JSON coming from a UI and the Dynamic values scripts see.
+rhai = { version = "1.25", features = ["serde"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
 zerocopy = { version = "0.8", features = ["derive"] }
+
+[features]
+# LC3, the LE Audio codec. Off by default: it is ~7k lines of DSP used only
+# so the browser demo pages can *play* what a scripted sink receives, and
+# neither the core library nor the `simble mcp` binary needs it — SDUs are
+# opaque bytes to the protocol layers. The pages build enables it; see
+# .github/workflows/pages.yml.
+lc3 = ["dep:lc3-codec"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 nusb = "0.2"
@@ -48,6 +64,11 @@ web-sys = { version = "0.3", features = [
 # browser backend enabled here plus `--cfg getrandom_backend="wasm_js"` in
 # RUSTFLAGS at build time (see .github/workflows/pages.yml and README).
 getrandom = { version = "0.3", features = ["wasm_js"] }
+# p256 (LE Secure Connections ECDH) pulls the older getrandom 0.2 through
+# elliptic-curve/rand_core; on wasm that generation needs its "js" backend
+# enabled explicitly, or the build fails with "targets are not supported by
+# default". Named so both majors can coexist.
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
 
 [[example]]
 name = "heart_rate_monitor"

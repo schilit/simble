@@ -15,6 +15,21 @@
 //! [netsim](https://android.googlesource.com/platform/tools/netsim), the Android
 //! emulator's network simulator, over a WebSocket, and can also reach real
 //! hardware through a USB Bluetooth dongle.
+//!
+//! # Three surfaces
+//!
+//! One stack, three frontends:
+//!
+//! - **MCP (agent-first)** — [`mcp`] serves `simble mcp` over stdio, so an AI
+//!   agent builds, runs and tests devices as tool calls without a checkout or
+//!   a build step. This is the surface designed for agents.
+//! - **Web** — the crate compiled to `wasm32-unknown-unknown`; see
+//!   [`transport::wasm_ws`] for the browser bindings.
+//! - **Native** — this library API and the `simble` CLI, for tests and CI.
+//!
+//! The engine is shared, so the surfaces cannot diverge: `run_test_script` and
+//! `lint_script` back the CLI, the browser's Testing page, and the MCP
+//! `run_test`/`lint` tools alike.
 
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
 // Every public item carries a doc comment; combined with CI's `-D warnings`
@@ -24,6 +39,7 @@
 pub mod android;
 pub mod api;
 pub mod att;
+pub mod audio;
 pub mod classic;
 pub mod client;
 pub mod controller;
