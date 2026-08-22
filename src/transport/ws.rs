@@ -461,7 +461,8 @@ pub(crate) fn server_handshake<S: Read + Write>(stream: &mut S) -> Result<String
 }
 
 /// The server end of the WebSocket HCI link: bridges one accepted WebSocket
-/// connection to an [`HciChannel`], where the *WebSocket peer is the host*.
+/// connection to an [`HciChannel`](super::HciChannel), where the *WebSocket
+/// peer is the host*.
 ///
 /// It is the mirror of [`super::netsim::NetsimTransport`]: incoming binary
 /// messages are complete host→controller H4 packets, injected into the
