@@ -3069,6 +3069,108 @@ mod web {
             Ok(self.scene.add_central(address, target))
         }
 
+        /// Adds a *scripted* central at `address` — a Rhai script that builds
+        /// an `android::BluetoothGatt`, connects it, and reacts in callbacks.
+        /// Returns its device index, or the script/address error, so a page
+        /// can show a compile failure on the line that caused it.
+        pub fn add_scripted_central(
+            &mut self,
+            address: &str,
+            script: &str,
+        ) -> Result<usize, JsValue> {
+            let address = address.parse().map_err(js_error)?;
+            self.scene
+                .add_scripted_central(address, script)
+                .map_err(js_error)
+        }
+
+        /// Points scripted central `index` at `target`, overriding the address
+        /// its script named — for a page that allocates addresses itself.
+        pub fn scripted_central_set_target(
+            &mut self,
+            index: usize,
+            target: &str,
+        ) -> Result<(), JsValue> {
+            let target = target.parse().map_err(js_error)?;
+            match self.scene.scripted_central_mut(index) {
+                Some(central) => {
+                    central.set_target(target);
+                    Ok(())
+                }
+                None => Err(js_error("not a scripted central")),
+            }
+        }
+
+        /// Drains what scripted central `index` emitted with
+        /// `client.emit(kind, payload)` — the script's channel to the page.
+        pub fn scripted_central_emitted(&mut self, index: usize) -> js_sys::Array {
+            let out = js_sys::Array::new();
+            if let Some(central) = self.scene.scripted_central_mut(index) {
+                for message in central.take_emitted() {
+                    out.push(&JsValue::from_str(&message));
+                }
+            }
+            out
+        }
+
+        /// Queues a read on scripted central `index`, naming the
+        /// characteristic by UUID string (`"2A37"` or a full 128-bit UUID) —
+        /// what the discovered tree a page renders already holds.
+        pub fn scripted_central_read(&mut self, index: usize, uuid: &str) -> Result<(), JsValue> {
+            let uuid: crate::types::Uuid = uuid.parse().map_err(js_error)?;
+            match self.scene.scripted_central_mut(index) {
+                Some(central) => {
+                    central.read(uuid);
+                    Ok(())
+                }
+                None => Err(js_error("not a scripted central")),
+            }
+        }
+
+        /// Queues a write (Write Request) on scripted central `index`.
+        pub fn scripted_central_write(
+            &mut self,
+            index: usize,
+            uuid: &str,
+            value: Vec<u8>,
+        ) -> Result<(), JsValue> {
+            let uuid: crate::types::Uuid = uuid.parse().map_err(js_error)?;
+            match self.scene.scripted_central_mut(index) {
+                Some(central) => {
+                    central.write(uuid, value, true);
+                    Ok(())
+                }
+                None => Err(js_error("not a scripted central")),
+            }
+        }
+
+        /// Queues enabling (or disabling) notifications on scripted central
+        /// `index`.
+        pub fn scripted_central_subscribe(
+            &mut self,
+            index: usize,
+            uuid: &str,
+            enable: bool,
+        ) -> Result<(), JsValue> {
+            let uuid: crate::types::Uuid = uuid.parse().map_err(js_error)?;
+            match self.scene.scripted_central_mut(index) {
+                Some(central) => {
+                    central.subscribe(uuid, enable);
+                    Ok(())
+                }
+                None => Err(js_error("not a scripted central")),
+            }
+        }
+
+        /// The first error a scripted central's callbacks raised — a failed
+        /// `assert`, or an operation naming a characteristic the peer does not
+        /// have. `undefined` while the script is behaving.
+        pub fn scripted_central_failure(&self, index: usize) -> Option<String> {
+            self.scene
+                .scripted_central(index)
+                .and_then(|c| c.failure().map(str::to_string))
+        }
+
         /// The discovered-GATT JSON of central `index` (`undefined` if not a
         /// central).
         pub fn central_status_json(&self, index: usize) -> Option<String> {

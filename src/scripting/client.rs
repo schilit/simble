@@ -391,6 +391,24 @@ impl ScriptedCentral {
         self.client.take_emitted()
     }
 
+    /// Queues a read from outside the script — a page button on the
+    /// discovered tree, a test. It joins the same queue the script's own
+    /// `client.read(uuid)` uses, so ordering is one story, not two.
+    pub fn read(&mut self, uuid: Uuid) {
+        self.client.with_central(|c| c.queue_read(uuid));
+    }
+
+    /// Queues a write from outside the script.
+    pub fn write(&mut self, uuid: Uuid, value: Vec<u8>, with_response: bool) {
+        self.client
+            .with_central(|c| c.queue_write(uuid, value, with_response));
+    }
+
+    /// Queues a subscribe (or unsubscribe) from outside the script.
+    pub fn subscribe(&mut self, uuid: Uuid, enable: bool) {
+        self.client.with_central(|c| c.queue_subscribe(uuid, enable));
+    }
+
     /// Drains the H4 packets the client has queued for the controller.
     pub fn take_outbox(&mut self) -> Vec<Vec<u8>> {
         let mut out = self.client.take_outbox();
