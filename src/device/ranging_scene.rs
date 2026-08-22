@@ -651,6 +651,7 @@ impl RangingScene {
                 bandwidth_hz: cs.map(|e| e.bandwidth_hz),
                 unambiguous_range_m: cs.map(|e| e.unambiguous_range_m),
                 error_m: cs.map(|e| e.distance_m - truth),
+                ranging_counter: self.locator.initiator.measured_counter(),
                 tones: self.tone_views(),
             },
         }
@@ -658,26 +659,41 @@ impl RangingScene {
 
     /// The raw per-tone measurements, so a page can show what the estimate
     /// was computed from rather than only its output.
+    ///
+    /// All three columns come from one stored measurement, so the sums shown
+    /// are the sums the estimate was actually fitted to. Pairing the latest
+    /// local half with the latest remote half instead would, for most of
+    /// every procedure, add tones from two different measurements — and their
+    /// sums are noise, since the oscillator offset only cancels within a
+    /// procedure.
     fn tone_views(&self) -> Vec<ToneView> {
         let local = self.locator.initiator.local_tones();
         let remote = self.locator.initiator.remote_tones();
+        let combined = self.locator.initiator.combined_tones();
+        // The estimator's own unwrapped sequence. The wrapped sums look like
+        // scatter at any real distance; the straight line the distance was
+        // fitted to only exists here.
+        let unwrapped = crate::cs::ranging::unwrap_sequence(combined);
         local
             .iter()
-            .map(|tone| {
-                let peer = remote.iter().find(|t| t.channel == tone.channel);
-                ToneView {
-                    channel: tone.channel,
-                    i: tone.i,
-                    q: tone.q,
-                    local_phase_deg: tone.phase_rad().to_degrees(),
-                    remote_phase_deg: peer.map(|t| t.phase_rad().to_degrees()),
-                    combined_phase_deg: peer.map(|t| {
-                        crate::controller::propagation::wrap_phase(
-                            tone.phase_rad() + t.phase_rad(),
-                        )
-                        .to_degrees()
-                    }),
-                }
+            .map(|tone| ToneView {
+                channel: tone.channel,
+                i: tone.i,
+                q: tone.q,
+                local_phase_deg: tone.phase_rad().to_degrees(),
+                remote_phase_deg: remote
+                    .iter()
+                    .find(|t| t.channel == tone.channel)
+                    .map(|t| t.phase_rad().to_degrees()),
+                combined_phase_deg: combined
+                    .iter()
+                    .find(|t| t.channel == tone.channel)
+                    .map(|t| t.phase_rad.to_degrees()),
+                unwrapped_phase_deg: combined
+                    .iter()
+                    .position(|t| t.channel == tone.channel)
+                    .and_then(|index| unwrapped.get(index))
+                    .map(|radians| radians.to_degrees()),
             })
             .collect()
     }
@@ -790,6 +806,7 @@ struct CsView {
     bandwidth_hz: Option<f64>,
     unambiguous_range_m: Option<f64>,
     error_m: Option<f64>,
+    ranging_counter: Option<u16>,
     tones: Vec<ToneView>,
 }
 
@@ -802,6 +819,7 @@ struct ToneView {
     local_phase_deg: f64,
     remote_phase_deg: Option<f64>,
     combined_phase_deg: Option<f64>,
+    unwrapped_phase_deg: Option<f64>,
 }
 
 #[cfg(test)]
@@ -925,6 +943,7 @@ mod tests {
             "the per-tone measurements must be visible"
         );
         assert!(parsed["cs"]["tones"][0]["combined_phase_deg"].is_f64());
+        assert!(parsed["cs"]["tones"][0]["unwrapped_phase_deg"].is_f64());
         assert!(parsed["truth"]["distance_m"].is_f64());
         assert!(parsed["room"]["path_loss_exponent"].is_f64());
     }

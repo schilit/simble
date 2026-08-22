@@ -129,18 +129,7 @@ pub fn estimate(tones: &[CombinedTone]) -> Option<PbrEstimate> {
     }
     let mut sorted = tones.to_vec();
     sorted.sort_by_key(|t| t.channel);
-
-    // Unwrap: each tone's phase is only known modulo a turn, so accumulate
-    // the *smallest* step consistent with the previous tone. Correct while
-    // the true step stays under half a turn, which is what bounds the
-    // unambiguous range.
-    let mut unwrapped = Vec::with_capacity(sorted.len());
-    let mut running = sorted[0].phase_rad;
-    unwrapped.push(running);
-    for pair in sorted.windows(2) {
-        running += wrap_phase(pair[1].phase_rad - pair[0].phase_rad);
-        unwrapped.push(running);
-    }
+    let unwrapped = unwrap_sequence(&sorted);
 
     let frequencies: Vec<f64> = sorted
         .iter()
@@ -163,6 +152,31 @@ pub fn estimate(tones: &[CombinedTone]) -> Option<PbrEstimate> {
         unambiguous_range_m: SPEED_OF_LIGHT_M_PER_S / (4.0 * spacing_hz),
         residual_rad: fit.residual_rms,
     })
+}
+
+/// Unwraps a sequence of combined phases into the continuous ramp the fit is
+/// actually made against.
+///
+/// Each tone's phase is only known modulo a turn, so this accumulates the
+/// *smallest* step consistent with the previous tone. Correct while the true
+/// step stays under half a turn — which is exactly what bounds the
+/// unambiguous range.
+///
+/// Public because it is the only honest way to draw the measurement: the
+/// wrapped phases look like scatter at any real distance, and the straight
+/// line only appears here. `tones` must already be sorted by channel.
+pub fn unwrap_sequence(tones: &[CombinedTone]) -> Vec<f64> {
+    let Some(first) = tones.first() else {
+        return Vec::new();
+    };
+    let mut unwrapped = Vec::with_capacity(tones.len());
+    let mut running = first.phase_rad;
+    unwrapped.push(running);
+    for pair in tones.windows(2) {
+        running += wrap_phase(pair[1].phase_rad - pair[0].phase_rad);
+        unwrapped.push(running);
+    }
+    unwrapped
 }
 
 /// The whole pipeline: pair up two ends' tones and fit a distance.
@@ -344,6 +358,29 @@ mod tests {
             estimate.unambiguous_range_m
         );
         assert!((estimate.unambiguous_range_m - 37.47).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_unwrapping_turns_the_wrapped_phases_into_a_straight_line() {
+        // The wrapped sequence looks like scatter — this is why a chart of it
+        // teaches nothing, and why the estimator's own unwrapped sequence is
+        // what a reader needs to see.
+        let (local, remote) = measured_pair(14.0, 0.0, 21);
+        let combined = combine(&local, &remote);
+        let unwrapped = unwrap_sequence(&combined);
+        assert_eq!(unwrapped.len(), combined.len());
+
+        let steps: Vec<f64> = unwrapped.windows(2).map(|w| w[1] - w[0]).collect();
+        let mean = steps.iter().sum::<f64>() / steps.len() as f64;
+        // Evenly spaced to within the 12-bit quantization of the Phase
+        // Correction Terms themselves — about a milliradian.
+        assert!(
+            steps.iter().all(|s| (s - mean).abs() < 1e-3),
+            "a noiseless measurement unwraps to evenly spaced steps: {steps:?}"
+        );
+        // The step is 4π·d·Δf/c: 1.17 rad at 14 m with 2 MHz tones.
+        assert!((mean - 1.174).abs() < 0.01, "step {mean}");
+        assert!(unwrap_sequence(&[]).is_empty());
     }
 
     #[test]

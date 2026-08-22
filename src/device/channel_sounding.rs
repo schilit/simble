@@ -35,7 +35,7 @@
 //! negotiating capabilities would be a sequence with nothing on the other end
 //! of it; a host talking to a real controller must not skip them.
 
-use crate::cs::ranging::PbrEstimate;
+use crate::cs::ranging::{CombinedTone, PbrEstimate};
 use crate::cs::tones::{SubeventResult, Tone, parse_subevent_result};
 use crate::device::host::command;
 use crate::packets::HciEvent;
@@ -102,14 +102,31 @@ pub struct CsInitiator {
     local: Option<SubeventResult>,
     /// The most recent Ranging Data the peer sent over RAS.
     remote: Option<RangingData>,
-    /// The last estimate computed, kept so a caller can read it without
-    /// re-deriving, and so a page can show the previous value while the next
-    /// procedure runs.
-    estimate: Option<PbrEstimate>,
+    /// The last procedure whose two halves met, kept whole: a caller reading
+    /// tones and a distance gets a set that were all measured together.
+    /// Holding the halves separately would let a reader pair the local tones
+    /// of one procedure with the peer's from another, and their sums would be
+    /// noise presented as a measurement.
+    measurement: Option<Measurement>,
     /// Procedures whose two halves were combined.
     completed: u32,
-    /// Procedures where the peer's data never lined up with the local half.
+    /// Procedures where the peer's data could not be matched to a local half.
     mismatched: u32,
+}
+
+/// One procedure, complete: both halves and what they add up to.
+#[derive(Debug)]
+struct Measurement {
+    /// The procedure both halves were measured in.
+    counter: u16,
+    /// The initiator's own tones.
+    local: Vec<Tone>,
+    /// The reflector's, as they arrived over the Ranging Service.
+    remote: Vec<Tone>,
+    /// Their per-channel sums, free of the oscillator offset.
+    combined: Vec<CombinedTone>,
+    /// The distance those sums imply.
+    estimate: PbrEstimate,
 }
 
 impl CsInitiator {
@@ -121,7 +138,7 @@ impl CsInitiator {
             config_id,
             local: None,
             remote: None,
-            estimate: None,
+            measurement: None,
             completed: 0,
             mismatched: 0,
         }
@@ -152,19 +169,46 @@ impl CsInitiator {
         self.config_id
     }
 
-    /// The tones this device's own controller last reported.
+    /// The initiator's own tones from the last complete measurement.
+    ///
+    /// These come from the stored measurement rather than from whatever the
+    /// controller reported most recently, so they always belong to the same
+    /// procedure as [`Self::remote_tones`] and [`Self::combined_tones`].
     pub fn local_tones(&self) -> &[Tone] {
+        self.measurement.as_ref().map_or(&[], |m| m.local.as_slice())
+    }
+
+    /// The tones this device's controller reported most recently, whether or
+    /// not the peer's matching half has arrived yet.
+    ///
+    /// This is how to tell whether measurements are flowing at all. Do
+    /// **not** pair these with [`Self::remote_tones`]: for most of every
+    /// procedure the two are from different measurements, and their sums are
+    /// noise. [`Self::combined_tones`] is the pairing that is safe to show.
+    pub fn pending_local_tones(&self) -> &[Tone] {
         self.local.as_ref().map_or(&[], |s| s.tones.as_slice())
     }
 
-    /// The tones the peer last sent over the Ranging Service.
+    /// The peer's tones from that same measurement.
     pub fn remote_tones(&self) -> &[Tone] {
-        self.remote.as_ref().map_or(&[], |d| d.tones.as_slice())
+        self.measurement.as_ref().map_or(&[], |m| m.remote.as_slice())
+    }
+
+    /// Their per-channel sums — what the distance was actually fitted to.
+    pub fn combined_tones(&self) -> &[CombinedTone] {
+        self.measurement
+            .as_ref()
+            .map_or(&[], |m| m.combined.as_slice())
+    }
+
+    /// The procedure the last complete measurement came from.
+    pub fn measured_counter(&self) -> Option<u16> {
+        self.measurement.as_ref().map(|m| m.counter)
     }
 
     /// The most recent distance estimate, if the two halves have met.
     pub fn estimate(&self) -> Option<&PbrEstimate> {
-        self.estimate.as_ref()
+        self.measurement.as_ref().map(|m| &m.estimate)
     }
 
     /// How many procedures produced an estimate, and how many were dropped
@@ -178,7 +222,7 @@ impl CsInitiator {
         self.state = CsState::Idle;
         self.local = None;
         self.remote = None;
-        self.estimate = None;
+        self.measurement = None;
     }
 
     /// Feeds one HCI packet in, returning the commands to send back.
@@ -259,7 +303,10 @@ impl CsInitiator {
                     && result.connection_handle == self.connection_handle
                 {
                     self.local = Some(result);
-                    self.recompute();
+                    // The peer's half of *this* procedure is still in flight
+                    // over GATT, so a local half arriving ahead of it is the
+                    // normal case, not a mismatch. Only try to combine.
+                    self.combine_halves(false);
                 }
                 Vec::new()
             }
@@ -277,7 +324,9 @@ impl CsInitiator {
             return false;
         };
         self.remote = Some(data);
-        self.recompute();
+        // The peer's half is the last thing to arrive, so if it does not line
+        // up with a local half now, the procedure really is lost.
+        self.combine_halves(true);
         true
     }
 
@@ -286,20 +335,40 @@ impl CsInitiator {
     /// The counter check is not bookkeeping: tones from two different
     /// procedures were measured with different oscillator phases, so summing
     /// them cancels nothing and produces a confident-looking number with no
-    /// relationship to distance. Mismatches are counted, not combined.
-    fn recompute(&mut self) {
+    /// relationship to distance.
+    ///
+    /// `count_mismatch` says whether a failure to line up is worth reporting.
+    /// The local half always arrives first — the peer's has to cross a GATT
+    /// link — so a local half with no matching remote is the ordinary state
+    /// of affairs mid-procedure, and counting it would report a fault on
+    /// every single measurement.
+    fn combine_halves(&mut self, count_mismatch: bool) {
         let (Some(local), Some(remote)) = (self.local.as_ref(), self.remote.as_ref()) else {
             return;
         };
         // The ranging counter is the procedure counter's low 12 bits.
-        if local.procedure_counter & 0x0FFF != remote.ranging_counter {
-            self.mismatched = self.mismatched.saturating_add(1);
+        let counter = local.procedure_counter & 0x0FFF;
+        if counter != remote.ranging_counter {
+            if count_mismatch {
+                self.mismatched = self.mismatched.saturating_add(1);
+            }
             return;
         }
-        if let Some(estimate) = crate::cs::estimate_from_tones(&local.tones, &remote.tones) {
-            self.estimate = Some(estimate);
-            self.completed = self.completed.saturating_add(1);
+        if self.measurement.as_ref().is_some_and(|m| m.counter == counter) {
+            return; // already combined; both halves arriving twice is not two measurements
         }
+        let combined = crate::cs::combine(&local.tones, &remote.tones);
+        let Some(estimate) = crate::cs::estimate(&combined) else {
+            return;
+        };
+        self.measurement = Some(Measurement {
+            counter,
+            local: local.tones.clone(),
+            remote: remote.tones.clone(),
+            combined,
+            estimate,
+        });
+        self.completed = self.completed.saturating_add(1);
     }
 
     /// LE CS Create Config's 28 parameter bytes (Vol 4, Part E, Section
@@ -629,10 +698,14 @@ mod tests {
         let local = tones_at(6.0, &offsets, 1.0);
 
         initiator.on_packet(&subevent_result(0x0040, 1, 5, &local));
-        assert_eq!(initiator.local_tones().len(), 19);
+        assert_eq!(initiator.pending_local_tones().len(), 19);
         assert!(
             initiator.estimate().is_none(),
             "half a measurement is not a measurement"
+        );
+        assert!(
+            initiator.local_tones().is_empty(),
+            "and half a measurement must not be reported as tones either"
         );
 
         let remote = RangingData {
@@ -674,6 +747,78 @@ mod tests {
         assert!(initiator.on_ranging_data(&stale.to_bytes()), "it parsed");
         assert!(initiator.estimate().is_none(), "but it was not combined");
         assert_eq!(initiator.procedure_counts(), (0, 1));
+        assert!(
+            initiator.combined_tones().is_empty(),
+            "and nothing may be shown as a sum of two procedures' tones"
+        );
+    }
+
+    #[test]
+    fn test_a_local_half_waiting_for_its_peer_is_not_a_mismatch() {
+        // The local half always arrives first; the peer's has to cross a GATT
+        // link. Counting that as a fault would report one on every single
+        // measurement, which is how the demo page's counter first read
+        // "70 procedures combined / 70 mismatched".
+        let mut initiator = measuring_initiator();
+        let mut rng = crate::controller::propagation::Rng::new(4);
+        let offsets: Vec<f64> = (0..19).map(|_| rng.uniform_phase()).collect();
+
+        for counter in 1..=3u16 {
+            initiator.on_packet(&subevent_result(
+                0x0040,
+                1,
+                counter,
+                &tones_at(5.0, &offsets, 1.0),
+            ));
+            let peer = RangingData {
+                ranging_counter: counter,
+                config_id: 1,
+                selected_tx_power: 0,
+                antenna_paths_mask: 0x01,
+                reference_power_level: -60,
+                tones: tones_at(5.0, &offsets, -1.0),
+            };
+            initiator.on_ranging_data(&peer.to_bytes());
+        }
+        assert_eq!(
+            initiator.procedure_counts(),
+            (3, 0),
+            "three measurements, no faults"
+        );
+        assert_eq!(initiator.measured_counter(), Some(3));
+    }
+
+    #[test]
+    fn test_the_tones_reported_all_come_from_one_procedure() {
+        // What a caller shows must be internally consistent: the local tones,
+        // the peer's, and their sums have to be from the same measurement, or
+        // the sums shown are not the sums the distance was fitted to.
+        let mut initiator = measuring_initiator();
+        let mut rng = crate::controller::propagation::Rng::new(5);
+        let offsets: Vec<f64> = (0..19).map(|_| rng.uniform_phase()).collect();
+        initiator.on_packet(&subevent_result(0x0040, 1, 1, &tones_at(5.0, &offsets, 1.0)));
+        let peer = RangingData {
+            ranging_counter: 1,
+            config_id: 1,
+            selected_tx_power: 0,
+            antenna_paths_mask: 0x01,
+            reference_power_level: -60,
+            tones: tones_at(5.0, &offsets, -1.0),
+        };
+        initiator.on_ranging_data(&peer.to_bytes());
+        let first_local = initiator.local_tones().to_vec();
+
+        // The next procedure's local half arrives; its peer's has not.
+        let later: Vec<f64> = (0..19).map(|_| rng.uniform_phase()).collect();
+        initiator.on_packet(&subevent_result(0x0040, 1, 2, &tones_at(9.0, &later, 1.0)));
+        assert_eq!(
+            initiator.local_tones(),
+            first_local.as_slice(),
+            "the reported half must not race ahead of the peer's"
+        );
+        assert_eq!(initiator.measured_counter(), Some(1));
+        assert_eq!(initiator.combined_tones().len(), 19);
+        assert_eq!(initiator.procedure_counts(), (1, 0));
     }
 
     #[test]
@@ -681,9 +826,9 @@ mod tests {
         let mut initiator = measuring_initiator();
         let tones = tones_at(3.0, &[0.0; 19], 1.0);
         initiator.on_packet(&subevent_result(0x0041, 1, 1, &tones));
-        assert!(initiator.local_tones().is_empty());
+        assert!(initiator.pending_local_tones().is_empty());
         initiator.on_packet(&subevent_result(0x0040, 1, 1, &tones));
-        assert_eq!(initiator.local_tones().len(), 19);
+        assert_eq!(initiator.pending_local_tones().len(), 19);
     }
 
     #[test]
