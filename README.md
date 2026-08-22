@@ -3,18 +3,17 @@
 [![CI](https://github.com/schilit/simble/actions/workflows/ci.yml/badge.svg)](https://github.com/schilit/simble/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-**SimBLE creates simulated Bluetooth devices for testing.** Spin up a virtual heart-rate
-monitor, keyboard, LE Audio earbud, hands-free car kit, or media remote — and connect to it
-from the Android emulator, from test code, or (with a USB dongle) from a real phone. No
-hardware to charge, pair, or lose: every device is defined in code, behaves the same way
-every run, and can misbehave on command when that's what your test needs.
+**SimBLE creates simulated Bluetooth scenes for testing.** A scene can contain *one device* or
+*several interacting devices*. No hardware to charge, pair, or lose: every device is defined in
+code, behaves the same way every run, and can misbehave on command when that's what your test
+needs.
 
 Inspired by [Bumble](https://github.com/google/bumble) and
 [NimBLE](https://github.com/apache/mynewt-nimble), SimBLE embeds
 [Rhai](https://rhai.rs) for device definitions and tests.
-SimBLE is written in pure Rust and is a native companion to
+SimBLE is written in pure Rust and works with
 [netsim](https://android.googlesource.com/platform/tools/netsim), the Android emulator's
-network simulator.
+Bluetooth radio simulator.
 
 ### Choose a surface
 
@@ -24,17 +23,23 @@ network simulator.
 | **MCP** | An AI agent is creating, running, and testing devices | [Quick start 1](#quick-start-1-drive-it-from-an-ai-agent-mcp) |
 | **Native** | You need Rust integration, CI fixtures, netsim, or a USB dongle | [Quick start 4](#quick-start-4-use-it-as-a-library) |
 
-All three use the same host stack with different frontends and transports.
+All three use the same host stack with different transports.
 
 ---
 
 ## What can I do with it?
 
-In a chat with SimBLE available, say:
+**Web** — interactively build a device in the [Playground](https://schilit.github.io/simble/playground/),
+inspect it, and try it in a browser.
+
+**MCP** — in a chat with SimBLE available, say:
 
 > *“Create a simulated heart-rate monitor, connect to it, and check that its rate stays below 200 bpm for five seconds.”*
 
-SimBLE gives the agent a repeatable device-testing environment. It can also:
+**Native** — run reproducible device tests locally or in CI, integrate SimBLE into Rust tests,
+or connect a scene to netsim or a USB dongle.
+
+Whichever surface you choose, you can also:
 
 - **Test Android apps against Bluetooth accessories that don't exist yet** — or that you
   don't want a drawer full of. Your app in the Android emulator, SimBLE as the accessory,
@@ -50,19 +55,52 @@ SimBLE gives the agent a repeatable device-testing environment. It can also:
 - **Reach real hardware when you want it.** With a USB Bluetooth dongle, a SimBLE device
   advertises over real RF and your actual phone can scan, connect, and pair with it.
 
-## Where scenes run
+## Choose a controller
 
-The frontend you choose (MCP, Web, or Native) is separate from where its Bluetooth scene runs.
+A **surface** is how you use SimBLE (MCP, Web, or Native). A **scene** is the collection of
+simulated devices and interactions. A **controller** is where that scene runs; choose it
+independently of the surface.
 
-| Scene host | MCP | Web | Native |
-|---|---|---|---|
-| **In-process** | Default | Default | Tests and CI |
-| **netsim** | `run_on("netsim")` | WebSocket controller | netsim examples |
-| **USB dongle** | Not available yet | Not available | `usb_hrm` example |
+<table width="100%">
+  <colgroup>
+    <col width="16%">
+    <col width="28%">
+    <col width="28%">
+    <col width="28%">
+  </colgroup>
+  <thead>
+    <tr>
+      <th width="16%">Controller</th>
+      <th width="28%">MCP</th>
+      <th width="28%">Web</th>
+      <th width="28%">Native</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>In-process</th>
+      <td>Default</td>
+      <td>Default</td>
+      <td>Tests and CI</td>
+    </tr>
+    <tr>
+      <th>netsim</th>
+      <td><code>run_on("netsim")</code></td>
+      <td>netsim over WebSocket</td>
+      <td>netsim examples</td>
+    </tr>
+    <tr>
+      <th>USB dongle</th>
+      <td>Not available yet</td>
+      <td>Not available</td>
+      <td><code>usb_hrm</code> example</td>
+    </tr>
+  </tbody>
+</table>
 
-The in-process host needs no external setup and is deterministic. netsim requires local
+The in-process controller needs no external setup and is deterministic. netsim requires local
 `netsimd` with its WebSocket endpoint: MCP adds peripherals and the Android emulator is the
-central; Web uses its WebSocket controller. The
+central; Web connects to netsim over WebSocket. The
 [controller ladder](https://schilit.github.io/simble/controllers/) explains the fidelity and
 setup trade-offs in more detail.
 
@@ -71,13 +109,14 @@ setup trade-offs in more detail.
 SimBLE ships an MCP server for stateful device construction and testing in an agent
 conversation. Once configured, the client works in a live scene: a session-scoped set of peripherals, plus a
 central and scanner to exercise them. The scene persists across calls, so an agent can build it,
-drive interactions, and inspect the result. Calling `run_on` switches its host and starts a new scene.
+drive interactions, and inspect the result. `run_on` chooses its controller; currently, changing
+controllers starts a fresh live scene.
 
 | Tools | What they do |
 |---|---|
 | `example`, `lookup` | Learn the API and the assigned numbers without leaving the session |
 | `lint`, `run_test` | Compile a script, or run it and check every `assert(...)` |
-| `run_on`, `add_peripheral`, `tick`, `status`, `scan` | Choose the scene host, build the scene, drive the clock, see it as a whole or as a scanner hears it |
+| `run_on`, `add_peripheral`, `tick`, `status`, `scan` | Choose the controller, build the scene, drive the clock, see it as a whole or as a scanner hears it |
 | `connect`, `read`, `write`, `assert` | Drive a central against a peripheral |
 | `subscribe`, `assert_over` | Monitor a value across a time window |
 
@@ -98,11 +137,12 @@ assert_over {"uuid": "2A37", "op": "<", "value": 200, "seconds": 5}
 The scripts are the same artifact throughout: `simble FILE.rhai` runs one headless for CI
 (exit 0 / 1), and `simble --no-run FILE.rhai` lints without running.
 
-## Devices are scripts
+## Self-contained device scripts and tests
 
-A SimBLE device can be a short [Rhai](https://rhai.rs) script that you edit and re-run without
-rebuilding Rust. Its API is Android-shaped: `BluetoothGattServer`, `BluetoothGattService`,
-characteristics, and notifications correspond to familiar `android.bluetooth` concepts.
+A short [Rhai](https://rhai.rs) script contains a complete device definition: its GATT services,
+initial values, and behavior. Edit and re-run it without rebuilding Rust. Its API is
+Android-shaped: `BluetoothGattServer`, `BluetoothGattService`, characteristics, and
+notifications correspond to familiar `android.bluetooth` concepts.
 
 ```rhai
 // A heart-rate monitor, defined entirely in a text file:
@@ -118,9 +158,9 @@ hrs.add_characteristic(hr);
 server.add_service(hrs);
 ```
 
-The same script can define a device or a test: add `assert(...)` for a test. Execution is
-bounded and has no filesystem or network access; the script can run identically in local tests,
-netsim fixtures, and CI.
+Add `assert(...)` and that same self-contained file becomes a device test. Execution is bounded
+and has no filesystem or network access; the script can run identically in local tests, netsim
+fixtures, and CI.
 
 ## What devices come built in?
 
@@ -146,7 +186,14 @@ reachable versus library-only.
 
 ## Quick start 1: drive it from an AI agent (MCP)
 
-From a source checkout, build and register the server:
+Start from a source checkout:
+
+```bash
+git clone https://github.com/schilit/simble.git
+cd simble
+```
+
+Build and register the server:
 
 ```bash
 cargo build --release --bin simble
@@ -169,7 +216,7 @@ Then ask the agent, for example:
 
 > **Use the Android emulator**
 >
-> *“Switch the scene to netsim, add a thermometer, and tell me when my Android emulator can discover it.”*
+> *“Run this scene on netsim, add a thermometer, and tell me when my Android emulator can discover it.”*
 
 For the first prompt, the agent calls `example` → `add_peripheral` → `connect` → `assert_over`
 and reports PASS or FAIL. The in-process run is deterministic. See
