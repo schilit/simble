@@ -131,7 +131,8 @@ export function createDeviceHeader(options) {
       note.className = "hint";
       // The note explains what kind of text this is — a device definition, a
       // transcript of real binding calls, a read-only copy — so a reader is
-      // never guessing whether they are looking at something runnable.
+      // never guessing whether they are looking at something runnable. It is
+      // page-authored markup (links, <code>), never anything a device reported.
       note.innerHTML = script.note;
       panel.append(note);
     }
