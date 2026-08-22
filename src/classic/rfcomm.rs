@@ -860,19 +860,33 @@ impl Multiplexer {
             }
             MultiplexerState::Disconnecting => {
                 self.state = MultiplexerState::Disconnected;
-                (Vec::new(), vec![MultiplexerEvent::Disconnected])
+                let mut events = self.close_all_dlcs();
+                events.push(MultiplexerEvent::Disconnected);
+                (Vec::new(), events)
             }
             _ => (Vec::new(), Vec::new()),
         }
     }
 
+    /// Drops every DLC and reports each closure. A DLC cannot outlive its
+    /// session: the DLCI only has meaning inside the multiplexer, so leaving
+    /// them in `Connected` would let `write` hand the caller frames to send
+    /// on a channel that is gone.
+    fn close_all_dlcs(&mut self) -> Vec<MultiplexerEvent> {
+        let mut dlcis: Vec<u8> = self.dlcs.keys().copied().collect();
+        // Sorted only so the event order is deterministic for callers/tests;
+        // `HashMap` iteration order is not.
+        dlcis.sort_unstable();
+        self.dlcs.clear();
+        dlcis.into_iter().map(MultiplexerEvent::DlcClosed).collect()
+    }
+
     fn on_disc(&mut self) -> (Vec<Vec<u8>>, Vec<MultiplexerEvent>) {
         self.state = MultiplexerState::Disconnected;
         let c_r = if self.role == Role::Initiator { 0 } else { 1 };
-        (
-            vec![RfcommFrame::ua(c_r, 0).to_bytes()],
-            vec![MultiplexerEvent::Disconnected],
-        )
+        let mut events = self.close_all_dlcs();
+        events.push(MultiplexerEvent::Disconnected);
+        (vec![RfcommFrame::ua(c_r, 0).to_bytes()], events)
     }
 
     fn on_dm_frame(&mut self, frame: RfcommFrame) -> (Vec<Vec<u8>>, Vec<MultiplexerEvent>) {
@@ -1871,6 +1885,53 @@ mod tests {
         let frame = RfcommFrame::parse(&frames[0]).expect("valid frame");
         assert_eq!(frame.p_f, 1);
         assert_eq!(&frame.information[1..], b"hello");
+    }
+
+    #[test]
+    fn test_a_peer_disc_on_the_session_closes_its_open_dlcs() {
+        // A DLCI only has meaning inside its multiplexer, so leaving DLCs
+        // Connected after the session goes down lets `write` hand the caller
+        // frames to send on a channel that no longer exists.
+        let mut initiator = Multiplexer::new(Role::Initiator, DEFAULT_L2CAP_MTU);
+        let mut responder = Multiplexer::new(Role::Responder, DEFAULT_L2CAP_MTU);
+        responder.listen(1, DEFAULT_MAX_FRAME_SIZE, DEFAULT_INITIAL_CREDITS);
+        let dlci = drive_open_dlc(&mut initiator, &mut responder, 1);
+
+        let (_, events) = responder
+            .receive(&RfcommFrame::disc(1, 0).to_bytes())
+            .unwrap();
+
+        assert_eq!(
+            events,
+            vec![
+                MultiplexerEvent::DlcClosed(dlci),
+                MultiplexerEvent::Disconnected
+            ]
+        );
+        assert!(responder.dlcs.is_empty());
+        assert!(responder.write(dlci, b"x").is_err());
+    }
+
+    #[test]
+    fn test_our_own_session_disconnect_closes_its_open_dlcs() {
+        let mut initiator = Multiplexer::new(Role::Initiator, DEFAULT_L2CAP_MTU);
+        let mut responder = Multiplexer::new(Role::Responder, DEFAULT_L2CAP_MTU);
+        responder.listen(1, DEFAULT_MAX_FRAME_SIZE, DEFAULT_INITIAL_CREDITS);
+        let dlci = drive_open_dlc(&mut initiator, &mut responder, 1);
+
+        initiator.disconnect().unwrap();
+        let (_, events) = initiator
+            .receive(&RfcommFrame::ua(0, 0).to_bytes())
+            .unwrap();
+
+        assert_eq!(
+            events,
+            vec![
+                MultiplexerEvent::DlcClosed(dlci),
+                MultiplexerEvent::Disconnected
+            ]
+        );
+        assert!(initiator.dlcs.is_empty());
     }
 
     #[test]
