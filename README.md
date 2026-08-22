@@ -116,8 +116,8 @@ controllers starts a fresh live scene.
 |---|---|
 | `example`, `lookup` | Learn the API and the assigned numbers without leaving the session |
 | `lint`, `run_test` | Compile a script, or run it and check every `assert(...)` |
-| `run_on`, `add_peripheral`, `tick`, `status`, `scan` | Choose the controller, build the scene, drive the clock, see it as a whole or as a scanner hears it |
-| `connect`, `read`, `write`, `assert` | Drive a central against a peripheral |
+| `run_on`, `add_peripheral`, `add_central`, `tick`, `status`, `scan` | Choose the controller, build the scene (devices *and* the clients that drive them), drive the clock, see it as a whole or as a scanner hears it |
+| `connect`, `read`, `write`, `assert` | Drive a central against a peripheral, one call at a time |
 | `subscribe`, `assert_over` | Monitor a value across a time window |
 
 `example` serves 18 ready-to-run device scripts, `lookup` resolves SIG assigned numbers, and
@@ -132,6 +132,15 @@ add_peripheral {"script": "..."}  // → "added peripheral #0", its GATT as JSON
 connect    {}                     // → the discovered services
 assert_over {"uuid": "2A37", "op": "<", "value": 200, "seconds": 5}
 // → "PASS — 2A37 byte 1 held < 200 across 30 samples over 5.0s (extreme 76)"
+```
+
+`add_central` is the other half: instead of scripting each interaction as a tool call, hand it a
+client script and it connects, discovers, subscribes and asserts on its own.
+
+```jsonc
+add_central {"script": "let c = android::BluetoothGatt(\"Probe\"); c.connect(\"AA:BB:CC:00:00:01\");
+             fn on_services_discovered(client) { client.subscribe(uuid::HEART_RATE_MEASUREMENT); }
+             fn on_characteristic_changed(client, uuid, value) { assert(value[1] < 200, \"plausible\"); }"}
 ```
 
 The scripts are the same artifact throughout: `simble FILE.rhai` runs one headless for CI
@@ -161,6 +170,24 @@ server.add_service(hrs);
 Add `assert(...)` and that same self-contained file becomes a device test. Execution is bounded
 and has no filesystem or network access; the script can run identically in local tests, netsim
 fixtures, and CI.
+
+The client half is scriptable too, and mirrors `android.bluetooth` the same way —
+`BluetoothGatt` plus the `BluetoothGattCallback` methods as plain functions:
+
+```rhai
+let client = android::BluetoothGatt("HRM Client");
+client.connect("AA:BB:CC:00:00:01");
+
+fn on_services_discovered(client) {
+    client.subscribe(uuid::HEART_RATE_MEASUREMENT);
+}
+fn on_characteristic_changed(client, uuid, value) {
+    assert(value[1] > 30 && value[1] < 220, "a plausible heart rate");   // this is the test
+}
+```
+
+Both halves run anywhere the library does: an in-page scene, a JSON scene file, the MCP scene,
+or over netsim against a real stack.
 
 ## What devices come built in?
 
