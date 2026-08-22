@@ -24,11 +24,20 @@ use lc3_codec::encoder::lc3_encoder::Lc3Encoder;
 
 /// A single-channel LC3 decoder configured for one stream.
 ///
-/// The working buffers are owned here because `Lc3Decoder` borrows them for
-/// its lifetime; a caller only sees frames in and PCM out.
+/// The decoder is created once and kept for the life of the stream. That is
+/// not an optimization: LC3 is an MDCT codec whose decoder carries overlap,
+/// long-term post-filter, and packet-loss state from each frame into the
+/// next. Rebuilding it per frame — which this type used to do, because
+/// `Lc3Decoder` borrows its working buffers — zeroes that state and leaves a
+/// discontinuity at every frame boundary, which at 10 ms frames is 100 seams
+/// a second of audible scratchiness.
 pub struct Lc3Stream {
-    scaler_buf: Vec<f32>,
-    complex_buf: Vec<lc3_codec::common::complex::Complex>,
+    // Field order is load-bearing: `decoder` borrows the two buffers below
+    // and Rust drops fields in declaration order, so it must be dropped
+    // first.
+    decoder: Lc3Decoder<'static>,
+    _scaler_buf: Box<[f32]>,
+    _complex_buf: Box<[lc3_codec::common::complex::Complex]>,
     samples_per_frame: usize,
 }
 
@@ -86,9 +95,28 @@ impl Lc3Stream {
         let duration = frame_duration(frame_duration_us).ok_or(Lc3Error::UnsupportedConfig)?;
         let (scaler_len, complex_len) =
             Lc3Decoder::calc_working_buffer_lengths(1, duration, frequency);
+        let mut scaler_buf = vec![0.0f32; scaler_len].into_boxed_slice();
+        let mut complex_buf =
+            vec![lc3_codec::common::complex::Complex::default(); complex_len].into_boxed_slice();
+
+        // SAFETY: the decoder borrows these buffers for as long as it lives.
+        // Both are heap allocations owned by the struct being built, so their
+        // addresses are stable even when the struct itself is moved, and the
+        // field order above guarantees the decoder is dropped before them.
+        // Nothing else ever aliases them: they are private and only reachable
+        // through the decoder.
+        let (scaler_ref, complex_ref) = unsafe {
+            (
+                std::slice::from_raw_parts_mut(scaler_buf.as_mut_ptr(), scaler_buf.len()),
+                std::slice::from_raw_parts_mut(complex_buf.as_mut_ptr(), complex_buf.len()),
+            )
+        };
+        let decoder = Lc3Decoder::new(1, duration, frequency, scaler_ref, complex_ref);
+
         Ok(Self {
-            scaler_buf: vec![0.0; scaler_len],
-            complex_buf: vec![lc3_codec::common::complex::Complex::default(); complex_len],
+            decoder,
+            _scaler_buf: scaler_buf,
+            _complex_buf: complex_buf,
             samples_per_frame: (sample_rate_hz as usize * frame_duration_us as usize) / 1_000_000,
         })
     }
@@ -100,27 +128,12 @@ impl Lc3Stream {
 
     /// Decodes one LC3 frame into 16-bit PCM.
     ///
-    /// The decoder is rebuilt per call because it borrows the working
-    /// buffers for its lifetime; that costs a little setup and keeps the
-    /// borrow structure simple, which is the right trade for demo playback
-    /// at one frame per 10 ms.
-    pub fn decode(
-        &mut self,
-        frame: &[u8],
-        sample_rate_hz: u32,
-        frame_duration_us: u32,
-    ) -> Result<Vec<i16>, Lc3Error> {
-        let frequency = sampling_frequency(sample_rate_hz).ok_or(Lc3Error::UnsupportedConfig)?;
-        let duration = frame_duration(frame_duration_us).ok_or(Lc3Error::UnsupportedConfig)?;
+    /// Frames must be fed in the order they were encoded: the decoder is
+    /// stateful, so a skipped or reordered frame degrades the frames after
+    /// it as well as itself.
+    pub fn decode(&mut self, frame: &[u8]) -> Result<Vec<i16>, Lc3Error> {
         let mut samples = vec![0i16; self.samples_per_frame];
-        let mut decoder = Lc3Decoder::new(
-            1,
-            duration,
-            frequency,
-            &mut self.scaler_buf,
-            &mut self.complex_buf,
-        );
-        decoder
+        self.decoder
             .decode_frame(16, 0, frame, &mut samples)
             .map_err(|e| Lc3Error::BadFrame(format!("{e:?}")))?;
         Ok(samples)
@@ -133,12 +146,13 @@ impl Lc3Stream {
 /// on the air rather than PCM — which makes the media plane an honest round
 /// trip end to end. A sink receiving from Android needs only the decoder.
 pub struct Lc3Encode {
-    integer_buf: Vec<i16>,
-    scaler_buf: Vec<f32>,
-    complex_buf: Vec<lc3_codec::common::complex::Complex>,
+    // Kept alive across frames for the same reason as [`Lc3Stream`]: the
+    // encoder carries MDCT and post-filter state between frames.
+    encoder: Lc3Encoder<'static>,
+    _integer_buf: Box<[i16]>,
+    _scaler_buf: Box<[f32]>,
+    _complex_buf: Box<[lc3_codec::common::complex::Complex]>,
     samples_per_frame: usize,
-    frequency: SamplingFrequency,
-    duration: FrameDuration,
 }
 
 impl Lc3Encode {
@@ -148,13 +162,35 @@ impl Lc3Encode {
         let duration = frame_duration(frame_duration_us).ok_or(Lc3Error::UnsupportedConfig)?;
         let (integer_len, scaler_len, complex_len) =
             Lc3Encoder::calc_working_buffer_lengths(1, duration, frequency);
-        Ok(Self {
-            integer_buf: vec![0; integer_len],
-            scaler_buf: vec![0.0; scaler_len],
-            complex_buf: vec![lc3_codec::common::complex::Complex::default(); complex_len],
-            samples_per_frame: (sample_rate_hz as usize * frame_duration_us as usize) / 1_000_000,
-            frequency,
+        let mut integer_buf = vec![0i16; integer_len].into_boxed_slice();
+        let mut scaler_buf = vec![0.0f32; scaler_len].into_boxed_slice();
+        let mut complex_buf =
+            vec![lc3_codec::common::complex::Complex::default(); complex_len].into_boxed_slice();
+
+        // SAFETY: as in `Lc3Stream::new` — heap buffers owned by this struct,
+        // dropped after the encoder that borrows them, never aliased.
+        let (integer_ref, scaler_ref, complex_ref) = unsafe {
+            (
+                std::slice::from_raw_parts_mut(integer_buf.as_mut_ptr(), integer_buf.len()),
+                std::slice::from_raw_parts_mut(scaler_buf.as_mut_ptr(), scaler_buf.len()),
+                std::slice::from_raw_parts_mut(complex_buf.as_mut_ptr(), complex_buf.len()),
+            )
+        };
+        let encoder = Lc3Encoder::new(
+            1,
             duration,
+            frequency,
+            integer_ref,
+            scaler_ref,
+            complex_ref,
+        );
+
+        Ok(Self {
+            encoder,
+            _integer_buf: integer_buf,
+            _scaler_buf: scaler_buf,
+            _complex_buf: complex_buf,
+            samples_per_frame: (sample_rate_hz as usize * frame_duration_us as usize) / 1_000_000,
         })
     }
 
@@ -178,15 +214,7 @@ impl Lc3Encode {
             )));
         }
         let mut out = vec![0u8; output_bytes];
-        let mut encoder = Lc3Encoder::new(
-            1,
-            self.duration,
-            self.frequency,
-            &mut self.integer_buf,
-            &mut self.scaler_buf,
-            &mut self.complex_buf,
-        );
-        encoder
+        self.encoder
             .encode_frame(0, samples, &mut out)
             .map_err(|e| Lc3Error::BadFrame(format!("{e:?}")))?;
         Ok(out)
@@ -246,7 +274,7 @@ mod tests {
         assert_eq!(frame.len(), frame_bytes, "LC3 is constant bitrate");
         assert!(frame.iter().any(|&b| b != 0), "the frame carries content");
 
-        let decoded = decoder.decode(&frame, rate, duration_us).unwrap();
+        let decoded = decoder.decode(&frame).unwrap();
         assert_eq!(decoded.len(), samples.len());
         let energy = |s: &[i16]| s.iter().map(|&v| (v as f64).abs()).sum::<f64>() / s.len() as f64;
         let (before, after) = (energy(&samples), energy(&decoded));
@@ -256,18 +284,16 @@ mod tests {
         );
     }
 
-    /// **The interop test that matters**: these frames were encoded by
-    /// Google's liblc3 (via its `lc3py` binding) — the very implementation
-    /// Android ships — from a 440 Hz tone at 16 kHz, 10 ms, 40 octets per
-    /// frame, which is exactly the codec configuration simble's PAC record
-    /// advertises.
+    /// Frames encoded by Google's liblc3 (via its `lc3py` binding) — the
+    /// very implementation Android ships — from a 440 Hz tone at 16 kHz,
+    /// 10 ms, 40 octets per frame, which is exactly the codec configuration
+    /// simble's PAC record advertises.
     ///
-    /// Everything else in this file checks simble against itself. This
-    /// checks it against the encoder a real phone would use, which is the
+    /// Everything else in this file checks simble against itself. These
+    /// check it against the encoder a real phone would use, which is the
     /// only way to know the decoder would understand a phone at all.
-    #[test]
-    fn test_frames_from_googles_liblc3_decode_to_the_original_tone() {
-        const LIBLC3_440HZ_FRAMES: [[u8; 40]; 5] = [
+    #[rustfmt::skip]
+    const LIBLC3_440HZ_FRAMES: [[u8; 40]; 5] = [
   // frame 0
   [0xA7, 0xC9, 0xFD, 0xAC, 0x49, 0x85, 0x6D, 0xDA,
    0xCD, 0xFF, 0xCA, 0xCF, 0xCA, 0x7B, 0xF3, 0x0A,
@@ -298,14 +324,18 @@ mod tests {
    0x83, 0xFD, 0x03, 0x22, 0xDC, 0xB8, 0x6D, 0xCF,
    0xB7, 0x90, 0x74, 0xCC, 0xB3, 0xC0, 0xE3, 0xF9,
    0xA2, 0x36, 0x7E, 0xA9, 0x01, 0xAD, 0x50, 0x25],
-        ];
+    ];
 
+    /// **The interop test that matters**: foreign frames must come back as
+    /// the tone that went in.
+    #[test]
+    fn test_frames_from_googles_liblc3_decode_to_the_original_tone() {
         let mut decoder = Lc3Stream::new(16_000, 10_000).unwrap();
         let mut pcm = Vec::new();
         for frame in &LIBLC3_440HZ_FRAMES {
             pcm.extend(
                 decoder
-                    .decode(frame, 16_000, 10_000)
+                    .decode(frame)
                     .expect("a frame from liblc3 must decode"),
             );
         }
@@ -331,6 +361,47 @@ mod tests {
         );
     }
 
+    /// The decoder carries MDCT overlap, long-term post-filter, and
+    /// packet-loss state from each frame into the next. It was once rebuilt
+    /// per call — because `Lc3Decoder` borrows its working buffers — which
+    /// zeroed that state and left a step discontinuity at every frame
+    /// boundary: 100 a second at 10 ms frames, and audible as a scratchy,
+    /// static-y stream.
+    ///
+    /// The tone test above passed throughout. A steady sine is nearly
+    /// stationary, so losing the overlap barely moves its peak or its zero
+    /// crossings; the damage was at the seams, so that is where this looks.
+    #[test]
+    fn test_decoder_state_carries_across_frame_boundaries() {
+        let mut decoder = Lc3Stream::new(16_000, 10_000).unwrap();
+        let mut pcm = Vec::new();
+        for frame in &LIBLC3_440HZ_FRAMES {
+            pcm.extend(decoder.decode(frame).expect("frame must decode"));
+        }
+
+        // The largest sample-to-sample step at a frame boundary, against the
+        // largest step anywhere inside a frame. For continuous audio the two
+        // are the same order of magnitude; a decoder that has forgotten its
+        // state jumps at the seam.
+        let step = |i: usize| (pcm[i] as i32 - pcm[i - 1] as i32).abs();
+        let at_seams = (1..LIBLC3_440HZ_FRAMES.len())
+            .map(|f| step(f * 160))
+            .max()
+            .unwrap();
+        let inside = (1..pcm.len())
+            .filter(|i| i % 160 != 0)
+            .map(step)
+            .max()
+            .unwrap();
+
+        assert!(
+            at_seams <= inside * 2,
+            "frame boundaries are discontinuous: the largest step at a seam \
+             is {at_seams} against {inside} inside a frame, so the decoder is \
+             losing its inter-frame state"
+        );
+    }
+
     #[test]
     fn test_encoder_rejects_a_wrong_length_frame() {
         let mut encoder = Lc3Encode::new(16_000, 10_000).unwrap();
@@ -342,7 +413,7 @@ mod tests {
         // A sink receives whatever is on the air; garbage must come back as
         // an error the page can show, not take the device down.
         let mut stream = Lc3Stream::new(16_000, 10_000).unwrap();
-        let result = stream.decode(&[0xAB; 40], 16_000, 10_000);
+        let result = stream.decode(&[0xAB; 40]);
         // Either it decodes to something meaningless or it errors — both are
         // acceptable; panicking is not, and that is what this pins.
         if let Ok(samples) = result {

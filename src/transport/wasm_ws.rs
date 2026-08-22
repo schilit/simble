@@ -2583,10 +2583,10 @@ mod web {
     #[cfg(feature = "lc3")]
     #[wasm_bindgen]
     pub struct WebLc3 {
+        // The stream configuration lives inside these two now: both are
+        // stateful across frames and are built for one configuration.
         encoder: crate::audio::lc3::Lc3Encode,
         decoder: crate::audio::lc3::Lc3Stream,
-        sample_rate_hz: u32,
-        frame_duration_us: u32,
     }
 
     #[cfg(feature = "lc3")]
@@ -2602,8 +2602,6 @@ mod web {
                     .map_err(js_error)?,
                 decoder: crate::audio::lc3::Lc3Stream::new(sample_rate_hz, frame_duration_us)
                     .map_err(js_error)?,
-                sample_rate_hz,
-                frame_duration_us,
             })
         }
 
@@ -2623,7 +2621,7 @@ mod web {
         /// Decodes one LC3 frame back to 16-bit PCM.
         pub fn decode(&mut self, frame: Vec<u8>) -> Result<Vec<i16>, JsValue> {
             self.decoder
-                .decode(&frame, self.sample_rate_hz, self.frame_duration_us)
+                .decode(&frame)
                 .map_err(js_error)
         }
     }
