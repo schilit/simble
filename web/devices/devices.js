@@ -2,7 +2,8 @@
 //
 // The domain shell: one page, one timer, one wasm instance, several domains.
 //
-// Each domain (Media, Car, HID, Ranging) is an ES module exporting
+// Each domain (Generic, Media, Car, HID, Ranging, Health, Home) is an ES module
+// exporting
 // `mount(root)` and `unmount()`. This shell owns the tab strip and the
 // lifecycle; it knows nothing about Bluetooth.
 //
@@ -20,6 +21,8 @@
 // WebSocket drops, so a dead device lingers at the same address).
 
 const DOMAINS = [
+  { id: "generic", label: "Generic", module: "../dual/dual.js",
+    blurb: "Plain GATT: a server's own database beside what a client discovers" },
   { id: "media", label: "Media", module: "../audio/audio.js",
     blurb: "LE Audio: a source streaming LC3 to a sink over a real CIS" },
   { id: "car", label: "Car", module: "../car/car.js",
@@ -34,7 +37,7 @@ const DOMAINS = [
     blurb: "Home control: a colour bulb driven through its own characteristic" },
 ];
 
-const DEFAULT_ID = "media";
+const DEFAULT_ID = "generic";
 
 let current = null;      // { id, module }
 let switching = 0;       // guards against overlapping switches
