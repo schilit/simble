@@ -2,8 +2,9 @@
 //
 // Playing isochronous SDUs through the Web Audio graph.
 //
-// Shared by the Speaker page and the combined LE Audio page, because getting
-// this right took several attempts and neither should carry its own copy:
+// Lives in common/ rather than in the Audio page, because getting this right
+// took several attempts and the next page that plays a stream should inherit
+// the answers rather than rediscover them:
 //
 //   - The graph runs at the *stream's* sample rate, not the hardware rate.
 //     At 44.1 kHz every 160-sample buffer was resampled independently, by a
@@ -18,16 +19,33 @@
 
 const JITTER_LEAD_S = 0.25;
 
+// A silence longer than this means the stream stopped and started again, not
+// that it fell behind. Without the distinction every stream begins with one
+// phantom underrun — the cursor is stale from whenever audio was last enabled —
+// and a counter that is never zero is a counter nobody reads.
+const RESTART_GAP_S = 0.5;
+
 /// Creates a player for one stream configuration. `decode` turns one SDU into
 /// an Int16Array of PCM; pass null to treat SDUs as raw 16-bit PCM.
 export function createSduPlayer({ sampleRate }) {
   let audio = null;
   let gain = null;
   let cursor = 0;
+  let lastPlayedAt = -Infinity; // context time of the previous batch
   const stats = { received: 0, played: 0, underruns: 0 };
 
   return {
     stats,
+
+    /// Zeroes the counters so they describe one stream rather than the page's
+    /// whole history — call it when a new stream starts.
+    reset() {
+      stats.received = 0;
+      stats.played = 0;
+      stats.underruns = 0;
+      lastPlayedAt = -Infinity;
+      if (audio) cursor = audio.currentTime;
+    },
 
     /// Browsers require a user gesture before an AudioContext makes sound, so
     /// this must be called from a real click handler. A context created
@@ -52,6 +70,18 @@ export function createSduPlayer({ sampleRate }) {
       // Harmless if it is already running, and the difference between
       // "suspended" and "running" is the difference between silence and audio.
       audio.resume();
+    },
+
+    /// Releases the AudioContext. A page that is unmounted and remounted would
+    /// otherwise leak one context per visit, and a browser caps how many a
+    /// document may hold — after which `enable()` silently gets nothing.
+    close() {
+      if (!audio) return;
+      const closing = audio;
+      audio = null;
+      gain = null;
+      cursor = 0;
+      closing.close();
     },
 
     /// The AudioContext's state, or "off" before one exists.
@@ -111,11 +141,14 @@ export function createSduPlayer({ sampleRate }) {
       // sounds like and it should be visible rather than merely audible.
       let startAt = cursor;
       if (startAt < audio.currentTime) {
-        if (stats.played > 0) stats.underruns++;
+        if (stats.played > 0 && audio.currentTime - lastPlayedAt < RESTART_GAP_S) {
+          stats.underruns++;
+        }
         startAt = audio.currentTime + JITTER_LEAD_S;
       }
       node.start(startAt);
       cursor = startAt + buffer.duration;
+      lastPlayedAt = audio.currentTime;
       stats.played += decoded.length;
     },
   };
