@@ -176,7 +176,7 @@ impl ProtocolHandler for SdpHandler {
 /// peer, and what the device wants to send back.
 ///
 /// This mirrors the LE side's `VirtualDevice::audio_rx` — a queue plus an
-/// accessor — but lives behind an [`Arc<Mutex<_>>`] because the handler
+/// accessor — but lives behind an `Arc<Mutex<_>>` because the handler
 /// itself is owned as a `Box<dyn ProtocolHandler>` inside the host, where a
 /// caller cannot reach it. Holding a clone of the port is how a scripted
 /// device, a test, or an example talks to the serial connection.
