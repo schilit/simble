@@ -1010,6 +1010,20 @@ pub fn run_test_script(script: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Lints a Rhai script without running it: compiles it in the same engine
+/// [`run_test_script`] would use (so `android::*` / `uuid::*` and the test
+/// bindings are all in scope) and reports a syntax/parse error if any, with
+/// its position. Side-effect-free — nothing executes — so it's the cheap
+/// pre-flight for an agent's generate-check-fix loop (`simble --no-run`).
+pub fn lint_script(script: &str) -> Result<(), String> {
+    let mut engine = new_engine();
+    register_web_extensions(&mut engine);
+    engine
+        .compile(script)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 /// The central's connect → discover progression.
 #[derive(Clone, Copy, PartialEq)]
 enum CentralPhase {

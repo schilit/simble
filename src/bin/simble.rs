@@ -24,7 +24,7 @@
 //! same transport pages use for `netsim` and `rootcanal-ws`.
 
 use simble::transport::usb::parse_vid_pid;
-use simble::transport::wasm_ws::run_test_script;
+use simble::transport::wasm_ws::{lint_script, run_test_script};
 use simble::transport::{HciChannel, UsbTransport, WsServerConn};
 use std::io::Read;
 use std::net::{TcpListener, TcpStream};
@@ -36,7 +36,9 @@ simble — SimBLE developer CLI
 
 usage:
   simble FILE.rhai [FILE.rhai ...]     run device script(s) as tests (stdin if none)
+  simble --no-run FILE.rhai ...        lint only: compile/check, don't execute
   simble --usb [VID:PID] [--ws-port N] bridge a USB dongle onto ws://127.0.0.1:N/
+  simble mcp                           run the MCP server (stdio) for agents
 
 Running scripts exits 0 if every assert(...) holds, 1 if any fails.
 --usb serves one WebSocket client at a time; point a page's backend at it.";
@@ -47,6 +49,15 @@ fn main() -> ExitCode {
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!("{USAGE}");
         return ExitCode::SUCCESS;
+    }
+    if args.first().map(String::as_str) == Some("mcp") {
+        return match simble::mcp::serve_stdio() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("simble mcp: {e}");
+                ExitCode::from(2)
+            }
+        };
     }
     if args.iter().any(|a| a == "--usb") {
         return run_bridge(&args);
@@ -60,12 +71,16 @@ fn run_tests(args: &[String]) -> ExitCode {
     // Positional args are files; reject stray flags so a typo isn't silently
     // treated as "no files, read stdin".
     let mut files = Vec::new();
+    let mut lint_only = false;
     for arg in args {
-        if arg.starts_with('-') {
-            eprintln!("simble: unknown option {arg:?}\n\n{USAGE}");
-            return ExitCode::from(2);
+        match arg.as_str() {
+            "--no-run" => lint_only = true,
+            _ if arg.starts_with('-') => {
+                eprintln!("simble: unknown option {arg:?}\n\n{USAGE}");
+                return ExitCode::from(2);
+            }
+            _ => files.push(arg.clone()),
         }
-        files.push(arg.clone());
     }
 
     if files.is_empty() {
@@ -74,7 +89,7 @@ fn run_tests(args: &[String]) -> ExitCode {
             eprintln!("simble: cannot read stdin: {e}");
             return ExitCode::from(2);
         }
-        return report("<stdin>", &script, false);
+        return report("<stdin>", &script, false, lint_only);
     }
 
     let show_names = files.len() > 1;
@@ -88,7 +103,7 @@ fn run_tests(args: &[String]) -> ExitCode {
                 continue;
             }
         };
-        if report(file, &script, show_names) == ExitCode::FAILURE {
+        if report(file, &script, show_names, lint_only) == ExitCode::FAILURE {
             any_failed = true;
         }
     }
@@ -99,21 +114,28 @@ fn run_tests(args: &[String]) -> ExitCode {
     }
 }
 
-/// Runs one script and prints its result. `with_name` prefixes each line with
-/// the file, so a multi-file run reads like a test report.
-fn report(name: &str, script: &str, with_name: bool) -> ExitCode {
+/// Runs (or, with `lint_only`, just compiles) one script and prints its result.
+/// `with_name` prefixes each line with the file, so a multi-file run reads like
+/// a test report.
+fn report(name: &str, script: &str, with_name: bool, lint_only: bool) -> ExitCode {
     let tag = if with_name {
         format!("{name}: ")
     } else {
         String::new()
     };
-    match run_test_script(script) {
-        Ok(()) => {
-            println!("{tag}PASS — all assertions held");
+    let outcome = if lint_only {
+        lint_script(script).map(|()| "OK — compiles cleanly")
+    } else {
+        run_test_script(script).map(|()| "PASS — all assertions held")
+    };
+    match outcome {
+        Ok(message) => {
+            println!("{tag}{message}");
             ExitCode::SUCCESS
         }
         Err(message) => {
-            eprintln!("{tag}FAIL — {message}");
+            let label = if lint_only { "LINT" } else { "FAIL" };
+            eprintln!("{tag}{label} — {message}");
             ExitCode::FAILURE
         }
     }

@@ -35,6 +35,9 @@ pub mod df;
 pub mod gap;
 pub mod gatt;
 pub mod l2cap;
+// The MCP server (`simble mcp`) uses std stdin/stdout and native transports.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod mcp;
 pub mod packets;
 pub mod profiles;
 pub mod scripting;
