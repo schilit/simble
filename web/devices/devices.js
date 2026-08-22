@@ -28,6 +28,8 @@ const DOMAINS = [
     blurb: "HID over GATT: a keyboard and mouse, and a host decoding them" },
   { id: "ranging", label: "Ranging", module: "../ranging/ranging.js",
     blurb: "Distance: channel sounding against RSSI path loss" },
+  { id: "health", label: "Health", module: "../hrm/hrm.js",
+    blurb: "Body sensors: a heart-rate monitor notifying its measurement" },
   { id: "home", label: "Home", module: "../lightbulb/lightbulb.js",
     blurb: "Home control: a colour bulb driven through its own characteristic" },
 ];

@@ -4,135 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light">
-<title>SimBLE scripted device</title>
+<title>SimBLE Health</title>
+<link rel="stylesheet" href="../common/simble.css">
 <link rel="stylesheet" href="../common/nav.css">
-<style>
-  :root {
-    --bg: #ffffff; --panel: #f6f8fa; --border: #d0d7de; --text: #1f2328;
-    --dim: #656d76; --accent: #0969da; --good: #1a7f37; --bad: #cf222e;
-    --warn: #9a6700; --heart: #cf222e;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--bg); color: var(--text);
-    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  }
-  header {
-    display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
-    padding: 1rem 1.5rem; border-bottom: 1px solid var(--border);
-  }
-  header h1 { font-size: 1.15rem; margin: 0; }
-  header .sub { color: var(--dim); font-size: 0.85rem; }
-  header a { color: var(--accent); text-decoration: none; margin-left: auto; font-size: 0.85rem; }
-  .pill {
-    font-size: 0.75rem; padding: 0.1rem 0.6rem; border-radius: 1rem;
-    border: 1px solid var(--border); color: var(--dim);
-  }
-  .pill.ok { color: var(--good); border-color: var(--good); }
-  .pill.bad { color: var(--bad); border-color: var(--bad); }
-  main {
-    display: grid; grid-template-columns: minmax(24rem, 1fr) minmax(20rem, 1fr);
-    gap: 1.25rem; padding: 1.25rem 1.5rem; max-width: 75rem; margin: 0 auto;
-  }
-  @media (max-width: 56rem) { main { grid-template-columns: 1fr; } }
-  .panel {
-    background: var(--panel); border: 1px solid var(--border);
-    border-radius: 8px; padding: 1rem;
-  }
-  .panel h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em;
-    color: var(--dim); margin: 0 0 0.75rem; }
-  textarea#script {
-    width: 100%; height: 26rem; resize: vertical; background: var(--bg);
-    color: var(--text); border: 1px solid var(--border); border-radius: 6px;
-    font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    padding: 0.6rem; tab-size: 4;
-  }
-  button, .btn {
-    background: #eaeef2; color: var(--text); border: 1px solid var(--border);
-    border-radius: 6px; padding: 0.35rem 0.9rem; font-size: 0.85rem;
-    cursor: pointer; text-decoration: none; display: inline-block;
-  }
-  button:hover, .btn:hover { border-color: var(--dim); }
-  button.primary { background: #0969da; border-color: #0969da; color: #fff; }
-  .row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-top: 0.6rem; }
-  .hint { color: var(--dim); font-size: 0.8rem; }
-  .error {
-    color: var(--bad); font-family: ui-monospace, Menlo, monospace;
-    font-size: 0.8rem; white-space: pre-wrap; margin-top: 0.5rem;
-  }
-  details { margin-top: 0.75rem; }
-  details summary { cursor: pointer; color: var(--dim); font-size: 0.85rem; }
-  details pre {
-    max-height: 18rem; overflow: auto; background: var(--bg); border: 1px solid var(--border);
-    border-radius: 6px; padding: 0.6rem; font-size: 11.5px; white-space: pre-wrap;
-  }
-  /* Suggestion chips that seed the AI request */
-  .suggest { margin-top: 0.5rem; }
-  .suggest .chip {
-    display: inline-block; border: 1px solid var(--border); border-radius: 1rem;
-    padding: 0.15rem 0.7rem; margin: 0.2rem 0.3rem 0 0; font-size: 0.78rem;
-    cursor: pointer; background: #eaeef2; color: var(--text);
-  }
-  .suggest .chip:hover { border-color: var(--accent); }
-  .suggest .chip.active { border-color: var(--accent); color: var(--accent); }
-  #req-echo { margin-top: 0.45rem; font-size: 0.8rem; color: var(--dim); }
-  #req-echo b { color: var(--text); font-weight: 500; }
-  /* Heart (only shown for a Heart Rate Measurement characteristic) */
-  .heart-box { text-align: center; padding: 0.5rem 0 0.75rem; }
-  .heart {
-    display: inline-block; font-size: 4rem; color: var(--heart);
-    transform-origin: center; animation: beat 0.83s ease-in-out infinite;
-  }
-  .heart.flat { animation: none; opacity: 0.3; }
-  @keyframes beat {
-    0%, 100% { transform: scale(1); }
-    12% { transform: scale(1.22); }
-    24% { transform: scale(1); }
-    36% { transform: scale(1.12); }
-    50% { transform: scale(1); }
-  }
-  .bpm { font-size: 1.8rem; font-weight: 600; }
-  .bpm small { color: var(--dim); font-size: 0.9rem; font-weight: 400; }
-  /* Generic GATT viewer */
-  .kv { display: grid; grid-template-columns: auto 1fr; gap: 0.15rem 0.9rem;
-    font-size: 0.85rem; margin-bottom: 0.75rem; }
-  .kv dt { color: var(--dim); } .kv dd { margin: 0; }
-  .svc { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.7rem;
-    overflow: hidden; }
-  .svc-head { background: #eaeef2; padding: 0.4rem 0.7rem; font-size: 0.82rem; }
-  .svc-head .u { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
-    font-size: 0.76rem; margin-left: 0.4rem; }
-  .chr { padding: 0.5rem 0.7rem; border-top: 1px solid var(--border); }
-  .chr.pulse { animation: pulse 0.9s ease-out; }
-  @keyframes pulse {
-    0% { background: rgba(88,166,255,0.28); }
-    100% { background: transparent; }
-  }
-  .chr-top { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
-  .chr-name { font-weight: 500; }
-  .chr-uuid { font-family: ui-monospace, Menlo, monospace; color: var(--dim); font-size: 0.75rem; }
-  .prop {
-    display: inline-block; border: 1px solid var(--border); border-radius: 4px;
-    padding: 0 0.3rem; font-size: 0.68rem; color: var(--dim);
-    font-family: ui-monospace, Menlo, monospace;
-  }
-  .prop.sub { color: var(--good); border-color: var(--good); }
-  .chr-val { margin-top: 0.25rem; font-size: 0.9rem; }
-  .chr-val .decoded { font-weight: 600; }
-  .chr-val .raw { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
-    font-size: 0.76rem; margin-left: 0.4rem; }
-  .sub-note { color: var(--good); font-size: 0.72rem; margin-left: 0.4rem; }
-  #setup { display: none; grid-column: 1 / -1; border-color: var(--warn); }
-  #setup.visible { display: block; }
-  #setup pre {
-    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-    padding: 0.6rem; overflow-x: auto; font-size: 0.8rem;
-  }
-  #setup code { color: var(--good); }
-  #setup a { color: var(--accent); }
-  footer { color: var(--dim); font-size: 0.78rem; padding: 0 1.5rem 1.5rem;
-    max-width: 75rem; margin: 0 auto; }
-</style>
 </head>
 <body>
 <nav class="sitenav">
@@ -141,8 +15,7 @@
     <a href="../playground/">Playground</a>
     <a href="../explorer/">API Explorer</a>
     <a href="../scanner/">Scanner</a>
-    <a href="../hrm/" aria-current="page">Scripted device</a>
-    <a href="../devices/">Devices</a>
+    <a href="../devices/" aria-current="page">Devices</a>
     <a href="../dual/">Server + Client</a>
     <a href="../scene/">Scene</a>
     <a href="../testing/">Testing</a>
@@ -154,80 +27,15 @@
   <a class="ext" href="https://github.com/schilit/simble">GitHub ↗</a>
 </nav>
 <header>
-  <h1>SimBLE scripted device</h1>
-  <span class="sub">this page opened a running SimBLE — the Rhai script below <em>is</em> the device</span>
-  <span id="conn" class="pill">starting…</span>
+  <h1>SimBLE Health</h1>
+  <span class="sub">a heart-rate monitor notifying its measurement over GATT</span>
 </header>
 
-<main>
-  <section id="setup" class="panel">
-    <h2>netsim is not reachable</h2>
-    <p>Could not reach netsim at <code>localhost:7681</code> — is <code>netsimd</code> running with its
-       WebSocket frontend enabled? This page is served from the cloud, but the Bluetooth scene runs
-       <strong>on your machine</strong>: the wasm build of SimBLE in this tab connects to a local
-       <code>netsimd</code> over <code>ws://localhost:7681</code>. Start it with:</p>
-    <pre><code>netsimd --logtostderr --no-shutdown --ws-port 7681</code></pre>
-    <p class="hint">Needs the canary-channel emulator (see the README's <em>Testing Against netsim</em>
-       section). Tip: open <a href="../scanner/">the scanner</a> in a second tab — both tabs join the
-       same netsim scene. Edit the script here, press Run, and watch the scanner tab pick up the change.</p>
-  </section>
+<main></main>
 
-  <section class="panel">
-    <h2>Device script (Rhai)</h2>
-    <textarea id="script" spellcheck="false"></textarea>
-    <div class="row">
-      <button id="run" class="primary">▶ Run</button>
-      <button id="stop">■ Stop</button>
-      <span id="run-state" class="hint"></span>
-    </div>
-    <div id="script-error" class="error"></div>
-    <div class="row" style="margin-top:1rem">
-      <span class="hint">Generate a device with AI:</span>
-      <a id="ai-claude" class="btn" target="_blank" rel="noopener">Open in Claude</a>
-      <a id="ai-chatgpt" class="btn" target="_blank" rel="noopener">Open in ChatGPT</a>
-      <button id="ai-gemini">Gemini</button>
-      <button id="ai-copy">Copy prompt</button>
-    </div>
-    <div class="suggest" id="suggest"></div>
-    <div id="req-echo"></div>
-    <div id="ai-hint" class="hint"></div>
-    <details>
-      <summary>view the AI prompt</summary>
-      <pre id="ai-prompt-view"></pre>
-    </details>
-    <p class="hint" style="margin-bottom:0">
-      Conventions: if the script defines <code>fn tick(server, t)</code> it runs ~10×/sec
-      (<code>t</code> = seconds since Run; functions can't see top-level variables — use the
-      arguments). <code>server.update_value(uuid, [bytes])</code> writes the live GATT database;
-      subscribed centrals are notified on change. Advertising (name + service UUIDs) is issued by
-      this page's host glue for now, pending Rhai advertising bindings.
-    </p>
-  </section>
-
-  <section class="panel">
-    <h2>Live device</h2>
-    <dl class="kv">
-      <dt>advertising as</dt><dd id="dev-name">—</dd>
-      <dt>connection</dt><dd id="dev-conn">—</dd>
-      <dt>subscription</dt><dd id="dev-sub">—</dd>
-    </dl>
-    <div id="hr-box" class="heart-box" hidden>
-      <span id="heart" class="heart flat">❤</span>
-      <div class="bpm"><span id="bpm">—</span> <small>bpm</small></div>
-    </div>
-    <div id="gatt"></div>
-    <p class="hint">This viewer renders whatever GATT structure the running script builds — every
-       service and characteristic, with properties, live values, and subscription state read from
-       the wasm stack's real attribute database. A central on the scene can connect and subscribe
-       (an emulator, or just watch the advertisement with the scanner tab).</p>
-  </section>
-</main>
-
-<footer>
-  SimBLE compiled to WebAssembly — no server-side interpreter, no backend. The page joins netsim
-  as <code>web-device</code>; the advertised name comes from your script.
-</footer>
-
-<script type="module" src="./hrm.js"></script>
+<script type="module">
+  import { mount } from "./hrm.js";
+  mount(document.querySelector("main"));
+</script>
 </body>
 </html>

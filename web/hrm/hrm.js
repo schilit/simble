@@ -1,9 +1,178 @@
+// SimBLE Health domain: a heart-rate monitor, as a mountable domain module.
+//
+// Exports mount(root)/unmount() so the Devices shell can host it as a tab.
+// The authoring half of the old scripted-device page -- editor, Run/Stop and
+// the AI prompt -- is gone: that is the Playground's job, and this is a demo
+// that starts itself. The script now comes straight from the library's
+// default_heart_rate_script(), so the tab and MCP's `example` tool serve the
+// same device.
+//
+// Original note:
 // Simble scripted-device page glue: a running Simble (wasm) whose device is
 // defined by the editable Rhai script. All Bluetooth logic is in Rust/wasm;
 // this file only wires DOM <-> WebPeripheral and renders the live GATT
 // database the script builds — whatever kind of device that is.
 
 import init, { WebPeripheral, default_heart_rate_script } from "../pkg/simble.js";
+
+const STYLE_ID = "simble-health-style";
+
+const STYLE = `:root {
+    --bg: #ffffff; --panel: #f6f8fa; --border: #d0d7de; --text: #1f2328;
+    --dim: #656d76; --accent: #0969da; --good: #1a7f37; --bad: #cf222e;
+    --warn: #9a6700; --heart: #cf222e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
+    padding: 1rem 1.5rem; border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 1.15rem; margin: 0; }
+  header .sub { color: var(--dim); font-size: 0.85rem; }
+  header a { color: var(--accent); text-decoration: none; margin-left: auto; font-size: 0.85rem; }
+  .pill {
+    font-size: 0.75rem; padding: 0.1rem 0.6rem; border-radius: 1rem;
+    border: 1px solid var(--border); color: var(--dim);
+  }
+  .pill.ok { color: var(--good); border-color: var(--good); }
+  .pill.bad { color: var(--bad); border-color: var(--bad); }
+  main {
+    display: grid; grid-template-columns: minmax(24rem, 1fr) minmax(20rem, 1fr);
+    gap: 1.25rem; padding: 1.25rem 1.5rem; max-width: 75rem; margin: 0 auto;
+  }
+  @media (max-width: 56rem) { main { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 1rem;
+  }
+  .panel h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--dim); margin: 0 0 0.75rem; }
+  textarea#script {
+    width: 100%; height: 26rem; resize: vertical; background: var(--bg);
+    color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+    font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    padding: 0.6rem; tab-size: 4;
+  }
+  button, .btn {
+    background: #eaeef2; color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 0.35rem 0.9rem; font-size: 0.85rem;
+    cursor: pointer; text-decoration: none; display: inline-block;
+  }
+  button:hover, .btn:hover { border-color: var(--dim); }
+  button.primary { background: #0969da; border-color: #0969da; color: #fff; }
+  .row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-top: 0.6rem; }
+  .hint { color: var(--dim); font-size: 0.8rem; }
+  .error {
+    color: var(--bad); font-family: ui-monospace, Menlo, monospace;
+    font-size: 0.8rem; white-space: pre-wrap; margin-top: 0.5rem;
+  }
+  details { margin-top: 0.75rem; }
+  details summary { cursor: pointer; color: var(--dim); font-size: 0.85rem; }
+  details pre {
+    max-height: 18rem; overflow: auto; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 0.6rem; font-size: 11.5px; white-space: pre-wrap;
+  }
+  /* Suggestion chips that seed the AI request */
+  .suggest { margin-top: 0.5rem; }
+  .suggest .chip {
+    display: inline-block; border: 1px solid var(--border); border-radius: 1rem;
+    padding: 0.15rem 0.7rem; margin: 0.2rem 0.3rem 0 0; font-size: 0.78rem;
+    cursor: pointer; background: #eaeef2; color: var(--text);
+  }
+  .suggest .chip:hover { border-color: var(--accent); }
+  .suggest .chip.active { border-color: var(--accent); color: var(--accent); }
+  #req-echo { margin-top: 0.45rem; font-size: 0.8rem; color: var(--dim); }
+  #req-echo b { color: var(--text); font-weight: 500; }
+  /* Heart (only shown for a Heart Rate Measurement characteristic) */
+  .heart-box { text-align: center; padding: 0.5rem 0 0.75rem; }
+  .heart {
+    display: inline-block; font-size: 4rem; color: var(--heart);
+    transform-origin: center; animation: beat 0.83s ease-in-out infinite;
+  }
+  .heart.flat { animation: none; opacity: 0.3; }
+  @keyframes beat {
+    0%, 100% { transform: scale(1); }
+    12% { transform: scale(1.22); }
+    24% { transform: scale(1); }
+    36% { transform: scale(1.12); }
+    50% { transform: scale(1); }
+  }
+  .bpm { font-size: 1.8rem; font-weight: 600; }
+  .bpm small { color: var(--dim); font-size: 0.9rem; font-weight: 400; }
+  /* Generic GATT viewer */
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 0.15rem 0.9rem;
+    font-size: 0.85rem; margin-bottom: 0.75rem; }
+  .kv dt { color: var(--dim); } .kv dd { margin: 0; }
+  .svc { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.7rem;
+    overflow: hidden; }
+  .svc-head { background: #eaeef2; padding: 0.4rem 0.7rem; font-size: 0.82rem; }
+  .svc-head .u { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
+    font-size: 0.76rem; margin-left: 0.4rem; }
+  .chr { padding: 0.5rem 0.7rem; border-top: 1px solid var(--border); }
+  .chr.pulse { animation: pulse 0.9s ease-out; }
+  @keyframes pulse {
+    0% { background: rgba(88,166,255,0.28); }
+    100% { background: transparent; }
+  }
+  .chr-top { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
+  .chr-name { font-weight: 500; }
+  .chr-uuid { font-family: ui-monospace, Menlo, monospace; color: var(--dim); font-size: 0.75rem; }
+  .prop {
+    display: inline-block; border: 1px solid var(--border); border-radius: 4px;
+    padding: 0 0.3rem; font-size: 0.68rem; color: var(--dim);
+    font-family: ui-monospace, Menlo, monospace;
+  }
+  .prop.sub { color: var(--good); border-color: var(--good); }
+  .chr-val { margin-top: 0.25rem; font-size: 0.9rem; }
+  .chr-val .decoded { font-weight: 600; }
+  .chr-val .raw { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
+    font-size: 0.76rem; margin-left: 0.4rem; }
+  .sub-note { color: var(--good); font-size: 0.72rem; margin-left: 0.4rem; }
+  #setup { display: none; grid-column: 1 / -1; border-color: var(--warn); }
+  #setup.visible { display: block; }
+  #setup pre {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.6rem; overflow-x: auto; font-size: 0.8rem;
+  }
+  #setup code { color: var(--good); }
+  #setup a { color: var(--accent); }
+  footer { color: var(--dim); font-size: 0.78rem; padding: 0 1.5rem 1.5rem;
+    max-width: 75rem; margin: 0 auto; }`;
+
+const MARKUP = `<div class="domain-status"><span id="conn" class="pill">starting…</span></div>
+<section id="setup" class="panel">
+    <h2>netsim is not reachable</h2>
+    <p>Could not reach netsim at <code>localhost:7681</code> — is <code>netsimd</code> running with its
+       WebSocket frontend enabled? This page is served from the cloud, but the Bluetooth scene runs
+       <strong>on your machine</strong>: the wasm build of SimBLE in this tab connects to a local
+       <code>netsimd</code> over <code>ws://localhost:7681</code>. Start it with:</p>
+    <pre><code>netsimd --logtostderr --no-shutdown --ws-port 7681</code></pre>
+    <p class="hint">Needs the canary-channel emulator (see the README's <em>Testing Against netsim</em>
+       section). Tip: open <a href="../scanner/">the scanner</a> in a second tab — both tabs join the
+       same netsim scene. Edit the script here, press Run, and watch the scanner tab pick up the change.</p>
+  </section>
+
+  <section class="panel">
+    <h2>Live device</h2>
+    <dl class="kv">
+      <dt>advertising as</dt><dd id="dev-name">—</dd>
+      <dt>connection</dt><dd id="dev-conn">—</dd>
+      <dt>subscription</dt><dd id="dev-sub">—</dd>
+    </dl>
+    <div id="hr-box" class="heart-box" hidden>
+      <span id="heart" class="heart flat">❤</span>
+      <div class="bpm"><span id="bpm">—</span> <small>bpm</small></div>
+    </div>
+    <div id="gatt"></div>
+    <p class="hint">This viewer renders whatever GATT structure the running script builds — every
+       service and characteristic, with properties, live values, and subscription state read from
+       the wasm stack's real attribute database. A central on the scene can connect and subscribe
+       (an emulator, or just watch the advertisement with the scanner tab).</p>
+  </section>`;
 
 const WS_URL =
   "ws://localhost:7681/v1/websocket/bt?name=web-device&address=CC:1E:57:00:00:02";
@@ -15,79 +184,6 @@ const WS_URL =
 // purpose a DIFFERENT device from this page's on-screen default (a
 // thermometer), so pasting the AI's result yields something visibly different
 // from what's already running.
-const AI_PROMPT = `You write Rhai scripts that define virtual Bluetooth LE peripherals for Simble (a Rust BLE simulator that runs the script in a web page). Reply with ONLY a Rhai script in a single code block — no explanations.
-
-RHAI IS NOT RUST:
-- \`let x = ...;\` declares everything: no types, no \`mut\`, no \`::new()\`.
-- Constructors are plain calls of the type name: \`android::BluetoothGattServer("name")\`.
-- Byte payloads are arrays of integers: \`[0x00, 72]\`. Strings use "double quotes". Comments use //.
-- No imports, no crates. NO infinite loops, NO sleep, NO blocking waits — the script body runs ONCE to build the device.
-
-RUNTIME MODEL (the web page hosts the device):
-- The script body must create a server and keep it in a top-level variable:
-    let server = android::BluetoothGattServer("my-device");
-- Optionally define \`fn tick(server, t)\` — the page calls it ~10 times per second; \`t\` is seconds since the script was run (a float). IMPORTANT: Rhai functions are encapsulated and CANNOT see top-level variables — use only the \`server\` and \`t\` parameters, and keep tick stateless (derive everything from \`t\`: \`sin(t)\`, \`t % 5.0\`, \`(2.0*t).to_int()\`...).
-- \`server.update_value(uuid, [bytes])\` (web-runtime extension) writes a characteristic's value into the live GATT database; the page automatically sends a real BLE notification to any subscribed central when the value changes. This is the preferred way to animate values from tick().
-- Advertising (device name + 16-bit service UUIDs) is derived from the server you build and issued by the page — do not try to advertise from the script.
-
-API SURFACE (all real, backed by Simble's GATT stack):
-- android::BluetoothGattServer(name) -> server
-- android::BluetoothGattService(uuid, android::SERVICE_TYPE_PRIMARY) -> svc
-- android::BluetoothGattCharacteristic(uuid, properties, permissions) -> chr
-- android::BluetoothGattDescriptor(uuid, permissions) -> desc
-- chr.set_value([bytes]) / chr.get_value() / chr.value / chr.add_descriptor(desc)
-- svc.add_characteristic(chr) / svc.get_characteristic(uuid)
-- server.add_service(svc) / server.get_service(uuid) / server.name
-- server.notify_characteristic_changed(device, chr, confirm) — needs a connected \`device\` taken from an event; in this web runtime prefer server.update_value.
-- server.send_response(device, request_id, status, offset, value)
-- take_events() or server.take_events() -> array of event maps {event, server, device, uuid, value, request_id, offset, status, mtu, response_needed}. Event kinds: "connected", "disconnected", "service_added", "characteristic_read", "characteristic_write", "descriptor_read", "descriptor_write", "notification_sent", "mtu_changed". Call inside tick() to react to peer writes.
-- wait_for "connected" { /* \`event\` is bound here */ } — consumes queued events, ERRORS if none is pending; use in tests, not in tick().
-- assert(condition, "message")
-
-CONSTANTS:
-- android::PROPERTY_READ, PROPERTY_WRITE, PROPERTY_WRITE_NO_RESPONSE, PROPERTY_NOTIFY, PROPERTY_INDICATE, PROPERTY_BROADCAST (combine with |)
-- android::PERMISSION_READ, PERMISSION_WRITE (plus _ENCRYPTED / _MITM variants)
-- android::SERVICE_TYPE_PRIMARY, SERVICE_TYPE_SECONDARY; android::GATT_SUCCESS, GATT_FAILURE
-- uuid::HEART_RATE_SERVICE, uuid::HEART_RATE_MEASUREMENT, uuid::BODY_SENSOR_LOCATION, uuid::BATTERY_SERVICE, uuid::BATTERY_LEVEL, uuid::CLIENT_CHARACTERISTIC_CONFIGURATION, uuid::MANUFACTURER_NAME, uuid::MODEL_NUMBER, uuid::SERIAL_NUMBER (Device Information), and more.
-- Any other UUID: uuid::of("2A6E") for a 16-bit assigned number, or uuid::of("12345678-1234-5678-1234-56789abcdef0") for a custom 128-bit UUID. Use uuid::of for anything without a named constant (e.g. Environmental Sensing 181A, Temperature 2A6E, Humidity 2A6F, Cycling Speed and Cadence 1816 / CSC Measurement 2A5B).
-
-RULES:
-- Every notify-capable characteristic MUST attach a CCCD descriptor, or centrals cannot subscribe and the runtime will not notify:
-    let cccd = android::BluetoothGattDescriptor(uuid::CLIENT_CHARACTERISTIC_CONFIGURATION, android::PERMISSION_READ | android::PERMISSION_WRITE);
-    chr.add_descriptor(cccd);
-- Standard encodings:
-    Heart Rate Measurement (2A37) = [flags, bpm], flags 0x00 for an 8-bit bpm.
-    Battery Level (2A19) = one byte, 0-100.
-    Temperature (2A6E, Environmental Sensing) = signed 16-bit little-endian, hundredths of a degree C: 21.5C -> value 2150 -> [2150 & 0xFF, (2150 >> 8) & 0xFF].
-    Humidity (2A6F) = unsigned 16-bit little-endian, hundredths of a percent.
-
-COMPLETE WORKED EXAMPLE (a heart-rate monitor whose bpm breathes over time):
-\`\`\`rhai
-let server = android::BluetoothGattServer("web-hrm");
-
-let hrs = android::BluetoothGattService(uuid::HEART_RATE_SERVICE, android::SERVICE_TYPE_PRIMARY);
-let hr = android::BluetoothGattCharacteristic(
-    uuid::HEART_RATE_MEASUREMENT,
-    android::PROPERTY_READ | android::PROPERTY_NOTIFY,
-    android::PERMISSION_READ,
-);
-hr.set_value([0x00, 72]);
-let cccd = android::BluetoothGattDescriptor(
-    uuid::CLIENT_CHARACTERISTIC_CONFIGURATION,
-    android::PERMISSION_READ | android::PERMISSION_WRITE,
-);
-hr.add_descriptor(cccd);
-hrs.add_characteristic(hr);
-server.add_service(hrs);
-
-fn tick(server, t) {
-    let bpm = 76 + (12.0 * sin(t / 4.0)).to_int();
-    server.update_value(uuid::HEART_RATE_MEASUREMENT, [0x00, bpm]);
-}
-\`\`\`
-
-MY DEVICE REQUEST:
-`;
 
 // Clickable suggestions that seed the "MY DEVICE REQUEST:" line. Each is
 // buildable with the bindings above (named uuid::* consts, or uuid::of for the
@@ -108,13 +204,11 @@ const SUGGESTIONS = [
     request: "a surprising, fun made-up BLE device of your choice — pick something delightful and make its values animate over time." },
 ];
 
-let currentRequest = "";
 
 // --- DOM handles -----------------------------------------------------------
 const $ = (id) => document.getElementById(id);
-const editor = $("script");
-const connPill = $("conn");
-const setupPanel = $("setup");
+let script = "";
+let connPill, setupPanel;
 
 let peripheral = null;
 let runStart = performance.now();
@@ -136,7 +230,15 @@ function setPill(text, cls) {
 }
 
 function showScriptError(message) {
-  $("script-error").textContent = message ? String(message) : "";
+  // The authoring panel that held #script-error is gone; a script error here
+  // is a library bug rather than something the viewer typed, so it goes to
+  // the console and the status pill instead of a silent null dereference.
+  const box = $("script-error");
+  if (box) box.textContent = message ? String(message) : "";
+  else if (message) {
+    console.error("device script error:", message);
+    setPill("device script error — see console", "bad");
+  }
 }
 
 function createPeripheral(script) {
@@ -154,15 +256,14 @@ function run() {
   stopped = false;
   try {
     if (peripheral) {
-      peripheral.run_script(editor.value); // same socket, new device
+      peripheral.run_script(script); // same socket, new device
       runStart = performance.now();
     } else {
-      createPeripheral(editor.value);
+      createPeripheral(script);
     }
     prevValues.clear();
     setRunning(true);
-    $("run-state").textContent = "device rebuilt from script";
-    setTimeout(() => ($("run-state").textContent = ""), 2500);
+    setPill("device rebuilt from script", "ok");
   } catch (e) {
     showScriptError(e); // the previous device keeps running
   }
@@ -184,17 +285,18 @@ function stop() {
   $("dev-sub").textContent = "—";
   $("hr-box").hidden = true;
   setupPanel.classList.remove("visible");
-  setPill("stopped", "");
   setRunning(false);
-  $("run-state").textContent = "device stopped";
-  setTimeout(() => ($("run-state").textContent = ""), 2500);
+  setPill("device stopped", "");
 }
 
 // Run is highlighted only when stopped (the call to action); Stop is enabled
 // only while running.
 function setRunning(on) {
-  $("run").classList.toggle("primary", !on);
-  $("stop").disabled = !on;
+  // The authoring controls are gone; kept as a hook so run()/stop() read the
+  // same as they did rather than growing conditionals at every call site.
+  $("run")?.classList.toggle("primary", !on);
+  const stopBtn = $("stop");
+  if (stopBtn) stopBtn.disabled = !on;
 }
 
 // --- decoding helpers ------------------------------------------------------
@@ -400,7 +502,7 @@ function loop() {
     const now = performance.now();
     if (now - lastConnectAttempt > 3000) {
       lastConnectAttempt = now;
-      try { createPeripheral(editor.value); } catch (e) { showScriptError(e); }
+      try { createPeripheral(script); } catch (e) { showScriptError(e); }
     }
     return;
   }
@@ -434,64 +536,47 @@ function loop() {
   }
 }
 
-// --- AI affordance ---------------------------------------------------------
-function effectivePrompt() {
-  return AI_PROMPT + (currentRequest ? currentRequest + "\n" : "");
-}
+// --- lifecycle -------------------------------------------------------------
 
-function refreshAi() {
-  const encoded = encodeURIComponent(effectivePrompt());
-  $("ai-claude").href = `https://claude.ai/new?q=${encoded}`;
-  $("ai-chatgpt").href = `https://chatgpt.com/?q=${encoded}`;
-  $("ai-prompt-view").textContent = effectivePrompt();
-  $("req-echo").innerHTML = currentRequest
-    ? `Request: <b>${escapeHtml(currentRequest)}</b>`
-    : "Pick a suggestion above, or type your own after “MY DEVICE REQUEST:”.";
-}
+let timer = null;
+let container = null;
 
-function setRequest(request, chipEl) {
-  currentRequest = request;
-  for (const el of document.querySelectorAll("#suggest .chip")) el.classList.remove("active");
-  if (chipEl) chipEl.classList.add("active");
-  refreshAi();
-}
+/// Builds the domain into `root` and starts it. Async because the wasm module
+/// must be initialised before a device can exist.
+export async function mount(root) {
+  await init();
 
-function wireAi() {
-  const suggest = $("suggest");
-  suggest.innerHTML = SUGGESTIONS
-    .map((s, i) => `<span class="chip" data-i="${i}">${escapeHtml(s.label)}</span>`)
-    .join("");
-  for (const chip of suggest.querySelectorAll(".chip")) {
-    chip.addEventListener("click", () =>
-      setRequest(SUGGESTIONS[+chip.dataset.i].request, chip));
+  if (!document.getElementById(STYLE_ID)) {
+    const el = document.createElement("style");
+    el.id = STYLE_ID;
+    el.textContent = STYLE;
+    document.head.append(el);
   }
-  // Rotating seed: a random suggestion is pre-filled so the prompt is
-  // immediately useful, and it's a non-default device type.
-  const seed = Math.floor(Math.random() * SUGGESTIONS.length);
-  setRequest(SUGGESTIONS[seed].request, suggest.querySelector(`.chip[data-i="${seed}"]`));
+  container = root;
+  root.innerHTML = MARKUP;
 
-  const hint = (t) => { $("ai-hint").textContent = t; setTimeout(() => ($("ai-hint").textContent = ""), 4000); };
-  $("ai-gemini").addEventListener("click", async () => {
-    await navigator.clipboard.writeText(effectivePrompt());
-    window.open("https://gemini.google.com/app", "_blank", "noopener");
-    hint("prompt copied — paste it into Gemini and send");
-  });
-  $("ai-copy").addEventListener("click", async () => {
-    await navigator.clipboard.writeText(effectivePrompt());
-    hint("prompt copied — paste into any LLM, then paste the returned Rhai here and press Run");
-  });
+  connPill = $("conn");
+  setupPanel = $("setup");
+  script = default_heart_rate_script();
+
+  // Unlike the old authoring page, a domain tab starts itself -- there is no
+  // Run button to press, because the script is not editable here.
+  run();
+  timer = setInterval(loop, 100);
 }
 
-// --- boot ------------------------------------------------------------------
-await init();
-editor.value = default_heart_rate_script();
-$("run").addEventListener("click", run);
-$("stop").addEventListener("click", stop);
-wireAi();
-
-// Start stopped: the editor holds the script; the device runs only on Run.
-setRunning(false);
-setPill("ready — press Run", "");
-$("dev-conn").textContent = "not started";
-$("dev-sub").textContent = "—";
-setInterval(loop, 100);
+/// Releases everything this domain owns. The shell hosts one domain at a
+/// time, so anything left running becomes a leak -- and on netsim a device
+/// whose socket drops without a disconnect lingers as a ghost at the same
+/// address.
+export function unmount() {
+  if (timer !== null) {
+    clearInterval(timer);
+    timer = null;
+  }
+  try { stop(); } catch (_) { /* already down */ }
+  document.getElementById(STYLE_ID)?.remove();
+  if (container) container.innerHTML = "";
+  container = null;
+  connPill = setupPanel = undefined;
+}

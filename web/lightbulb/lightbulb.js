@@ -42,7 +42,8 @@ const STYLE = `main { display: grid; grid-template-columns: minmax(20rem, 1fr) m
   .rgb-readout { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
     font-size: 0.85rem; }`;
 
-const MARKUP = `<div id="backend" style="grid-column:1/-1"></div>
+const MARKUP = `<div class="domain-status"><span id="conn" class="pill">starting…</span></div>
+<div id="backend" style="grid-column:1/-1"></div>
   <section class="panel">
     <h2>The light</h2>
     <div class="bulb-stage">
