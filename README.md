@@ -84,6 +84,30 @@ language, get back a runnable, checkable, shippable test — and lean on the cas
 can't stage on demand (the peripheral that misbehaves at exactly the wrong moment, reproducibly,
 every time).
 
+## Drive it from an AI agent (MCP)
+
+SimBLE ships an **MCP server**, so an agent can build and test BLE devices as tool calls in a
+conversation — the AI-first loop above, made interactive and stateful. MCP is JSON-RPC over
+stdio (no gRPC, no extra dependencies). Register the binary once:
+
+```bash
+cargo build --release --bin simble
+claude mcp add simble -- "$PWD/target/release/simble" mcp
+# any other MCP client: run `simble mcp` (stdio) and point the client at it
+```
+
+The agent then gets a **live, deterministic scene** — no netsim, no hardware — and these tools:
+
+- `lint` / `run_test` — compile a script, or run it and check every `assert(...)`
+- `add_peripheral` / `scan` / `status` — build the scene; see it on the air, or as a whole
+- `connect` / `read` / `assert` — drive a central against a peripheral
+- `subscribe` / `assert_over` — monitor a value across a time window
+
+So *"build a heart-rate monitor and check HR stays under 200"* becomes `add_peripheral` →
+`connect` → `assert_over` — a reproducible test the agent authors and runs live. The same
+`.rhai` scripts still run headless via `simble FILE.rhai` (exit 0 / 1) for CI, and
+`simble --no-run FILE.rhai` lints without running.
+
 ## What devices come built in?
 
 Ready-made simulated devices: **heart-rate monitor**, **keyboard**, **mouse**,
