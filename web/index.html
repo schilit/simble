@@ -121,11 +121,12 @@
         <p>A PLAYBULB-style smart light: a writable <code>[R,G,B]</code> characteristic on a custom 128-bit
            service. Pick a color, the glowing bulb reacts, and a subscribed central is notified.</p>
       </a>
-      <a class="card" href="./speaker/">
-        <h3>Speaker <span class="tag">showcase</span></h3>
-        <p>An LE Audio Volume Control device you can <em>hear</em>: every control writes an opcode to the
-           write-only control point, the device's own script applies it, and the tone's gain follows the
-           <code>Volume State</code> characteristic.</p>
+      <a class="card" href="./devices/">
+        <h3>Devices <span class="tag">showcase</span></h3>
+        <p>Whole devices, each playing several protocol roles over one link: <strong>Media</strong>
+           (LE Audio over a real CIS, with volume control), <strong>Car</strong> (hands-free telephony
+           over SDP, RFCOMM and AT), <strong>HID</strong> (a keyboard and mouse, and a host decoding
+           their reports), and <strong>Ranging</strong> (channel sounding against RSSI path loss).</p>
       </a>
       <a class="card" href="./dual/">
         <h3>Server + Client <span class="tag">showcase</span></h3>
