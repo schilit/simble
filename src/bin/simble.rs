@@ -10,9 +10,15 @@
 //! the browser Testing page does, so the file that passes here is the file CI
 //! runs.
 //!
+//! A `.json` file is a *scene*: several devices, how they are placed and how
+//! they are wired (see `docs/scene-format.md`). It runs the same way — one
+//! file in, exit 0 or 1 — so a whole topology is as committable and as
+//! runnable as a single device.
+//!
 //! ```text
 //! simble device.rhai                 # run one device/test
 //! simble tests/*.rhai                # run many; nonzero exit if any fail
+//! simble scene.json                  # instantiate a whole scene and run it
 //! simble < device.rhai               # or read the script from stdin
 //! simble --usb [VID:PID] [--ws-port N]
 //!                                    # instead, bridge a USB dongle onto a
@@ -23,12 +29,15 @@
 //! re-exposes its HCI over the netsim-style WebSocket (default port 7681), the
 //! same transport pages use for `netsim` and `rootcanal-ws`.
 
+use simble::scene::runner::{RunOptions, RunReport};
+use simble::scene::{Controller, Scene};
 use simble::transport::usb::parse_vid_pid;
 use simble::transport::wasm_ws::{lint_script, run_test_script};
 use simble::transport::{HciChannel, UsbTransport, WsServerConn};
 use std::io::Read;
 use std::net::{TcpListener, TcpStream};
 use std::process::ExitCode;
+use std::str::FromStr;
 use std::time::Duration;
 
 const USAGE: &str = "\
@@ -36,11 +45,18 @@ simble — SimBLE developer CLI
 
 usage:
   simble FILE.rhai [FILE.rhai ...]     run device script(s) as tests (stdin if none)
-  simble --no-run FILE.rhai ...        lint only: compile/check, don't execute
+  simble SCENE.json [SCENE.json ...]   instantiate a scene file and run it
+  simble --no-run FILE ...             check only: compile scripts / validate scenes
   simble --usb [VID:PID] [--ws-port N] bridge a USB dongle onto ws://127.0.0.1:N/
   simble mcp                           run the MCP server (stdio) for agents
 
+scene options:
+  --controller self|netsim|usb         override the scene file's controller
+  --seconds N                          how long to run each scene (default 2)
+  --tick-ms N                          scene clock step in ms (default 100)
+
 Running scripts exits 0 if every assert(...) holds, 1 if any fails.
+Running a scene exits 0 if every device came up and none reported an error.
 --usb serves one WebSocket client at a time; point a page's backend at it.";
 
 fn main() -> ExitCode {
@@ -72,15 +88,47 @@ fn run_tests(args: &[String]) -> ExitCode {
     // treated as "no files, read stdin".
     let mut files = Vec::new();
     let mut lint_only = false;
+    let mut scene_options = RunOptions::default();
+    let mut controller_override = None;
+    let mut expecting = None;
     for arg in args {
+        if let Some(option) = expecting.take() {
+            match parse_scene_option(option, arg, &mut scene_options, &mut controller_override) {
+                Ok(()) => continue,
+                Err(message) => {
+                    eprintln!("simble: {message}\n\n{USAGE}");
+                    return ExitCode::from(2);
+                }
+            }
+        }
         match arg.as_str() {
             "--no-run" => lint_only = true,
+            "--controller" | "--seconds" | "--tick-ms" => expecting = Some(arg.clone()),
             _ if arg.starts_with('-') => {
                 eprintln!("simble: unknown option {arg:?}\n\n{USAGE}");
                 return ExitCode::from(2);
             }
             _ => files.push(arg.clone()),
         }
+    }
+    if let Some(option) = expecting {
+        eprintln!("simble: {option} needs a value\n\n{USAGE}");
+        return ExitCode::from(2);
+    }
+
+    // A scene file is a different kind of artifact, not a different kind of
+    // script, so it gets its own path rather than a mode flag.
+    let (scenes, scripts): (Vec<String>, Vec<String>) =
+        files.iter().cloned().partition(|f| f.ends_with(".json"));
+    if !scenes.is_empty() {
+        if !scripts.is_empty() {
+            eprintln!(
+                "simble: cannot mix scene files with device scripts in one run \
+                 (a scene already says which devices it holds)"
+            );
+            return ExitCode::from(2);
+        }
+        return run_scenes(&scenes, lint_only, controller_override, &scene_options);
     }
 
     if files.is_empty() {
@@ -138,6 +186,153 @@ fn report(name: &str, script: &str, with_name: bool, lint_only: bool) -> ExitCod
             eprintln!("{tag}{label} — {message}");
             ExitCode::FAILURE
         }
+    }
+}
+
+// --- scene files ------------------------------------------------------------
+
+fn parse_scene_option(
+    option: String,
+    value: &str,
+    options: &mut RunOptions,
+    controller: &mut Option<Controller>,
+) -> Result<(), String> {
+    match option.as_str() {
+        "--controller" => {
+            *controller = Some(Controller::from_str(value)?);
+            Ok(())
+        }
+        "--seconds" => {
+            options.seconds = value
+                .parse()
+                .map_err(|_| format!("--seconds needs a number, got {value:?}"))?;
+            Ok(())
+        }
+        "--tick-ms" => {
+            options.tick_ms = value
+                .parse()
+                .map_err(|_| format!("--tick-ms needs a whole number, got {value:?}"))?;
+            Ok(())
+        }
+        other => Err(format!("unknown option {other:?}")),
+    }
+}
+
+/// Loads and runs each scene file, printing one block per scene. `check_only`
+/// stops after validation — the scene equivalent of `--no-run`, and what CI
+/// wants for a fixture whose controller isn't available on the runner.
+fn run_scenes(
+    files: &[String],
+    check_only: bool,
+    controller: Option<Controller>,
+    options: &RunOptions,
+) -> ExitCode {
+    let mut any_failed = false;
+    for file in files {
+        if run_scene(file, check_only, controller, options) == ExitCode::FAILURE {
+            any_failed = true;
+        }
+    }
+    if any_failed {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+fn run_scene(
+    file: &str,
+    check_only: bool,
+    controller: Option<Controller>,
+    options: &RunOptions,
+) -> ExitCode {
+    let text = match std::fs::read_to_string(file) {
+        Ok(text) => text,
+        Err(e) => {
+            eprintln!("simble: cannot read {file}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut scene = match Scene::from_json(&text) {
+        Ok(scene) => scene,
+        Err(e) => {
+            eprintln!("{file}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Some(controller) = controller {
+        scene.controller = controller;
+    }
+    let resolved = match scene.resolve() {
+        Ok(resolved) => resolved,
+        Err(e) => {
+            eprintln!("{file}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let label = resolved.name.clone().unwrap_or_else(|| file.to_string());
+    println!(
+        "{file}: {label} — {} device(s) on {}",
+        resolved.devices.len(),
+        resolved.controller
+    );
+    for device in &resolved.devices {
+        let target = device
+            .target
+            .as_ref()
+            .map(|(id, _)| format!(" -> {id}"))
+            .unwrap_or_default();
+        println!(
+            "  {:<12} {:<13} {}{target}",
+            device.id,
+            device.role.to_string(),
+            device.address
+        );
+    }
+    if check_only {
+        println!("{file}: OK — valid scene ({} device(s))", resolved.devices.len());
+        return ExitCode::SUCCESS;
+    }
+
+    match simble::scene::runner::run(&resolved, options) {
+        Ok(report) => report_scene(file, &report),
+        Err(e) => {
+            eprintln!("{file}: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn report_scene(file: &str, report: &RunReport) -> ExitCode {
+    for device in &report.devices {
+        match (&device.error, &device.name) {
+            (Some(error), _) => eprintln!("  {} — ERROR {error}", device.id),
+            (None, Some(name)) => println!("  {} — up as {name:?}", device.id),
+            (None, None) => println!("  {} — up", device.id),
+        }
+    }
+    // Say it out loud rather than let a declared-but-unapplied bond look like
+    // a working one: a scene can express more than this loader materializes.
+    let pending = report.bonds_not_installed();
+    if pending > 0 {
+        eprintln!(
+            "  note: {pending} declared bond record(s) were validated but not installed — \
+             the loader cannot yet reach a scripted device's bond store \
+             (see docs/scene-format.md)"
+        );
+    }
+    if report.ok() {
+        println!(
+            "{file}: PASS — {} device(s) ran {:.1}s on {}",
+            report.devices.len(),
+            report.elapsed,
+            report.controller
+        );
+        ExitCode::SUCCESS
+    } else {
+        eprintln!("{file}: FAIL — a device reported an error");
+        ExitCode::FAILURE
     }
 }
 
