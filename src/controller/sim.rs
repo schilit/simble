@@ -276,6 +276,14 @@ enum Action {
         handle: u16,
         data: Vec<u8>,
     },
+    /// An isochronous SDU (LE Audio media plane), routed like ACL data on
+    /// the same connection handle — Simble carries ISO over the established
+    /// connection rather than modeling CIG/CIS setup.
+    Iso {
+        from: usize,
+        handle: u16,
+        data: Vec<u8>,
+    },
 }
 
 /// The shared medium. Holds every `SimController` on the "air" and, on each
@@ -380,6 +388,7 @@ impl Link {
             match action {
                 Action::Disconnect { from, handle } => self.route_disconnect(from, handle),
                 Action::Acl { from, handle, data } => self.route_acl(from, handle, &data),
+                Action::Iso { from, handle, data } => self.route_iso(from, handle, &data),
             }
         }
 
@@ -405,6 +414,17 @@ impl Link {
                         from: i,
                         handle: hdr.handle_and_flags.get() & 0x0FFF,
                         data: pkt[1..].to_vec(), // handle+flags+len+payload, forwarded verbatim
+                    });
+                }
+            }
+            Some(h4_type::HCI_ISO_DATA) => {
+                if let Ok((hdr, _)) = Ref::<_, AclHeader>::from_prefix(&pkt[1..]) {
+                    // An ISO header shares the ACL header's shape (handle +
+                    // flags, then a length), so the same view reads it.
+                    actions.push(Action::Iso {
+                        from: i,
+                        handle: hdr.handle_and_flags.get() & 0x0FFF,
+                        data: pkt[1..].to_vec(),
                     });
                 }
             }
@@ -536,6 +556,16 @@ impl Link {
     fn route_acl(&mut self, from: usize, handle: u16, data: &[u8]) {
         if let Some(peer) = self.peer_of(from, handle) {
             let mut pkt = vec![h4_type::HCI_ACL_DATA];
+            pkt.extend_from_slice(data);
+            self.controllers[peer].outbox.push_back(pkt);
+        }
+    }
+
+    /// Delivers an isochronous SDU to the connection's peer — the media
+    /// plane's counterpart to [`Self::route_acl`].
+    fn route_iso(&mut self, from: usize, handle: u16, data: &[u8]) {
+        if let Some(peer) = self.peer_of(from, handle) {
+            let mut pkt = vec![h4_type::HCI_ISO_DATA];
             pkt.extend_from_slice(data);
             self.controllers[peer].outbox.push_back(pkt);
         }

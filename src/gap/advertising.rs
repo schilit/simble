@@ -3,6 +3,7 @@
 
 //! GAP (Generic Access Profile) advertising data structures and builders.
 
+use crate::types::SimbleError;
 use serde::{Deserialize, Serialize};
 
 /// Standard GAP Advertising Data (AD) Types.
@@ -110,8 +111,14 @@ impl AdvertisingData {
             bytes.push(f);
         }
 
-        // Complete Local Name
-        if let Some(ref name) = self.complete_name {
+        // Complete Local Name. An empty name is omitted rather than emitted
+        // as a valueless structure: those two bytes buy nothing and come out
+        // of a 31-byte budget, which is enough to push a beacon carrying a
+        // full-size service-data payload over the limit — at which point the
+        // advertisement is rejected and the device silently never transmits.
+        if let Some(ref name) = self.complete_name
+            && !name.is_empty()
+        {
             let name_bytes = name.as_bytes();
             bytes.push((1 + name_bytes.len()) as u8);
             bytes.push(ad_type::COMPLETE_LOCAL_NAME);
@@ -146,6 +153,89 @@ impl AdvertisingData {
 
         bytes
     }
+}
+
+/// Builds an advertising payload (flags + 16-bit service UUIDs + complete
+/// local name) that fits the legacy 31-byte limit, dropping the UUID list
+/// and then trimming the name if needed — the name is the demo's identity,
+/// so it survives longest.
+pub fn build_adv_payload(name: &str, service_uuids: &[u16]) -> Vec<u8> {
+    const MAX_ADV_LEN: usize = 31;
+    let build = |name: &str, uuids: &[u16]| {
+        let mut ad = AdvertisingData::new()
+            .with_flags(flags::LE_GENERAL_DISCOVERABLE | flags::BR_EDR_NOT_SUPPORTED)
+            .with_name(name);
+        for &uuid in uuids {
+            ad = ad.with_service_uuid_16(uuid);
+        }
+        ad.to_bytes()
+    };
+    let mut bytes = build(name, service_uuids);
+    if bytes.len() > MAX_ADV_LEN {
+        bytes = build(name, &[]);
+    }
+    let mut trimmed = name.to_string();
+    while bytes.len() > MAX_ADV_LEN && trimmed.pop().is_some() {
+        bytes = build(&trimmed, &[]);
+    }
+    bytes
+}
+
+/// Like [`build_adv_payload`], but folds in script-staged extras (service
+/// data, manufacturer data — the beacon idiom). The extras were asked for
+/// explicitly, so they survive trimming: the UUID list is dropped first,
+/// then the name; if the extras alone still exceed the legacy 31-byte
+/// limit, that is a script error, not something to truncate silently.
+pub fn build_adv_payload_with_extras(
+    name: &str,
+    service_uuids: &[u16],
+    extras: Option<&AdvertisingData>,
+) -> Result<Vec<u8>, SimbleError> {
+    let Some(extras) = extras else {
+        return Ok(build_adv_payload(name, service_uuids));
+    };
+    const MAX_ADV_LEN: usize = 31;
+    // An empty name is omitted entirely (no zero-length AD structure), so a
+    // large service-data payload can occupy the whole packet — real beacons
+    // (Quick Share, Eddystone) carry no name at all.
+    let build = |name: &str, uuids: &[u16]| {
+        let mut ad = AdvertisingData::new()
+            .with_flags(flags::LE_GENERAL_DISCOVERABLE | flags::BR_EDR_NOT_SUPPORTED);
+        // `with_name` already drops an empty name, so no special case here.
+        ad = ad.with_name(name);
+        for &uuid in uuids {
+            ad = ad.with_service_uuid_16(uuid);
+        }
+        // Services registered by a Rust profile registrar live only in the
+        // GATT database, so `advertise_service_uuid` stages them here —
+        // without this they were silently dropped and the device advertised
+        // no services at all.
+        for &uuid in &extras.service_uuids_16 {
+            if !ad.service_uuids_16.contains(&uuid) {
+                ad = ad.with_service_uuid_16(uuid);
+            }
+        }
+        ad.service_data_16 = extras.service_data_16.clone();
+        ad.manufacturer_data = extras.manufacturer_data.clone();
+        ad.to_bytes()
+    };
+    let mut bytes = build(name, service_uuids);
+    if bytes.len() > MAX_ADV_LEN {
+        bytes = build(name, &[]);
+    }
+    // Trim the name one char at a time, down to nothing, to make room.
+    let mut trimmed = name.to_string();
+    while bytes.len() > MAX_ADV_LEN && !trimmed.is_empty() {
+        trimmed.pop();
+        bytes = build(&trimmed, &[]);
+    }
+    if bytes.len() > MAX_ADV_LEN {
+        return Err(SimbleError::InvalidParameter(format!(
+            "advertising extras exceed the 31-byte legacy limit ({} bytes)",
+            bytes.len()
+        )));
+    }
+    Ok(bytes)
 }
 
 #[cfg(test)]

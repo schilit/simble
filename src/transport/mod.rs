@@ -9,6 +9,8 @@ pub(crate) mod hci_adapter;
 // `wasm_ws` instead, whose JS-binding half is gated inside the module so its
 // pure-Rust demo engines stay natively compiled and natively tested.
 #[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod live_scene;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod netsim;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod rootcanal;
@@ -20,6 +22,39 @@ pub mod wasm_ws;
 pub(crate) mod ws;
 
 pub use hci_adapter::{HciChannel, h4_type};
+
+/// The contract every live HCI transport already meets by convention
+/// (rootcanal, netsim, usb): move packets both ways between the wire and
+/// `channel` without blocking. Formalized so scenes can be generic over
+/// *where* their controller lives — `LiveScene<T>` runs scripted devices
+/// over any of them.
+#[cfg(not(target_arch = "wasm32"))]
+pub trait HciTransport {
+    /// Drains host→controller packets from `channel` onto the wire, and
+    /// feeds any controller→host packets currently available back into it.
+    fn pump(&mut self, channel: &HciChannel) -> Result<(), crate::types::SimbleError>;
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<S: std::io::Read + std::io::Write> HciTransport for netsim::NetsimTransport<S> {
+    fn pump(&mut self, channel: &HciChannel) -> Result<(), crate::types::SimbleError> {
+        NetsimTransport::pump(self, channel)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl<S: std::io::Read + std::io::Write> HciTransport for rootcanal::RootcanalTransport<S> {
+    fn pump(&mut self, channel: &HciChannel) -> Result<(), crate::types::SimbleError> {
+        RootcanalTransport::pump(self, channel)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl HciTransport for usb::UsbTransport {
+    fn pump(&mut self, channel: &HciChannel) -> Result<(), crate::types::SimbleError> {
+        UsbTransport::pump(self, channel)
+    }
+}
 #[cfg(not(target_arch = "wasm32"))]
 pub use netsim::NetsimTransport;
 #[cfg(not(target_arch = "wasm32"))]

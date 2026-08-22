@@ -22,17 +22,6 @@ use crate::android::gatt_service::BluetoothGattCharacteristic;
 use crate::client::gatt_client::GattClient;
 use crate::controller::sim::Link;
 use crate::gap::{AdvertisingData, ad_type, flags};
-use crate::l2cap::{AclPacketBoundary, AclReassembler, HciAclHeader, L2capHeader};
-use crate::packets::att::opcode as att_op;
-use crate::scripting::bindings::{dynamic_to_bytes, runtime_error};
-use crate::scripting::{ScriptGattServer, new_engine};
-use crate::types::{Address, SimbleError, Uuid};
-use rhai::{AST, Array, CallFnOptions, Dynamic, Engine, EvalAltResult, Map, Scope};
-use serde::Serialize;
-use zerocopy::IntoBytes;
-
-use super::hci_adapter::{HciChannel, h4_type};
-
 /// The default script served by the scripted-device page — a single source of
 /// truth shared by the page (via `default_heart_rate_script`) and the native
 /// unit tests below, so what ships is what's tested. (The file keeps its
@@ -40,18 +29,30 @@ use super::hci_adapter::{HciChannel, h4_type};
 /// is likewise kept for the page's stable wasm import.)
 pub const DEFAULT_HEART_RATE_SCRIPT: &str = include_str!("../../web/hrm/heart_rate.rhai");
 
-mod event {
-    pub const DISCONNECTION_COMPLETE: u8 = 0x05;
-    pub const LE_META: u8 = 0x3E;
-    pub const SUB_CONNECTION_COMPLETE: u8 = 0x01;
-    pub const SUB_ADVERTISING_REPORT: u8 = 0x02;
-    pub const SUB_ENHANCED_CONNECTION_COMPLETE: u8 = 0x0A;
-}
+use crate::device::LeHost;
+use crate::packets::hci_events::{
+    HciEvent, advertising_reports, event_code as hci_event_code, le_subevent,
+};
+// Advertising payload builders live with `AdvertisingData` in `gap`; kept in
+// this module's public surface for the browser bindings and existing callers.
+pub use crate::gap::advertising::{build_adv_payload, build_adv_payload_with_extras};
+use crate::l2cap::{AclReassembler, HciAclHeader, L2capHeader};
+use crate::packets::att::opcode as att_op;
+use crate::scripting::bindings::{dynamic_to_bytes, runtime_error};
+use crate::scripting::{ScriptGattServer, new_engine};
+use crate::types::{Address, AddressType, SimbleError, Uuid};
+use rhai::{AST, Array, Blob, CallFnOptions, Dynamic, Engine, EvalAltResult, Map, Scope};
+use serde::Serialize;
 
+use super::hci_adapter::{HciChannel, h4_type};
+
+/// Sends one HCI command on `channel`. The packet itself is built by the
+/// host layer (`device::host::command`) so there is a single definition of
+/// what an HCI command looks like.
 fn queue_command(channel: &HciChannel, opcode: [u8; 2], params: &[u8]) -> Result<(), SimbleError> {
-    let mut command = vec![opcode[0], opcode[1], params.len() as u8];
-    command.extend_from_slice(params);
-    channel.send_command(&command)
+    let packet = crate::device::host::command(opcode, params);
+    // `command` emits a complete H4 packet; the channel adds the type byte.
+    channel.send_command(&packet[1..])
 }
 
 /// Queues the controller bring-up shared by both demos. The post-Reset
@@ -59,9 +60,15 @@ fn queue_command(channel: &HciChannel, opcode: [u8; 2], params: &[u8]) -> Result
 /// Section 7.3.1, bit 61), so both masks must be opened before any
 /// advertising report or connection event can arrive.
 fn queue_common_init(channel: &HciChannel) -> Result<(), SimbleError> {
-    queue_command(channel, [0x03, 0x0C], &[])?; // Reset
-    queue_command(channel, [0x01, 0x0C], &[0xFF; 8])?; // Set Event Mask
-    queue_command(channel, [0x01, 0x20], &[0xFF; 8]) // LE Set Event Mask
+    // The demo advertiser/scanner share the host layer's bring-up, minus the
+    // LE Audio host-feature command a real peripheral sends.
+    for packet in crate::device::host::init_commands()
+        .into_iter()
+        .take(3)
+    {
+        channel.send_command(&packet[1..])?;
+    }
+    Ok(())
 }
 
 /// Queues the scanner's full HCI bring-up: reset, event masks, passive scan
@@ -191,92 +198,40 @@ fn decode_ad_structures(data: &[u8], report: &mut ScanReport) {
 /// out sequentially per report (event type, address type, address, data,
 /// RSSI), the on-air order every real controller and rootcanal emit.
 pub fn parse_scan_reports(packet: &[u8]) -> Vec<ScanReport> {
-    let mut reports = Vec::new();
-    if packet.len() < 5
-        || packet[0] != h4_type::HCI_EVENT
-        || packet[1] != event::LE_META
-        || packet[3] != event::SUB_ADVERTISING_REPORT
-    {
-        return reports;
-    }
-    let mut rest = &packet[5..];
-    for _ in 0..packet[4] {
-        // Fixed part: event type (1), address type (1), address (6),
-        // data length (1); then data and a trailing RSSI byte.
-        let [event_type, address_type, addr @ .., data_len] = rest else {
-            break;
-        };
-        if addr.len() < 6 {
-            break;
-        }
-        let _ = data_len;
-        let (event_type, address_type) = (*event_type, *address_type);
-        let data_len = rest[8] as usize;
-        if rest.len() < 10 + data_len {
-            break;
-        }
-        let address = Address::new(rest[2..8].try_into().expect("6 address bytes"));
-        let data = &rest[9..9 + data_len];
-        let rssi = rest[9 + data_len] as i8;
-
-        let mut report = ScanReport {
-            address: address.to_string(),
-            address_type: address_type_name(address_type),
-            // ADV_IND (0x00) and ADV_DIRECT_IND (0x01) are connectable
-            // (Core Spec Vol 4, Part E, Section 7.7.65.2).
-            connectable: event_type <= 0x01,
-            scan_response: event_type == 0x04,
-            rssi,
-            name: None,
-            flags: None,
-            tx_power: None,
-            service_uuids: Vec::new(),
-            service_data: Vec::new(),
-            manufacturer_data: None,
-            raw: hex(data),
-        };
-        decode_ad_structures(data, &mut report);
-        reports.push(report);
-        rest = &rest[10 + data_len..];
-    }
-    reports
-}
-
-/// Builds an advertising payload (flags + 16-bit service UUIDs + complete
-/// local name) that fits the legacy 31-byte limit, dropping the UUID list
-/// and then trimming the name if needed — the name is the demo's identity,
-/// so it survives longest.
-pub fn build_adv_payload(name: &str, service_uuids: &[u16]) -> Vec<u8> {
-    const MAX_ADV_LEN: usize = 31;
-    let build = |name: &str, uuids: &[u16]| {
-        let mut ad = AdvertisingData::new()
-            .with_flags(flags::LE_GENERAL_DISCOVERABLE | flags::BR_EDR_NOT_SUPPORTED)
-            .with_name(name);
-        for &uuid in uuids {
-            ad = ad.with_service_uuid_16(uuid);
-        }
-        ad.to_bytes()
+    let Some(HciEvent::Other { code, parameters }) = HciEvent::parse_h4(packet) else {
+        return Vec::new();
     };
-    let mut bytes = build(name, service_uuids);
-    if bytes.len() > MAX_ADV_LEN {
-        bytes = build(name, &[]);
+    if code != hci_event_code::LE_META || parameters.first() != Some(&le_subevent::ADVERTISING_REPORT)
+    {
+        return Vec::new();
     }
-    let mut trimmed = name.to_string();
-    while bytes.len() > MAX_ADV_LEN && trimmed.pop().is_some() {
-        bytes = build(&trimmed, &[]);
-    }
-    bytes
+    advertising_reports(parameters)
+        .into_iter()
+        .map(|report| {
+            let mut scan = ScanReport {
+                address: Address::new(report.header.address).to_string(),
+                address_type: address_type_name(report.header.address_type),
+                connectable: report.header.is_connectable(),
+                scan_response: report.header.is_scan_response(),
+                rssi: report.rssi,
+                name: None,
+                flags: None,
+                tx_power: None,
+                service_uuids: Vec::new(),
+                service_data: Vec::new(),
+                manufacturer_data: None,
+                raw: hex(report.data),
+            };
+            decode_ad_structures(report.data, &mut scan);
+            scan
+        })
+        .collect()
 }
 
 /// Pads an advertising payload into the fixed 32-byte HCI parameter block
 /// (significant length byte + 31 data bytes) of LE Set Advertising Data /
 /// LE Set Scan Response Data.
-fn adv_data_param(payload: &[u8]) -> Vec<u8> {
-    let mut param = vec![payload.len() as u8];
-    param.extend_from_slice(payload);
-    param.resize(32, 0x00);
-    param
-}
+use crate::device::host::adv_data_param;
 
 /// Builds the advertising payload for a lightweight demo advertiser (used by
 /// the scanner page to populate an otherwise-empty scene): flags, an optional
@@ -352,19 +307,52 @@ pub fn queue_advertiser_start(
     queue_command(channel, [0x0A, 0x20], &[0x01]) // LE Set Advertising Enable
 }
 
+/// Sends one L2CAP PDU as ACL data, fragmented by the host layer so there
+/// is a single definition of LE ACL fragmentation.
 fn send_acl(channel: &HciChannel, handle: u16, l2cap: &[u8]) -> Result<(), SimbleError> {
-    let header = HciAclHeader::new(
-        handle,
-        AclPacketBoundary::FirstNonFlushable,
-        l2cap.len() as u16,
-    );
-    let mut acl = Vec::with_capacity(4 + l2cap.len());
-    acl.extend_from_slice(header.as_bytes());
-    acl.extend_from_slice(l2cap);
-    channel.send_acl_data(&acl)
+    for packet in crate::device::host::acl_packets(handle, l2cap) {
+        channel.send_acl_data(&packet[1..])?;
+    }
+    Ok(())
+}
+
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+/// Extracts the `address=` query parameter from a netsim WebSocket URL.
+/// Pages write it in display order (`CC:1E:57:00:00:06`), which is what the
+/// device's identity must be — SMP computes with it.
+fn address_from_ws_url(url: &str) -> Option<Address> {
+    url.split(['?', '&'])
+        .find_map(|param| param.strip_prefix("address="))
+        .and_then(|value| value.split('&').next())
+        .and_then(|value| value.parse::<Address>().ok())
+}
+
+/// Rewrites a netsim WebSocket URL's `address=` parameter into the byte order
+/// netsim actually puts on the air.
+///
+/// netsim reads that parameter **LSB-first**, so a URL written in display
+/// order advertises the address reversed: a device asking for
+/// `CC:1E:57:00:00:06` appears as `06:00:00:57:1E:CC`, and nothing can reach
+/// it at the address the page believes it has (SMP then computes with the
+/// wrong identity too). Pages keep writing display order; this puts the wire
+/// order on the query string.
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code))]
+fn ws_url_with_wire_address(url: &str) -> String {
+    let Some(address) = address_from_ws_url(url) else {
+        return url.to_string();
+    };
+    let wire = address.to_netsim_wire_string();
+    let display = address.to_string();
+    url.replace(&format!("address={display}"), &format!("address={wire}"))
 }
 
 fn find_value_handle(server: &ScriptGattServer, uuid: Uuid) -> Option<u16> {
+    // Services built by a Rust profile registrar (add_ras, add_pacs,
+    // add_ascs) exist only in the GATT database, so fall back to it when
+    // the script's own service list does not know the UUID.
+    if let Some(handle) = server.with_server(|s| s.device.gatt_db.value_handle_for_uuid(uuid)) {
+        return Some(handle);
+    }
     server.with_server(|s| {
         s.get_services()
             .iter()
@@ -395,6 +383,157 @@ fn register_web_extensions(engine: &mut Engine) {
                 .map_err(|status| runtime_error(format!("set_value failed: ATT error {status}")))
         },
     );
+    // The read half: `server.value(uuid)` returns the characteristic's
+    // current bytes from the live GattDatabase — including values a central
+    // wrote. A script's `fn tick` has no variables that survive between
+    // calls, so the database is the only state it can carry; this getter is
+    // what lets a device react to writes (setpoints, control points).
+    // Real profile implementations, callable from a script. The protocol
+    // lives in Rust (`crate::profiles`) — a state machine with tests — and
+    // the script just composes a device out of them. `add_ascs` in
+    // particular installs the ASE control-point handler, so a peer's Config
+    // Codec / Enable writes actually drive the endpoint state machine
+    // instead of landing on inert bytes.
+    engine.register_fn(
+        "add_pacs",
+        |server: &mut ScriptGattServer, sink_location: i64, source_location: i64| {
+            server.with_server(|s| {
+                crate::profiles::PublishedAudioCapabilitiesService::register(
+                    &mut s.device.gatt_db,
+                    sink_location as u32,
+                    source_location as u32,
+                );
+            });
+        },
+    );
+    // Several profiles carry IEEE-754 floats (ranging distance, weight
+    // scales, some sensor readings) and a script has no other way to lay
+    // one out. Little-endian, as everything on the wire is.
+    engine.register_fn("f32_le", |value: f64| -> Blob {
+        (value as f32).to_le_bytes().to_vec()
+    });
+
+    engine.register_fn(
+        // Ranging Service (185B) — the GATT half of Bluetooth 6.0 Channel
+        // Sounding: a responder publishes distance estimates a peer reads or
+        // subscribes to. The ranging procedure itself is a controller
+        // feature; this is what a phone actually talks to.
+        "add_ras",
+        |server: &mut ScriptGattServer| {
+            server.with_server(|s| {
+                crate::profiles::RangingService::register(&mut s.device.gatt_db);
+            });
+        },
+    );
+    engine.register_fn(
+        "add_ascs",
+        |server: &mut ScriptGattServer,
+         sink_ase_ids: Dynamic,
+         source_ase_ids: Dynamic|
+         -> Result<(), Box<EvalAltResult>> {
+            let sink = dynamic_to_bytes(sink_ase_ids)?;
+            let source = dynamic_to_bytes(source_ase_ids)?;
+            server.with_server(|s| {
+                crate::profiles::AudioStreamControlService::register(
+                    &mut s.device.gatt_db,
+                    &sink,
+                    &source,
+                );
+            });
+            Ok(())
+        },
+    );
+    // Adds a 16-bit UUID to the advertisement. Services registered by the
+    // Rust profile registrars live in the GATT database rather than the
+    // script's service list, so they need advertising explicitly.
+    engine.register_fn(
+        "advertise_service_uuid",
+        |server: &mut ScriptGattServer, uuid16: i64| -> Result<(), Box<EvalAltResult>> {
+            let uuid16 = u16::try_from(uuid16).map_err(|_| {
+                runtime_error(format!("advertise_service_uuid: not a 16-bit uuid: {uuid16}"))
+            })?;
+            server.with_server(|s| {
+                s.device
+                    .advertising_data
+                    .get_or_insert_with(crate::gap::AdvertisingData::new)
+                    .service_uuids_16
+                    .push(uuid16);
+            });
+            Ok(())
+        },
+    );
+
+    // The return path of the event channel: a script tells the host (a page,
+    // a test) something that isn't GATT state — a log line, a decoded frame,
+    // a state transition. Payloads cross as JSON.
+    engine.register_fn(
+        "emit",
+        |server: &mut ScriptGattServer,
+         kind: &str,
+         payload: Dynamic|
+         -> Result<(), Box<EvalAltResult>> {
+            let value: serde_json::Value = rhai::serde::from_dynamic(&payload)
+                .map_err(|e| runtime_error(format!("emit payload is not serializable: {e}")))?;
+            let message = serde_json::json!({ "event": kind, "payload": value });
+            server.push_emitted(message.to_string());
+            Ok(())
+        },
+    );
+
+    // The LE Audio media plane, script side. `send_audio` streams one SDU to
+    // the connected peer; `take_audio` drains what a sink has received.
+    engine.register_fn(
+        "send_audio",
+        |server: &mut ScriptGattServer, sdu: Dynamic| -> Result<bool, Box<EvalAltResult>> {
+            let bytes = dynamic_to_bytes(sdu)?;
+            Ok(server.with_server(|s| {
+                let handle = s.device.audio_handle();
+                match handle.and_then(|h| s.device.build_audio_packet(h, &bytes)) {
+                    Some(packet) => {
+                        s.device.audio_tx_pending.push(packet);
+                        true
+                    }
+                    None => false,
+                }
+            }))
+        },
+    );
+    engine.register_fn(
+        "take_audio",
+        |server: &mut ScriptGattServer| -> rhai::Array {
+            server.with_server(|s| {
+                s.device
+                    .take_audio()
+                    .into_iter()
+                    .map(Dynamic::from_blob)
+                    .collect()
+            })
+        },
+    );
+    engine.register_fn(
+        "value",
+        |server: &mut ScriptGattServer, uuid: Uuid| -> Result<Blob, Box<EvalAltResult>> {
+            let handle = find_value_handle(server, uuid)
+                .ok_or_else(|| runtime_error(format!("no characteristic with UUID {uuid}")))?;
+            // Host-side read: a device sees its own attributes regardless of
+            // client permissions, so a script can read the write-only control
+            // point a peer just wrote.
+            server
+                .with_server(|s| s.device.gatt_db.value(handle).map(Blob::from))
+                .ok_or_else(|| runtime_error(format!("no value for characteristic {uuid}")))
+        },
+    );
+}
+
+/// What a client subscribed to on a characteristic's CCCD.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CccdSubscription {
+    /// Nothing enabled.
+    None,
+    /// Notifications (unacknowledged).
+    Notify,
+    /// Indications (confirmed by the peer).
+    Indicate,
 }
 
 /// A notify-capable characteristic the host glue watches for value changes.
@@ -455,9 +594,15 @@ pub struct ScriptedPeripheral {
     ast: AST,
     scope: Scope<'static>,
     servers: Vec<ScriptGattServer>,
-    reassembler: AclReassembler,
+    /// The LE host layer: HCI event dispatch, ATT/SMP replies, ACL framing.
+    host: LeHost,
     connection: Option<(u16, Address)>,
     tick_defined: bool,
+    /// Whether the script defines `fn on_event(server, event)` — the
+    /// handler that receives ATT events and host-pushed UI events.
+    on_event_defined: bool,
+    /// Per-device state bound as `this` for `tick`/`on_event`.
+    state: Dynamic,
     watched: Vec<WatchedCharacteristic>,
     last_values: HashMap<u16, Vec<u8>>,
     last_error: Option<String>,
@@ -547,15 +692,24 @@ impl ScriptedPeripheral {
         let tick_defined = ast
             .iter_functions()
             .any(|f| f.name == "tick" && f.params.len() == 2);
+        let on_event_defined = ast
+            .iter_functions()
+            .any(|f| f.name == "on_event" && f.params.len() == 2);
 
         let mut peripheral = Self {
             engine,
             ast,
             scope,
             servers,
-            reassembler: AclReassembler::new(),
+            host: LeHost::new(),
             connection: None,
             tick_defined,
+            on_event_defined,
+            // Persistent per-device state, bound as `this` for `tick` and
+            // `on_event` (Rhai's documented event-handler pattern): script
+            // functions are pure and cannot see the calling scope, so this
+            // map is how a device remembers anything between calls.
+            state: Dynamic::from_map(rhai::Map::new()),
             watched: Vec::new(),
             last_values: HashMap::new(),
             last_error: None,
@@ -579,9 +733,11 @@ impl ScriptedPeripheral {
             ast,
             scope: Scope::new(),
             servers: Vec::new(),
-            reassembler: AclReassembler::new(),
+            host: LeHost::new(),
             connection: None,
             tick_defined: false,
+            on_event_defined: false,
+            state: Dynamic::from_map(rhai::Map::new()),
             watched: Vec::new(),
             last_values: HashMap::new(),
             last_error: None,
@@ -670,6 +826,27 @@ impl ScriptedPeripheral {
         self.primary().with_server(|s| s.device.name.clone())
     }
 
+    /// Stamps the device's on-air identity. The script engine allocates a
+    /// per-session placeholder address, but SMP pairing computes with
+    /// `device.address`/`address_type` — so the scene must overwrite them
+    /// with the address it actually advertises (public, per the advertising
+    /// parameters in [`Self::queue_start`]), or pairing against a real
+    /// stack fails its confirm/DHKey check.
+    pub fn set_identity(&mut self, address: Address) {
+        self.primary().with_server(|s| {
+            s.device.address = address;
+            s.device.address_type = AddressType::Public;
+            // Scenes have a real controller, so SMP key distribution waits
+            // for the Encryption Change event as the spec requires.
+            s.device.defer_key_distribution = true;
+        });
+    }
+
+    /// Drains the isochronous SDUs this device has received (media plane).
+    pub fn take_audio(&mut self) -> Vec<Vec<u8>> {
+        self.primary().with_server(|s| s.device.take_audio())
+    }
+
     /// Records a non-fatal runtime problem for the page's error pane.
     pub fn record_error(&mut self, message: String) {
         self.last_error = Some(message);
@@ -693,28 +870,14 @@ impl ScriptedPeripheral {
     /// advertising parameters, advertising data + scan response carrying the
     /// script device's identity, then advertising enable.
     pub fn queue_start(&self, channel: &HciChannel) -> Result<(), SimbleError> {
-        queue_common_init(channel)?;
-        // LE Set Advertising Parameters: 100ms interval, ADV_IND, public own
-        // address, all channels, no filter.
-        queue_command(
-            channel,
-            [0x06, 0x20],
-            &[
-                0xA0, 0x00, 0xA0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07,
-                0x00,
-            ],
-        )?;
-        let name = self.device_name();
         let uuids = self.primary_service_uuids_16();
-        queue_command(
-            channel,
-            [0x08, 0x20],
-            &adv_data_param(&build_adv_payload(&name, &uuids)),
-        )?;
-        // Scan response repeats the name for active scanners.
-        let scan_rsp = AdvertisingData::new().with_name(&name).to_bytes();
-        queue_command(channel, [0x09, 0x20], &adv_data_param(&scan_rsp))?;
-        queue_command(channel, [0x0A, 0x20], &[0x01]) // LE Set Advertising Enable
+        let commands = self
+            .primary()
+            .with_server(|s| self.host.start_advertising(&s.device, &uuids))?;
+        for packet in commands {
+            channel.inject_host_packet(packet)?;
+        }
+        Ok(())
     }
 
     fn primary_service_uuids_16(&self) -> Vec<u16> {
@@ -780,13 +943,23 @@ impl ScriptedPeripheral {
         })
     }
 
-    fn cccd_notify_enabled(&self, watch: &WatchedCharacteristic) -> bool {
+    /// What the client asked for on this characteristic's CCCD (Core Spec
+    /// Vol 3, Part G, Section 3.3.3.3): bit 0 notify, bit 1 indicate. Both
+    /// matter — several SIG profiles mandate Indicate, and a device that
+    /// only ever notifies delivers nothing to those clients.
+    fn cccd_subscription(&self, watch: &WatchedCharacteristic) -> CccdSubscription {
         let Some(cccd) = watch.cccd_handle else {
-            return false;
+            return CccdSubscription::None;
         };
-        self.servers[watch.server_index].with_server(|s| s.device.cccd_value(cccd).unwrap_or(0))
-            & 0x0001
-            != 0
+        let value = self.servers[watch.server_index]
+            .with_server(|s| s.device.cccd_value(cccd).unwrap_or(0));
+        if value & 0x0002 != 0 {
+            CccdSubscription::Indicate
+        } else if value & 0x0001 != 0 {
+            CccdSubscription::Notify
+        } else {
+            CccdSubscription::None
+        }
     }
 
     /// Routes one controller-to-host H4 packet: connection events into the
@@ -797,67 +970,74 @@ impl ScriptedPeripheral {
         channel: &HciChannel,
         packet: &[u8],
     ) -> Result<(), SimbleError> {
-        match packet.first() {
-            Some(&h4_type::HCI_EVENT) => self.handle_event(channel, packet),
-            Some(&h4_type::HCI_ACL_DATA) => self.handle_acl(channel, packet),
-            _ => Ok(()),
-        }
-    }
-
-    fn handle_event(&mut self, channel: &HciChannel, packet: &[u8]) -> Result<(), SimbleError> {
-        match packet.get(1) {
-            Some(&event::LE_META)
-                if packet.len() >= 15
-                    && matches!(
-                        packet[3],
-                        event::SUB_CONNECTION_COMPLETE | event::SUB_ENHANCED_CONNECTION_COMPLETE
-                    )
-                    && packet[4] == 0x00 =>
-            {
-                let handle = u16::from_le_bytes([packet[5], packet[6]]) & 0x0FFF;
-                let peer = Address::new(packet[9..15].try_into().expect("6 address bytes"));
-                self.primary()
-                    .with_server(|s| s.device.on_connected(handle, peer));
-                self.connection = Some((handle, peer));
-                Ok(())
-            }
-            Some(&event::DISCONNECTION_COMPLETE) if packet.len() >= 6 => {
-                let handle = u16::from_le_bytes([packet[4], packet[5]]);
-                self.primary()
-                    .with_server(|s| s.device.on_disconnected(handle));
-                self.reassembler.on_disconnected(handle);
-                self.connection = None;
-                // The controller stops advertising on connection establishment
-                // (Core Spec Vol 6, Part B, Section 4.4.2); re-enable so the
-                // device is discoverable again.
-                queue_command(channel, [0x0A, 0x20], &[0x01])
-            }
-            _ => Ok(()),
-        }
-    }
-
-    fn handle_acl(&mut self, channel: &HciChannel, packet: &[u8]) -> Result<(), SimbleError> {
-        let Some((header, payload)) = HciAclHeader::parse(&packet[1..]) else {
-            return Err(SimbleError::PacketParseError("Invalid ACL header".into()));
-        };
-        let handle = header.handle();
-        let is_first = header.is_first_fragment();
-        let Some(frame) = self.reassembler.push_fragment(handle, is_first, payload)? else {
-            return Ok(());
-        };
-        let response = self
+        // The host layer owns HCI event dispatch, ATT/SMP responses, and the
+        // ACL fragmentation; this glue only moves its output to the channel
+        // and mirrors the connection for `status_json`.
+        let outgoing = self
             .primary()
-            .with_server(|s| s.device.process_l2cap_packet(handle, &frame))?;
-        if let Some(l2cap) = response {
-            send_acl(channel, handle, &l2cap)?;
+            .clone()
+            .with_server(|s| self.host.handle_packet(&mut s.device, packet))?;
+        for out in outgoing {
+            channel.inject_host_packet(out)?;
         }
+        self.connection = self.host.connection();
         Ok(())
+    }
+
+    /// Delivers queued events (ATT activity, and anything the host pushed
+    /// with `push_event`) to the script's `fn on_event(server, event)`.
+    ///
+    /// State is bound as `this` — Rhai's documented event-handler pattern —
+    /// because script functions are pure and cannot see the calling scope,
+    /// so a map bound this way is how a device remembers anything between
+    /// calls. Handler errors land in `last_error` rather than killing the
+    /// device, matching how tick errors are treated.
+    fn dispatch_events(&mut self) {
+        if !self.on_event_defined {
+            return;
+        }
+        let events = self.primary().take_own_events();
+        if events.is_empty() {
+            return;
+        }
+        let server = Dynamic::from(self.primary().clone());
+        let Self {
+            engine,
+            ast,
+            scope,
+            state,
+            last_error,
+            ..
+        } = self;
+        for event in events {
+            let options = CallFnOptions::new().eval_ast(false).bind_this_ptr(state);
+            let args = (server.clone(), event);
+            match engine.call_fn_with_options::<Dynamic>(options, scope, ast, "on_event", args) {
+                Ok(_) => *last_error = None,
+                Err(e) => *last_error = Some(e.to_string()),
+            }
+        }
+    }
+
+    /// Pushes an event into the running script from outside the stack — a UI
+    /// control, a test, a host simulating a condition. Delivered to
+    /// `on_event` on the next tick.
+    pub fn push_event(&mut self, kind: &str, payload_json: &str) {
+        self.primary().push_event(kind, payload_json.to_string());
+    }
+
+    /// Drains what the script emitted for the host with `server.emit(...)`.
+    pub fn take_emitted(&mut self) -> Vec<String> {
+        self.primary().take_emitted()
     }
 
     /// One host tick: calls the script's `fn tick(server, t)` if defined
     /// (`t` = seconds since Run), then turns any changed notify-capable
     /// value into a real ATT notification for a subscribed central.
     pub fn tick(&mut self, channel: &HciChannel, t_seconds: f64) -> Result<(), SimbleError> {
+        // Events first, so a write that arrived since the last tick is
+        // handled before the periodic tick sees the world.
+        self.dispatch_events();
         if self.tick_defined {
             let args = (Dynamic::from(self.primary().clone()), t_seconds);
             // eval_ast(false): the script body already ran in `run_script`;
@@ -875,6 +1055,14 @@ impl ScriptedPeripheral {
             }
         }
         self.flush_value_notifications(channel)?;
+        // Ship any SDUs the script queued with send_audio (the media plane
+        // is unacknowledged, so this is fire-and-forget).
+        let sdus = self
+            .primary()
+            .with_server(|s| std::mem::take(&mut s.device.audio_tx_pending));
+        for packet in sdus {
+            channel.inject_host_packet(packet)?;
+        }
         // The observer queue records every ATT event for scripts; nothing
         // drains it across ticks, so cap it here (scripts that want events
         // must consume them with `take_events()` inside their own tick).
@@ -895,14 +1083,28 @@ impl ScriptedPeripheral {
             let Some((handle, _)) = self.connection else {
                 continue;
             };
-            if !self.cccd_notify_enabled(&watch) {
-                continue;
+            let l2cap = match self.cccd_subscription(&watch) {
+                CccdSubscription::None => continue,
+                CccdSubscription::Notify => self.servers[watch.server_index].with_server(|s| {
+                    Ok(s.device
+                        .create_notification_for(handle, watch.value_handle, &current))
+                }),
+                // An indication is confirmed by the peer, so only one may be
+                // outstanding; `create_indication` refuses a second and the
+                // value is picked up on a later tick.
+                CccdSubscription::Indicate => self.servers[watch.server_index].with_server(|s| {
+                    s.device
+                        .create_indication(handle, watch.value_handle, &current)
+                }),
+            };
+            match l2cap {
+                Ok(l2cap) => send_acl(channel, handle, &l2cap)?,
+                Err(_) => {
+                    // Indication still in flight — re-send this value once the
+                    // confirmation lands rather than dropping it.
+                    self.last_values.remove(&watch.value_handle);
+                }
             }
-            let l2cap = self.servers[watch.server_index].with_server(|s| {
-                s.device
-                    .create_notification_for(handle, watch.value_handle, &current)
-            });
-            send_acl(channel, handle, &l2cap)?;
         }
         Ok(())
     }
@@ -925,12 +1127,12 @@ impl ScriptedPeripheral {
                 .unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"));
         }
         // Subscription state is resolved before the server borrow below —
-        // `cccd_notify_enabled` borrows the same server, and `with_server`
+        // `cccd_subscription` borrows the same server, and `with_server`
         // borrows are not reentrant.
         let subscribed_handles: Vec<u16> = self
             .watched
             .iter()
-            .filter(|w| self.cccd_notify_enabled(w))
+            .filter(|w| self.cccd_subscription(w) != CccdSubscription::None)
             .map(|w| w.value_handle)
             .collect();
         let services = self.primary().with_server(|s| {
@@ -1025,7 +1227,7 @@ pub fn lint_script(script: &str) -> Result<(), String> {
 }
 
 /// The central's connect → discover progression.
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum CentralPhase {
     /// Waiting to connect to the target advertiser.
     Connecting,
@@ -1083,6 +1285,8 @@ struct CentralDevice {
     values: std::collections::BTreeMap<u16, Vec<u8>>,
     /// Value handles with notifications enabled.
     subscribed: std::collections::BTreeSet<u16>,
+    /// Outgoing isochronous SDU sequence number (media plane).
+    audio_tx_sequence: u16,
 }
 
 impl CentralDevice {
@@ -1097,6 +1301,7 @@ impl CentralDevice {
             in_flight: None,
             values: std::collections::BTreeMap::new(),
             subscribed: std::collections::BTreeSet::new(),
+            audio_tx_sequence: 0,
         }
     }
 
@@ -1155,12 +1360,17 @@ impl CentralDevice {
     fn consume(&mut self, channel: &HciChannel, packet: &[u8]) {
         match packet.first() {
             Some(&h4_type::HCI_EVENT) => {
-                if packet.len() >= 15
-                    && packet[1] == event::LE_META
-                    && packet[3] == 0x01
-                    && packet[4] == 0x00
+                // Parsed through the same typed view the peripheral host
+                // uses, rather than a second hand-rolled copy: this event
+                // was where a dropped field silently broke pairing, and one
+                // parser is easier to keep right than two. The Enhanced
+                // variant is accepted too — a resolving central gets that
+                // one, and the old byte test (`packet[3] == 0x01`) ignored
+                // it, so such a connection never started discovery.
+                if let Some(HciEvent::LeConnectionComplete(event)) = HciEvent::parse_h4(packet)
+                    && event.status == 0x00
                 {
-                    let handle = u16::from_le_bytes([packet[5], packet[6]]) & 0x0FFF;
+                    let handle = event.connection_handle.get() & 0x0FFF;
                     self.client = GattClient::new(handle, self.target);
                     self.phase = CentralPhase::ExchangingMtu;
                     let req = self.client.create_exchange_mtu_request(517);
@@ -1399,7 +1609,8 @@ impl SceneEngine {
     /// Adds a scripted peripheral at `address`; returns its device index (or the
     /// script error).
     pub fn add_peripheral(&mut self, address: Address, script: &str) -> Result<usize, String> {
-        let peripheral = ScriptedPeripheral::run_script(script)?;
+        let mut peripheral = ScriptedPeripheral::run_script(script)?;
+        peripheral.set_identity(address);
         let channel = self.link.add_device(address);
         let index = self.devices.len();
         self.devices.push(SceneDevice {
@@ -1526,6 +1737,35 @@ impl SceneEngine {
         }
     }
 
+    /// Streams one isochronous SDU from central `index` to the peripheral it
+    /// is connected to — the media plane a real LE Audio source drives.
+    /// Returns false if the central has no connection yet.
+    pub fn central_send_audio(&mut self, index: usize, sdu: &[u8]) -> bool {
+        let Some(SceneRole::Central(central)) = self.devices.get(index).map(|d| &d.role) else {
+            return false;
+        };
+        let handle = central.client.connection_handle;
+        if handle == 0 {
+            return false;
+        }
+        let sequence = central.audio_tx_sequence;
+        if let Some(SceneRole::Central(central)) = self.devices.get_mut(index).map(|d| &mut d.role)
+        {
+            central.audio_tx_sequence = sequence.wrapping_add(1);
+        }
+        let packet = crate::packets::build_iso_packet(handle, sequence, sdu);
+        let _ = self.devices[index].channel.inject_host_packet(packet);
+        true
+    }
+
+    /// Drains the SDUs peripheral `index` has received, oldest first.
+    pub fn peripheral_take_audio(&mut self, index: usize) -> Vec<Vec<u8>> {
+        match self.devices.get_mut(index).map(|d| &mut d.role) {
+            Some(SceneRole::Peripheral(p)) => p.take_audio(),
+            _ => Vec::new(),
+        }
+    }
+
     /// Queue enabling notifications on `value_handle` for central `index`.
     pub fn central_subscribe(&mut self, index: usize, value_handle: u16) {
         if let Some(SceneRole::Central(c)) = self.devices.get_mut(index).map(|d| &mut d.role) {
@@ -1565,6 +1805,525 @@ impl SceneEngine {
 #[cfg(test)]
 mod scene_tests {
     use super::*;
+
+    #[test]
+    fn test_ws_url_carries_the_wire_byte_order() {
+        // netsim reads the URL address LSB-first, so a page writing display
+        // order would advertise the address reversed and be unreachable.
+        let url = "ws://localhost:7681/v1/websocket/bt?name=web-speaker&address=CC:1E:57:00:00:06";
+        assert_eq!(
+            ws_url_with_wire_address(url),
+            "ws://localhost:7681/v1/websocket/bt?name=web-speaker&address=06:00:00:57:1E:CC"
+        );
+        // The identity stays the address the page asked for.
+        assert_eq!(
+            address_from_ws_url(url),
+            Some("CC:1E:57:00:00:06".parse().unwrap())
+        );
+        // A URL without an address is passed through untouched.
+        let plain = "ws://localhost:7681/v1/websocket/bt?name=x";
+        assert_eq!(ws_url_with_wire_address(plain), plain);
+    }
+
+    #[test]
+    fn test_address_is_parsed_from_the_netsim_url() {
+        // The browser path stamps identity from the WebSocket URL; without it
+        // a page-hosted device pairs with the script engine's placeholder
+        // address and a real stack rejects the pairing.
+        let url = "ws://localhost:7681/v1/websocket/bt?name=web-speaker&address=CC:1E:57:00:00:06";
+        assert_eq!(
+            address_from_ws_url(url),
+            Some("CC:1E:57:00:00:06".parse().unwrap())
+        );
+        // Order-independent, and absent means absent.
+        assert_eq!(
+            address_from_ws_url("ws://h/p?address=AA:BB:CC:00:00:01&name=x"),
+            Some("AA:BB:CC:00:00:01".parse().unwrap())
+        );
+        assert_eq!(address_from_ws_url("ws://h/p?name=x"), None);
+    }
+
+    #[test]
+    fn test_scene_stamps_on_air_identity_onto_the_device() {
+        // The script engine allocates placeholder addresses (every session
+        // starts at :01), but SMP computes with device.address — the scene
+        // must overwrite it with the address actually on the air.
+        let mut scene = SceneEngine::new();
+        let script = r#"
+            let server = android::BluetoothGattServer("A");
+            let bas = android::BluetoothGattService(uuid::BATTERY_SERVICE, android::SERVICE_TYPE_PRIMARY);
+            bas.add_characteristic(android::BluetoothGattCharacteristic(
+                uuid::BATTERY_LEVEL, android::PROPERTY_READ, android::PERMISSION_READ));
+            server.add_service(bas);
+        "#;
+        scene
+            .add_peripheral("AA:BB:CC:00:00:07".parse().unwrap(), script)
+            .unwrap();
+        let status = scene.peripheral_status_json(0).unwrap();
+        assert!(
+            status.contains("AA:BB:CC:00:00:07"),
+            "device should carry its on-air address: {status}"
+        );
+    }
+
+    #[test]
+    fn test_connection_complete_records_peer_address_type() {
+        // Byte 8 of LE Connection Complete is the peer address type; SMP
+        // mixes it into pairing crypto, so it must reach the connection.
+        let mut scene = SceneEngine::new();
+        let script = r#"
+            let server = android::BluetoothGattServer("B");
+            let bas = android::BluetoothGattService(uuid::BATTERY_SERVICE, android::SERVICE_TYPE_PRIMARY);
+            bas.add_characteristic(android::BluetoothGattCharacteristic(
+                uuid::BATTERY_LEVEL, android::PROPERTY_READ, android::PERMISSION_READ));
+            server.add_service(bas);
+        "#;
+        let index = scene
+            .add_peripheral("AA:BB:CC:00:00:08".parse().unwrap(), script)
+            .unwrap();
+        scene.tick(0.1); // bring-up
+
+        // LE Connection Complete with peer type 0x00 (public).
+        let mut event = vec![
+            0x04, 0x3E, 0x13, 0x01, 0x00, 0x40, 0x00, 0x01, 0x00,
+        ];
+        event.extend_from_slice(&[0xB9, 0x62, 0xF7, 0xD6, 0x79, 0x7C]); // peer LE
+        event.extend_from_slice(&[0x18, 0x00, 0x00, 0x00, 0x48, 0x00, 0x00]);
+        let channel = scene.devices[index].channel.clone();
+        let SceneRole::Peripheral(p) = &mut scene.devices[index].role else {
+            panic!("expected peripheral");
+        };
+        p.handle_packet(&channel, &event).unwrap();
+        p.primary().with_server(|s| {
+            let conn = s.device.connections.get(&0x0040).expect("connected");
+            assert_eq!(conn.peer_address_type, AddressType::Public);
+        });
+    }
+
+    #[test]
+    fn test_ltk_request_event_gets_a_reply_with_the_session_key() {
+        // Encryption start over a real controller: the LE Long Term Key
+        // Request event must be answered with the key SMP recorded on the
+        // connection, or pairing fails on the peer.
+        let mut scene = SceneEngine::new();
+        let script = r#"
+            let server = android::BluetoothGattServer("C");
+            let bas = android::BluetoothGattService(uuid::BATTERY_SERVICE, android::SERVICE_TYPE_PRIMARY);
+            bas.add_characteristic(android::BluetoothGattCharacteristic(
+                uuid::BATTERY_LEVEL, android::PROPERTY_READ, android::PERMISSION_READ));
+            server.add_service(bas);
+        "#;
+        let index = scene
+            .add_peripheral("AA:BB:CC:00:00:09".parse().unwrap(), script)
+            .unwrap();
+        scene.tick(0.1); // bring-up
+
+        let channel = scene.devices[index].channel.clone();
+        while channel.poll_host_packet().is_some() {} // drain bring-up
+
+        let SceneRole::Peripheral(p) = &mut scene.devices[index].role else {
+            panic!("expected peripheral");
+        };
+        // Connect, then plant the key SMP would have recorded.
+        let mut connect = vec![0x04, 0x3E, 0x13, 0x01, 0x00, 0x40, 0x00, 0x01, 0x01];
+        connect.extend_from_slice(&[0x11; 6]);
+        connect.extend_from_slice(&[0x18, 0x00, 0x00, 0x00, 0x48, 0x00, 0x00]);
+        p.handle_packet(&channel, &connect).unwrap();
+        let key = [0xAB; 16];
+        p.primary().with_server(|s| {
+            s.device.connections.get_mut(&0x0040).unwrap().ltk = Some(key);
+        });
+
+        // LE Long Term Key Request: subevent 0x05, handle, rand(8), ediv(2).
+        let mut event = vec![0x04, 0x3E, 0x0D, 0x05, 0x40, 0x00];
+        event.extend_from_slice(&[0x00; 10]);
+        p.handle_packet(&channel, &event).unwrap();
+
+        let reply = channel.poll_host_packet().expect("a reply must be queued");
+        assert_eq!(&reply[..3], &[0x01, 0x1A, 0x20], "LTK Request Reply");
+        assert_eq!(&reply[6..22], &key, "carrying the session key");
+    }
+
+    #[test]
+    fn test_scanner_hears_script_staged_advertising_extras() {
+        // The beacon idiom: a script stages service data + manufacturer data
+        // and the on-air advertisement must carry both to a scanner.
+        let mut scene = SceneEngine::new();
+        let script = r#"
+            let server = android::BluetoothGattServer("Beacon");
+            let bas = android::BluetoothGattService(uuid::BATTERY_SERVICE, android::SERVICE_TYPE_PRIMARY);
+            let level = android::BluetoothGattCharacteristic(uuid::BATTERY_LEVEL,
+                android::PROPERTY_READ, android::PERMISSION_READ);
+            level.set_value([88]);
+            bas.add_characteristic(level);
+            server.add_service(bas);
+            server.advertise_service_data(0xFE2C, [0x00, 0x11, 0x22]);
+            server.advertise_manufacturer_data(0x00E0, [0x01]);
+        "#;
+        scene
+            .add_peripheral("AA:BB:CC:00:00:01".parse().unwrap(), script)
+            .unwrap();
+        let scanner = scene.add_scanner("AA:BB:CC:00:00:02".parse().unwrap());
+        for _ in 0..3 {
+            scene.tick(0.1);
+        }
+
+        let reports = scene.scanner_reports_json(scanner);
+        assert!(reports.contains("fe2c") || reports.contains("FE2C"), "{reports}");
+        assert!(
+            reports.contains("001122") || reports.contains("[0,17,34]"),
+            "service data bytes should be on the air: {reports}"
+        );
+        assert!(
+            reports.contains("00E0"),
+            "manufacturer company id should be on the air: {reports}"
+        );
+    }
+
+    /// `add_pacs` / `add_ascs` call the Rust profile registrars, which write
+    /// into the GATT database rather than the script's service list — so
+    /// nothing in the script surface proves they landed. Read them back.
+    /// `push_event` + `on_event` are the host→script event path; the
+    /// dispatch had no test, so a script could stop receiving events
+    /// without anything noticing.
+    #[test]
+    fn test_pushed_events_reach_the_script_handler() {
+        let script = r#"
+            let server = android::BluetoothGattServer("evt");
+            let bas = android::BluetoothGattService(uuid::BATTERY_SERVICE, android::SERVICE_TYPE_PRIMARY);
+            let level = android::BluetoothGattCharacteristic(uuid::BATTERY_LEVEL,
+                android::PROPERTY_READ, android::PERMISSION_READ);
+            level.set_value([100]);
+            bas.add_characteristic(level);
+            server.add_service(bas);
+            // `this` is the persistent state map bound by the runtime.
+            fn on_event(server, event) {
+                if event.event == "ui" && event.action == "drain" {
+                    let level = server.value(uuid::BATTERY_LEVEL)[0];
+                    server.update_value(uuid::BATTERY_LEVEL, [level - event.amount]);
+                    server.emit("drained", #{ to: level - event.amount });
+                }
+            }
+        "#;
+        let mut peripheral = ScriptedPeripheral::run_script(script).unwrap();
+        let channel = HciChannel::new();
+
+        peripheral.push_event("ui", r#"{"action":"drain","amount":7}"#);
+        peripheral.tick(&channel, 0.1).unwrap();
+
+        let level = peripheral
+            .primary()
+            .with_server(|s| s.device.gatt_db.value_handle_for_uuid(crate::types::Uuid::Uuid16(0x2A19))
+                .and_then(|h| s.device.gatt_db.value(h).map(|v| v.to_vec())))
+            .unwrap();
+        assert_eq!(level, vec![93], "the handler ran and applied the payload");
+
+        let emitted = peripheral.take_emitted();
+        assert_eq!(emitted.len(), 1, "the script's emit reached the host");
+        assert!(
+            emitted[0].contains("\"drained\"") && emitted[0].contains("93"),
+            "emitted payload: {}",
+            emitted[0]
+        );
+        assert!(peripheral.take_emitted().is_empty(), "draining is destructive");
+    }
+
+    #[test]
+    fn test_profile_registrar_bindings_build_real_services() {
+        let mut scene = SceneEngine::new();
+        let script = r#"
+            let server = android::BluetoothGattServer("LEA");
+            server.add_pacs(0x03, 0x00);
+            server.add_ascs([0x01], []);
+            server.add_ras();
+        "#;
+        let index = scene
+            .add_peripheral("AA:BB:CC:00:00:51".parse().unwrap(), script)
+            .unwrap();
+        let status = scene.peripheral_status_json(index).unwrap();
+        // The registrars write to the database; check there, not in status.
+        let handles: Vec<u16> = [0x2BC9, 0x2BC4, 0x2BC6, 0x2B70]
+            .iter()
+            .map(|&uuid| {
+                let SceneRole::Peripheral(p) = &scene.devices[index].role else {
+                    panic!("expected a peripheral");
+                };
+                p.primary().with_server(|s| {
+                    s.device
+                        .gatt_db
+                        .value_handle_for_uuid(crate::types::Uuid::Uuid16(uuid))
+                        .unwrap_or_else(|| panic!("characteristic {uuid:#06X} missing"))
+                })
+            })
+            .collect();
+        assert_eq!(handles.len(), 4, "sink PAC, sink ASE, ASE CP, ranging data");
+        assert!(!status.is_empty());
+    }
+
+    /// `send_audio` and `take_audio` are the script's half of the media
+    /// plane; neither had a test.
+    #[test]
+    fn test_script_can_send_and_receive_audio_sdus() {
+        let mut scene = SceneEngine::new();
+        let sink_script = r#"
+            let server = android::BluetoothGattServer("sink");
+            let bas = android::BluetoothGattService(uuid::BATTERY_SERVICE, android::SERVICE_TYPE_PRIMARY);
+            bas.add_characteristic(android::BluetoothGattCharacteristic(
+                uuid::BATTERY_LEVEL, android::PROPERTY_READ, android::PERMISSION_READ));
+            server.add_service(bas);
+            // Drain what arrived and record how much, so a test can see it.
+            fn tick(server, t) {
+                let frames = server.take_audio();
+                if frames.len() > 0 {
+                    server.update_value(uuid::BATTERY_LEVEL, [frames.len()]);
+                }
+            }
+        "#;
+        let sink = scene
+            .add_peripheral("AA:BB:CC:00:00:52".parse().unwrap(), sink_script)
+            .unwrap();
+        let source = scene.add_central(
+            "AA:BB:CC:00:00:53".parse().unwrap(),
+            "AA:BB:CC:00:00:52".parse().unwrap(),
+        );
+        for _ in 0..40 {
+            scene.tick(0.02);
+        }
+        for _ in 0..3 {
+            assert!(scene.central_send_audio(source, &[0xAA; 8]));
+            scene.tick(0.02);
+        }
+        scene.tick(0.02);
+        let status = scene.peripheral_status_json(sink).unwrap();
+        // The script drained the SDUs and wrote the count into the battery
+        // level, so a non-zero value proves take_audio saw them.
+        assert!(
+            !status.contains("\"value\": \"00\""),
+            "the script's take_audio should have seen SDUs: {status}"
+        );
+    }
+
+    #[test]
+    fn test_script_staged_service_uuids_reach_the_advertisement() {
+        // A service built by a Rust profile registrar exists only in the
+        // GATT database, so the script stages its UUID explicitly. That
+        // staging used to be dropped, leaving the device advertising no
+        // services — invisible to a scanner filtering on one.
+        let mut scene = SceneEngine::new();
+        let script = r#"
+            let server = android::BluetoothGattServer("Ranger");
+            server.add_ras();
+            server.advertise_service_uuid(0x185B);
+        "#;
+        scene
+            .add_peripheral("AA:BB:CC:00:00:41".parse().unwrap(), script)
+            .unwrap();
+        let scanner = scene.add_scanner("AA:BB:CC:00:00:42".parse().unwrap());
+        for _ in 0..3 {
+            scene.tick(0.1);
+        }
+        let reports = scene.scanner_reports_json(scanner);
+        assert!(
+            reports.contains("185B"),
+            "the staged service UUID must be on the air: {reports}"
+        );
+    }
+
+    #[test]
+    fn test_beacon_advertises_non_connectable() {
+        // advertise_connectable(false) must put ADV_NONCONN_IND (0x03) in the
+        // LE Set Advertising Parameters and send no scan-response command.
+        let mut scene = SceneEngine::new();
+        let script = r#"
+            let server = android::BluetoothGattServer("Beacon");
+            let bas = android::BluetoothGattService(uuid::BATTERY_SERVICE, android::SERVICE_TYPE_PRIMARY);
+            bas.add_characteristic(android::BluetoothGattCharacteristic(
+                uuid::BATTERY_LEVEL, android::PROPERTY_READ, android::PERMISSION_READ));
+            server.add_service(bas);
+            server.advertise_manufacturer_data(0x004C, [0x02, 0x15]);
+            server.advertise_connectable(false);
+        "#;
+        let _ = &mut scene;
+        // Drive queue_start on a standalone channel so the bring-up commands
+        // are inspectable (a live scene's link would consume them).
+        let mut p = ScriptedPeripheral::run_script(script).unwrap();
+        p.set_identity("AA:BB:CC:00:00:0A".parse().unwrap());
+        let channel = HciChannel::new();
+        p.queue_start(&channel).unwrap();
+        let mut adv_type = None;
+        let mut saw_scan_rsp = false;
+        while let Some(pkt) = channel.poll_host_packet() {
+            // H4 command (0x01), opcode LE Set Advertising Parameters 0x2006;
+            // params start at index 3, advertising type is the 5th param byte.
+            if pkt.len() >= 9 && pkt[0] == 0x01 && pkt[1] == 0x06 && pkt[2] == 0x20 {
+                // [0..4]=H4/opcode/len, [4..8]=interval min+max, [8]=adv type.
+                adv_type = Some(pkt[8]);
+            }
+            if pkt.len() >= 3 && pkt[0] == 0x01 && pkt[1] == 0x09 && pkt[2] == 0x20 {
+                saw_scan_rsp = true;
+            }
+        }
+        assert_eq!(adv_type, Some(0x03), "should be ADV_NONCONN_IND");
+        assert!(!saw_scan_rsp, "a non-connectable beacon sends no scan response");
+    }
+
+    #[test]
+    fn test_large_service_data_drops_name_to_fit() {
+        // A 24-byte service-data payload (Quick Share nudge) fills the packet;
+        // the builder must drop the name entirely, not emit a stub, and not
+        // reject the advertisement.
+        let mut extras = AdvertisingData::new();
+        extras.service_data_16.push((0xFE2C, vec![0xAB; 24]));
+        let payload = build_adv_payload_with_extras("QuickShare", &[], Some(&extras))
+            .expect("nameless beacon must fit in 31 bytes");
+        assert!(payload.len() <= 31, "len {}", payload.len());
+        // Service data present…
+        assert!(payload.windows(2).any(|w| w == [0x2C, 0xFE]));
+        // …and no Complete Local Name AD type (0x09).
+        assert!(!payload.contains(&0x09), "name should be absent: {payload:?}");
+    }
+
+    #[test]
+    fn test_indicate_subscription_sends_indications_not_notifications() {
+        // CCCD bit 1 is Indicate. The flush path used to send a notification
+        // whatever the client asked for and to ignore bit 1 entirely, so an
+        // Indicate-only characteristic (several SIG profiles mandate one)
+        // delivered nothing at all.
+        let script = r#"
+            let server = android::BluetoothGattServer("ind");
+            let svc = android::BluetoothGattService(uuid::from_u16(0x181D), android::SERVICE_TYPE_PRIMARY);
+            let ch = android::BluetoothGattCharacteristic(uuid::from_u16(0x2A9D),
+                android::PROPERTY_READ | android::PROPERTY_INDICATE, android::PERMISSION_READ);
+            ch.set_value([0x00, 0x01]);
+            ch.add_descriptor(android::BluetoothGattDescriptor(
+                uuid::CLIENT_CHARACTERISTIC_CONFIGURATION,
+                android::PERMISSION_READ | android::PERMISSION_WRITE));
+            svc.add_characteristic(ch);
+            server.add_service(svc);
+            fn tick(server, t) {
+                server.update_value(uuid::from_u16(0x2A9D), [0x00, 2 + t.to_int() % 5]);
+            }
+        "#;
+        let mut peripheral = ScriptedPeripheral::run_script(script).unwrap();
+        let channel = HciChannel::new();
+        let drain = |channel: &HciChannel| {
+            let mut out = Vec::new();
+            while let Some(p) = channel.poll_host_packet() {
+                out.push(p);
+            }
+            out
+        };
+        peripheral.queue_start(&channel).unwrap();
+        let _ = drain(&channel);
+
+        let mut connect = vec![0x04, 0x3E, 0x13, 0x01, 0x00, 0x40, 0x00, 0x01, 0x00];
+        connect.extend_from_slice(&[0x11; 6]);
+        connect.extend_from_slice(&[0x18, 0x00, 0x00, 0x00, 0x48, 0x00, 0x00]);
+        peripheral.handle_packet(&channel, &connect).unwrap();
+        let _ = drain(&channel);
+
+        // Subscribe for indications (CCCD = 0x0002), not notifications.
+        let watch = peripheral.watched[0].clone();
+        let cccd = watch.cccd_handle.expect("characteristic declares a CCCD");
+        peripheral.primary().with_server(|s| {
+            let _ = s.device.gatt_db.set_value(cccd, &[0x02, 0x00]);
+        });
+        assert_eq!(
+            peripheral.cccd_subscription(&watch),
+            CccdSubscription::Indicate
+        );
+
+        peripheral.tick(&channel, 1.0).unwrap();
+        let packets = drain(&channel);
+        let att_opcodes: Vec<u8> = packets
+            .iter()
+            .filter(|p| p.len() > 9)
+            .map(|p| p[9])
+            .collect();
+        assert!(
+            att_opcodes.contains(&0x1D),
+            "an Indicate subscriber must get ATT Handle Value Indication (0x1D), got {att_opcodes:02X?}"
+        );
+        assert!(
+            !att_opcodes.contains(&0x1B),
+            "and not a notification (0x1B)"
+        );
+    }
+
+    #[test]
+    fn test_central_starts_discovery_on_either_connection_complete() {
+        // The central used to test raw bytes for subevent 0x01 only, so a
+        // controller reporting the Enhanced variant (0x0A) — what an
+        // address-resolving stack sends — never started discovery. Both
+        // must work now that it shares the peripheral's typed parser.
+        for subevent in [0x01u8, 0x0A] {
+            let mut central = CentralDevice::new("AA:BB:CC:00:00:31".parse().unwrap());
+            let channel = HciChannel::new();
+            let mut event = vec![0x04, 0x3E, 0x13, subevent, 0x00, 0x40, 0x00, 0x01, 0x00];
+            event.extend_from_slice(&[0x11; 6]);
+            event.extend_from_slice(&[0x18, 0x00, 0x00, 0x00, 0x48, 0x00, 0x00]);
+            central.consume(&channel, &event);
+            assert_eq!(
+                central.phase,
+                CentralPhase::ExchangingMtu,
+                "subevent {subevent:#04X} should start discovery"
+            );
+            assert!(
+                channel.poll_host_packet().is_some(),
+                "an MTU exchange request must go out"
+            );
+        }
+
+        // A failed connection starts nothing.
+        let mut central = CentralDevice::new("AA:BB:CC:00:00:31".parse().unwrap());
+        let channel = HciChannel::new();
+        let mut failed = vec![0x04, 0x3E, 0x13, 0x01, 0x02, 0x40, 0x00, 0x01, 0x00];
+        failed.extend_from_slice(&[0x11; 6]);
+        failed.extend_from_slice(&[0x18, 0x00, 0x00, 0x00, 0x48, 0x00, 0x00]);
+        central.consume(&channel, &failed);
+        assert_ne!(central.phase, CentralPhase::ExchangingMtu);
+    }
+
+    #[test]
+    fn test_audio_streams_from_central_to_peripheral() {
+        // The media plane end to end: a central streams isochronous SDUs over
+        // the simulated radio and the peripheral receives them in order.
+        let mut scene = SceneEngine::new();
+        let script = r#"
+            let server = android::BluetoothGattServer("sink");
+            let vcs = android::BluetoothGattService(uuid::VOLUME_CONTROL_SERVICE, android::SERVICE_TYPE_PRIMARY);
+            vcs.add_characteristic(android::BluetoothGattCharacteristic(
+                uuid::VOLUME_STATE, android::PROPERTY_READ, android::PERMISSION_READ));
+            server.add_service(vcs);
+        "#;
+        let sink = scene
+            .add_peripheral("AA:BB:CC:00:00:20".parse().unwrap(), script)
+            .unwrap();
+        let source = scene.add_central(
+            "AA:BB:CC:00:00:21".parse().unwrap(),
+            "AA:BB:CC:00:00:20".parse().unwrap(),
+        );
+        // Let the connection come up.
+        for _ in 0..40 {
+            scene.tick(0.02);
+        }
+
+        // Three "codec frames" worth of audio.
+        let frames: Vec<Vec<u8>> = (0u8..3).map(|i| vec![i; 8]).collect();
+        for frame in &frames {
+            assert!(
+                scene.central_send_audio(source, frame),
+                "the central must have a connection to stream over"
+            );
+            scene.tick(0.02);
+        }
+        scene.tick(0.02);
+
+        let received = scene.peripheral_take_audio(sink);
+        assert_eq!(received, frames, "every SDU arrives, in order");
+        // Draining is destructive: a second take sees nothing new.
+        assert!(scene.peripheral_take_audio(sink).is_empty());
+    }
 
     #[test]
     fn test_scene_scanner_sees_scripted_peripheral() {
@@ -1685,9 +2444,10 @@ mod web {
 
     use super::super::hci_adapter::HciChannel;
     use super::{
-        DEFAULT_HEART_RATE_SCRIPT, ScriptedPeripheral, parse_scan_reports, queue_advertiser_start,
-        queue_scanner_start,
+        DEFAULT_HEART_RATE_SCRIPT, ScriptedPeripheral, address_from_ws_url, parse_scan_reports,
+        queue_advertiser_start, queue_scanner_start, ws_url_with_wire_address,
     };
+    use crate::types::Address;
 
     /// Panics otherwise vanish into an opaque `unreachable` trap; route them
     /// to the browser console instead.
@@ -1815,6 +2575,59 @@ mod web {
     /// The **in-page controller** backend: a whole scene of scripted devices
     /// sharing one in-process [`Link`](crate::controller::sim::Link), with no
     /// WebSocket and no netsim. Add peripherals and scanners, `tick()` on a
+    /// LC3 for the demo pages: encode PCM into the frames a source puts on
+    /// the air, decode the frames a sink received so the page can play
+    /// them. Behind the `lc3` feature — the pages build enables it, the
+    /// `simble mcp` binary does not need it (SDUs are opaque to the
+    /// protocol layers).
+    #[cfg(feature = "lc3")]
+    #[wasm_bindgen]
+    pub struct WebLc3 {
+        encoder: crate::audio::lc3::Lc3Encode,
+        decoder: crate::audio::lc3::Lc3Stream,
+        sample_rate_hz: u32,
+        frame_duration_us: u32,
+    }
+
+    #[cfg(feature = "lc3")]
+    #[wasm_bindgen]
+    impl WebLc3 {
+        /// Creates a codec for one stream's configuration — the same values
+        /// the ASE was configured with (16 kHz / 10 ms is what simble's PAC
+        /// record advertises).
+        #[wasm_bindgen(constructor)]
+        pub fn new(sample_rate_hz: u32, frame_duration_us: u32) -> Result<WebLc3, JsValue> {
+            Ok(Self {
+                encoder: crate::audio::lc3::Lc3Encode::new(sample_rate_hz, frame_duration_us)
+                    .map_err(js_error)?,
+                decoder: crate::audio::lc3::Lc3Stream::new(sample_rate_hz, frame_duration_us)
+                    .map_err(js_error)?,
+                sample_rate_hz,
+                frame_duration_us,
+            })
+        }
+
+        /// PCM samples per frame, so the page knows how much audio to hand
+        /// over and how much to expect back.
+        pub fn samples_per_frame(&self) -> usize {
+            self.encoder.samples_per_frame()
+        }
+
+        /// Encodes one frame of 16-bit PCM into `frame_bytes` of LC3.
+        pub fn encode(&mut self, samples: Vec<i16>, frame_bytes: usize) -> Result<Vec<u8>, JsValue> {
+            self.encoder
+                .encode(&samples, frame_bytes)
+                .map_err(js_error)
+        }
+
+        /// Decodes one LC3 frame back to 16-bit PCM.
+        pub fn decode(&mut self, frame: Vec<u8>) -> Result<Vec<i16>, JsValue> {
+            self.decoder
+                .decode(&frame, self.sample_rate_hz, self.frame_duration_us)
+                .map_err(js_error)
+        }
+    }
+
     /// timer, and read each device's state — the browser pages use this when
     /// the backend selector is set to "in-page". Wraps [`SceneEngine`].
     #[wasm_bindgen]
@@ -1870,7 +2683,7 @@ mod web {
             self.scene.central_write(index, value_handle, value);
         }
 
-        /// Queue enabling notifications on `value_handle` for central `index`.
+    /// Queue enabling notifications on `value_handle` for central `index`.
         pub fn central_subscribe(&mut self, index: usize, value_handle: u16) {
             self.scene.central_subscribe(index, value_handle);
         }
@@ -1889,6 +2702,22 @@ mod web {
         }
 
         /// The number of devices in the scene.
+        /// Streams one isochronous SDU (a codec frame's worth of audio) from
+        /// central `index` to the peripheral it is connected to.
+        pub fn central_send_audio(&mut self, index: usize, sdu: Vec<u8>) -> bool {
+            self.scene.central_send_audio(index, &sdu)
+        }
+
+        /// Drains the SDUs peripheral `index` has received, as an array of
+        /// byte arrays — what the page feeds to its audio output.
+        pub fn peripheral_take_audio(&mut self, index: usize) -> js_sys::Array {
+            let out = js_sys::Array::new();
+            for sdu in self.scene.peripheral_take_audio(index) {
+                out.push(&js_sys::Uint8Array::from(&sdu[..]).into());
+            }
+            out
+        }
+
         pub fn device_count(&self) -> usize {
             self.scene.device_count()
         }
@@ -1985,6 +2814,9 @@ mod web {
         channel: HciChannel,
         peripheral: ScriptedPeripheral,
         started: bool,
+        /// The on-air address netsim advertises for this device, kept so a
+        /// script rebuild re-stamps the identity SMP computes with.
+        address: Option<Address>,
     }
 
     #[wasm_bindgen]
@@ -1992,12 +2824,25 @@ mod web {
         #[wasm_bindgen(constructor)]
         pub fn new(url: &str, script: &str) -> Result<WebPeripheral, JsValue> {
             install_panic_hook();
-            let peripheral = ScriptedPeripheral::run_script(script).map_err(js_error)?;
+            let mut peripheral = ScriptedPeripheral::run_script(script).map_err(js_error)?;
+            // The device must own the address netsim advertises for it, not
+            // the script engine's placeholder — SMP mixes it into the pairing
+            // crypto, and a real controller drives key distribution off the
+            // Encryption Change event.
+            if let Some(address) = address_from_ws_url(url) {
+                peripheral.set_identity(address);
+            }
+
+            let address = address_from_ws_url(url);
+            // netsim reads the URL address LSB-first; connect with the wire
+            // form so the device lands on the air where the page says it is.
+            let url = ws_url_with_wire_address(url);
             Ok(Self {
-                transport: WasmWsTransport::connect(url)?,
+                transport: WasmWsTransport::connect(&url)?,
                 channel: HciChannel::new(),
                 peripheral,
                 started: false,
+                address,
             })
         }
 
@@ -2006,7 +2851,10 @@ mod web {
         /// script's compile/runtime message; on error the old device keeps
         /// running.
         pub fn run_script(&mut self, script: &str) -> Result<(), JsValue> {
-            let peripheral = ScriptedPeripheral::run_script(script).map_err(js_error)?;
+            let mut peripheral = ScriptedPeripheral::run_script(script).map_err(js_error)?;
+            if let Some(address) = self.address {
+                peripheral.set_identity(address);
+            }
             self.peripheral = peripheral;
             self.channel = HciChannel::new();
             self.started = false;
@@ -2163,6 +3011,8 @@ pub use web::{
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::l2cap::AclPacketBoundary;
+    use zerocopy::IntoBytes;
     use crate::att::opcode;
     use crate::l2cap::{L2capHeader, cid};
 
@@ -2200,9 +3050,9 @@ mod tests {
     fn adv_report_event(event_type: u8, data: &[u8], rssi: i8) -> Vec<u8> {
         let mut packet = vec![
             h4_type::HCI_EVENT,
-            event::LE_META,
-            (11 + data.len()) as u8,
-            event::SUB_ADVERTISING_REPORT,
+            hci_event_code::LE_META,
+            (12 + data.len()) as u8, // subevent, count, 9-byte report header, data, RSSI
+            le_subevent::ADVERTISING_REPORT,
             0x01,       // one report
             event_type, // ADV_IND etc.
             0x00,       // public address
@@ -2217,6 +3067,49 @@ mod tests {
         packet.extend_from_slice(data);
         packet.push(rssi as u8);
         packet
+    }
+
+    /// Everything a device can put in an advertisement must survive being
+    /// encoded and decoded again. simble owns both halves — `AdvertisingData`
+    /// builds and `parse_scan_reports` decodes — so this round trip is the
+    /// cheapest guard there is against a field being silently dropped on the
+    /// way out. `advertise_service_uuid` shipped broken precisely because
+    /// nothing checked the encoder against the decoder.
+    #[test]
+    fn test_every_advertised_field_survives_the_round_trip() {
+        let mut extras = AdvertisingData::new();
+        extras.service_uuids_16.push(0x185B); // staged by advertise_service_uuid
+        extras.service_data_16.push((0xFE2C, vec![0x00, 0x11, 0x22]));
+        extras = extras.with_manufacturer_data(0x00E0, &[0xAB]);
+
+        let payload = build_adv_payload_with_extras("Ranger", &[0x180F], Some(&extras))
+            .expect("fits in 31 bytes");
+        let reports = parse_scan_reports(&adv_report_event(0x00, &payload, -55));
+        assert_eq!(reports.len(), 1);
+        let report = &reports[0];
+
+        assert_eq!(report.name.as_deref(), Some("Ranger"), "name survives");
+        assert!(
+            report.service_uuids.iter().any(|u| u == "180F"),
+            "the device's own service survives: {:?}",
+            report.service_uuids
+        );
+        assert!(
+            report.service_uuids.iter().any(|u| u == "185B"),
+            "a staged service UUID survives: {:?}",
+            report.service_uuids
+        );
+        assert!(
+            report
+                .service_data
+                .iter()
+                .any(|d| d.tag == "FE2C" && d.data == "001122"),
+            "service data survives: {:?}",
+            report.service_data
+        );
+        let mfg = report.manufacturer_data.as_ref().expect("manufacturer data");
+        assert_eq!((mfg.tag.as_str(), mfg.data.as_str()), ("00E0", "AB"));
+        assert!(report.flags.is_some(), "flags survive");
     }
 
     #[test]
@@ -2262,9 +3155,9 @@ mod tests {
         assert!(
             parse_scan_reports(&[
                 h4_type::HCI_EVENT,
-                event::LE_META,
+                hci_event_code::LE_META,
                 0x04,
-                event::SUB_ADVERTISING_REPORT,
+                le_subevent::ADVERTISING_REPORT,
                 0x01,
                 0x00,
                 0x00
@@ -2291,9 +3184,9 @@ mod tests {
     fn le_connection_complete(handle: u16, peer_le: [u8; 6]) -> Vec<u8> {
         let mut packet = vec![
             h4_type::HCI_EVENT,
-            event::LE_META,
+            hci_event_code::LE_META,
             19,
-            event::SUB_CONNECTION_COMPLETE,
+            le_subevent::CONNECTION_COMPLETE,
             0x00, // status
         ];
         packet.extend_from_slice(&handle.to_le_bytes());
@@ -2333,13 +3226,15 @@ mod tests {
         peripheral.queue_start(&channel).unwrap();
         let commands = drain_host_packets(&channel);
         let opcodes: Vec<u16> = commands.iter().map(|c| opcode_of(c)).collect();
+        // 0x2074 (LE Set Host Feature) declares CIS host support, without
+        // which a controller refuses to open an isochronous stream.
         assert_eq!(
             opcodes,
-            vec![0x0C03, 0x0C01, 0x2001, 0x2006, 0x2008, 0x2009, 0x200A]
+            vec![0x0C03, 0x0C01, 0x2001, 0x2074, 0x2006, 0x2008, 0x2009, 0x200A]
         );
         // Advertising data carries the script device's name and the
         // Environmental Sensing service UUID (0x181A) the script declared.
-        let adv_data = &commands[4];
+        let adv_data = &commands[5];
         assert!(adv_data.windows(15).any(|w| w == b"web-thermometer"));
         assert!(adv_data.windows(2).any(|w| w == [0x1A, 0x18]));
 
@@ -2370,7 +3265,10 @@ mod tests {
                 .iter()
                 .any(|p| p[0] == h4_type::HCI_ACL_DATA && p.ends_with(&[opcode::WRITE_RSP]))
         );
-        assert!(peripheral.cccd_notify_enabled(&watch));
+        assert_eq!(
+            peripheral.cccd_subscription(&watch),
+            CccdSubscription::Notify
+        );
 
         // Script tick updates the temperature, which becomes a notification.
         peripheral.tick(&channel, 2.0).unwrap();
@@ -2397,7 +3295,7 @@ mod tests {
         // Disconnect: state clears and advertising is re-enabled.
         let disconnect = vec![
             h4_type::HCI_EVENT,
-            event::DISCONNECTION_COMPLETE,
+            hci_event_code::DISCONNECTION_COMPLETE,
             4,
             0x00,
             0x40,
@@ -2526,7 +3424,7 @@ mod tests {
         let channel = HciChannel::new();
         session.queue_start(&channel).unwrap();
         let commands = drain_host_packets(&channel);
-        assert!(commands[4].windows(8).any(|w| w == b"explorer"));
+        assert!(commands[5].windows(8).any(|w| w == b"explorer"));
     }
 
     #[test]
@@ -2594,6 +3492,8 @@ mod tests {
         .unwrap();
         let commands = drain_host_packets(&channel);
         let opcodes: Vec<u16> = commands.iter().map(|c| opcode_of(c)).collect();
+        // 0x2074 (LE Set Host Feature) declares CIS host support, without
+        // which a controller refuses to open an isochronous stream.
         assert_eq!(
             opcodes,
             vec![0x0C03, 0x0C01, 0x2001, 0x2006, 0x2008, 0x2009, 0x200A]

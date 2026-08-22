@@ -131,6 +131,10 @@ pub struct NetsimTransport<S: Read + Write> {
     /// unfragmented binary frames both ways) but handled for spec fidelity.
     fragment: Vec<u8>,
     fragment_opcode: Option<u8>,
+    /// Optional btsnoop capture of every H4 packet both ways (Wireshark
+    /// opens it directly) — the HCI-level equivalent of a sniffer, for
+    /// debugging exchanges against real stacks. See [`Self::set_trace`].
+    trace: Option<std::fs::File>,
 }
 
 impl NetsimTransport<TcpStream> {
@@ -172,7 +176,46 @@ impl<S: Read + Write> NetsimTransport<S> {
             reader: WsFrameReader::default(),
             fragment: Vec::new(),
             fragment_opcode: None,
+            trace: None,
         }
+    }
+
+    /// Starts capturing every H4 packet (both directions) into `file` in
+    /// btsnoop format (datalink 1002, HCI UART/H4) — the format Wireshark
+    /// and `tshark` read natively. The header is written immediately.
+    pub fn set_trace(&mut self, mut file: std::fs::File) -> std::io::Result<()> {
+        file.write_all(b"btsnoop\0")?;
+        file.write_all(&1u32.to_be_bytes())?; // version
+        file.write_all(&1002u32.to_be_bytes())?; // datalink: HCI UART (H4)
+        self.trace = Some(file);
+        Ok(())
+    }
+
+    /// Appends one btsnoop record; `received` is the direction flag
+    /// (false = host→controller). Trace failures are swallowed — capture
+    /// must never break the transport.
+    fn trace_record(&mut self, packet: &[u8], received: bool) {
+        let Some(file) = self.trace.as_mut() else {
+            return;
+        };
+        // btsnoop timestamps are microseconds since year 0; this constant
+        // is the Unix epoch in that scale (what Wireshark expects).
+        const UNIX_EPOCH_OFFSET: u64 = 0x00DC_DDB3_0F2F_8000;
+        let micros = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_micros() as u64)
+            .unwrap_or(0)
+            + UNIX_EPOCH_OFFSET;
+        let len = packet.len() as u32;
+        let mut record = Vec::with_capacity(24 + packet.len());
+        record.extend_from_slice(&len.to_be_bytes());
+        record.extend_from_slice(&len.to_be_bytes());
+        record.extend_from_slice(&u32::from(received).to_be_bytes());
+        record.extend_from_slice(&0u32.to_be_bytes()); // cumulative drops
+        record.extend_from_slice(&micros.to_be_bytes());
+        record.extend_from_slice(packet);
+        let _ = file.write_all(&record);
+        let _ = file.flush();
     }
 
     fn handle_frame(&mut self, frame: DecodedFrame) -> Result<Option<Vec<u8>>, SimbleError> {
@@ -215,6 +258,7 @@ impl<S: Read + Write> NetsimTransport<S> {
     /// as-is — it's already a complete H4 packet, no further framing needed.
     pub fn pump(&mut self, channel: &super::HciChannel) -> Result<(), SimbleError> {
         while let Some(packet) = channel.poll_host_packet() {
+            self.trace_record(&packet, false);
             let frame = encode_masked_binary_frame(&packet);
             self.stream
                 .write_all(&frame)
@@ -237,10 +281,96 @@ impl<S: Read + Write> NetsimTransport<S> {
 
         while let Some(frame) = self.reader.next_frame() {
             if let Some(packet) = self.handle_frame(frame)? {
+                self.trace_record(&packet, true);
                 channel.receive_from_controller(packet)?;
             }
         }
         Ok(())
+    }
+}
+
+// --- Scene over netsim ------------------------------------------------------
+
+/// The WebSocket frontend of a netsimd started by Android Studio's emulator
+/// (or by hand: `netsimd --logtostderr --no-shutdown --ws-port 7681`).
+pub const DEFAULT_WS_URL: &str = "ws://127.0.0.1:7681";
+
+/// A [`LiveScene`] whose backend is netsim: each peripheral is its own
+/// WebSocket connection to netsimd, which routes advertising and data
+/// between them, the Android emulator, and any other netsim clients. The
+/// emulator (or another netsim device) plays the central.
+pub struct NetsimScene {
+    ws_url: String,
+    scene: super::live_scene::LiveScene<NetsimTransport<TcpStream>>,
+}
+
+impl NetsimScene {
+    /// Creates an empty netsim scene targeting `ws_url` (no connection is
+    /// made until the first peripheral is added).
+    pub fn new(ws_url: &str) -> Self {
+        Self {
+            ws_url: ws_url.trim_end_matches('/').to_string(),
+            scene: super::live_scene::LiveScene::new(),
+        }
+    }
+
+    /// Runs `script` and registers the resulting device with netsimd under
+    /// its script name and `address` (netsim reads both from the connection
+    /// URI's query string). A connection failure returns the "is netsimd
+    /// running" hint from [`NetsimTransport::connect`].
+    pub fn add_peripheral(
+        &mut self,
+        address: crate::types::Address,
+        script: &str,
+    ) -> Result<usize, String> {
+        let ws_url = self.ws_url.clone();
+        self.scene.add_peripheral(address, script, |peripheral| {
+            // The name goes verbatim into the query string; keep it URL-safe
+            // (spaces are the only realistic offender in a device name).
+            let name = peripheral.device_name().replace(' ', "%20");
+            let addr_lsb = address.to_netsim_wire_string();
+            let url = format!("{ws_url}/v1/websocket/bt?name={name}&address={addr_lsb}");
+            let mut transport = NetsimTransport::connect(&url).map_err(|e| e.to_string())?;
+            // SIMBLE_BTSNOOP=<dir> captures this device's HCI traffic to
+            // <dir>/<name>.btsnoop (Wireshark-readable) for debugging
+            // exchanges against real stacks.
+            if let Ok(dir) = std::env::var("SIMBLE_BTSNOOP") {
+                let path = std::path::Path::new(&dir).join(format!("{name}.btsnoop"));
+                match std::fs::File::create(&path) {
+                    Ok(file) => {
+                        let _ = transport.set_trace(file);
+                    }
+                    Err(e) => eprintln!("SIMBLE_BTSNOOP: cannot create {path:?}: {e}"),
+                }
+            }
+            Ok(transport)
+        })
+    }
+
+    /// See [`LiveScene::pump`].
+    pub fn pump(&mut self) {
+        self.scene.pump();
+    }
+
+    /// See [`LiveScene::tick`].
+    pub fn tick(&mut self, seconds: f64) {
+        self.scene.tick(seconds);
+    }
+
+    /// The current script-clock time in seconds.
+    pub fn now(&self) -> f64 {
+        self.scene.now()
+    }
+
+    /// The number of peripherals in the scene.
+    pub fn device_count(&self) -> usize {
+        self.scene.device_count()
+    }
+
+    /// The GATT status JSON of peripheral `index`, or `None` for an unknown
+    /// index.
+    pub fn peripheral_status_json(&self, index: usize) -> Option<String> {
+        self.scene.peripheral_status_json(index)
     }
 }
 
