@@ -11,11 +11,16 @@
 //! is zerocopy and the rest is hand-parsed in [`RfcommFrame::parse`].
 //!
 //! [`Multiplexer`] is the session state machine over one Classic L2CAP
-//! channel (DLCI 0 is its control channel); it owns zero or more [`Dlc`]s,
-//! each with its own RFCOMM-level credit-based flow control (distinct from,
-//! and layered above, L2CAP's own flow control). This is a plain synchronous
-//! state machine: [`Multiplexer::receive`] takes one incoming frame and returns
-//! `(outgoing frame bytes, events)`, the same style as `lmp::LmpLink::receive`.
+//! channel (DLCI 0 is its control channel); it owns zero or more [`Dlc`]s.
+//! This is a plain synchronous state machine: [`Multiplexer::receive`] takes
+//! one incoming frame and returns `(outgoing frame bytes, events)`, the same
+//! style as `lmp::LmpLink::receive`.
+//!
+//! Credit-based flow control (RFCOMM-level, distinct from and layered above
+//! L2CAP's own) is negotiated per session by the PN convergence-layer field
+//! and tracked in [`CreditFlowControl`]. It is not assumed: a peer that asks
+//! for the pre-1.1 convergence layer, or that opens a DLC by bare SABM with
+//! no PN at all, gets frames with no credit octet.
 //!
 //! PN (Parameter Negotiation) and MSC (Modem Status Command) multiplexer
 //! control commands are implemented. RPN (Remote Port Negotiation) is not:
@@ -44,6 +49,10 @@ pub(crate) const DEFAULT_MAX_CREDITS: u8 = 32;
 pub(crate) const DEFAULT_CREDIT_THRESHOLD: u8 = DEFAULT_MAX_CREDITS / 2;
 /// Default negotiated maximum RFCOMM frame size.
 pub const DEFAULT_MAX_FRAME_SIZE: u16 = 1000;
+/// The frame size a DLC opened without PN must assume for the peer: N1's
+/// default value (RFCOMM 1.1 5.5.3, TS 07.10 5.7.2). PN is optional before
+/// SABM, so a peer that skips it has agreed to nothing but this.
+pub const DEFAULT_FRAME_SIZE_WITHOUT_PN: u16 = 127;
 /// Lowest assignable RFCOMM server channel number.
 pub const DYNAMIC_CHANNEL_NUMBER_START: u8 = 1;
 /// Highest assignable RFCOMM server channel number.
@@ -67,11 +76,27 @@ pub mod frame_type {
 }
 
 /// Multiplexer Control Channel (MCC) command types (ETSI TS 07.10, 5.4.6.3).
+/// These are the 6-bit type values before the `<< 2 | C/R | EA` shift that
+/// `make_mcc` applies, matching how Bumble and Zephyr spell them.
 pub(crate) mod mcc_type {
     /// PN: Parameter Negotiation command.
     pub const PN: u8 = 0x20;
     /// MSC: Modem Status Command.
     pub const MSC: u8 = 0x38;
+}
+
+/// PN convergence-layer (CL) field values that negotiate credit-based flow
+/// control, RFCOMM 1.1 5.5.3. A command asks with `CFC_COMMAND` and the
+/// responder agrees with `CFC_RESPONSE`; any other value means the peer wants
+/// the pre-1.1 (no credit octet) convergence layer, and answering `0xE0`
+/// anyway would put our credit octets into its application byte stream.
+pub(crate) mod pn_cl {
+    /// Command asking for credit-based flow control.
+    pub const CFC_COMMAND: u8 = 0xF0;
+    /// Response accepting credit-based flow control.
+    pub const CFC_RESPONSE: u8 = 0xE0;
+    /// Neither: convergence layer 1, no credit octets.
+    pub const NO_CFC: u8 = 0x00;
 }
 
 // ---------------------------------------------------------------------------
@@ -463,11 +488,16 @@ pub struct Dlc {
     pub tx_max_frame_size: u16,
     /// Credits currently available to us for sending.
     pub(crate) tx_credits: u8,
+    /// Whether credit-based flow control was negotiated for this DLC
+    /// (RFCOMM 1.1 5.5.2). When false, frames carry no credit octet and
+    /// transmission is not credit-gated.
+    pub(crate) cfc: bool,
     mtu: usize,
     tx_buffer: Vec<u8>,
 }
 
 impl Dlc {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         dlci: u8,
         c_r: u8,
@@ -476,6 +506,7 @@ impl Dlc {
         rx_max_frame_size: u16,
         rx_initial_credits: u8,
         peer_l2cap_mtu: u16,
+        cfc: bool,
     ) -> Self {
         // Header (2) + worst-case 2-byte length + trailing FCS (1).
         const MAX_OVERHEAD: u16 = 5;
@@ -491,6 +522,7 @@ impl Dlc {
             rx_credits_threshold: DEFAULT_CREDIT_THRESHOLD,
             tx_max_frame_size,
             tx_credits: tx_initial_credits,
+            cfc,
             mtu,
             tx_buffer: Vec::new(),
         }
@@ -508,6 +540,9 @@ impl Dlc {
     }
 
     fn rx_credits_needed(&self) -> u8 {
+        if !self.cfc {
+            return 0;
+        }
         if self.rx_credits <= self.rx_credits_threshold {
             self.rx_max_credits - self.rx_credits
         } else {
@@ -519,6 +554,19 @@ impl Dlc {
     /// opportunistically piggy-backing an rx-credit refill (P/F=1, leading
     /// credit octet) when `rx_credits` has dropped to the low-water mark.
     fn process_tx(&mut self) -> Vec<RfcommFrame> {
+        if !self.cfc {
+            // No CFC negotiated: the peer is not expecting a credit octet and
+            // grants no credits, so send everything with P/F=0 and no gating
+            // (RFCOMM 1.1 5.5.2 — flow control then falls to MSC FC, which
+            // this stack does not drive).
+            let mut frames = Vec::new();
+            while !self.tx_buffer.is_empty() {
+                let take = self.mtu.min(self.tx_buffer.len());
+                let chunk: Vec<u8> = self.tx_buffer.drain(..take).collect();
+                frames.push(RfcommFrame::uih(self.c_r, self.dlci, chunk, 0));
+            }
+            return frames;
+        }
         let mut frames = Vec::new();
         let mut rx_credits_needed = self.rx_credits_needed();
         while (!self.tx_buffer.is_empty() && self.tx_credits > 0) || rx_credits_needed > 0 {
@@ -578,6 +626,21 @@ pub enum MultiplexerState {
     Disconnected,
 }
 
+/// Whether credit-based flow control is in use on this session, RFCOMM 1.1
+/// 5.5.2. It is a session-wide property settled by the convergence-layer
+/// field of the first PN exchange; a session whose DLCs all open by bare
+/// SABM never negotiates it and stays without. (Tri-state modelled on
+/// Zephyr's `session->cfc`, `subsys/bluetooth/host/classic/rfcomm.c`.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreditFlowControl {
+    /// No PN has been exchanged yet; still open to either answer.
+    Unknown,
+    /// Negotiated: frames carry credit octets and sending is credit-gated.
+    Supported,
+    /// Declined by the peer, or never negotiated: no credit octets.
+    NotSupported,
+}
+
 /// Result of feeding one incoming frame into [`Multiplexer::receive`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MultiplexerEvent {
@@ -623,6 +686,8 @@ pub struct Multiplexer {
     pub state: MultiplexerState,
     /// Open data link connections, keyed by DLCI.
     pub dlcs: HashMap<u8, Dlc>,
+    /// Whether credit-based flow control was negotiated for this session.
+    pub cfc: CreditFlowControl,
     peer_mtu: u16,
     pending_open: Option<MccPn>,
     listen_configs: HashMap<u8, (u16, u8)>,
@@ -635,6 +700,7 @@ impl Multiplexer {
             role,
             state: MultiplexerState::Init,
             dlcs: HashMap::new(),
+            cfc: CreditFlowControl::Unknown,
             peer_mtu,
             pending_open: None,
             listen_configs: HashMap::new(),
@@ -692,7 +758,7 @@ impl Multiplexer {
         }
         let pn = MccPn {
             dlci: channel << 1,
-            cl: 0xF0,
+            cl: pn_cl::CFC_COMMAND,
             priority: 7,
             ack_timer: 0,
             max_frame_size,
@@ -854,31 +920,53 @@ impl Multiplexer {
         else {
             return (vec![RfcommFrame::dm(1, pn.dlci).to_bytes()], Vec::new());
         };
+        // RFCOMM 1.1 5.5.3: answer CFC only if the command asked for it.
+        // Answering 0xE0 to a 0x00 request would make every P/F=1 frame's
+        // leading credit octet look like application data to the peer.
+        self.negotiate_cfc(pn.cl == pn_cl::CFC_COMMAND);
+        let cfc = self.cfc == CreditFlowControl::Supported;
+        let (response_cl, response_credits) = if cfc {
+            (pn_cl::CFC_RESPONSE, rx_initial_credits)
+        } else {
+            (pn_cl::NO_CFC, 0)
+        };
         let mut dlc = Dlc::new(
             pn.dlci,
             self.role_c_r(),
             pn.max_frame_size,
-            pn.initial_credits,
+            if cfc { pn.initial_credits } else { 0 },
             rx_max_frame_size,
-            rx_initial_credits,
+            response_credits,
             self.peer_mtu,
+            cfc,
         );
         dlc.state = DlcState::Connecting;
         self.dlcs.insert(pn.dlci, dlc);
         let response_pn = MccPn {
             dlci: pn.dlci,
-            cl: 0xE0,
+            cl: response_cl,
             priority: 7,
             ack_timer: 0,
             max_frame_size: rx_max_frame_size,
             max_retransmissions: 0,
-            initial_credits: rx_initial_credits,
+            initial_credits: response_credits,
         };
         let mcc = make_mcc(mcc_type::PN, false, &response_pn.to_bytes());
         (
             vec![RfcommFrame::uih(self.role_c_r(), 0, mcc, 0).to_bytes()],
             Vec::new(),
         )
+    }
+
+    /// Settles the session's CFC state from one PN exchange. The first PN
+    /// decides it for the whole session (RFCOMM 1.1 5.5.2); a later PN cannot
+    /// re-enable CFC once a peer has declined it.
+    fn negotiate_cfc(&mut self, peer_wants_cfc: bool) {
+        if !peer_wants_cfc {
+            self.cfc = CreditFlowControl::NotSupported;
+        } else if self.cfc == CreditFlowControl::Unknown {
+            self.cfc = CreditFlowControl::Supported;
+        }
     }
 
     fn on_mcc_pn_response(&mut self, pn: MccPn) -> (Vec<Vec<u8>>, Vec<MultiplexerEvent>) {
@@ -888,14 +976,17 @@ impl Multiplexer {
         let Some(requested) = self.pending_open.take() else {
             return (Vec::new(), Vec::new());
         };
+        self.negotiate_cfc(pn.cl == pn_cl::CFC_RESPONSE);
+        let cfc = self.cfc == CreditFlowControl::Supported;
         let mut dlc = Dlc::new(
             pn.dlci,
             self.role_c_r(),
             pn.max_frame_size,
-            pn.initial_credits,
+            if cfc { pn.initial_credits } else { 0 },
             requested.max_frame_size,
-            requested.initial_credits,
+            if cfc { requested.initial_credits } else { 0 },
             self.peer_mtu,
+            cfc,
         );
         dlc.state = DlcState::Connecting;
         self.dlcs.insert(pn.dlci, dlc);
@@ -935,6 +1026,10 @@ impl Multiplexer {
             Uih,
         }
 
+        if !self.dlcs.contains_key(&dlci) {
+            return self.on_frame_for_unknown_dlci(&frame);
+        }
+
         let action = {
             let Some(dlc) = self.dlcs.get_mut(&dlci) else {
                 return (Vec::new(), Vec::new());
@@ -948,25 +1043,13 @@ impl Multiplexer {
                     } else {
                         dlc.state = DlcState::Connected;
                         let ua = RfcommFrame::ua(1 - dlc_c_r, dlci).to_bytes();
-                        let mcc = make_mcc(
-                            mcc_type::MSC,
-                            true,
-                            &MccMsc::default_response(dlci).to_bytes(),
-                        );
-                        let msc_frame = RfcommFrame::uih(dlc_c_r, 0, mcc, 0).to_bytes();
-                        Action::Opened(vec![ua, msc_frame])
+                        Action::Opened(vec![ua, msc_command(dlc_c_r, dlci)])
                     }
                 }
                 frame_type::UA => match dlc.state {
                     DlcState::Connecting => {
                         dlc.state = DlcState::Connected;
-                        let mcc = make_mcc(
-                            mcc_type::MSC,
-                            true,
-                            &MccMsc::default_response(dlci).to_bytes(),
-                        );
-                        let msc_frame = RfcommFrame::uih(dlc_c_r, 0, mcc, 0).to_bytes();
-                        Action::Opened(vec![msc_frame])
+                        Action::Opened(vec![msc_command(dlc_c_r, dlci)])
                     }
                     DlcState::Disconnecting => Action::ClosedAfterOurDisc,
                     _ => Action::None,
@@ -998,6 +1081,62 @@ impl Multiplexer {
         }
     }
 
+    /// Handles a frame naming a DLCI we have no [`Dlc`] for.
+    ///
+    /// PN is *optional* before SABM (RFCOMM 1.1 5.5.3, TS 07.10 5.4.6.3.1),
+    /// so a conforming peer may open a DLC with a bare SABM and the defaults.
+    /// This used to drop such a frame silently, which left that peer waiting
+    /// out its own T1 (60 s in Zephyr) with no idea why. We open the DLC with
+    /// defaults when the channel is being listened on — matching Zephyr's
+    /// `rfcomm_handle_sabm`, which is what real peers are tested against —
+    /// and answer DM otherwise so the peer fails immediately.
+    fn on_frame_for_unknown_dlci(
+        &mut self,
+        frame: &RfcommFrame,
+    ) -> (Vec<Vec<u8>>, Vec<MultiplexerEvent>) {
+        let dlci = frame.dlci;
+        match frame.frame_type {
+            frame_type::SABM => {
+                let Some(&(rx_max_frame_size, rx_initial_credits)) =
+                    self.listen_configs.get(&(dlci >> 1))
+                else {
+                    return (vec![RfcommFrame::dm(1, dlci).to_bytes()], Vec::new());
+                };
+                // No PN means nothing was negotiated: N1 falls back to its
+                // default and credit-based flow control is off for the
+                // session (Zephyr's `rfcomm_dlc_connected` settles an
+                // still-`Unknown` session to not-supported the same way).
+                if self.cfc == CreditFlowControl::Unknown {
+                    self.cfc = CreditFlowControl::NotSupported;
+                }
+                let cfc = self.cfc == CreditFlowControl::Supported;
+                let mut dlc = Dlc::new(
+                    dlci,
+                    self.role_c_r(),
+                    DEFAULT_FRAME_SIZE_WITHOUT_PN,
+                    0,
+                    rx_max_frame_size,
+                    if cfc { rx_initial_credits } else { 0 },
+                    self.peer_mtu,
+                    cfc,
+                );
+                dlc.state = DlcState::Connected;
+                let dlc_c_r = dlc.c_r;
+                self.dlcs.insert(dlci, dlc);
+                self.state = MultiplexerState::Connected;
+                let ua = RfcommFrame::ua(1 - dlc_c_r, dlci).to_bytes();
+                (
+                    vec![ua, msc_command(dlc_c_r, dlci)],
+                    vec![MultiplexerEvent::DlcOpened(dlci)],
+                )
+            }
+            // TS 07.10 5.4.6.3.1: DM is the answer to a DISC on a DLC that is
+            // not open, so the peer stops retransmitting.
+            frame_type::DISC => (vec![RfcommFrame::dm(1, dlci).to_bytes()], Vec::new()),
+            _ => (Vec::new(), Vec::new()),
+        }
+    }
+
     fn on_dlc_uih(
         &mut self,
         dlci: u8,
@@ -1007,7 +1146,13 @@ impl Multiplexer {
             return (Vec::new(), Vec::new());
         };
         let mut data = frame.information.as_slice();
-        if frame.p_f == 1 {
+        // The credit octet exists only when CFC is in use (RFCOMM 1.1 5.5.2),
+        // so P/F is only a credit indicator then; reading it otherwise would
+        // eat the first byte of application data. Zephyr strips it whenever
+        // P/F is set, which is more lenient towards a peer that sets P/F it
+        // did not negotiate; keying on the negotiated state instead keeps rx
+        // symmetric with what `process_tx` will send.
+        if dlc.cfc && frame.p_f == 1 {
             let received_credits = data.first().copied().unwrap_or(0);
             dlc.tx_credits = dlc.tx_credits.saturating_add(received_credits);
             data = &data[data.len().min(1)..];
@@ -1022,6 +1167,17 @@ impl Multiplexer {
         let out_frames = dlc.process_tx().into_iter().map(|f| f.to_bytes()).collect();
         (out_frames, events)
     }
+}
+
+/// The MSC command every side sends once its DLC opens (TS 07.10 5.4.6.3.7):
+/// V.24 signals asserted, carried on the control channel.
+fn msc_command(dlc_c_r: u8, dlci: u8) -> Vec<u8> {
+    let mcc = make_mcc(
+        mcc_type::MSC,
+        true,
+        &MccMsc::default_response(dlci).to_bytes(),
+    );
+    RfcommFrame::uih(dlc_c_r, 0, mcc, 0).to_bytes()
 }
 
 fn unknown_dlci(dlci: u8) -> SimbleError {
@@ -1495,6 +1651,179 @@ mod tests {
         assert!(manager.is_server_registered(RFCOMM_PSM));
         manager.unregister_server(RFCOMM_PSM);
         assert!(!manager.is_server_registered(RFCOMM_PSM));
+    }
+
+    /// Brings a responder multiplexer's session up by feeding it SABM(0).
+    fn connected_responder() -> Multiplexer {
+        let mut responder = Multiplexer::new(Role::Responder, DEFAULT_L2CAP_MTU);
+        responder
+            .receive(&RfcommFrame::sabm(1, 0).to_bytes())
+            .expect("SABM(0) accepted");
+        responder
+    }
+
+    fn pn_command_frame(dlci: u8, cl: u8, initial_credits: u8) -> Vec<u8> {
+        let pn = MccPn {
+            dlci,
+            cl,
+            priority: 7,
+            ack_timer: 0,
+            max_frame_size: DEFAULT_MAX_FRAME_SIZE,
+            max_retransmissions: 0,
+            initial_credits,
+        };
+        RfcommFrame::uih(1, 0, make_mcc(mcc_type::PN, true, &pn.to_bytes()), 0).to_bytes()
+    }
+
+    /// Extracts the single PN record from a multiplexer's reply frames.
+    fn sole_pn_response(frames: &[Vec<u8>]) -> MccPn {
+        let frame = RfcommFrame::parse(&frames[0]).expect("valid frame");
+        let (mcc, c_r, value) = parse_mcc(&frame.information).expect("valid mcc");
+        assert_eq!(mcc, mcc_type::PN);
+        assert!(!c_r, "a PN response must have C/R clear");
+        MccPn::parse(value).expect("valid PN")
+    }
+
+    #[test]
+    fn test_a_bare_sabm_on_a_listened_channel_opens_the_dlc_with_defaults() {
+        // PN is optional before SABM (RFCOMM 1.1 5.5.3): a peer may open a
+        // DLC with a bare SABM. Dropping it silently left that peer waiting
+        // out its own T1.
+        let mut responder = connected_responder();
+        responder.listen(1, DEFAULT_MAX_FRAME_SIZE, DEFAULT_INITIAL_CREDITS);
+
+        let (out, events) = responder
+            .receive(&RfcommFrame::sabm(1, 2).to_bytes())
+            .unwrap();
+
+        assert_eq!(events, vec![MultiplexerEvent::DlcOpened(2)]);
+        let ua = RfcommFrame::parse(&out[0]).expect("valid frame");
+        assert_eq!(ua.frame_type, frame_type::UA);
+        assert_eq!(ua.dlci, 2);
+
+        let dlc = responder.dlcs.get(&2).expect("DLC created");
+        assert!(dlc.is_open());
+        // Nothing was negotiated, so N1 is its default and CFC is off.
+        assert_eq!(dlc.tx_max_frame_size, DEFAULT_FRAME_SIZE_WITHOUT_PN);
+        assert!(!dlc.cfc);
+        assert_eq!(responder.cfc, CreditFlowControl::NotSupported);
+    }
+
+    #[test]
+    fn test_a_bare_sabm_on_an_unlistened_channel_is_answered_with_dm() {
+        let mut responder = connected_responder();
+
+        let (out, events) = responder
+            .receive(&RfcommFrame::sabm(1, 8).to_bytes())
+            .unwrap();
+
+        assert!(events.is_empty());
+        let dm = RfcommFrame::parse(&out[0]).expect("valid frame");
+        assert_eq!(dm.frame_type, frame_type::DM);
+        assert_eq!(dm.dlci, 8);
+        assert!(responder.dlcs.is_empty());
+    }
+
+    #[test]
+    fn test_a_disc_on_an_unknown_dlci_is_answered_with_dm() {
+        let mut responder = connected_responder();
+
+        let (out, _) = responder
+            .receive(&RfcommFrame::disc(1, 6).to_bytes())
+            .unwrap();
+
+        let dm = RfcommFrame::parse(&out[0]).expect("valid frame");
+        assert_eq!(dm.frame_type, frame_type::DM);
+        assert_eq!(dm.dlci, 6);
+    }
+
+    #[test]
+    fn test_a_pn_asking_for_no_cfc_is_not_answered_with_cfc() {
+        // RFCOMM 1.1 5.5.3: 0xE0 may only answer 0xF0. Answering it to a
+        // 0x00 request makes our credit octets look like application data.
+        let mut responder = connected_responder();
+        responder.listen(1, DEFAULT_MAX_FRAME_SIZE, DEFAULT_INITIAL_CREDITS);
+
+        let (out, _) = responder
+            .receive(&pn_command_frame(2, pn_cl::NO_CFC, 0))
+            .unwrap();
+
+        let pn = sole_pn_response(&out);
+        assert_eq!(pn.cl, pn_cl::NO_CFC);
+        assert_eq!(pn.initial_credits, 0);
+        assert_eq!(responder.cfc, CreditFlowControl::NotSupported);
+    }
+
+    #[test]
+    fn test_a_pn_asking_for_cfc_is_answered_with_cfc() {
+        let mut responder = connected_responder();
+        responder.listen(1, DEFAULT_MAX_FRAME_SIZE, DEFAULT_INITIAL_CREDITS);
+
+        let (out, _) = responder
+            .receive(&pn_command_frame(2, pn_cl::CFC_COMMAND, 7))
+            .unwrap();
+
+        let pn = sole_pn_response(&out);
+        assert_eq!(pn.cl, pn_cl::CFC_RESPONSE);
+        assert_eq!(pn.initial_credits, DEFAULT_INITIAL_CREDITS);
+        assert_eq!(responder.cfc, CreditFlowControl::Supported);
+    }
+
+    #[test]
+    fn test_a_dlc_without_cfc_sends_no_credit_octet() {
+        // The whole point of honouring cl=0x00: the peer's byte stream must
+        // contain exactly what was written, with no credit octet spliced in.
+        let mut responder = connected_responder();
+        responder.listen(1, DEFAULT_MAX_FRAME_SIZE, DEFAULT_INITIAL_CREDITS);
+        responder
+            .receive(&pn_command_frame(2, pn_cl::NO_CFC, 0))
+            .unwrap();
+        responder
+            .receive(&RfcommFrame::sabm(1, 2).to_bytes())
+            .unwrap();
+
+        let frames = responder.write(2, b"hello").unwrap();
+
+        assert_eq!(frames.len(), 1, "no credit-only frame should be emitted");
+        let frame = RfcommFrame::parse(&frames[0]).expect("valid frame");
+        assert_eq!(frame.p_f, 0, "P/F marks a credit octet, which is absent");
+        assert_eq!(frame.information, b"hello");
+    }
+
+    #[test]
+    fn test_a_dlc_without_cfc_is_not_gated_on_credits() {
+        // Without CFC the peer grants no credits at all, so gating on them
+        // would mean never sending anything.
+        let mut responder = connected_responder();
+        responder.listen(1, DEFAULT_MAX_FRAME_SIZE, DEFAULT_INITIAL_CREDITS);
+        responder
+            .receive(&pn_command_frame(2, pn_cl::NO_CFC, 0))
+            .unwrap();
+        responder
+            .receive(&RfcommFrame::sabm(1, 2).to_bytes())
+            .unwrap();
+        assert_eq!(responder.dlcs.get(&2).unwrap().tx_credits, 0);
+
+        assert!(!responder.write(2, b"first").unwrap().is_empty());
+        assert!(!responder.write(2, b"second").unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_a_dlc_with_cfc_still_sends_the_credit_octet() {
+        let mut responder = connected_responder();
+        responder.listen(1, DEFAULT_MAX_FRAME_SIZE, DEFAULT_INITIAL_CREDITS);
+        responder
+            .receive(&pn_command_frame(2, pn_cl::CFC_COMMAND, 7))
+            .unwrap();
+        responder
+            .receive(&RfcommFrame::sabm(1, 2).to_bytes())
+            .unwrap();
+
+        let frames = responder.write(2, b"hello").unwrap();
+
+        let frame = RfcommFrame::parse(&frames[0]).expect("valid frame");
+        assert_eq!(frame.p_f, 1);
+        assert_eq!(&frame.information[1..], b"hello");
     }
 
     #[test]
