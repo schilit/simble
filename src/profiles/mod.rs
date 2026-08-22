@@ -11,6 +11,7 @@ pub mod ams;
 pub mod ancs;
 /// Audio Stream Control Service (ASCS, UUID 0x184E).
 pub mod ascs;
+pub mod ascs_client;
 /// Audio Streaming for Hearing Aids (ASHA) service.
 pub mod asha;
 /// Basic Audio Profile (BAP) broadcast announcements and codec configuration.
