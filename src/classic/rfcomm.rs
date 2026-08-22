@@ -915,13 +915,7 @@ impl Multiplexer {
         if !c_r {
             return (Vec::new(), Vec::new());
         }
-        let dlc_c_r = dlc.c_r;
-        let response = MccMsc::default_response(msc.dlci);
-        let mcc = make_mcc(mcc_type::MSC, false, &response.to_bytes());
-        (
-            vec![RfcommFrame::uih(dlc_c_r, 0, mcc, 0).to_bytes()],
-            Vec::new(),
-        )
+        (vec![msc_frame(dlc.c_r, msc.dlci, false)], Vec::new())
     }
 
     fn on_dlc_frame(&mut self, frame: RfcommFrame) -> (Vec<Vec<u8>>, Vec<MultiplexerEvent>) {
@@ -948,25 +942,13 @@ impl Multiplexer {
                     } else {
                         dlc.state = DlcState::Connected;
                         let ua = RfcommFrame::ua(1 - dlc_c_r, dlci).to_bytes();
-                        let mcc = make_mcc(
-                            mcc_type::MSC,
-                            true,
-                            &MccMsc::default_response(dlci).to_bytes(),
-                        );
-                        let msc_frame = RfcommFrame::uih(dlc_c_r, 0, mcc, 0).to_bytes();
-                        Action::Opened(vec![ua, msc_frame])
+                        Action::Opened(vec![ua, msc_frame(dlc_c_r, dlci, true)])
                     }
                 }
                 frame_type::UA => match dlc.state {
                     DlcState::Connecting => {
                         dlc.state = DlcState::Connected;
-                        let mcc = make_mcc(
-                            mcc_type::MSC,
-                            true,
-                            &MccMsc::default_response(dlci).to_bytes(),
-                        );
-                        let msc_frame = RfcommFrame::uih(dlc_c_r, 0, mcc, 0).to_bytes();
-                        Action::Opened(vec![msc_frame])
+                        Action::Opened(vec![msc_frame(dlc_c_r, dlci, true)])
                     }
                     DlcState::Disconnecting => Action::ClosedAfterOurDisc,
                     _ => Action::None,
@@ -1026,6 +1008,18 @@ impl Multiplexer {
 
 fn unknown_dlci(dlci: u8) -> SimbleError {
     SimbleError::DeviceError(format!("RFCOMM: unknown DLCI {dlci:#04x}"))
+}
+
+/// The default MSC (modem status) frame for `dlci`. MCC frames always travel
+/// on the control channel (DLCI 0) but carry the *DLC's* C/R bit, hence
+/// `dlc_c_r` alongside `dlci`. `command` selects command versus response.
+fn msc_frame(dlc_c_r: u8, dlci: u8, command: bool) -> Vec<u8> {
+    let mcc = make_mcc(
+        mcc_type::MSC,
+        command,
+        &MccMsc::default_response(dlci).to_bytes(),
+    );
+    RfcommFrame::uih(dlc_c_r, 0, mcc, 0).to_bytes()
 }
 
 // ---------------------------------------------------------------------------
