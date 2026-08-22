@@ -1,7 +1,14 @@
 // Copyright 2026 Bill Schilit — SPDX-License-Identifier: Apache-2.0
 //
-// SimBLE Color Bulb: a curated visual demo (like the scripted-device page's
-// beating heart, but for a light). A Rhai-scripted peripheral exposes a
+// SimBLE Home domain: a colour bulb, as a mountable domain module.
+//
+// Exports mount(root)/unmount() so the Devices shell can host it as a tab and
+// tear it down on switch. The markup and styles live here rather than in an
+// index.html, because a mounted domain is injected into the shell's stage --
+// index.html is now only a thin standalone entry point.
+//
+// A curated visual demo (like the scripted-device page's beating heart, but
+// for a light). A Rhai-scripted peripheral exposes a
 // writable [R, G, B] "color" characteristic on a custom 128-bit service; the
 // page renders a glowing bulb whose color reflects the characteristic's live
 // value, and a color picker writes new values into the device's own GATT
@@ -13,6 +20,88 @@ import init, { WebPeripheral, WebLink } from "../pkg/simble.js";
 import { renderGatt } from "../common/viewer.js";
 import { attachHighlightedEditor } from "../common/highlight.js";
 import { createBackendSelector } from "../common/backend.js";
+
+const STYLE_ID = "simble-home-style";
+
+const STYLE = `main { display: grid; grid-template-columns: minmax(20rem, 1fr) minmax(18rem, 1fr);
+    gap: 1.25rem; padding: 1.25rem 1.5rem; max-width: 72rem; margin: 0 auto; }
+  @media (max-width: 56rem) { main { grid-template-columns: 1fr; } }
+  .bulb-stage { display: flex; flex-direction: column; align-items: center;
+    padding: 1rem 0 0.5rem; }
+  #bulbSvg { width: 190px; height: auto; transition: filter 0.25s; }
+  #glass { transition: fill 0.25s; }
+  .swatches { display: flex; gap: 0.5rem; flex-wrap: wrap; justify-content: center;
+    margin-top: 0.8rem; }
+  .swatch { width: 2rem; height: 2rem; border-radius: 50%; border: 2px solid var(--border);
+    cursor: pointer; }
+  .swatch:hover { border-color: var(--text); }
+  .picker-row { display: flex; align-items: center; gap: 0.8rem; justify-content: center;
+    margin-top: 0.8rem; flex-wrap: wrap; }
+  input[type=color] { width: 3rem; height: 2rem; border: 1px solid var(--border);
+    border-radius: 6px; background: var(--panel); cursor: pointer; }
+  .rgb-readout { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
+    font-size: 0.85rem; }`;
+
+const MARKUP = `<div id="backend" style="grid-column:1/-1"></div>
+  <section class="panel">
+    <h2>The light</h2>
+    <div class="bulb-stage">
+      <svg id="bulbSvg" viewBox="0 0 120 170" role="img" aria-label="color bulb">
+        <g>
+          <path id="glass" d="M60 10 C25 10 8 38 20 68 C26 84 40 92 42 112 L78 112 C80 92 94 84 100 68 C112 38 95 10 60 10 Z" fill="#33ccff"/>
+          <path d="M40 55 Q50 40 60 55 Q70 70 80 55" stroke="rgba(255,255,255,0.55)" stroke-width="3" fill="none"/>
+        </g>
+        <rect x="44" y="112" width="32" height="10" rx="2" fill="#656d76"/>
+        <rect x="46" y="124" width="28" height="8" rx="2" fill="#6e7681"/>
+        <rect x="48" y="134" width="24" height="7" rx="2" fill="#57606a"/>
+        <path d="M52 148 Q60 158 68 148" stroke="#444c56" fill="none" stroke-width="3"/>
+      </svg>
+      <div class="picker-row">
+        <label for="picker">Pick a color:</label>
+        <input type="color" id="picker" value="#33ccff">
+        <span class="rgb-readout" id="rgb">RGB 33,204,255</span>
+      </div>
+      <div class="swatches" id="swatches"></div>
+    </div>
+    <p class="hint" style="margin-top:1rem">
+      The bulb color is a writable <code>[R, G, B]</code> characteristic on a custom 128-bit service
+      (Magic-Blue-style). The picker writes the value into the device's live GATT database via the
+      host <code>set_value</code> path — the same one the script's <code>update_value</code> uses — so
+      you see the bulb change here <strong>and</strong> any connected central is notified of the new
+      color. (The script is the peripheral; central-role scripting doesn't exist yet, so the page
+      supplies the "write" a phone app would send.)
+    </p>
+    <p class="hint" id="mode-hint" style="margin-top:0.5rem"></p>
+    <div id="script-error" class="error"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Live device</h2>
+    <dl class="kv">
+      <dt>advertising as</dt><dd id="dev-name">—</dd>
+      <dt>connection</dt><dd id="dev-conn">—</dd>
+      <dt>subscription</dt><dd id="dev-sub">—</dd>
+    </dl>
+    <div id="gatt"></div>
+    <details>
+      <summary>view / edit the device script (Rhai)</summary>
+      <textarea id="script" class="code" spellcheck="false" style="height:16rem;margin-top:0.5rem"></textarea>
+      <div class="row"><button id="run" class="primary">▶ Run</button>
+        <span id="run-state" class="hint"></span></div>
+    </details>
+  </section>
+
+  <section id="setup" class="panel setup" style="grid-column:1/-1">
+    <h2>netsim is not reachable</h2>
+    <p>Could not reach netsim at <code>localhost:7681</code> — is <code>netsimd</code> running with its
+       WebSocket frontend enabled? This page is served from the cloud, but the Bluetooth scene runs
+       <strong>on your machine</strong>: the wasm build of SimBLE in this tab connects to a local
+       <code>netsimd</code> over <code>ws://localhost:7681</code>. Start it with:</p>
+    <pre><code>netsimd --logtostderr --no-shutdown --ws-port 7681</code></pre>
+    <p class="hint">Needs the canary-channel emulator. The bulb still works offline — the color you
+       pick is written into the in-browser device; connect netsim to expose it on the scene and notify a
+       real central.</p>
+  </section>`;
 
 const IN_PAGE_ADDR = "CC:1E:57:00:00:05";
 const WS_URL =
@@ -54,10 +143,7 @@ const PRESETS = ["#ff3355", "#ff9933", "#ffee33", "#33dd66", "#33ccff", "#7755ff
 
 // --- DOM -------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
-const editor = $("script");
-const connPill = $("conn");
-const setupPanel = $("setup");
-const picker = $("picker");
+let editor, connPill, setupPanel, picker;
 
 let mode = "in-page"; // "in-page" (a wasm WebLink in this tab) | "websocket" (netsim)
 let peripheral = null; // WebPeripheral, WebSocket backend only
@@ -215,68 +301,113 @@ function loop() {
   } catch (e) { showScriptError(e); }
 }
 
-// --- boot ------------------------------------------------------------------
-await init();
-editor.value = DEFAULT_SCRIPT;
-attachHighlightedEditor(editor); // syntax highlighting overlay (degrades to plain)
+// --- lifecycle -------------------------------------------------------------
 
-// swatches
-const sw = $("swatches");
-for (const hex of PRESETS) {
-  const el = document.createElement("div");
-  el.className = "swatch";
-  el.style.background = hex;
-  el.title = hex;
-  el.addEventListener("click", () => {
-    picker.value = hex;
-    const [r, g, b] = hexToRgb(hex);
-    applyBulb(r, g, b);
-    writeColor(r, g, b);
+let timer = null;
+let container = null;
+
+/// Builds the domain into `root` and starts it. Async because the wasm module
+/// has to be initialised before any device exists.
+export async function mount(root) {
+  await init();
+
+  if (!document.getElementById(STYLE_ID)) {
+    const el = document.createElement("style");
+    el.id = STYLE_ID;
+    el.textContent = STYLE;
+    document.head.append(el);
+  }
+  container = root;
+  root.innerHTML = MARKUP;
+
+  editor = $("script");
+  connPill = $("conn");
+  setupPanel = $("setup");
+  picker = $("picker");
+
+  editor.value = DEFAULT_SCRIPT;
+  attachHighlightedEditor(editor); // syntax highlighting overlay (degrades to plain)
+
+  // swatches
+  const sw = $("swatches");
+  for (const hex of PRESETS) {
+    const el = document.createElement("div");
+    el.className = "swatch";
+    el.style.background = hex;
+    el.title = hex;
+    el.addEventListener("click", () => {
+      picker.value = hex;
+      const [r, g, b] = hexToRgb(hex);
+      applyBulb(r, g, b);
+      writeColor(r, g, b);
+    });
+    sw.appendChild(el);
+  }
+
+  picker.addEventListener("input", () => {
+    const rgb = hexToRgb(picker.value);
+    if (!rgb) return;
+    applyBulb(...rgb);
+    writeColor(...rgb);
   });
-  sw.appendChild(el);
-}
 
-picker.addEventListener("input", () => {
-  const rgb = hexToRgb(picker.value);
-  if (!rgb) return;
-  applyBulb(...rgb);
-  writeColor(...rgb);
-});
+  $("run").addEventListener("click", run);
 
-$("run").addEventListener("click", run);
+  const initial = hexToRgb(picker.value);
+  if (initial) applyBulb(...initial);
 
-const initial = hexToRgb(picker.value);
-if (initial) applyBulb(...initial);
-
-// Controller backend: "in-page" (a wasm WebLink in this tab, no netsim) or
-// "websocket" (a real netsim scene). Both write the color live into the GATT
-// database and notify subscribers; websocket also puts the bulb on the air for
-// a real central (e.g. the emulator) to connect and subscribe.
-function setModeHint() {
-  $("mode-hint").textContent = mode === "in-page"
-    ? "In-browser controller — no netsim; the bulb runs entirely in this tab."
-    : "";
-}
-function switchBackend() {
-  teardownDevices();
-  openedOnce = false;
-  setupPanel.classList.remove("visible");
+  // Controller backend: "in-page" (a wasm WebLink in this tab, no netsim) or
+  // "websocket" (a real netsim scene). Both write the color live into the GATT
+  // database and notify subscribers; websocket also puts the bulb on the air for
+  // a real central (e.g. the emulator) to connect and subscribe.
+  function setModeHint() {
+    $("mode-hint").textContent = mode === "in-page"
+      ? "In-browser controller — no netsim; the bulb runs entirely in this tab."
+      : "";
+  }
+  function switchBackend() {
+    teardownDevices();
+    openedOnce = false;
+    setupPanel.classList.remove("visible");
+    setModeHint();
+    if (mode === "in-page") {
+      try { buildInPage(editor.value); } catch (e) { showScriptError(e); }
+    } else {
+      setPill("starting…", "");
+      try { createPeripheral(editor.value); } catch (e) { showScriptError(e); }
+    }
+  }
+  mode = createBackendSelector($("backend"), {
+    onChange: (m) => { mode = m; switchBackend(); },
+  });
   setModeHint();
+
   if (mode === "in-page") {
     try { buildInPage(editor.value); } catch (e) { showScriptError(e); }
   } else {
-    setPill("starting…", "");
     try { createPeripheral(editor.value); } catch (e) { showScriptError(e); }
   }
+  timer = setInterval(loop, 100);
 }
-mode = createBackendSelector($("backend"), {
-  onChange: (m) => { mode = m; switchBackend(); },
-});
-setModeHint();
 
-if (mode === "in-page") {
-  try { buildInPage(editor.value); } catch (e) { showScriptError(e); }
-} else {
-  try { createPeripheral(editor.value); } catch (e) { showScriptError(e); }
+/// Releases everything this domain owns. The shell mounts one domain at a
+/// time, so anything left running here becomes a leak -- and on netsim a
+/// device whose socket is dropped without a disconnect lingers as a ghost at
+/// the same address.
+export function unmount() {
+  if (timer !== null) {
+    clearInterval(timer);
+    timer = null;
+  }
+  try { peripheral?.free(); } catch (_) { /* already gone */ }
+  try { link?.free(); } catch (_) { /* already gone */ }
+  peripheral = null;
+  link = null;
+  linkIndex = -1;
+  document.getElementById(STYLE_ID)?.remove();
+  // Clear our own markup rather than relying on the host to do it: the
+  // standalone page has no shell to tidy up after us.
+  if (container) container.innerHTML = "";
+  container = null;
+  editor = connPill = setupPanel = picker = undefined;
 }
-setInterval(loop, 100);

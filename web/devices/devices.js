@@ -28,6 +28,8 @@ const DOMAINS = [
     blurb: "HID over GATT: a keyboard and mouse, and a host decoding them" },
   { id: "ranging", label: "Ranging", module: "../ranging/ranging.js",
     blurb: "Distance: channel sounding against RSSI path loss" },
+  { id: "home", label: "Home", module: "../lightbulb/lightbulb.js",
+    blurb: "Home control: a colour bulb driven through its own characteristic" },
 ];
 
 const DEFAULT_ID = "media";
