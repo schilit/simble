@@ -41,6 +41,25 @@ fn test_uuid_16_to_128_base_expansion() {
 }
 
 #[test]
+fn test_uuid_att_wire_encoding() {
+    // On the ATT wire a 16-bit UUID is its own two little-endian bytes — not
+    // the first two bytes of the 128-bit expansion, which are the tail of the
+    // Bluetooth base UUID (0x34, 0xFB) and identify nothing.
+    let cccd = Uuid::from_u16(0x2902);
+    assert_eq!(cccd.to_att_bytes(), vec![0x02, 0x29]);
+    assert_eq!(Uuid::from_bytes(&cccd.to_att_bytes()), Some(cccd));
+    assert_ne!(cccd.to_att_bytes(), cccd.to_128_bit_bytes()[..2].to_vec());
+
+    // A 128-bit UUID crosses the wire whole.
+    let custom = Uuid::from_u128_bytes([
+        0xFB, 0x34, 0x9B, 0x5F, 0x80, 0x00, 0x00, 0x80, 0x00, 0x10, 0x00, 0x00, 0x01, 0x00, 0x7B,
+        0x5E,
+    ]);
+    assert_eq!(custom.to_att_bytes().len(), 16);
+    assert_eq!(Uuid::from_bytes(&custom.to_att_bytes()), Some(custom));
+}
+
+#[test]
 fn test_address_formatting_and_parsing() {
     let addr_str = "F0:DE:F1:22:33:44";
     let addr = Address::from_str(addr_str).expect("Valid Address");

@@ -43,6 +43,136 @@ fn test_device_lifecycle_and_connection_management() {
 }
 
 #[test]
+fn test_read_by_group_type_splits_mixed_uuid_lengths() {
+    // One Attribute Data List carries entries of a single length (Core Spec
+    // Vol 3, Part F, 3.4.4.10), and each entry's group end handle bounds its
+    // own service (Vol 3, Part G, 2.5.2). Violating either makes a client
+    // slice a 128-bit service UUID into phantom 16-bit services and report
+    // every later characteristic inside the first service.
+    let mut dev = VirtualDevice::new(
+        "Mixed",
+        Address::from_be_bytes([0xF0, 0xDE, 0xF1, 0x00, 0x11, 0x44]),
+        AddressType::Random,
+    );
+    // A 16-bit service with one characteristic…
+    let first = dev.gatt_db.add_service(Uuid::from_u16(0x181A), true);
+    dev.gatt_db.add_characteristic(
+        Uuid::from_u16(0x2A6E),
+        CharacteristicProperties(CharacteristicProperties::READ),
+        vec![0x00, 21],
+        AttributePermissions::default(),
+    );
+    // …then a 128-bit one, whose declaration value is 16 bytes.
+    let custom = Uuid::from_u128_bytes([
+        0x01, 0xEE, 0xFF, 0xC0, 0x00, 0x00, 0xE5, 0xB1, 0x11, 0x4A, 0xDE, 0xC0, 0x01, 0x00, 0x7B,
+        0x5E,
+    ]);
+    let second = dev.gatt_db.add_service(custom, true);
+
+    let conn_h = 0x0010;
+    dev.on_connected(conn_h, Address::ANY);
+
+    let mut req = vec![opcode::READ_BY_GROUP_TYPE_REQ];
+    req.extend_from_slice(&0x0001u16.to_le_bytes());
+    req.extend_from_slice(&0xFFFFu16.to_le_bytes());
+    req.extend_from_slice(&service_uuid::PRIMARY_SERVICE.to_le_bytes());
+    let resp = dev
+        .process_l2cap_packet(conn_h, &L2capHeader::serialize(cid::ATT, &req))
+        .unwrap()
+        .unwrap();
+    let (_, payload) = L2capHeader::parse(&resp).unwrap();
+
+    assert_eq!(payload[0], opcode::READ_BY_GROUP_TYPE_RSP);
+    let item_len = payload[1] as usize;
+    assert_eq!(item_len, 6, "16-bit service: 2 handles + a 2-byte UUID");
+    let entries = &payload[2..];
+    assert_eq!(
+        entries.len() % item_len,
+        0,
+        "the list must divide evenly into equal-length entries"
+    );
+    assert_eq!(
+        entries.len() / item_len,
+        1,
+        "the 128-bit service has a different length and belongs to a later response"
+    );
+
+    // The first service's group must end before the second's declaration,
+    // not run to 0xFFFF.
+    let group_end = u16::from_le_bytes([entries[2], entries[3]]);
+    assert_eq!(u16::from_le_bytes([entries[0], entries[1]]), first);
+    assert!(
+        group_end < second,
+        "group end {group_end:#06x} must stop before the next service {second:#06x}"
+    );
+
+    // Continuing from the last handle returns the 128-bit service, alone.
+    let mut req2 = vec![opcode::READ_BY_GROUP_TYPE_REQ];
+    req2.extend_from_slice(&(group_end + 1).to_le_bytes());
+    req2.extend_from_slice(&0xFFFFu16.to_le_bytes());
+    req2.extend_from_slice(&service_uuid::PRIMARY_SERVICE.to_le_bytes());
+    let resp2 = dev
+        .process_l2cap_packet(conn_h, &L2capHeader::serialize(cid::ATT, &req2))
+        .unwrap()
+        .unwrap();
+    let (_, payload2) = L2capHeader::parse(&resp2).unwrap();
+    assert_eq!(payload2[1] as usize, 20, "128-bit service: 2 handles + 16");
+    assert_eq!(payload2[2..].len(), 20);
+}
+
+#[test]
+fn test_find_information_response_carries_the_real_16_bit_uuid() {
+    // A Find Information Response must carry a 16-bit UUID as its own two
+    // little-endian bytes (Core Spec Vol 3, Part F, 3.4.3.2). Encoding it by
+    // truncating the 128-bit form yields the tail of the Bluetooth base UUID
+    // (0x34FB) instead, so a real central discovers a nonexistent descriptor
+    // and can never enable notifications.
+    let mut dev = VirtualDevice::new(
+        "Notifier",
+        Address::from_be_bytes([0xF0, 0xDE, 0xF1, 0x00, 0x11, 0x33]),
+        AddressType::Random,
+    );
+    dev.gatt_db.add_service(Uuid::from_u16(0x180D), true);
+    let (_, value_handle) = dev.gatt_db.add_characteristic(
+        Uuid::from_u16(0x2A37),
+        CharacteristicProperties(CharacteristicProperties::READ | CharacteristicProperties::NOTIFY),
+        vec![0x00, 72],
+        AttributePermissions::default(),
+    );
+    let cccd_handle = dev.gatt_db.add_cccd();
+
+    let conn_h = 0x0010;
+    dev.on_connected(conn_h, Address::ANY);
+
+    let mut req = vec![opcode::FIND_INFORMATION_REQ];
+    req.extend_from_slice(&value_handle.to_le_bytes());
+    req.extend_from_slice(&0xFFFFu16.to_le_bytes());
+    let resp = dev
+        .process_l2cap_packet(conn_h, &L2capHeader::serialize(cid::ATT, &req))
+        .unwrap()
+        .unwrap();
+    let (_, payload) = L2capHeader::parse(&resp).unwrap();
+
+    assert_eq!(payload[0], opcode::FIND_INFORMATION_RSP);
+    assert_eq!(payload[1], 0x01, "format 0x01 = 16-bit UUIDs");
+    // Entries are (handle, uuid) pairs; find the CCCD's.
+    let mut found = None;
+    let (entries, _) = payload[2..].as_chunks::<4>();
+    for entry in entries {
+        let handle = u16::from_le_bytes([entry[0], entry[1]]);
+        let uuid = u16::from_le_bytes([entry[2], entry[3]]);
+        if handle == cccd_handle {
+            found = Some(uuid);
+        }
+    }
+    assert_eq!(
+        found,
+        Some(0x2902),
+        "the CCCD must be discoverable as 0x2902, not 0x34FB"
+    );
+}
+
+#[test]
 fn test_device_end_to_end_gatt_interaction() {
     let dev_addr = Address::from_be_bytes([0xF0, 0xDE, 0xF1, 0x00, 0x11, 0x22]);
     let mut dev = VirtualDevice::new("SensorNode", dev_addr, AddressType::Random);

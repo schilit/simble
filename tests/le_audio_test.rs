@@ -109,3 +109,59 @@ fn test_ascs_control_point_dispatch_through_att_write() {
         ]
     );
 }
+
+/// Every characteristic that declares Notify or Indicate must be followed by
+/// a Client Characteristic Configuration descriptor, or a client has nowhere
+/// to write its subscription and can never receive a value (Core Spec Vol 3,
+/// Part G, Section 3.3.3.3).
+///
+/// This is a class-level guard rather than a per-profile assertion: the
+/// defect appeared independently in PACS, ASCS, RAS and five example scripts,
+/// each time as "one more characteristic someone forgot".
+#[test]
+fn test_every_notifying_characteristic_has_a_cccd() {
+    use simble::gatt::{GattDatabase, desc_uuid};
+    use simble::profiles::{
+        AudioStreamControlService, PublishedAudioCapabilitiesService, RangingService,
+    };
+    use simble::types::Uuid;
+
+    let mut db = GattDatabase::new();
+    PublishedAudioCapabilitiesService::register(&mut db, 0x03, 0x00);
+    AudioStreamControlService::register(&mut db, &[1], &[2]);
+    RangingService::register(&mut db);
+
+    const NOTIFY_OR_INDICATE: u8 = 0x10 | 0x20;
+    let cccd = Uuid::Uuid16(desc_uuid::CLIENT_CHARACTERISTIC_CONFIGURATION);
+    // A characteristic declaration's value is [properties, handle_lo,
+    // handle_hi, uuid...]; the value attribute follows it, and the CCCD (if
+    // any) follows that.
+    let declaration = Uuid::Uuid16(0x2803);
+    let handles: Vec<u16> = db.attributes.keys().copied().collect();
+
+    let mut checked = 0;
+    for (i, handle) in handles.iter().enumerate() {
+        let attr = &db.attributes[handle];
+        if attr.uuid != declaration || attr.value.is_empty() {
+            continue;
+        }
+        if attr.value[0] & NOTIFY_OR_INDICATE == 0 {
+            continue;
+        }
+        let characteristic_uuid = &attr.value[3..];
+        let follows_cccd = handles
+            .get(i + 2)
+            .map(|h| db.attributes[h].uuid == cccd)
+            .unwrap_or(false);
+        assert!(
+            follows_cccd,
+            "characteristic {characteristic_uuid:02X?} declares notify/indicate \
+             but has no CCCD after its value attribute"
+        );
+        checked += 1;
+    }
+    assert!(
+        checked >= 9,
+        "expected to check every notifying characteristic in PACS + ASCS + RAS, saw {checked}"
+    );
+}
