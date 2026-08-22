@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>SimBLE HID over GATT</title>
+<link rel="stylesheet" href="../common/simble.css">
+<link rel="stylesheet" href="../common/nav.css">
+</head>
+<body>
+<nav class="sitenav">
+  <a class="brand" href="../">Sim<b>BLE</b></a>
+  <div class="tabs">
+    <a href="../playground/">Playground</a>
+    <a href="../explorer/">API Explorer</a>
+    <a href="../scanner/">Scanner</a>
+    <a href="../hrm/">Scripted device</a>
+    <a href="../lightbulb/">Color Bulb</a>
+    <a href="../speaker/">Speaker</a>
+    <a href="../source/">Audio Source</a>
+    <a href="../dual/">Server + Client</a>
+    <a href="../scene/">Scene</a>
+    <a href="../testing/">Testing</a>
+    <a href="../shared/">Shared</a>
+    <a href="../controllers/">Controllers</a>
+  </div>
+  <span class="spacer"></span>
+  <a class="ext" href="../doc/">Docs</a>
+  <a class="ext" href="https://github.com/schilit/simble">GitHub ↗</a>
+</nav>
+<header>
+  <h1>HID over GATT</h1>
+  <span class="sub">a simulated Bluetooth keyboard and mouse, and a computer decoding their input reports</span>
+</header>
+
+<!-- The demo is a mountable domain module: this page is the standalone shell
+     that gives it a container. A tabbed shell hosting several domains mounts
+     the same module and calls unmount() when the user switches away. -->
+<main></main>
+
+<footer>
+  SimBLE compiled to WebAssembly. Four devices — two HOGP peripherals and two centrals — share one
+  in-page simulated radio; no netsim and no external process. HID Service <code>0x1812</code>,
+  Report Map <code>0x2A4B</code>, Report <code>0x2A4D</code>, Protocol Mode <code>0x2A4E</code>.
+</footer>
+
+<script type="module">
+  import { mount, unmount } from "./hid.js";
+  await mount(document.querySelector("main"));
+  // A standalone page has no shell to tear it down, so do it on navigation
+  // away: an abandoned WebLink would otherwise keep ticking until the tab dies.
+  window.addEventListener("pagehide", unmount);
+</script>
+</body>
+</html>
