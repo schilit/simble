@@ -130,6 +130,14 @@ fn write_message<W: Write>(out: &mut W, message: &Value) -> std::io::Result<()> 
 }
 
 impl Server {
+    /// Drives the server programmatically (the non-stdio entry point): pass a
+    /// JSON-RPC request `Value`, get its response, or `None` for a notification.
+    /// Same dispatch [`serve_stdio`] runs per line — useful for embedding and
+    /// for scenario tests that exercise the tools without a pipe.
+    pub fn request(&mut self, request: &Value) -> Option<Value> {
+        self.handle(request)
+    }
+
     /// Dispatches one JSON-RPC request. `Some(response)` for requests, `None`
     /// for notifications (a message with no `id` is never answered).
     fn handle(&mut self, request: &Value) -> Option<Value> {
