@@ -166,12 +166,17 @@ Give explicit addresses when something outside the scene refers to them: a
 phone that has already bonded, a test script, a `netsim devices` listing you
 want to read at a glance.
 
+A scripted `central` names its own peer with `client.connect("…")`, but the
+scene has already allocated the addresses, so `target` overrides it. The
+literal in a catalog client script is a default for the playground, not a
+requirement — topology beats script.
+
 ## 6. Roles
 
 | Role | Meaning | `device`/`script` | `target` | Instantiated today |
 |---|---|---|---|---|
 | `peripheral` | GATT server; advertises and answers a central. The default. | exactly one | forbidden | **yes** — `self` and `netsim` |
-| `central` | GATT client; connects to `target` and discovers it. | forbidden | required | **yes** — `self` only |
+| `central` | GATT client; connects to `target`. With a script it is `android::BluetoothGatt` and drives the peer; without one it just discovers. | optional | required | **yes** — `self` only |
 | `scanner` | Passive observer collecting advertising reports. | forbidden | forbidden | **yes** — `self` only |
 | `audio_source` | LE Audio Unicast Client: configures `target`'s ASE and opens a CIS to it. | optional | required | **no** |
 | `hid_host` | HID host consuming `target`'s input reports. | optional | required | **no** |

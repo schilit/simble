@@ -596,6 +596,11 @@ impl ScriptedCentral {
             services: Vec<Svc>,
             #[serde(skip_serializing_if = "Option::is_none")]
             last_error: Option<String>,
+            /// The first callback error — a failed `assert`. Separate from
+            /// `last_error` because it is the *verdict*: a caller deciding
+            /// whether a run passed reads this, and it never clears.
+            #[serde(skip_serializing_if = "Option::is_none")]
+            failure: Option<String>,
         }
         #[derive(serde::Serialize)]
         struct Svc {
@@ -638,6 +643,7 @@ impl ScriptedCentral {
                 })
                 .collect(),
             last_error: self.last_error.clone(),
+            failure: self.failure.clone(),
         });
         let view = View {
             name: self.client.name(),
