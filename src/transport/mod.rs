@@ -56,7 +56,9 @@ impl HciTransport for usb::UsbTransport {
     }
 }
 #[cfg(not(target_arch = "wasm32"))]
-pub use netsim::NetsimTransport;
+// Renamed on the way out: at this level "the default WebSocket URL" is
+// ambiguous — there is more than one live backend.
+pub use netsim::{DEFAULT_WS_URL as NETSIM_WS_URL, NetsimTransport};
 #[cfg(not(target_arch = "wasm32"))]
 pub use rootcanal::{H4FrameReader, RootcanalTransport, read_h4_packet, write_h4_packet};
 #[cfg(not(target_arch = "wasm32"))]

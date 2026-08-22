@@ -12,6 +12,32 @@ python3 -m venv .venv && .venv/bin/pip install bumble lc3py   # Python >= 3.10
 ~/Library/Android/sdk/emulator/netsim devices                 # confirm netsimd
 ```
 
+## `gatt_client.py`
+
+Bumble hosts a Heart Rate peripheral; simble's **scripted** GATT client
+(`android::BluetoothGatt`, the catalog's `hrm_client` script) connects to it
+over netsim, discovers, subscribes and asserts on the notifications. One
+command, and the client's exit status is the verdict:
+
+```bash
+cargo build --example scripted_central
+.venv/bin/python tests/interop/gatt_client.py
+```
+
+`tests/central_script_test.rs` runs the same client against a *simble*
+peripheral, which proves the scripting surface and nothing about the wire.
+This is the check that counts, and it has already earned its keep twice:
+
+- LE Create Connection was sending peer address type "public" unconditionally.
+  Bumble advertises with a random static address, so nothing ever connected —
+  and the in-process controller never reads that field, so every simulated
+  test passed. The client now scans for the target and takes the type off the
+  air.
+- Bumble puts a Characteristic User Description at `value_handle + 1` and the
+  CCCD at `+ 2`. A client that assumes the common layout subscribes to the
+  wrong handle; against a simble server that write even succeeds. The client
+  issues Find Information over the descriptor range instead.
+
 ## `lea_source.py`
 
 A complete LE Audio source: connects to a simble sink, discovers ASCS,

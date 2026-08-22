@@ -1427,6 +1427,57 @@ mod tests {
     }
 
     #[test]
+    fn add_central_points_a_scripted_client_at_the_peripheral_the_scene_allocated() {
+        // The script names an address it cannot know — MCP allocates them —
+        // so the tool re-points it and says so. Without that, every client
+        // script an agent copied out of `example` would sit in "connecting".
+        let mut s = Server::default();
+        call(&mut s, "add_peripheral", json!({ "script": catalog::script("hrm").unwrap() }));
+        let added = call(
+            &mut s,
+            "add_central",
+            json!({ "script": catalog::script("hrm_client").unwrap() }),
+        );
+        assert_eq!(added["result"]["isError"], false);
+        let text = added["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("pointed at"), "{text}");
+        assert!(text.contains("\"phase\": \"ready\""), "{text}");
+        assert!(text.contains("2A37"), "{text}");
+    }
+
+    #[test]
+    fn add_central_reports_a_failed_assertion_as_a_tool_error() {
+        // A client script is a test; if its assertions do not hold, the agent
+        // must be told so rather than reading a healthy-looking GATT dump.
+        let mut s = Server::default();
+        call(&mut s, "add_peripheral", json!({ "script": catalog::script("hrm").unwrap() }));
+        let added = call(
+            &mut s,
+            "add_central",
+            json!({ "script": r#"
+                let client = android::BluetoothGatt("Probe");
+                client.connect("AA:BB:CC:00:00:01");
+                fn on_services_discovered(client) {
+                    assert(client.services().len() == 99, "impossible service count");
+                }
+            "# }),
+        );
+        assert_eq!(added["result"]["isError"], true);
+        let text = added["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("impossible service count"), "{text}");
+    }
+
+    #[test]
+    fn add_central_is_refused_on_netsim_where_the_far_side_plays_the_central() {
+        let mut s = Server::default();
+        call(&mut s, "run_on", json!({ "target": "netsim" }));
+        let added = call(&mut s, "add_central", json!({ "script": "let c = 1;" }));
+        assert_eq!(added["result"]["isError"], true);
+        let text = added["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("self-mode only"), "{text}");
+    }
+
+    #[test]
     fn test_run_test_pass_and_fail() {
         let mut s = Server::default();
         let pass = call(

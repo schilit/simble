@@ -46,6 +46,10 @@ use crate::types::{Address, Uuid};
 
 /// LE Create Connection (Vol 4, Part E, Section 7.8.12).
 const LE_CREATE_CONNECTION: [u8; 2] = [0x0D, 0x20];
+/// LE Set Scan Parameters (Vol 4, Part E, Section 7.8.10).
+const LE_SET_SCAN_PARAMETERS: [u8; 2] = [0x0B, 0x20];
+/// LE Set Scan Enable (Vol 4, Part E, Section 7.8.11).
+const LE_SET_SCAN_ENABLE: [u8; 2] = [0x0C, 0x20];
 /// Disconnect (Vol 4, Part E, Section 7.1.6).
 const DISCONNECT: [u8; 2] = [0x06, 0x04];
 /// Remote User Terminated Connection — the reason a host gives when the
@@ -63,6 +67,9 @@ pub enum CentralPhase {
     Idle,
     /// Controller bring-up issued; waiting for it to complete.
     Initializing,
+    /// Scanning for the target, to learn which address type it advertises
+    /// with before initiating.
+    Scanning,
     /// LE Create Connection sent; waiting for LE Connection Complete.
     Connecting,
     /// Connected; exchanging ATT MTU.
@@ -83,6 +90,7 @@ impl CentralPhase {
         match self {
             CentralPhase::Idle => "idle",
             CentralPhase::Initializing => "initializing",
+            CentralPhase::Scanning => "scanning for the peer",
             CentralPhase::Connecting => "connecting",
             CentralPhase::ExchangingMtu => "exchanging MTU",
             CentralPhase::DiscoveringServices => "discovering services",
@@ -212,6 +220,16 @@ pub struct LeCentral {
     subscribed: BTreeSet<u16>,
     /// What the caller has not drained yet.
     events: Vec<CentralEvent>,
+    /// The peer's address type for LE Create Connection: `Some` when the
+    /// caller stated it, `None` until an advertising report reveals it.
+    ///
+    /// This is not cosmetic. A peer advertising with a random address is
+    /// unreachable by a Create Connection that says "public", and the
+    /// in-process controller ignores the field entirely — so the mistake is
+    /// invisible in every simble-against-simble test and total against a
+    /// real one. (The same field, dropped from LE Connection Complete, broke
+    /// every pairing attempt against Android; see `docs/HANDOFF-2026-08-22.md`.)
+    peer_address_type: Option<u8>,
 }
 
 impl LeCentral {
@@ -227,18 +245,57 @@ impl LeCentral {
             values: BTreeMap::new(),
             subscribed: BTreeSet::new(),
             events: Vec::new(),
+            peer_address_type: None,
         }
     }
 
-    /// Points the central at `target` and issues controller bring-up. LE
-    /// Create Connection waits for that to complete — a controller whose LE
-    /// event mask is still at its post-Reset default never reports the
-    /// connection (Vol 4, Part E, Section 7.3.1).
+    /// Points the central at `target` and issues controller bring-up.
+    ///
+    /// Two things are deliberately sequenced rather than fired at once:
+    ///
+    /// - LE Create Connection waits for bring-up to finish, because a
+    ///   controller whose LE event mask is still at its post-Reset default
+    ///   never reports the connection (Vol 4, Part E, Section 7.3.1).
+    /// - It then waits to *hear* the target, so the peer address type in the
+    ///   command is the one the peer actually advertises with. Guessing
+    ///   "public" reaches a random-address advertiser never, and the
+    ///   in-process controller does not read the field — so the failure only
+    ///   shows against a real peer.
+    ///
+    /// Use [`Self::connect_with_type`] when the type is already known (from
+    /// a scan the caller did, or a bond) and the scan step is unwanted.
     pub fn connect(&mut self, target: Address) -> Vec<Vec<u8>> {
+        self.begin(target, None)
+    }
+
+    /// As [`Self::connect`], but states the peer's address type (0 public,
+    /// 1 random) instead of learning it, skipping the scan.
+    pub fn connect_with_type(&mut self, target: Address, address_type: u8) -> Vec<Vec<u8>> {
+        self.begin(target, Some(address_type))
+    }
+
+    fn begin(&mut self, target: Address, address_type: Option<u8>) -> Vec<Vec<u8>> {
         self.target = target;
         self.client = GattClient::new(0, target);
+        self.peer_address_type = address_type;
         self.phase = CentralPhase::Initializing;
         init_commands()
+    }
+
+    /// Passive scanning, wide open: 10 ms window in a 10 ms interval, no
+    /// filter policy, so the target's next advertisement is heard at once.
+    fn scan_commands() -> Vec<Vec<u8>> {
+        vec![
+            command(
+                LE_SET_SCAN_PARAMETERS,
+                // type: passive, interval, window, own address type: public,
+                // filter policy: accept all.
+                &[0x00, 0x10, 0x00, 0x10, 0x00, 0x00, 0x00],
+            ),
+            // enable, no duplicate filtering (a filtered duplicate is a
+            // report we never see, and one report is all this needs).
+            command(LE_SET_SCAN_ENABLE, &[0x01, 0x00]),
+        ]
     }
 
     /// Tears the link down.
@@ -544,8 +601,44 @@ impl LeCentral {
                 if self.phase == CentralPhase::Initializing
                     && header.command_opcode.get() == last_init_opcode() =>
             {
+                match self.peer_address_type {
+                    Some(_) => {
+                        self.phase = CentralPhase::Connecting;
+                        out.push(command(
+                            LE_CREATE_CONNECTION,
+                            &self.create_connection_params(),
+                        ));
+                    }
+                    None => {
+                        self.phase = CentralPhase::Scanning;
+                        out.extend(Self::scan_commands());
+                    }
+                }
+            }
+            // The advertisement is where the peer's address type comes from.
+            HciEvent::Other { code, parameters }
+                if self.phase == CentralPhase::Scanning
+                    && code == crate::packets::hci_events::event_code::LE_META
+                    && parameters.first()
+                        == Some(&crate::packets::hci_events::le_subevent::ADVERTISING_REPORT) =>
+            {
+                let mut wire = self.target.to_be_bytes();
+                wire.reverse();
+                let Some(report) = crate::packets::hci_events::advertising_reports(parameters)
+                    .into_iter()
+                    .find(|report| report.header.address == wire)
+                else {
+                    return;
+                };
+                self.peer_address_type = Some(report.header.address_type);
                 self.phase = CentralPhase::Connecting;
-                out.push(command(LE_CREATE_CONNECTION, &self.create_connection_params()));
+                // Scanning and initiating at once is legal but wasteful, and
+                // some controllers refuse it outright.
+                out.push(command(LE_SET_SCAN_ENABLE, &[0x00, 0x00]));
+                out.push(command(
+                    LE_CREATE_CONNECTION,
+                    &self.create_connection_params(),
+                ));
             }
             HciEvent::LeConnectionComplete(event) => {
                 if event.status != 0x00 {
@@ -591,7 +684,8 @@ impl LeCentral {
         params.extend_from_slice(&0x0060u16.to_le_bytes()); // scan interval, 60 ms
         params.extend_from_slice(&0x0030u16.to_le_bytes()); // scan window, 30 ms
         params.push(0x00); // initiator filter policy: use the peer address
-        params.push(0x00); // peer address type: public
+        // Peer address type, as heard on the air (or as the caller stated).
+        params.push(self.peer_address_type.unwrap_or(0x00));
         let mut peer = self.target.to_be_bytes();
         peer.reverse(); // little-endian on the wire
         params.extend_from_slice(&peer);
@@ -693,6 +787,7 @@ impl LeCentral {
             CentralPhase::Ready => self.complete_operation(att, is_error, out),
             CentralPhase::Idle
             | CentralPhase::Initializing
+            | CentralPhase::Scanning
             | CentralPhase::Connecting
             | CentralPhase::Disconnected => {}
         }
@@ -888,10 +983,33 @@ mod tests {
         packet
     }
 
+    /// One LE Advertising Report event for `address` with `address_type`.
+    fn advertising_report(address: Address, address_type: u8) -> Vec<u8> {
+        let mut wire = address.to_be_bytes();
+        wire.reverse();
+        let mut body = vec![
+            crate::packets::hci_events::le_subevent::ADVERTISING_REPORT,
+            0x01,
+            0x00, // ADV_IND
+            address_type,
+        ];
+        body.extend_from_slice(&wire);
+        body.push(0x00); // no AD data
+        body.push(0xC0); // RSSI
+        let mut packet = vec![
+            h4_type::HCI_EVENT,
+            crate::packets::hci_events::event_code::LE_META,
+            body.len() as u8,
+        ];
+        packet.extend_from_slice(&body);
+        packet
+    }
+
     #[test]
     fn le_create_connection_is_withheld_until_the_event_masks_are_open() {
         let mut central = LeCentral::new();
-        let bringup = central.connect("AA:BB:CC:00:00:01".parse().unwrap());
+        let target: Address = "AA:BB:CC:00:00:01".parse().unwrap();
+        let bringup = central.connect_with_type(target, 0x00);
         assert!(!bringup.is_empty(), "connect issues controller bring-up");
         assert_eq!(central.phase(), CentralPhase::Initializing);
         // Anything other than the last init command's completion leaves the
@@ -910,9 +1028,38 @@ mod tests {
     }
 
     #[test]
+    fn the_peers_address_type_is_taken_from_its_advertisement_not_assumed() {
+        // A peer advertising with a random address is unreachable by a
+        // Create Connection that claims "public" — and the in-process
+        // controller never reads the field, so only a real one notices.
+        let mut central = LeCentral::new();
+        let target: Address = "F0:F1:F2:F3:F4:D2".parse().unwrap();
+        central.connect(target);
+        let last = last_init_opcode().to_le_bytes();
+        let out = central.on_packet(&command_complete(last, &[0x00]));
+        assert_eq!(central.phase(), CentralPhase::Scanning);
+        assert_eq!(out[0][1..3], LE_SET_SCAN_PARAMETERS);
+        assert_eq!(out[1][1..3], LE_SET_SCAN_ENABLE);
+
+        // An advertisement from someone else is not the peer.
+        let other: Address = "11:22:33:44:55:66".parse().unwrap();
+        assert!(central.on_packet(&advertising_report(other, 0x01)).is_empty());
+        assert_eq!(central.phase(), CentralPhase::Scanning);
+
+        let out = central.on_packet(&advertising_report(target, 0x01));
+        assert_eq!(central.phase(), CentralPhase::Connecting);
+        let create = out
+            .iter()
+            .find(|packet| packet[1..3] == LE_CREATE_CONNECTION)
+            .expect("the connection was initiated");
+        // scan interval(2) window(2) filter policy(1), then the peer type.
+        assert_eq!(create[4 + 5], 0x01, "peer address type: random");
+    }
+
+    #[test]
     fn a_failed_connection_reports_its_hci_status_rather_than_hanging() {
         let mut central = LeCentral::new();
-        central.connect("AA:BB:CC:00:00:02".parse().unwrap());
+        central.connect_with_type("AA:BB:CC:00:00:02".parse().unwrap(), 0x00);
         let last = last_init_opcode().to_le_bytes();
         central.on_packet(&command_complete(last, &[0x00]));
         // LE Connection Complete with status 0x3E (Connection Failed to be
