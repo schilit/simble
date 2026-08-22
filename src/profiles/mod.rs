@@ -70,7 +70,7 @@ pub use hrs::{BodySensorLocation, HeartRateService};
 pub use mcp::{MediaControlService, mcp_uuid};
 pub use pacs::{PublishedAudioCapabilitiesService, audio_location, pacs_uuid};
 pub use pbp::{PublicBroadcastAnnouncement, pbp_uuid};
-pub use ras::{RangingService, ras_uuid};
+pub use ras::{RangingData, RangingService, ras_uuid};
 pub use tmap::{TelephonyAndMediaAudioService, tmap_uuid};
 pub use vcp::{VolumeControlService, vcp_uuid};
 pub use vocs::{VolumeOffsetControlService, vocs_uuid};

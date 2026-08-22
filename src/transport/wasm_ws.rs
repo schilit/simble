@@ -2904,6 +2904,77 @@ mod web {
 
     /// timer, and read each device's state — the browser pages use this when
     /// the backend selector is set to "in-page". Wraps [`SceneEngine`].
+    /// The ranging demo's scene: a tag and a locator on one simulated
+    /// medium, measured both by RSSI and by Channel Sounding.
+    ///
+    /// The page owns one timer and calls [`WebRanging::tick`]; everything
+    /// else it shows comes out of [`WebRanging::status_json`], which reports
+    /// the ground truth alongside both estimates and the raw measurements
+    /// behind them. See [`crate::device::ranging_scene`].
+    #[wasm_bindgen]
+    pub struct WebRanging {
+        scene: crate::device::RangingScene,
+    }
+
+    #[wasm_bindgen]
+    impl WebRanging {
+        /// Creates the scene with a tag and a locator at the given addresses.
+        #[wasm_bindgen(constructor)]
+        pub fn new(tag: &str, locator: &str) -> Result<WebRanging, JsValue> {
+            install_panic_hook();
+            Ok(Self {
+                scene: crate::device::RangingScene::new(
+                    tag.parse().map_err(js_error)?,
+                    locator.parse().map_err(js_error)?,
+                ),
+            })
+        }
+
+        /// Advances both devices one step.
+        pub fn tick(&mut self) {
+            self.scene.tick();
+        }
+
+        /// Moves the tag to `(x, y)` metres on the floor plan.
+        pub fn set_tag_position(&mut self, x: f64, y: f64) {
+            self.scene
+                .set_tag_position(crate::controller::propagation::Position::new(x, y));
+        }
+
+        /// Sets the room the radio propagates through: the transmit power in
+        /// dBm, the path-loss exponent, and the shadowing standard deviation
+        /// in dB. These are the *truth*; the locator does not learn them.
+        pub fn set_room(&mut self, tx_power_dbm: f64, path_loss_exponent: f64, shadowing_db: f64) {
+            let mut model = self.scene.path_loss();
+            model.tx_power_dbm = tx_power_dbm;
+            model.path_loss_exponent = path_loss_exponent;
+            model.shadowing_sigma_db = shadowing_db;
+            self.scene.set_path_loss(model);
+        }
+
+        /// Sets what the locator's RSSI estimator *assumes*: the calibrated
+        /// one-metre RSSI and the path-loss exponent. Changing these
+        /// re-derives the estimate from samples already collected.
+        pub fn set_rssi_assumptions(&mut self, reference_dbm: f64, path_loss_exponent: f64) {
+            self.scene
+                .set_rssi_assumptions(crate::cs::RssiRangingParams {
+                    reference_rssi_dbm: reference_dbm,
+                    path_loss_exponent,
+                });
+        }
+
+        /// Reseeds the medium's noise, so a run repeats exactly.
+        pub fn set_noise_seed(&mut self, seed: f64) {
+            self.scene.set_noise_seed(seed as u64);
+        }
+
+        /// The whole scene as JSON: truth, room, link state, and both
+        /// methods' inputs, estimates, and errors.
+        pub fn status_json(&self) -> String {
+            self.scene.status_json()
+        }
+    }
+
     #[wasm_bindgen]
     pub struct WebLink {
         scene: super::SceneEngine,
