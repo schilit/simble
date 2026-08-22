@@ -554,26 +554,28 @@ impl CallLineIdentification {
         })
     }
 
-    /// Renders the +CLIP parameter string.
+    /// Renders the +CLIP parameter string (3GPP TS 27.007 7.6).
+    ///
+    /// `<number>`, `<subaddr>` and `<alpha>` are string-typed parameters, so
+    /// they go on the wire in double quotes. This is not cosmetic: a real
+    /// HF reads them with a quoted-string parser (Zephyr's `clip_handle`
+    /// calls `at_get_string`) and gets nothing from a bare value. Absent
+    /// trailing optional fields are omitted rather than sent as empty
+    /// commas, which is also what a real AG does.
     pub(crate) fn to_clip_string(&self) -> String {
-        let fields = [
-            if self.number.is_empty() {
-                String::new()
-            } else {
-                self.number.clone()
-            },
-            self.kind.to_string(),
-            self.subaddr
-                .clone()
-                .filter(|s| !s.is_empty())
-                .unwrap_or_default(),
-            self.satype.map(|v| v.to_string()).unwrap_or_default(),
-            self.alpha
-                .clone()
-                .filter(|s| !s.is_empty())
-                .unwrap_or_default(),
-            self.cli_validity.map(|v| v.to_string()).unwrap_or_default(),
+        let quoted = |value: &str| format!("\"{value}\"");
+        let mut fields = vec![quoted(&self.number), self.kind.to_string()];
+        let optional = [
+            self.subaddr.as_deref().map(quoted),
+            self.satype.map(|v| v.to_string()),
+            self.alpha.as_deref().map(quoted),
+            self.cli_validity.map(|v| v.to_string()),
         ];
+        if let Some(last) = optional.iter().rposition(Option::is_some) {
+            for value in &optional[..=last] {
+                fields.push(value.clone().unwrap_or_default());
+            }
+        }
         fields.join(",")
     }
 }
@@ -843,6 +845,17 @@ pub fn parse_call_infos(responses: &[AtResponse]) -> Vec<CallInfo> {
     responses.iter().filter_map(parse_one_call_info).collect()
 }
 
+/// Extracts the operator name from the `+COPS: <mode>,<format>,"<name>"`
+/// line of a completed `AT+COPS?` [`HfpEvent::CommandCompleted`].
+pub fn parse_network_operator(responses: &[AtResponse]) -> Option<String> {
+    responses
+        .iter()
+        .find(|r| r.code == "+COPS")
+        .and_then(|r| r.parameters.get(2))
+        .and_then(AtParameter::as_str)
+        .map(str::to_string)
+}
+
 fn parse_one_call_info(response: &AtResponse) -> Option<CallInfo> {
     if response.code != "+CLCC" {
         return None;
@@ -967,6 +980,17 @@ impl HfProtocol {
         bytes
     }
 
+    /// Whether a command is still waiting for its final status.
+    ///
+    /// An AT response carries nothing that identifies which command it
+    /// answers — only its position in the stream does — so there is exactly
+    /// one outstanding-command slot. A caller that issues a second command
+    /// before the first completes will have the responses attributed to the
+    /// wrong one.
+    pub fn has_pending_command(&self) -> bool {
+        self.pending_command.is_some()
+    }
+
     /// Sends an ad hoc command outside the SLC procedure; its outcome
     /// arrives via a later `HfpEvent::CommandCompleted` from [`Self::receive`].
     pub fn send_command(&mut self, cmd: impl Into<String>) -> Vec<u8> {
@@ -993,9 +1017,27 @@ impl HfProtocol {
         self.send_command("AT+CHUP")
     }
 
-    /// Dials `number` (ATD).
+    /// Dials `number` (`ATD<number>;`).
+    ///
+    /// The trailing semicolon is not decoration: under V.250 it is what
+    /// makes the call a voice call rather than a data call, and HFP v1.9
+    /// 4.19.1 specifies `ATD<number>;` for exactly that reason. An AG that
+    /// checks for it (Zephyr's `hfp_ag.c` does) rejects the bare form.
     pub fn dial(&mut self, number: &str) -> Vec<u8> {
-        self.send_command(format!("ATD{number}"))
+        self.send_command(format!("ATD{number};"))
+    }
+
+    /// Selects the operator-name format (`AT+COPS=3,0`), which HFP v1.9 4.7
+    /// requires the HF to do before the name may be read.
+    pub fn select_operator_format(&mut self) -> Vec<u8> {
+        self.send_command("AT+COPS=3,0")
+    }
+
+    /// Reads the network operator name (`AT+COPS?`); the answer arrives in
+    /// the `HfpEvent::CommandCompleted` responses, for
+    /// [`parse_network_operator`].
+    pub fn query_network_operator(&mut self) -> Vec<u8> {
+        self.send_command("AT+COPS?")
     }
 
     /// Queries current calls (AT+CLCC).
@@ -1323,6 +1365,10 @@ pub struct AgProtocol {
     pub(crate) call_waiting_enabled: bool,
     /// Whether in-band ring tones are enabled.
     pub inband_ringtone_enabled: bool,
+    /// Network operator name reported by `AT+COPS?`.
+    pub network_operator: String,
+    /// Whether the HF selected the operator-name format with `AT+COPS=3,0`.
+    pub(crate) cops_format_selected: bool,
 
     remaining_slc_setup_features: HashSet<u32>,
     read_buffer: Vec<u8>,
@@ -1346,6 +1392,8 @@ impl AgProtocol {
             cli_notification_enabled: false,
             call_waiting_enabled: false,
             inband_ringtone_enabled: true,
+            network_operator: String::new(),
+            cops_format_selected: false,
             remaining_slc_setup_features: HashSet::new(),
             read_buffer: Vec::new(),
         }
@@ -1408,6 +1456,8 @@ impl AgProtocol {
             ("CHUP", AtSubCode::None) => self.on_chup(outgoing, events),
             ("CLCC", AtSubCode::None) => self.on_clcc(outgoing),
             ("CLIP", AtSubCode::Set) => self.on_clip(&cmd.parameters, outgoing),
+            ("COPS", AtSubCode::Set) => self.on_cops_set(&cmd.parameters, outgoing),
+            ("COPS", AtSubCode::Read) => self.on_cops_read(outgoing),
             ("VGS", AtSubCode::Set) => self.on_vgs(&cmd.parameters, outgoing, events),
             ("VGM", AtSubCode::Set) => self.on_vgm(&cmd.parameters, outgoing, events),
             _ => outgoing.push(response_bytes("ERROR")),
@@ -1729,10 +1779,14 @@ impl AgProtocol {
         outgoing: &mut Vec<Vec<u8>>,
         events: &mut Vec<HfpEvent>,
     ) {
+        // V.250's trailing `;` selects a voice call; it is part of the
+        // command, not part of the number, so it is stripped before the
+        // number reaches the caller.
         let number = params
             .first()
             .and_then(AtParameter::as_str)
             .unwrap_or("")
+            .trim_end_matches(';')
             .to_string();
         events.push(HfpEvent::Dial(number));
         outgoing.push(response_bytes("OK"));
@@ -1766,6 +1820,35 @@ impl AgProtocol {
 
     fn on_clip(&mut self, params: &[AtParameter], outgoing: &mut Vec<Vec<u8>>) {
         self.cli_notification_enabled = params.first().and_then(AtParameter::as_str) == Some("1");
+        outgoing.push(response_bytes("OK"));
+    }
+
+    /// `AT+COPS=<mode>,<format>` (HFP v1.9 4.7): the HF must select mode 3
+    /// (set format only, do not attempt network selection) and format 0
+    /// (long alphanumeric) before it may read the name, so any other pair is
+    /// refused rather than silently accepted.
+    fn on_cops_set(&mut self, params: &[AtParameter], outgoing: &mut Vec<Vec<u8>>) {
+        let mode = params.first().and_then(AtParameter::as_u32);
+        let format = params.get(1).and_then(AtParameter::as_u32);
+        if (mode, format) != (Some(3), Some(0)) {
+            outgoing.push(self.cme_error_response(CmeError::OperationNotSupported));
+            return;
+        }
+        self.cops_format_selected = true;
+        outgoing.push(response_bytes("OK"));
+    }
+
+    /// `AT+COPS?` (HFP v1.9 4.7). Answered only once the format has been
+    /// selected; a bare read is an ordering error, not a missing name.
+    fn on_cops_read(&mut self, outgoing: &mut Vec<Vec<u8>>) {
+        if !self.cops_format_selected {
+            outgoing.push(self.cme_error_response(CmeError::OperationNotAllowed));
+            return;
+        }
+        outgoing.push(response_bytes(&format!(
+            "+COPS: 0,0,\"{}\"",
+            self.network_operator
+        )));
         outgoing.push(response_bytes("OK"));
     }
 

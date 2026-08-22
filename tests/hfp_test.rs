@@ -16,6 +16,7 @@ use simble::classic::hfp::{
     CallLineIdentification, HfConfiguration, HfIndicator, HfProtocol, HfpEvent, ProfileVersion,
     VoiceRecognitionState, ag_feature, ag_sdp_feature, find_ag_sdp_record, find_hf_sdp_record,
     hf_feature, hf_sdp_feature, make_ag_sdp_records, make_hf_sdp_records, parse_call_infos,
+    parse_network_operator,
 };
 use simble::classic::sdp::{SdpClient, SdpServer};
 
@@ -403,15 +404,24 @@ fn test_microphone_volume() {
 #[test]
 fn test_cli_notification() {
     let (mut hf, mut ag) = default_hfp_connections();
+    // Bumble's version of this test pre-quotes the number and the name,
+    // because Bumble's `to_clip_string` does not quote string parameters
+    // itself. Simble does (TS 27.007 7.6 makes them string-typed, and a real
+    // HF parses them with a quoted-string reader), so the caller passes
+    // plain values and gets plain values back.
     let cli = CallLineIdentification {
-        number: "\"123456789\"".to_string(),
+        number: "123456789".to_string(),
         kind: 129,
         subaddr: None,
         satype: None,
-        alpha: Some("\"Bumble\"".to_string()),
+        alpha: Some("Bumble".to_string()),
         cli_validity: None,
     };
     let cmd = ag.send_cli_notification(&cli);
+    assert_eq!(
+        String::from_utf8_lossy(&cmd),
+        "\r\n+CLIP: \"123456789\",129,,,\"Bumble\"\r\n"
+    );
     let (_, events) = hf.receive(&cmd);
 
     let received = events
@@ -432,6 +442,82 @@ fn test_cli_notification() {
             cli_validity: None,
         }
     );
+}
+
+#[test]
+fn test_a_bare_caller_id_is_quoted_the_way_a_real_hands_free_expects_to_read_it() {
+    let mut ag = AgProtocol::new(default_ag_configuration());
+    let cli = CallLineIdentification {
+        number: "+15551234".to_string(),
+        kind: 129,
+        subaddr: None,
+        satype: None,
+        alpha: None,
+        cli_validity: None,
+    };
+    // Zephyr's AG emits exactly this shape, and its HF reads the number
+    // with at_get_string(); trailing empty optional fields are not sent.
+    assert_eq!(
+        String::from_utf8_lossy(&ag.send_cli_notification(&cli)),
+        "\r\n+CLIP: \"+15551234\",129\r\n"
+    );
+}
+
+#[test]
+fn test_the_operator_name_can_only_be_read_after_its_format_is_selected() {
+    let (mut hf, mut ag) = default_hfp_connections();
+    ag.network_operator = "Simble Mobile".into();
+
+    // HFP v1.9 4.7 orders these: AT+COPS=3,0 first, then the read. A bare
+    // read is an ordering error, and with extended errors off that is a
+    // plain ERROR.
+    let cmd = hf.query_network_operator();
+    let (out, _) = ag.receive(&cmd);
+    assert_eq!(String::from_utf8_lossy(&out[0]), "\r\nERROR\r\n");
+
+    let cmd = hf.select_operator_format();
+    let (out, _) = ag.receive(&cmd);
+    assert_eq!(String::from_utf8_lossy(&out[0]), "\r\nOK\r\n");
+
+    let cmd = hf.query_network_operator();
+    let (out, _) = ag.receive(&cmd);
+    assert_eq!(
+        String::from_utf8_lossy(&out[0]),
+        "\r\n+COPS: 0,0,\"Simble Mobile\"\r\n"
+    );
+}
+
+#[test]
+fn test_the_hands_free_reads_the_operator_name_out_of_the_response() {
+    let (mut hf, mut ag) = default_hfp_connections();
+    ag.network_operator = "Simble Mobile".into();
+    let cmd = hf.select_operator_format();
+    let (out, _) = ag.receive(&cmd);
+    for line in out {
+        hf.receive(&line);
+    }
+
+    let cmd = hf.query_network_operator();
+    let (out, _) = ag.receive(&cmd);
+    let mut operator = None;
+    for line in out {
+        for event in hf.receive(&line).1 {
+            if let HfpEvent::CommandCompleted { responses, .. } = event {
+                operator = parse_network_operator(&responses);
+            }
+        }
+    }
+    assert_eq!(operator.as_deref(), Some("Simble Mobile"));
+}
+
+#[test]
+fn test_selecting_any_format_but_the_long_alphanumeric_one_is_refused() {
+    let (mut hf, mut ag) = default_hfp_connections();
+    // Mode 0 would ask the AG to actually select a network, which an HF is
+    // not allowed to do.
+    let cmd = hf.send_command("AT+COPS=0,0");
+    let (out, _) = ag.receive(&cmd);
+    assert_eq!(String::from_utf8_lossy(&out[0]), "\r\nERROR\r\n");
 }
 
 #[test]
