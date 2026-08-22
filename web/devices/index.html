@@ -4,9 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light">
-<title>SimBLE Car Kit</title>
+<title>SimBLE Devices</title>
 <link rel="stylesheet" href="../common/simble.css">
 <link rel="stylesheet" href="../common/nav.css">
+<style>
+  .domain-strip { display: flex; gap: 0.35rem; align-items: baseline; flex-wrap: wrap;
+    padding: 0.6rem 1.5rem 0; max-width: 72rem; margin: 0 auto; }
+  .domain-tab { padding: 0.4rem 0.85rem; border-radius: 7px 7px 0 0; text-decoration: none;
+    color: var(--dim); font-weight: 600; font-size: 0.95rem; border: 1px solid transparent;
+    border-bottom: none; }
+  .domain-tab:hover { color: var(--fg); background: rgba(0,0,0,0.03); }
+  .domain-tab[aria-current="page"] { color: var(--fg); background: var(--panel);
+    border-color: var(--line); }
+  .domain-blurb { padding: 0.5rem 1.5rem 0; max-width: 72rem; margin: 0 auto;
+    color: var(--dim); font-size: 0.88rem; border-top: 1px solid var(--line); }
+</style>
 </head>
 <body>
 <nav class="sitenav">
@@ -29,26 +41,15 @@
   <a class="ext" href="https://github.com/schilit/simble">GitHub ↗</a>
 </nav>
 <header>
-  <h1>SimBLE Car Kit</h1>
-  <span class="sub">a phone and a hands-free head unit, and the AT dialogue between them</span>
+  <h1>SimBLE Devices</h1>
+  <span class="sub">whole devices, each playing several protocol roles over one link</span>
 </header>
 
-<!-- The domain module builds everything into this container. Keeping the page
-     itself empty is what lets the same module be mounted as a tab in the
-     domain shell without changing a line of it. -->
-<main></main>
+<div class="domain-strip" id="tabs"></div>
+<div class="domain-blurb" id="blurb"></div>
 
-<footer>
-  SimBLE compiled to WebAssembly. Both endpoints run in this one page on one timer:
-  <code>AgProtocol</code> and an <code>SdpServer</code> for the phone,
-  <code>HfProtocol</code> and an <code>SdpClient</code> for the head unit, with two RFCOMM
-  multiplexers handing frames to each other. Nothing here is recorded or replayed — the AT
-  lines are what the protocol layers produced this run.
-</footer>
+<main id="stage"></main>
 
-<script type="module">
-  import { mount } from "./car.js";
-  mount(document.querySelector("main"));
-</script>
+<script type="module" src="./devices.js"></script>
 </body>
 </html>
