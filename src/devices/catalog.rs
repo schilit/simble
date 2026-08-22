@@ -810,15 +810,150 @@ fn tick(server, t) {
     },
 ];
 
+/// One **client** catalog entry: a script that *drives* a device instead of
+/// being one (`android::BluetoothGatt`).
+///
+/// It carries `peer` — the peripheral entry it was written against — because
+/// a client is only meaningful pointed at something. That is what lets a test
+/// (or an agent) stand the pair up in one step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClientExample {
+    /// The catalog name.
+    pub name: &'static str,
+    /// One-line description, shown when the catalog is listed.
+    pub summary: &'static str,
+    /// The name of the [`EXAMPLES`] entry this client was written for.
+    pub peer: &'static str,
+    /// The Rhai source. Complete and runnable as-is.
+    pub script: &'static str,
+}
+
+/// The address every client example connects to.
+///
+/// A script names its own target, which is right for the playground and for
+/// a scene file where the topology is written down. A host that allocates
+/// addresses itself (MCP, a page) overrides it with
+/// `ScriptedCentral::set_target` — topology beats script — so this literal is
+/// a default, not a requirement.
+pub const EXAMPLE_PEER_ADDRESS: &str = "AA:BB:CC:00:00:01";
+
+/// Client-side catalog entries: scripted GATT *centrals*.
+pub const CENTRAL_EXAMPLES: &[ClientExample] = &[
+    ClientExample {
+        name: "hrm_client",
+        summary: "Heart-rate client: connect, subscribe, assert the readings are plausible",
+        peer: "hrm",
+        script: r#"// The client half of GATT, in the same Android vocabulary as the
+// server half: android::BluetoothGatt is Android's BluetoothGatt, and the
+// on_* functions are its BluetoothGattCallback.
+//
+// This script is also a test: `assert` inside a callback fails the run.
+let client = android::BluetoothGatt("HRM Client");
+client.connect("AA:BB:CC:00:00:01");
+
+// Discovery is what makes UUIDs usable — before it finishes the peer's
+// handles are unknown, so subscribe from here rather than at top level.
+fn on_services_discovered(client) {
+    assert(client.has_characteristic(uuid::HEART_RATE_MEASUREMENT),
+        "the peer is a heart-rate monitor");
+    client.subscribe(uuid::HEART_RATE_MEASUREMENT);
+}
+
+fn on_characteristic_changed(client, uuid, value) {
+    // [flags, bpm] — Heart Rate Measurement, Vol 3 Part G / the HRS spec.
+    assert(value.len() >= 2, "measurement carries flags and a rate");
+    assert(value[1] > 30 && value[1] < 220, "a plausible heart rate");
+    client.emit("bpm", value[1]);
+}
+"#,
+    },
+    ClientExample {
+        name: "thermostat_client",
+        summary: "Write then watch: sets a setpoint, subscribes, asserts the room converges",
+        peer: "thermostat",
+        script: r#"// A client that changes the device and then checks the device changed:
+// write the setpoint, subscribe to the temperature, and assert it moves
+// toward the target. The `this` map is how a callback remembers anything
+// — script functions are pure and cannot see the calling scope.
+let client = android::BluetoothGatt("Thermostat Client");
+client.connect("AA:BB:CC:00:00:01");
+
+const SETPOINT = uuid::of("5e7b0002-c0de-4a11-b1e5-0000c0ffee01");
+const TEMPERATURE = uuid::from_u16(0x2A6E);
+
+fn on_services_discovered(client) {
+    this.target = 26;
+    this.seen = 0;
+    client.write(SETPOINT, [this.target]);
+    client.subscribe(TEMPERATURE);
+}
+
+fn on_characteristic_write(client, uuid, status) {
+    assert(status == 0, "the setpoint was accepted");
+}
+
+fn on_characteristic_changed(client, uuid, value) {
+    // [flags, degrees C].
+    let degrees = value[1];
+    this.seen += 1;
+    client.emit("temperature", degrees);
+    // The room starts at 18 and steps one degree per tick, so it must
+    // never overshoot the target it was told to reach.
+    assert(degrees <= this.target, "the room does not overshoot the setpoint");
+}
+"#,
+    },
+    ClientExample {
+        name: "gatt_walker",
+        summary: "Discovery only: prints every service and characteristic the peer exposes",
+        peer: "smart_lock",
+        script: r#"// The smallest useful client: connect, discover, and report. Useful
+// against an unknown device — and against a device you wrote, to check it
+// publishes what you think it does.
+let client = android::BluetoothGatt("Walker");
+client.connect("AA:BB:CC:00:00:01");
+
+fn on_services_discovered(client) {
+    for service in client.services() {
+        client.emit("service", service.to_string());
+        for characteristic in client.characteristics(service) {
+            client.emit("characteristic", characteristic.to_string());
+        }
+    }
+    assert(client.services().len() > 0, "the peer published a GATT database");
+}
+"#,
+    },
+];
+
 /// The script for catalog entry `name`, or `None` if there is no such entry.
+/// Peripherals first, then clients: the two namespaces are disjoint.
 pub fn script(name: &str) -> Option<&'static str> {
-    EXAMPLES.iter().find(|e| e.name == name).map(|e| e.script)
+    EXAMPLES
+        .iter()
+        .find(|e| e.name == name)
+        .map(|e| e.script)
+        .or_else(|| {
+            CENTRAL_EXAMPLES
+                .iter()
+                .find(|e| e.name == name)
+                .map(|e| e.script)
+        })
+}
+
+/// The client catalog entry called `name`, or `None`.
+pub fn central(name: &str) -> Option<&'static ClientExample> {
+    CENTRAL_EXAMPLES.iter().find(|e| e.name == name)
 }
 
 /// Every catalog name, in catalog order — for error messages that tell a
 /// caller what they *could* have asked for.
 pub fn names() -> Vec<&'static str> {
-    EXAMPLES.iter().map(|e| e.name).collect()
+    EXAMPLES
+        .iter()
+        .map(|e| e.name)
+        .chain(CENTRAL_EXAMPLES.iter().map(|e| e.name))
+        .collect()
 }
 
 /// Every catalog name joined with ", ", the tail of an "unknown device" error.
@@ -843,5 +978,26 @@ mod tests {
             );
         }
         assert!(script("no-such-device").is_none());
+    }
+
+    #[test]
+    fn every_client_example_names_a_peripheral_that_exists() {
+        let mut seen = std::collections::HashSet::new();
+        for example in CENTRAL_EXAMPLES {
+            assert!(seen.insert(example.name), "duplicate name {}", example.name);
+            assert!(
+                EXAMPLES.iter().any(|p| p.name == example.peer),
+                "{} names peer {:?}, which is not in the catalog",
+                example.name,
+                example.peer
+            );
+            assert!(
+                example.script.contains(EXAMPLE_PEER_ADDRESS),
+                "{} does not connect to the documented example address",
+                example.name
+            );
+            assert_eq!(script(example.name), Some(example.script));
+        }
+        assert!(central("hrm").is_none(), "peripherals are not clients");
     }
 }
