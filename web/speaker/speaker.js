@@ -7,24 +7,24 @@
 // scaled by the speaker's Volume State characteristic, so both the audio and
 // the volume come out of the simulated stack.
 //
-// What is modeled: the ISO media plane — HCI ISO packets, SDU framing and
-// sequence numbers, routing over the simulated radio. What is not: CIS
-// establishment (SDUs ride the connection handle) and the LC3 codec (SDUs
-// carry 16-bit PCM; the payload is opaque to SimBLE, so a codec can slot in
-// later without changing the path).
+// What is modeled: the whole media plane. On the netsim controller the SDUs
+// arrive over a real CIS, carrying real LC3 frames — the Audio Source page
+// (or any LE Audio source) is the other end. The in-page link keeps the
+// simpler path, where a source in this same page streams over the simulated
+// radio without a CIS.
 
 import init, { WebPeripheral, WebLink, WebLc3 } from "../pkg/simble.js";
 import { renderGatt } from "../common/viewer.js";
 import { attachHighlightedEditor } from "../common/highlight.js";
 import { createBackendSelector } from "../common/backend.js";
+import { LE_AUDIO_SINK_SCRIPT as DEFAULT_SCRIPT } from "../common/le-audio-sink.js";
 
 const IN_PAGE_ADDR = "CC:1E:57:00:00:06";
 const SOURCE_ADDR = "CC:1E:57:00:00:07";
 
-// The media plane: SDUs carry 16-bit PCM at this rate, one frame per interval.
-// Real LE Audio would carry LC3 frames over a CIS; SimBLE models the SDU
-// transport (framing, sequence numbers, routing) and leaves the payload
-// opaque, so a codec can slot in later without changing the path.
+// The media plane: one frame per interval at this rate. The payload is
+// opaque to SimBLE itself — the codec lives in the page — which is why the
+// same path carries LC3 or raw PCM depending on the selector below.
 const PCM_RATE = 16000;
 // LC3 is defined for 7.5 ms and 10 ms frames; 10 ms at 16 kHz with 40 octets
 // per frame is exactly what this device's PAC record advertises.
@@ -51,63 +51,6 @@ const OP_UP = 0x01;
 const OP_UNMUTE_UP = 0x03;
 const OP_SET_ABSOLUTE = 0x04;
 
-const DEFAULT_SCRIPT = `// SimBLE Speaker — LE Audio Volume Control Service.
-// The control-point idiom: a peer WRITES a command opcode, and the device
-// applies it, updates its state and bumps the change counter. Nothing writes
-// the volume directly.
-let server = android::BluetoothGattServer("web-speaker");
-
-// A real LE Audio sink: PACS declares what this device can decode and
-// ASCS carries the endpoint a peer configures. Without them a phone (or
-// Bumble) has nothing to set a stream up against, however good the
-// volume control is.
-server.add_pacs(0x03, 0x00);   // sink locations: front left + front right
-server.add_ascs([0x01], []);   // one sink ASE
-server.advertise_service_uuid(0x1850);
-server.advertise_service_uuid(0x184E);
-// The targeted announcement LeAudioService scans for:
-// [type, available contexts (4 octets), metadata length]
-server.advertise_service_data(0x184E, [0x01, 0x06, 0x00, 0x00, 0x00, 0x00]);
-
-let vcs = android::BluetoothGattService(uuid::VOLUME_CONTROL_SERVICE, android::SERVICE_TYPE_PRIMARY);
-
-let state = android::BluetoothGattCharacteristic(uuid::VOLUME_STATE,
-    android::PROPERTY_READ | android::PROPERTY_NOTIFY, android::PERMISSION_READ);
-state.set_value([128, 0, 0]); // [volume 0-255, muted, change counter]
-state.add_descriptor(android::BluetoothGattDescriptor(
-    uuid::CLIENT_CHARACTERISTIC_CONFIGURATION,
-    android::PERMISSION_READ | android::PERMISSION_WRITE));
-vcs.add_characteristic(state);
-
-let point = android::BluetoothGattCharacteristic(uuid::VOLUME_CONTROL_POINT,
-    android::PROPERTY_WRITE, android::PERMISSION_WRITE);
-point.set_value([0xFF]); // 0xFF = no command pending
-vcs.add_characteristic(point);
-
-let flags = android::BluetoothGattCharacteristic(uuid::VOLUME_FLAGS,
-    android::PROPERTY_READ | android::PROPERTY_NOTIFY, android::PERMISSION_READ);
-flags.set_value([0x01]); // volume setting persisted
-vcs.add_characteristic(flags);
-server.add_service(vcs);
-
-// Opcodes: 0x00 down, 0x01 up, 0x02/0x03 unmute+down/up, 0x04 set absolute,
-// 0x05 unmute, 0x06 mute. A write is [opcode, change_counter] (+ volume for 0x04).
-fn tick(server, t) {
-    let command = server.value(uuid::VOLUME_CONTROL_POINT);
-    if command.len() < 1 || command[0] == 0xFF { return; }
-    let state = server.value(uuid::VOLUME_STATE);
-    let volume = state[0];
-    let muted = state[1];
-    let op = command[0];
-    if op == 0x00 || op == 0x02 { volume = if volume > 16 { volume - 16 } else { 0 }; }
-    if op == 0x01 || op == 0x03 { volume = if volume < 239 { volume + 16 } else { 255 }; }
-    if op == 0x02 || op == 0x03 || op == 0x05 { muted = 0; }
-    if op == 0x04 && command.len() > 2 { volume = command[2]; }
-    if op == 0x06 { muted = 1; }
-    server.update_value(uuid::VOLUME_STATE, [volume, muted, (state[2] + 1) % 256]);
-    server.update_value(uuid::VOLUME_CONTROL_POINT, [0xFF]); // consumed
-}
-`;
 
 // --- DOM -------------------------------------------------------------------
 const $ = (id) => document.getElementById(id);
@@ -207,7 +150,17 @@ let masterGain = null;
 
 function startAudio() {
   if (audio) return;
-  audio = new (window.AudioContext || window.webkitAudioContext)();
+  // Run the graph at the stream's own sample rate. At the hardware rate
+  // (44.1 kHz here) every 160-sample buffer was resampled on its own, by a
+  // ratio of 2.75625, so each 10 ms chunk picked up a filter transient at
+  // both edges -- 100 discontinuities a second, which is audible as a
+  // scratchy stream even when every SDU arrives on time.
+  const Ctor = window.AudioContext || window.webkitAudioContext;
+  try {
+    audio = new Ctor({ sampleRate: PCM_RATE });
+  } catch (e) {
+    audio = new Ctor();   // some browsers refuse a non-hardware rate
+  }
   masterGain = audio.createGain();
   masterGain.gain.value = 0;
 
@@ -274,6 +227,11 @@ function pumpSource(now) {
 // Plays the SDUs the sink received. Each is 16-bit PCM; it is queued into the
 // Web Audio graph THROUGH the volume gain, so what you hear is the streamed
 // audio scaled by the device's Volume State characteristic.
+// A jitter buffer. SDUs are drained in ~100 ms batches, so scheduling them
+// only 20 ms ahead meant any late tick landed past the cursor and playback
+// snapped forward — an audible gap on nearly every batch. Holding a lead
+// larger than the drain interval absorbs that jitter.
+const JITTER_LEAD_S = 0.25;
 let playCursor = 0;
 function playReceivedSdus() {
   if (!audio || !masterGain) return;
@@ -290,6 +248,10 @@ function playReceivedSdus() {
     }
   } catch (e) { return; }
   if (!sdus || sdus.length === 0) return;
+  // Decode the whole batch into ONE buffer. Scheduling each SDU as its own
+  // AudioBufferSourceNode put a seam every 10 ms; a batch has one seam.
+  const decoded = [];
+  let total = 0;
   for (const bytes of sdus) {
     let pcm;
     if (codecMode === "lc3" && lc3) {
@@ -302,31 +264,48 @@ function playReceivedSdus() {
     } else {
       pcm = new Int16Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 2);
     }
-    const buffer = audio.createBuffer(1, pcm.length, PCM_RATE);
+    decoded.push(pcm);
+    total += pcm.length;
+  }
+  if (total > 0) {
+    const buffer = audio.createBuffer(1, total, PCM_RATE);
     const channel = buffer.getChannelData(0);
-    for (let i = 0; i < pcm.length; i++) channel[i] = pcm[i] / 32768;
+    let at = 0;
+    for (const pcm of decoded) {
+      for (let i = 0; i < pcm.length; i++) channel[at + i] = pcm[i] / 32768;
+      at += pcm.length;
+    }
     const node = audio.createBufferSource();
     node.buffer = buffer;
     node.connect(masterGain);
-    // Schedule back-to-back so consecutive SDUs play gaplessly.
-    const startAt = Math.max(audio.currentTime + 0.02, playCursor);
+    // Schedule back-to-back so consecutive SDUs play gaplessly. Falling
+    // behind the clock means the source is not keeping up: re-prime the
+    // buffer and count it, because that is what scratchy playback sounds
+    // like and it should be visible rather than merely audible.
+    let startAt = playCursor;
+    if (startAt < audio.currentTime) {
+      if (streamStats.played > 0) streamStats.underruns++;
+      startAt = audio.currentTime + JITTER_LEAD_S;
+    }
     node.start(startAt);
     playCursor = startAt + buffer.duration;
-    streamStats.played++;
+    streamStats.played += decoded.length;
   }
   streamStats.received += sdus.length;
   updateStreamStats();
 }
 
-const streamStats = { received: 0, played: 0 };
+const streamStats = { received: 0, played: 0, underruns: 0 };
 function updateStreamStats() {
   const el = document.getElementById("stream-stats");
   if (el) {
     el.textContent = streaming
       ? `streaming ${codecMode.toUpperCase()} — ${streamStats.received} SDUs received ` +
         `(${SAMPLES_PER_SDU} samples/frame, ${PCM_RATE / 1000} kHz` +
-        (codecMode === "lc3" ? `, ${LC3_FRAME_BYTES} octets/frame)` : ")")
-      : `${streamStats.received} SDUs received`;
+        (codecMode === "lc3" ? `, ${LC3_FRAME_BYTES} octets/frame)` : ")") +
+        (streamStats.underruns ? ` · ${streamStats.underruns} underruns` : " · no underruns")
+      : `${streamStats.received} SDUs received` +
+        (streamStats.received ? ` · ${streamStats.underruns} underruns` : "");
   }
 }
 
