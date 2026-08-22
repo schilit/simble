@@ -35,8 +35,13 @@ jobs:
 
       - name: Build Simble for wasm32
         # The getrandom cfg selects its browser backend (see Cargo.toml's
-        # wasm32 dependency block).
-        run: cargo build --release --target wasm32-unknown-unknown --lib
+        # wasm32 dependency block). `lc3` is required, not optional: without
+        # it the bindings carry no WebLc3, and the Media domain fails to
+        # start on the deployed site while working locally for anyone who
+        # built with the feature.
+        run: >
+          cargo build --release --target wasm32-unknown-unknown --lib
+          --features lc3
         env:
           RUSTFLAGS: --cfg getrandom_backend="wasm_js"
 
