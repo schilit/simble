@@ -3258,6 +3258,84 @@ mod web {
         }
     }
 
+    // -- Car page: the hands-free car kit ---------------------------------
+    //
+    // Both endpoints live in one wasm object driven by one timer, because a
+    // two-tab design silently stalls: Chrome throttles a hidden tab hard
+    // enough that a device in one misses protocol deadlines.
+
+    /// The Car page's engine: a phone and a head unit on one HFP link.
+    /// Wraps [`CarKit`](crate::device::car_kit::CarKit), which needs no
+    /// transport of its own — there is no WebSocket and no netsim here.
+    #[wasm_bindgen]
+    pub struct WebCarKit {
+        kit: crate::device::car_kit::CarKit,
+    }
+
+    #[wasm_bindgen]
+    impl WebCarKit {
+        /// Creates the pair and starts the head unit reaching for the phone.
+        #[wasm_bindgen(constructor)]
+        pub fn new() -> WebCarKit {
+            install_panic_hook();
+            let mut kit = crate::device::car_kit::CarKit::new();
+            kit.start();
+            Self { kit }
+        }
+
+        /// One step of the link. `now_ms` is the page's clock.
+        pub fn tick(&mut self, now_ms: f64) {
+            self.kit.tick(now_ms.max(0.0) as u64);
+        }
+
+        /// Everything the page renders. `since_seq` selects the AT lines the
+        /// page has not appended yet.
+        pub fn status_json(&self, since_seq: f64) -> String {
+            self.kit.status_json(since_seq.max(0.0) as u64)
+        }
+
+        /// Routes one UI action. `argument` is the number for `dial`, the
+        /// operator name for `operator`, and the level for the gain and
+        /// indicator commands; it is ignored otherwise. Returns whether the
+        /// action was accepted, so the page can grey out what the link
+        /// cannot do yet.
+        pub fn command(&mut self, name: &str, argument: &str) -> bool {
+            use crate::classic::hfp::AgIndicator;
+            let level = || argument.parse::<u8>().unwrap_or(0);
+            let value = || argument.parse::<u32>().unwrap_or(0);
+            match name {
+                "incoming" => self.kit.incoming_call(argument),
+                "phone-dial" => self.kit.phone_dial(argument),
+                "phone-end" => self.kit.phone_end_call(),
+                "answer" => self.kit.answer(),
+                "hangup" => self.kit.hang_up(),
+                "car-dial" => self.kit.car_dial(argument),
+                "speaker" => self.kit.set_speaker_gain(level()),
+                "microphone" => self.kit.set_microphone_gain(level()),
+                "mute" => self.kit.set_microphone_muted(argument == "1"),
+                "voice" => self.kit.set_voice_recognition(argument == "1"),
+                "calls" => self.kit.query_calls(),
+                "service" => self.kit.set_indicator(AgIndicator::Service, value()),
+                "signal" => self.kit.set_indicator(AgIndicator::Signal, value()),
+                "battery" => self.kit.set_indicator(AgIndicator::BatteryCharge, value()),
+                "roam" => self.kit.set_indicator(AgIndicator::Roam, value()),
+                "operator" => {
+                    self.kit.set_operator(argument);
+                    true
+                }
+                _ => false,
+            }
+        }
+    }
+
+    impl Default for WebCarKit {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    // -- end Car page ------------------------------------------------------
+
     /// The default HRM script, so the page needs no separate fetch.
     #[wasm_bindgen]
     pub fn default_heart_rate_script() -> String {
@@ -3281,7 +3359,8 @@ mod web {
 
 #[cfg(target_arch = "wasm32")]
 pub use web::{
-    WebAdvertiser, WebPeripheral, WebScanner, WebSession, default_heart_rate_script, run_test,
+    WebAdvertiser, WebCarKit, WebPeripheral, WebScanner, WebSession, default_heart_rate_script,
+    run_test,
 };
 
 #[cfg(test)]
