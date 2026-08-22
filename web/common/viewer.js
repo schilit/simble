@@ -12,7 +12,7 @@
 // discovered-tree view, with the per-characteristic operations the server view
 // has no business offering.
 
-import { createGattView } from "./gatt-view.js";
+import { gattViewFor } from "./gatt-view.js";
 
 export {
   escapeHtml,
@@ -24,7 +24,7 @@ export {
   propChips,
 } from "./viewer-format.js";
 
-export { createGattView, promptForBytes } from "./gatt-view.js";
+export { createGattView, gattViewFor, promptForBytes } from "./gatt-view.js";
 
 /**
  * Renders a peripheral's own GATT database into `gattEl`.
@@ -37,17 +37,7 @@ export { createGattView, promptForBytes } from "./gatt-view.js";
  * @returns {?string} the "service/characteristic" key whose value just changed.
  */
 export function renderGatt(gattEl, status, prevValues) {
-  let view = gattEl._simbleView;
-  // Some callers clear their own container between renders; a view whose
-  // element is no longer in it would quietly update a detached node.
-  if (view && view.el.parentNode !== gattEl) view = null;
-  if (!view) {
-    view = createGattView({ mode: "server" });
-    gattEl.innerHTML = "";
-    gattEl.append(view.el);
-    gattEl._simbleView = view;
-  }
-  const changed = view.update(status);
+  const changed = gattViewFor(gattEl, { mode: "server" }).update(status);
   if (prevValues) {
     for (const service of status?.services || []) {
       for (const c of service.characteristics || []) {

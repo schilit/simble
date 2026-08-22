@@ -426,8 +426,9 @@ export async function mount(container) {
     stopped = false;
     setupPanel.classList.remove("visible");
     setModeHint();
-    // The two backends put the bulb on the air at different addresses, so the
-    // header follows the controller rather than claiming one of them always.
+    // Same address either way -- the in-page link and the netsim socket both
+    // put the bulb on the air as IN_PAGE_ADDR -- but restate it, because the
+    // header may be showing whatever the last device reported.
     head.setAddress(IN_PAGE_ADDR);
     head.setRunning(true);
     if (mode === "in-page") {

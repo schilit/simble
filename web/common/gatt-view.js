@@ -263,6 +263,28 @@ export function createGattView(options = {}) {
 }
 
 /**
+ * The get-or-create form, for callers that own a container and render into it
+ * on a timer rather than holding a view of their own. The view is stashed on
+ * the element, and rebuilt if the caller has cleared its container in the
+ * meantime — otherwise the next update would quietly patch a detached node.
+ *
+ * @param {HTMLElement} el the caller's container.
+ * @param {object} [options] passed to createGattView on first use only.
+ * @returns {object} the view.
+ */
+export function gattViewFor(el, options) {
+  let view = el._simbleView;
+  if (view && view.el.parentNode !== el) view = null;
+  if (!view) {
+    view = createGattView(options);
+    el.innerHTML = "";
+    el.append(view.el);
+    el._simbleView = view;
+  }
+  return view;
+}
+
+/**
  * Asks the reader for bytes to write, in the hex form the rest of the site
  * prints them in. Returns a Uint8Array, or null if they cancelled.
  *
