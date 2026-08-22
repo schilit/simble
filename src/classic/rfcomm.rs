@@ -23,10 +23,11 @@
 //! no PN at all, gets frames with no credit octet.
 //!
 //! PN (Parameter Negotiation) and MSC (Modem Status Command) multiplexer
-//! control commands are implemented. RPN (Remote Port Negotiation) is not:
-//! it negotiates serial port line settings (baud rate, parity, flow control
-//! lines) that this simulator has no use for, and real peers treat it as
-//! optional, so incoming RPN is silently ignored rather than answered.
+//! control commands are implemented. RPN (Remote Port Negotiation), RLS,
+//! TEST, FCON and FCOFF are not: they negotiate serial port line settings and
+//! pre-credit flow control that this simulator has no use for. Unrecognized
+//! MCC *commands* are answered with NSC (Non-Supported Command Response, TS
+//! 07.10 5.4.6.3.8) so the sender fails fast instead of waiting out its T2.
 
 use crate::classic::sdp::{
     AttributeIdSpec, DataElement, SdpClient, SdpUuid, ServiceAttribute, attribute_id,
@@ -83,6 +84,8 @@ pub(crate) mod mcc_type {
     pub const PN: u8 = 0x20;
     /// MSC: Modem Status Command.
     pub const MSC: u8 = 0x38;
+    /// NSC: Non-Supported Command Response (TS 07.10 5.4.6.3.8).
+    pub const NSC: u8 = 0x04;
 }
 
 /// PN convergence-layer (CL) field values that negotiate credit-based flow
@@ -892,8 +895,23 @@ impl Multiplexer {
         match mcc {
             mcc_type::PN => self.on_mcc_pn(c_r, value),
             mcc_type::MSC => self.on_mcc_msc(c_r, value),
-            // RPN and any other MCC command: not implemented, ignored (see
-            // module doc comment).
+            // RPN, RLS, TEST, FCON, FCOFF and anything else: not implemented.
+            // TS 07.10 5.4.6.3.8 wants NSC, not silence, so the sender fails
+            // fast rather than waiting out its T2. Only commands are answered:
+            // NSC is itself an MCC type, so NSC-ing a response would let two
+            // peers that both lack it trade NSCs forever. (Zephyr answers
+            // unconditionally; this is a deliberate departure.)
+            _ if c_r => {
+                // The value field is the offending command's own type octet,
+                // C/R and EA bits included — reassembled from what `parse_mcc`
+                // split apart.
+                let type_octet = (mcc << 2) | ((c_r as u8) << 1) | 1;
+                let nsc = make_mcc(mcc_type::NSC, false, &[type_octet]);
+                (
+                    vec![RfcommFrame::uih(self.role_c_r(), 0, nsc, 0).to_bytes()],
+                    Vec::new(),
+                )
+            }
             _ => (Vec::new(), Vec::new()),
         }
     }
@@ -1735,6 +1753,35 @@ mod tests {
         let dm = RfcommFrame::parse(&out[0]).expect("valid frame");
         assert_eq!(dm.frame_type, frame_type::DM);
         assert_eq!(dm.dlci, 6);
+    }
+
+    #[test]
+    fn test_an_unrecognized_mcc_command_is_answered_with_nsc() {
+        // TS 07.10 5.4.6.3.8: the answer to an unimplemented command is NSC,
+        // not silence, and its value is the offending command's type octet.
+        const RPN: u8 = 0x24;
+        let mut responder = connected_responder();
+
+        let rpn = RfcommFrame::uih(1, 0, make_mcc(RPN, true, &[0x0B]), 0).to_bytes();
+        let (out, _) = responder.receive(&rpn).unwrap();
+
+        let frame = RfcommFrame::parse(&out[0]).expect("valid frame");
+        let (mcc, c_r, value) = parse_mcc(&frame.information).expect("valid mcc");
+        assert_eq!(mcc, mcc_type::NSC);
+        assert!(!c_r, "NSC is a response");
+        assert_eq!(value, [(RPN << 2) | 0b11]);
+    }
+
+    #[test]
+    fn test_an_unrecognized_mcc_response_is_not_answered() {
+        // NSC is itself an MCC type; answering a response would let two peers
+        // that both lack it trade NSCs indefinitely.
+        let mut responder = connected_responder();
+
+        let rpn_response = RfcommFrame::uih(1, 0, make_mcc(0x24, false, &[0x0B]), 0).to_bytes();
+        let (out, _) = responder.receive(&rpn_response).unwrap();
+
+        assert!(out.is_empty());
     }
 
     #[test]
