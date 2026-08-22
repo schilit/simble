@@ -37,7 +37,17 @@ const STYLE = `main { max-width: 78rem; margin: 0 auto; padding: 1rem 1.25rem 2r
     color: var(--dim); margin: 0.9rem 0 0.5rem; }
   /* Client (discovered) GATT — nRF-Connect-flavoured tree */
   .svc { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.6rem; overflow: hidden; }
-  .svc-head { background: #eaeef2; padding: 0.4rem 0.7rem; font-size: 0.85rem; font-weight: 500; }
+  .device header .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block;
+  margin-right: 0.42rem; background-color: var(--dim); vertical-align: middle; }
+.device.server header .dot.on { background-color: var(--good); }
+.device.client header .dot.on { background-color: var(--accent); }
+.device header .icon { border: 1px solid var(--border); background: transparent; border-radius: 6px;
+  cursor: pointer; font-size: 0.85rem; line-height: 1; padding: 0.18rem 0.42rem; color: var(--dim);
+  margin-left: 0.3rem; }
+.device header .icon:hover { color: var(--fg); border-color: var(--fg); }
+.device header .icon[aria-pressed="true"] { color: var(--fg); border-color: var(--fg); }
+#client-script-text { width: 100%; min-height: 8.5rem; }
+.svc-head { background: #eaeef2; padding: 0.4rem 0.7rem; font-size: 0.85rem; font-weight: 500; }
   .svc-head .u { font-family: ui-monospace, Menlo, monospace; color: var(--dim); font-size: 0.76rem; margin-left: 0.4rem; }
   .chr { padding: 0.45rem 0.7rem; border-top: 1px solid var(--border); }
   .chr-top { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
@@ -71,14 +81,15 @@ const MARKUP = `<div class="domain-status"><span id="conn" class="pill">starting
   <div class="two">
     <section class="device server">
       <header>
-        <span class="role">● Server</span>
+        <span class="role"><i class="dot" id="server-dot"></i>Server</span>
         <span class="kind">peripheral · Rhai script</span>
+        <button class="icon" id="server-pen" aria-pressed="true" title="Show or hide the script">✎</button>
+        <button class="icon" id="run" title="Run or stop both devices">■</button>
         <span class="addr" id="server-addr">—</span>
       </header>
       <div class="body">
-        <textarea id="script" spellcheck="false"></textarea>
-        <div class="row">
-          <button id="run" class="primary">▶ Run &amp; reconnect</button>
+        <div id="server-script">
+          <textarea id="script" spellcheck="false"></textarea>
           <span id="run-state" class="hint"></span>
         </div>
         <h2 class="sub">Its GATT database (server view)</h2>
@@ -88,11 +99,18 @@ const MARKUP = `<div class="domain-status"><span id="conn" class="pill">starting
 
     <section class="device client">
       <header>
-        <span class="role">● Client</span>
-        <span class="kind">central · connects &amp; discovers</span>
+        <span class="role"><i class="dot" id="client-dot"></i>Client</span>
+        <span class="kind">central · Rust, not scripted</span>
+        <button class="icon" id="client-pen" aria-pressed="false" title="Show or hide what the client is doing">✎</button>
         <span class="addr" id="client-addr">—</span>
       </header>
       <div class="body">
+        <div id="client-script" hidden>
+          <textarea id="client-script-text" spellcheck="false" readonly></textarea>
+          <p class="hint"><strong>Not a script.</strong> The client is Rust (<code>CentralDevice</code>);
+             SimBLE has no central-role scripting. These are the real <code>WebLink</code> binding
+             calls this page issues, appended as they happen.</p>
+        </div>
         <div class="phase">Connection: <b id="client-phase">idle</b> · peer <span id="client-peer">—</span></div>
         <h2 class="sub">Discovered services (client view)</h2>
         <div id="client-gatt"><p class="empty">Connecting…</p></div>
@@ -103,6 +121,21 @@ const MARKUP = `<div class="domain-status"><span id="conn" class="pill">starting
 const $ = (id) => document.getElementById(id);
 const SERVER_ADDR = "AA:BB:CC:00:00:01";
 const CLIENT_ADDR = "AA:BB:CC:00:00:02";
+
+// NOT a script, and deliberately not written as one. The client is Rust --
+// CentralDevice -- and SimBLE has no central-role scripting, so any script
+// shown here would be an invented API that no one can run. What it shows
+// instead are the real binding calls this page makes, appended as they
+// happen, which is the linkage between a button and its effect.
+const CLIENT_TRACE_HEADER = `// The client is not scripted. It is CentralDevice (Rust), driven by this
+// page through the WebLink bindings below -- these are the real function
+// names, and each line is appended when the call is actually issued.
+//
+// On mount:
+link.add_central(CLIENT_ADDR, SERVER_ADDR);   // connect + discover
+//
+// From the discovered tree:
+`;
 
 const DEFAULT_SCRIPT = `// The server the client will connect to and discover.
 let server = android::BluetoothGattServer("HRM Server");
@@ -145,6 +178,56 @@ function setPill(text, cls) {
   const pill = $("conn");
   pill.textContent = text;
   pill.className = "pill" + (cls ? " " + cls : "");
+}
+
+let running = false;
+
+/// Reflects device state in the header: the dot is the state, the button is
+/// the control. They were previously a static bullet and a Run button that
+/// could only ever rebuild.
+function setRunning(on) {
+  running = on;
+  $("server-dot")?.classList.toggle("on", on);
+  const btn = $("run");
+  if (btn) {
+    btn.textContent = on ? "■" : "▶";
+    btn.title = on ? "Stop both devices (the link stops as a whole)" : "Run both devices";
+  }
+  if (!on) $("client-dot")?.classList.remove("on");
+}
+
+function startDevices() {
+  try {
+    build(editor.value);
+    setRunning(true);
+    $("run-state").textContent = "running — client reconnecting";
+    setTimeout(() => ($("run-state").textContent = ""), 2500);
+  } catch (e) {
+    $("run-state").textContent = String(e);
+    setRunning(false);
+  }
+}
+
+/// Stopping frees the link, so both devices genuinely leave the air rather
+/// than merely being hidden.
+function stopDevices() {
+  try { link?.free(); } catch (_) { /* already gone */ }
+  link = null;
+  setRunning(false);
+  setPill("stopped", "");
+  $("run-state").textContent = "stopped";
+  $("client-gatt").innerHTML = '<p class="empty">Stopped.</p>';
+  $("client-phase").textContent = "idle";
+}
+
+/// Appends one line to the client's live transcript. The point of the panel
+/// is the linkage between a button and the call it makes, so a line only
+/// appears because an operation was actually issued.
+function traceClient(line) {
+  const box = $("client-script-text");
+  if (!box) return;
+  box.value += line + "\n";
+  box.scrollTop = box.scrollHeight;
 }
 
 function build(script) {
@@ -203,6 +286,7 @@ function renderClient(status) {
 
 function loop() {
   if (!link) return;
+  if (!link) return;
   link.tick((performance.now() - t0) / 1000);
   try {
     const server = JSON.parse(link.peripheral_status_json(serverIndex));
@@ -212,6 +296,7 @@ function loop() {
     const client = JSON.parse(link.central_status_json(clientIndex));
     renderClient(client);
     setPill(client.connected ? `client · ${client.phase}` : "client connecting…", client.connected ? "ok" : "");
+    $("client-dot")?.classList.toggle("on", !!client.connected);
   } catch (e) { console.error("client render:", e); }
 }
 
@@ -244,25 +329,33 @@ export async function mount(root) {
     const handle = parseInt(btn.dataset.h, 10);
     if (btn.dataset.op === "read") {
       link.central_read(clientIndex, handle);
+      traceClient(`link.central_read(clientIndex, 0x${handle.toString(16).padStart(4, "0")});`);
     } else if (btn.dataset.op === "sub") {
       link.central_subscribe(clientIndex, handle);
+      traceClient(`link.central_subscribe(clientIndex, 0x${handle.toString(16).padStart(4, "0")});`);
     } else if (btn.dataset.op === "write") {
       const input = prompt("Bytes to write (hex, space-separated, e.g. 00 5A):", "00");
       if (input == null) return;
       const bytes = input.trim().split(/\s+/).map((x) => parseInt(x, 16)).filter((n) => !Number.isNaN(n));
       link.central_write(clientIndex, handle, new Uint8Array(bytes));
+      traceClient(`link.central_write(clientIndex, 0x${handle.toString(16).padStart(4, "0")}, [${
+        bytes.map((b) => "0x" + b.toString(16).padStart(2, "0")).join(", ")}]);`);
     }
   });
-  $("run").addEventListener("click", () => {
-    try {
-      build(editor.value);
-      $("run-state").textContent = "rebuilt — client reconnecting";
-      setTimeout(() => ($("run-state").textContent = ""), 2500);
-    } catch (e) {
-      $("run-state").textContent = String(e);
-    }
-  });
-  build(DEFAULT_SCRIPT);
+  $("run").addEventListener("click", () => (running ? stopDevices() : startDevices()));
+
+  // A pen shows or hides each side's script, so the panels can be read as
+  // devices rather than as editors.
+  for (const [pen, panel] of [["server-pen", "server-script"], ["client-pen", "client-script"]]) {
+    $(pen).addEventListener("click", () => {
+      const box = $(panel);
+      box.hidden = !box.hidden;
+      $(pen).setAttribute("aria-pressed", String(!box.hidden));
+    });
+  }
+
+  $("client-script-text").value = CLIENT_TRACE_HEADER;
+  startDevices();
   timer = setInterval(loop, 100);
 }
 
