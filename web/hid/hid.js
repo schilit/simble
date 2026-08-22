@@ -869,6 +869,7 @@ function buildHeaders() {
     });
     $(target + "-head").append(head.el);
     $(target + "-script").append(head.panel);
+    head.setState(false, "starting…");
     S.heads[key] = head;
   };
   peripheral("keyboard", "SimKeyboard", KEYBOARD_SCRIPT, "kbd");
@@ -884,6 +885,7 @@ function buildHeaders() {
       run: { running: true, disabled: true, reason: SHARED_LINK },
     });
     $(target).append(head.el);
+    head.setState(false, "starting…");
     S.heads[key] = head;
   };
   host("kbdHost", "Keyboard Host", "SimKeyboard", "kbdhost-head");
