@@ -18,9 +18,16 @@
 //   unmount()    clears the timer and drops the wasm scene
 
 import init, { WebRanging } from "../pkg/simble.js";
+import { createDeviceHeader } from "../common/device-header.js";
 
 const TAG_ADDRESS = "CC:1E:57:00:00:0A";
 const LOCATOR_ADDRESS = "CC:1E:57:00:00:0B";
+
+// Both ends live inside one `WebRanging`: the tag is the procedure's reflector
+// and the locator its initiator, and the scene object owns the medium between
+// them. There is no binding that removes one, so neither header offers a stop
+// it cannot perform.
+const SHARED_SCENE = "one ranging scene — both ends stop together";
 
 // 200 ms per tick: five Channel Sounding procedures a second, which is about
 // what a real ranging session runs at, and slow enough that a reader can
@@ -40,6 +47,7 @@ let timer = null;
 let styleEl = null;
 let container = null;
 let ui = {};
+let heads = {};
 let history = [];
 let dragging = false;
 
@@ -53,6 +61,7 @@ export async function mount(root) {
   document.head.appendChild(styleEl);
   root.innerHTML = MARKUP;
   cacheElements(root);
+  buildHeaders(root);
   wireControls();
 
   await init();
@@ -68,11 +77,38 @@ export async function mount(root) {
 export function unmount() {
   if (timer !== null) { clearInterval(timer); timer = null; }
   if (scene) { try { scene.free(); } catch (_) { /* already gone */ } scene = null; }
+  for (const head of Object.values(heads)) head.destroy();
   if (styleEl) { styleEl.remove(); styleEl = null; }
   if (container) { container.innerHTML = ""; container = null; }
   ui = {};
+  heads = {};
   history = [];
   dragging = false;
+}
+
+/// The two ends, as devices. Neither is scripted -- `WebRanging` is Rust on
+/// both sides, and a script shown here would be an API nobody can run -- so
+/// neither gets a pen.
+function buildHeaders(root) {
+  heads.tag = createDeviceHeader({
+    name: "Tag",
+    kind: "peripheral · Ranging Service 0x185B · reflector",
+    accent: "good",
+    address: TAG_ADDRESS,
+    dotMeans: "the locator has subscribed to its Ranging Data and it is notifying",
+    run: { running: true, disabled: true, reason: SHARED_SCENE },
+  });
+  root.querySelector("#rg-tag-head").append(heads.tag.el);
+
+  heads.locator = createDeviceHeader({
+    name: "Locator",
+    kind: "central · Channel Sounding initiator",
+    accent: "accent",
+    address: LOCATOR_ADDRESS,
+    dotMeans: "it is connected to the tag",
+    run: { running: true, disabled: true, reason: SHARED_SCENE },
+  });
+  root.querySelector("#rg-locator-head").append(heads.locator.el);
 }
 
 /** One timer callback: advance the scene, then render what it reports. */
@@ -116,6 +152,7 @@ const MARKUP = `
 
 <section class="panel">
   <h2>The tag — set the truth</h2>
+  <div id="rg-tag-head"></div>
   <svg id="rg-plan" viewBox="0 0 680 340" role="img"
        aria-label="floor plan with a draggable tag"></svg>
   <div class="row">
@@ -146,6 +183,7 @@ const MARKUP = `
 
 <section class="panel">
   <h2>The locator — two estimates</h2>
+  <div id="rg-locator-head"></div>
   <div class="rg-estimates">
     <div class="rg-card rg-rssi">
       <div class="rg-card-head">RSSI path loss</div>
@@ -445,6 +483,19 @@ function renderCs(cs) {
 }
 
 function renderLink(link, cs) {
+  // Each device's dot answers the question that device is for. The tag exists
+  // to ship its half of the phase measurements back, so its dot means the
+  // subscription is live -- not merely that something is connected, which
+  // would be true while the estimate stayed impossible.
+  heads.tag.setState(
+    link.ras_subscribed,
+    link.ras_subscribed
+      ? `notifying Ranging Data · ${link.notifications_sent} sent`
+      : link.connected ? "connected — not subscribed yet" : "advertising…",
+    link.ras_subscribed ? "ok" : "",
+  );
+  heads.locator.setState(link.connected, link.phase, link.connected ? "ok" : "");
+
   ui["rg-phase-label"].textContent = link.phase;
   ui["rg-handle"].textContent = link.connected
     ? "0x" + link.connection_handle.toString(16).toUpperCase().padStart(4, "0")
