@@ -50,9 +50,11 @@ prototype filter coefficients the SBC specification tabulates, to the nine
 significant figures the specification prints them at. They are specification
 constants — the numbers a conforming implementation must use — not expression
 borrowed from any implementation. They were cross-checked against the
-MIT-licensed `mini_sbc` crate's copy of the same specification tables, and
-against the coefficients bluez's fixed-point tables reduce to, purely to
-confirm no digit had been mistyped.
+MIT-licensed `mini_sbc` crate's copy of the same specification tables purely
+to confirm no digit had been mistyped, and then, far more convincingly,
+against libsbc's behaviour: a mistyped coefficient does not produce a
+bitstream that matches the reference to within 0.01% of bytes, and a
+deliberate 0.1% perturbation of one coefficient fails the interop tests.
 
 ---
 
@@ -79,8 +81,9 @@ the worse outcome, because the encoder and decoder share the filterbank,
 allocator and frame layout.
 
 `mini_sbc` was read rather than assumed about. It is a real, independent
-decoder (it derives its fixed-point tables from the specification's decimal
-values at compile time), it is `no_std`, and its licence is compatible. Its
+decoder — it keeps the specification's decimal coefficient strings in the
+source next to the fixed-point tables generated from them — it is `no_std`,
+and its licence is compatible. Its
 weaknesses: 1,752 lines for a decoder alone against 1,090 for both halves
 here, no encoder, no activity
 since March 2023, **its two tests assert nothing** — they `println!` the
