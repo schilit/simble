@@ -26,7 +26,8 @@
 import init, { WebSource, WebPeripheral, WebLink, WebLc3, WebScanner } from "../pkg/simble.js";
 import { createSduPlayer } from "../common/lc3-player.js";
 import { LE_AUDIO_SINK_SCRIPT as DEFAULT_SCRIPT } from "../common/le-audio-sink.js";
-import { renderGatt } from "../common/viewer.js";
+import { createGattView } from "../common/gatt-view.js";
+import { createDeviceHeader } from "../common/device-header.js";
 import { attachHighlightedEditor } from "../common/highlight.js";
 import { createBackendSelector } from "../common/backend.js";
 
@@ -113,13 +114,22 @@ let startedAt = 0;
 let editor = null;
 let slider = null;
 
+// The two device headers, and the sink's GATT view. Both devices used to share
+// one page-wide status pill, which could only ever describe one of them: the
+// pill said "streaming over a real CIS" while the sink beside it might have
+// been reconnecting.
+let sourceHead = null;
+let sinkHead = null;
+let gatt = null;
+
+// Stop is real here, so it has to *stay* stopped: the loop below rebuilds a
+// missing device on a timer, and without these a stop would silently reconnect
+// three seconds later — a control that appears to do nothing.
+let sourceStopped = false;
+let sinkStopped = false;
+
 const $ = (id) => root.querySelector(`#${id}`);
 
-function setPill(text, cls) {
-  const pill = $("conn");
-  pill.textContent = text;
-  pill.className = "pill" + (cls ? " " + cls : "");
-}
 const showError = (m) => ($("error").textContent = m ? String(m) : "");
 const showScriptError = (m) => ($("script-error").textContent = m ? String(m) : "");
 
@@ -254,7 +264,9 @@ function applySpeaker(volume, muted, changeCounter) {
 // — including the volume the audio is played at — is read back out of the live
 // characteristic values, never from a variable the UI kept on the side.
 function renderSink(status) {
-  $("dev-name").textContent = status.name ? `${status.name} (${status.address})` : "—";
+  // The name is the one the sink's own GATT server advertises.
+  sinkHead.setName(status.name);
+  if (status.address) sinkHead.setAddress(status.address);
   $("dev-conn").textContent = status.connected
     ? `connected to ${status.peer}`
     : "advertising, no central connected";
@@ -264,7 +276,7 @@ function renderSink(status) {
     ? "central subscribed — notifications flowing"
     : "no subscriber yet";
 
-  renderGatt($("gatt"), status, prevValues);
+  gatt.update(status);
 
   const state = services.flatMap((s) => s.characteristics).find((c) => c.uuid === VOLUME_STATE);
   if (state && state.value && state.value.length >= 6) {
@@ -402,6 +414,66 @@ function createSink() {
   }
 }
 
+// --- stopping one device without the other -------------------------------
+// Over netsim each of these devices owns its own WebSocket, which is to say its
+// own controller, so one can genuinely leave the air while the other stays on
+// it. In the in-page controller they share a single WebLink, and `WebLink` has
+// add_peripheral and add_central and no way at all to remove either — so there
+// the headers' toggles are disabled and say why rather than pretending.
+
+function stopSource() {
+  sourceStopped = true;
+  stop(); // a stream with no source is not a stream
+  dropSource(performance.now());
+  sourceHead.setRunning(false);
+  sourceHead.setState(false, "stopped");
+  $("status").textContent = "stopped";
+  for (const item of root.querySelectorAll(".stages li")) {
+    item.classList.remove("done", "active");
+  }
+}
+
+function startSource() {
+  sourceStopped = false;
+  lastSourceAttempt = performance.now() - RECONNECT_MS; // connect on the next tick
+  sourceHead.setRunning(true);
+  sourceHead.setState(false, "connecting…");
+}
+
+function stopSink() {
+  sinkStopped = true;
+  try {
+    sink?.free();
+  } catch (_) {
+    /* already gone */
+  }
+  sink = null;
+  sinkOpenedOnce = false;
+  gatt.update({ services: [] });
+  $("dev-conn").textContent = "stopped";
+  $("dev-sub").textContent = "—";
+  sinkHead.setRunning(false);
+  sinkHead.setState(false, "stopped");
+}
+
+function startSink() {
+  sinkStopped = false;
+  lastSinkAttempt = performance.now() - RECONNECT_MS;
+  sinkHead.setRunning(true);
+  sinkHead.setState(false, "connecting…");
+}
+
+/// The in-page controller hosts both devices on one link, so neither can be
+/// stopped alone there. The capability follows the backend rather than being
+/// decided once at mount.
+function applyStopCapability() {
+  const shared = mode === "in-page"
+    ? { disabled: true, reason: "one in-page link — the devices stop together" }
+    : { disabled: false };
+  sourceHead.setStopCapability(shared);
+  sinkHead.setStopCapability(shared);
+}
+
 // In-page backend: the sink and a central that streams to it share one wasm
 // Link in this tab, so the whole page works with no netsim at all. What it
 // cannot do is a CIS — that is a controller feature, and the in-page radio
@@ -485,12 +557,18 @@ function switchBackend() {
   prevValues.clear();
   discovered.clear();
   sinkOpenedOnce = false;
+  sourceStopped = false;
+  sinkStopped = false;
+  sourceHead.setRunning(true);
+  sinkHead.setRunning(true);
+  applyStopCapability();
   $("setup").classList.remove("visible");
   target = SINK_ADDR;
   renderSinkOptions();
   applyMode();
   if (mode === "in-page") {
-    setPill("in browser", "ok");
+    sourceHead.setState(false, "in browser · connecting…");
+    sinkHead.setState(false, "in browser · starting…");
     try {
       buildInPage();
     } catch (e) {
@@ -498,7 +576,8 @@ function switchBackend() {
     }
     return;
   }
-  setPill("starting…", "");
+  sourceHead.setState(false, "starting…");
+  sinkHead.setState(false, "starting…");
   // Nothing was open on first load, so connect at once; coming back from the
   // in-page controller means netsim is still holding the sockets we just
   // closed, and reconnecting into those is what the backoff above avoids.
@@ -513,20 +592,31 @@ function switchBackend() {
 // tick, and the audio. Two timers would be two throttling victims.
 
 function tickSource(now) {
+  if (sourceStopped) return; // stopped by its own header, and staying stopped
   if (!source) {
     if (now - lastSourceAttempt >= RECONNECT_MS) {
       lastSourceAttempt = now;
       createSource();
     }
+    sourceHead.setState(false, "connecting to localhost:7681…");
     return;
   }
   if (source.ready_state() === 3) {
     dropSource(now);
+    sourceHead.setState(false, "connection lost — reconnecting…", "bad");
     return;
   }
   const status = JSON.parse(source.tick());
   pumpAudio(now);
   renderHandshake(status);
+  // The dot means the thing this device exists to do: a stream is open. Every
+  // earlier stage is progress towards it, not the thing itself.
+  const streaming = Boolean(source.is_streaming());
+  sourceHead.setState(
+    streaming,
+    streaming ? "streaming over a real CIS" : status.stage || "connecting…",
+    status.error ? "bad" : streaming ? "ok" : "",
+  );
 }
 
 function renderHandshake(status) {
@@ -556,6 +646,7 @@ function renderHandshake(status) {
 }
 
 function tickSink(now) {
+  if (sinkStopped) return; // stopped by its own header, and staying stopped
   if (!sink) {
     if (now - lastSinkAttempt >= RECONNECT_MS) {
       lastSinkAttempt = now;
@@ -565,9 +656,9 @@ function tickSink(now) {
   }
   const state = sink.ready_state(); // 0 connecting, 1 open, 2 closing, 3 closed
   if (state === 3) {
-    if (sinkOpenedOnce) setPill("connection lost — reconnecting…", "bad");
+    if (sinkOpenedOnce) sinkHead.setState(false, "connection lost — reconnecting…", "bad");
     else {
-      setPill("netsim not reachable", "bad");
+      sinkHead.setState(false, "netsim not reachable", "bad");
       $("setup").classList.add("visible");
     }
     try {
@@ -580,7 +671,7 @@ function tickSink(now) {
     return;
   }
   if (state === 0) {
-    setPill(sinkOpenedOnce ? "reconnecting…" : "connecting to localhost:7681…", "");
+    sinkHead.setState(false, sinkOpenedOnce ? "reconnecting…" : "connecting to localhost:7681…");
     return;
   }
   sinkOpenedOnce = true;
@@ -588,12 +679,9 @@ function tickSink(now) {
   const status = JSON.parse(sink.tick((now - runStart) / 1000));
   player.play(sink.take_audio(), decodeSdu);
   if (now - lastRenderAt > 100) renderSink(status);
-  setPill(
-    source?.is_streaming()
-      ? "streaming over a real CIS"
-      : status.connected
-        ? "on air · sink connected"
-        : "on air · advertising",
+  sinkHead.setState(
+    true,
+    status.connected ? "on air · a client is connected" : "on air · advertising",
     "ok",
   );
 }
@@ -652,7 +740,12 @@ function tickInPage(now) {
   player.play(link.peripheral_take_audio(linkSink), decodeSdu);
   const json = link.peripheral_status_json(linkSink);
   if (json && now - lastRenderAt > 100) renderSink(JSON.parse(json));
-  setPill("in browser · advertising", "ok");
+  sinkHead.setState(true, "in browser · advertising", "ok");
+  // No CIS in the in-page controller: SDUs ride the connection handle, so the
+  // source's dot means "there is a central attached and SDUs can go out".
+  sourceHead.setState(linkCentral >= 0, linkCentral >= 0
+    ? "in browser · SDUs on the connection handle"
+    : "no central — streaming unavailable", linkCentral >= 0 ? "ok" : "warn");
 }
 
 function loop() {
@@ -764,7 +857,6 @@ const TEMPLATE = `
     <h1>SimBLE Audio</h1>
     <span class="sub">both halves of an LE Audio stream on one page — pick a file, it crosses a
       real CIS, and the speaker plays it at whatever volume its GATT says</span>
-    <span id="conn" class="pill">starting…</span>
   </div>
 
   <div id="backend" class="full"></div>
@@ -772,6 +864,7 @@ const TEMPLATE = `
   <div class="col">
     <section class="panel">
       <h2>The source</h2>
+      <div id="source-head"></div>
 
       <div id="drop" class="drop">
         <strong>Drop an audio file here</strong><br>
@@ -894,19 +987,14 @@ const TEMPLATE = `
     </section>
 
     <section class="panel">
-      <h2>Live device</h2>
+      <h2>The sink, as a device</h2>
+      <div id="sink-head"></div>
+      <div id="sink-script"></div>
       <dl class="kv">
-        <dt>advertising as</dt><dd id="dev-name">—</dd>
         <dt>connection</dt><dd id="dev-conn">—</dd>
         <dt>subscription</dt><dd id="dev-sub">—</dd>
       </dl>
       <div id="gatt"></div>
-      <details>
-        <summary>view / edit the sink's script (Rhai)</summary>
-        <textarea id="script" class="code" spellcheck="false" style="height:16rem;margin-top:0.5rem"></textarea>
-        <div class="row"><button id="run" class="primary">▶ Run</button>
-          <span id="run-state" class="hint"></span></div>
-      </details>
     </section>
   </div>
 
@@ -934,8 +1022,9 @@ export function mount(container) {
   root.innerHTML = TEMPLATE;
   const gen = ++generation;
 
-  editor = $("script");
   slider = $("vol");
+  buildHeaders();
+  editor = sinkHead.textarea;
   prevValues = new Map();
   discovered = new Map();
   frames = [];
@@ -963,8 +1052,6 @@ export function mount(container) {
     if (gen !== generation) return;
     lc3 = new WebLc3(PCM_RATE, SDU_INTERVAL_MS * 1000);
     player = createSduPlayer({ sampleRate: PCM_RATE });
-    editor.value = DEFAULT_SCRIPT;
-    attachHighlightedEditor(editor);
     renderSinkOptions();
     mode = createBackendSelector($("backend"), {
       onChange: (next) => {
@@ -1003,12 +1090,86 @@ export function unmount() {
   lc3 = null;
   frames = [];
   playing = false;
+  gatt?.destroy();
+  sourceHead?.destroy();
+  sinkHead?.destroy();
+  gatt = null;
+  sourceHead = null;
+  sinkHead = null;
   if (root) {
     root.innerHTML = "";
     root = null;
   }
   editor = null;
   slider = null;
+}
+
+/// The two device headers and the sink's GATT view. The source is a Rust
+/// `WebSource` and has no script of its own, so it gets no pen -- a fabricated
+/// one would be an API nobody can run.
+function buildHeaders() {
+  sourceHead = createDeviceHeader({
+    name: "Audio Source",
+    kind: "central · Unicast Client (Rust)",
+    accent: "accent",
+    address: SOURCE_ADDR,
+    dotMeans: "a stream to the sink is open and SDUs can go out",
+    run: { running: true, onRun: startSource, onStop: stopSource },
+  });
+  $("source-head").append(sourceHead.el);
+
+  sinkHead = createDeviceHeader({
+    name: "Audio Sink",
+    kind: "peripheral · Rhai script",
+    accent: "good",
+    address: SINK_ADDR,
+    dotMeans: "the sink is on the air",
+    script: {
+      text: DEFAULT_SCRIPT,
+      editable: true,
+      highlight: attachHighlightedEditor,
+      note: "The sink is this script: PACS says what it can decode, ASCS carries the endpoint the " +
+        "source configures, and the Volume Control Service is what the speaker's buttons write to. " +
+        "Applying rebuilds the device on the same socket or link.",
+      onApply: applySinkScript,
+    },
+    run: { running: true, onRun: startSink, onStop: stopSink },
+  });
+  $("sink-head").append(sinkHead.el);
+  $("sink-script").append(sinkHead.panel);
+
+  // Volume State is three bytes the Volume Control Service defines; the
+  // decoder lives with the page that knows the profile rather than in the
+  // shared viewer.
+  gatt = createGattView({
+    mode: "server",
+    decode: (c) => {
+      if (c.uuid !== VOLUME_STATE || !c.value || c.value.length < 6) return undefined;
+      const [volume, muted, changes] = [0, 2, 4].map((i) => parseInt(c.value.slice(i, i + 2), 16));
+      return `volume ${volume}${muted ? " · muted" : ""} · change counter ${changes}`;
+    },
+  });
+  $("gatt").append(gatt.el);
+}
+
+/// Rebuilding the sink from its script is the same operation in both backends:
+/// tear the device down and stand a new one up on the same socket or link.
+function applySinkScript() {
+  showScriptError(null);
+  try {
+    if (mode === "in-page") buildInPage();
+    else if (sink) {
+      sink.run_script(editor.value);
+      runStart = performance.now();
+    } else createSink();
+    prevValues.clear();
+    sinkHead.setApplyState("device rebuilt from script");
+    setTimeout(() => {
+      if (root) sinkHead.setApplyState("");
+    }, 2500);
+  } catch (e) {
+    showScriptError(e);
+  }
 }
 
 function wireControls() {
@@ -1072,24 +1233,4 @@ function wireControls() {
   for (const button of root.querySelectorAll(".ops button")) {
     button.addEventListener("click", () => sendOp(Number(button.dataset.op)));
   }
-
-  // Rebuilding the sink from its script is the same operation in both backends:
-  // tear the device down and stand a new one up on the same socket or link.
-  $("run").addEventListener("click", () => {
-    showScriptError(null);
-    try {
-      if (mode === "in-page") buildInPage();
-      else if (sink) {
-        sink.run_script(editor.value);
-        runStart = performance.now();
-      } else createSink();
-      prevValues.clear();
-      $("run-state").textContent = "device rebuilt from script";
-      setTimeout(() => {
-        if (root) $("run-state").textContent = "";
-      }, 2500);
-    } catch (e) {
-      showScriptError(e);
-    }
-  });
 }

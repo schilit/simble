@@ -19,7 +19,8 @@
 // here is the bulb, so the picker writes the device's own database directly.)
 
 import init, { WebPeripheral, WebLink } from "../pkg/simble.js";
-import { renderGatt } from "../common/viewer.js";
+import { createGattView } from "../common/gatt-view.js";
+import { createDeviceHeader } from "../common/device-header.js";
 import { attachHighlightedEditor } from "../common/highlight.js";
 import { createBackendSelector } from "../common/backend.js";
 
@@ -44,8 +45,7 @@ const STYLE = `main { display: grid; grid-template-columns: minmax(20rem, 1fr) m
   .rgb-readout { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
     font-size: 0.85rem; }`;
 
-const MARKUP = `<div class="domain-status"><span id="conn" class="pill">starting…</span></div>
-<div id="backend" style="grid-column:1/-1"></div>
+const MARKUP = `<div id="backend" style="grid-column:1/-1"></div>
   <section class="panel">
     <h2>The light</h2>
     <div class="bulb-stage">
@@ -81,18 +81,13 @@ const MARKUP = `<div class="domain-status"><span id="conn" class="pill">starting
 
   <section class="panel">
     <h2>Live device</h2>
+    <div id="device-head"></div>
+    <div id="device-script"></div>
     <dl class="kv">
-      <dt>advertising as</dt><dd id="dev-name">—</dd>
       <dt>connection</dt><dd id="dev-conn">—</dd>
       <dt>subscription</dt><dd id="dev-sub">—</dd>
     </dl>
     <div id="gatt"></div>
-    <details>
-      <summary>view / edit the device script (Rhai)</summary>
-      <textarea id="script" class="code" spellcheck="false" style="height:16rem;margin-top:0.5rem"></textarea>
-      <div class="row"><button id="run" class="primary">▶ Run</button>
-        <span id="run-state" class="hint"></span></div>
-    </details>
   </section>
 
   <section id="setup" class="panel setup" style="grid-column:1/-1">
@@ -146,8 +141,15 @@ server.add_service(svc);
 const PRESETS = ["#ff3355", "#ff9933", "#ffee33", "#33dd66", "#33ccff", "#7755ff", "#ff66cc", "#ffffff"];
 
 // --- DOM -------------------------------------------------------------------
-const $ = (id) => document.getElementById(id);
-let editor, connPill, setupPanel, picker;
+// Every lookup is scoped to the mounted root. The shell hosts one domain at a
+// time in a shared stage, and this module's generic ids (`script`, `run`,
+// `conn`) once collided with another domain's, writing one module's script
+// into the other's textarea.
+let root = null;
+const $ = (id) => root.querySelector(`#${id}`);
+let setupPanel, picker;
+let head = null; // the shared device header
+let gatt = null; // the shared GATT view
 
 let mode = "in-page"; // "in-page" (a wasm WebLink in this tab) | "websocket" (netsim)
 let peripheral = null; // WebPeripheral, WebSocket backend only
@@ -156,12 +158,8 @@ let linkIndex = -1; // peripheral index within the in-page link
 let runStart = performance.now();
 let lastConnectAttempt = 0;
 let openedOnce = false;
-const prevValues = new Map();
+let stopped = false; // Stop pressed: stay off the air until Run
 
-function setPill(text, cls) {
-  connPill.textContent = text;
-  connPill.className = "pill" + (cls ? " " + cls : "");
-}
 function showScriptError(m) { $("script-error").textContent = m ? String(m) : ""; }
 
 function createPeripheral(script) {
@@ -169,6 +167,11 @@ function createPeripheral(script) {
   peripheral = new WebPeripheral(WS_URL, script);
   runStart = performance.now();
 }
+
+/// The script the device is built from. Read-only on this page: authoring is
+/// the Playground's job, and what the pen is for here is showing that the bulb
+/// really is a scripted peripheral rather than a picture of one.
+const scriptText = () => DEFAULT_SCRIPT;
 
 // In-page backend: host the bulb on a wasm WebLink in this tab — no netsim.
 // A WebLink has no "remove peripheral", so re-running rebuilds the whole link
@@ -190,16 +193,35 @@ function teardownDevices() {
   if (link) { try { link.free(); } catch (_) { /* gone */ } link = null; linkIndex = -1; }
 }
 
+/// Puts the bulb on the air. In both backends this device is the only one its
+/// controller hosts -- one WebPeripheral with its own socket, or a WebLink with
+/// a single peripheral in it -- so run and stop here are genuinely this
+/// device's, not the whole scene's.
 function run() {
   showScriptError(null);
+  stopped = false;
   try {
-    if (mode === "in-page") buildInPage(editor.value);
-    else if (peripheral) { peripheral.run_script(editor.value); runStart = performance.now(); }
-    else createPeripheral(editor.value);
-    prevValues.clear();
-    $("run-state").textContent = "device rebuilt from script";
-    setTimeout(() => ($("run-state").textContent = ""), 2500);
+    if (mode === "in-page") buildInPage(scriptText());
+    else if (peripheral) { peripheral.run_script(scriptText()); runStart = performance.now(); }
+    else createPeripheral(scriptText());
+    head.setRunning(true);
+    head.setState(false, "starting…");
   } catch (e) { showScriptError(e); }
+}
+
+/// Takes the bulb off the air and keeps it off: the loop rebuilds a missing
+/// device by design, so a stop that only freed the object would come back a
+/// tenth of a second later.
+function stop() {
+  stopped = true;
+  teardownDevices();
+  openedOnce = false;
+  gatt?.update({ services: [] });
+  $("dev-conn").textContent = "stopped";
+  $("dev-sub").textContent = "—";
+  setupPanel.classList.remove("visible");
+  head.setRunning(false);
+  head.setState(false, "stopped");
 }
 
 // --- color helpers ---------------------------------------------------------
@@ -237,13 +259,16 @@ function writeColor(r, g, b) {
 
 // --- rendering -------------------------------------------------------------
 function render(status) {
-  $("dev-name").textContent = status.name ? `${status.name} (${status.address})` : "—";
+  // The name is the one the script's GATT server advertises, not a constant
+  // here that could drift away from it.
+  head.setName(status.name);
+  if (status.address) head.setAddress(status.address);
   $("dev-conn").textContent = status.connected
     ? `connected to ${status.peer}` : "advertising, no central connected";
   const anySub = (status.services || []).some((s) => s.characteristics.some((c) => c.subscribed));
   $("dev-sub").textContent = anySub ? "central subscribed — notifications flowing" : "no subscriber yet";
 
-  renderGatt($("gatt"), status, prevValues);
+  gatt.update(status);
 
   // Reflect the characteristic's current value onto the bulb + picker.
   const colorChar = (status.services || [])
@@ -261,17 +286,20 @@ function render(status) {
 }
 
 function loop() {
+  if (stopped) return; // Stop pressed: stay torn down until Run
   if (mode === "in-page") {
     if (!link || linkIndex < 0) {
-      try { buildInPage(editor.value); } catch (e) { showScriptError(e); }
+      try { buildInPage(scriptText()); } catch (e) { showScriptError(e); }
       return;
     }
     try {
       link.tick((performance.now() - runStart) / 1000);
       const json = link.peripheral_status_json(linkIndex);
       if (json) {
-        setPill("in browser · advertising", "ok");
-        render(JSON.parse(json));
+        const status = JSON.parse(json);
+        head.setState(true, status.connected
+          ? "in browser · central connected" : "in browser · advertising", "ok");
+        render(status);
       }
     } catch (e) { showScriptError(e); }
     return;
@@ -280,27 +308,27 @@ function loop() {
     const now = performance.now();
     if (now - lastConnectAttempt > 3000) {
       lastConnectAttempt = now;
-      try { createPeripheral(editor.value); } catch (e) { showScriptError(e); }
+      try { createPeripheral(scriptText()); } catch (e) { showScriptError(e); }
     }
     return;
   }
   const state = peripheral.ready_state();
   if (state === 3) {
-    if (openedOnce) setPill("connection lost — reconnecting…", "bad");
-    else { setPill("netsim not reachable", "bad"); setupPanel.classList.add("visible"); }
+    if (openedOnce) head.setState(false, "connection lost — reconnecting…", "bad");
+    else { head.setState(false, "netsim not reachable", "bad"); setupPanel.classList.add("visible"); }
     try { peripheral.free(); } catch (_) { /* gone */ }
     peripheral = null;
     return;
   }
   if (state === 0) {
-    setPill(openedOnce ? "reconnecting…" : "connecting to localhost:7681…", "");
+    head.setState(false, openedOnce ? "reconnecting…" : "connecting to localhost:7681…");
     return;
   }
   openedOnce = true;
   setupPanel.classList.remove("visible");
   try {
     const status = JSON.parse(peripheral.tick((performance.now() - runStart) / 1000));
-    setPill(status.connected ? "on air · central connected" : "on air · advertising", "ok");
+    head.setState(true, status.connected ? "on air · central connected" : "on air · advertising", "ok");
     render(status);
   } catch (e) { showScriptError(e); }
 }
@@ -308,11 +336,10 @@ function loop() {
 // --- lifecycle -------------------------------------------------------------
 
 let timer = null;
-let container = null;
 
-/// Builds the domain into `root` and starts it. Async because the wasm module
-/// has to be initialised before any device exists.
-export async function mount(root) {
+/// Builds the domain into `container` and starts it. Async because the wasm
+/// module has to be initialised before any device exists.
+export async function mount(container) {
   await init();
 
   if (!document.getElementById(STYLE_ID)) {
@@ -321,16 +348,45 @@ export async function mount(root) {
     el.textContent = STYLE;
     document.head.append(el);
   }
-  container = root;
+  root = container;
   root.innerHTML = MARKUP;
 
-  editor = $("script");
-  connPill = $("conn");
   setupPanel = $("setup");
   picker = $("picker");
 
-  editor.value = DEFAULT_SCRIPT;
-  attachHighlightedEditor(editor); // syntax highlighting overlay (degrades to plain)
+  head = createDeviceHeader({
+    name: "Color Bulb",
+    kind: "peripheral · Rhai script",
+    accent: "good",
+    address: IN_PAGE_ADDR,
+    dotMeans: "the bulb is on the air and advertising",
+    script: {
+      text: DEFAULT_SCRIPT,
+      editable: false,
+      highlight: attachHighlightedEditor,
+      note: "<strong>Read-only here.</strong> This is the device: a writable <code>[R, G, B]</code> " +
+        "characteristic on a custom 128-bit service. To change it, take it to the " +
+        "<a href=\"../playground/\">Playground</a>, which is where authoring lives.",
+    },
+    // Whichever backend is selected, this bulb is the only device its
+    // controller hosts, so stopping it stops nothing else.
+    run: { running: true, onRun: run, onStop: stop },
+  });
+  $("device-head").append(head.el);
+  $("device-script").append(head.panel);
+
+  // The colour characteristic is this page's own invention, so its decoder
+  // lives here rather than in the shared viewer -- that is the seam the widget
+  // used to fork along.
+  gatt = createGattView({
+    mode: "server",
+    decode: (c) => {
+      if (c.uuid !== COLOR_CHAR || !c.value || c.value.length < 6) return undefined;
+      const [r, g, b] = [0, 2, 4].map((i) => parseInt(c.value.slice(i, i + 2), 16));
+      return `RGB ${r},${g},${b}`;
+    },
+  });
+  $("gatt").append(gatt.el);
 
   // swatches
   const sw = $("swatches");
@@ -355,8 +411,6 @@ export async function mount(root) {
     writeColor(...rgb);
   });
 
-  $("run").addEventListener("click", run);
-
   const initial = hexToRgb(picker.value);
   if (initial) applyBulb(...initial);
 
@@ -372,13 +426,20 @@ export async function mount(root) {
   function switchBackend() {
     teardownDevices();
     openedOnce = false;
+    stopped = false;
     setupPanel.classList.remove("visible");
     setModeHint();
+    // Same address either way -- the in-page link and the netsim socket both
+    // put the bulb on the air as IN_PAGE_ADDR -- but restate it, because the
+    // header may be showing whatever the last device reported.
+    head.setAddress(IN_PAGE_ADDR);
+    head.setRunning(true);
     if (mode === "in-page") {
-      try { buildInPage(editor.value); } catch (e) { showScriptError(e); }
+      head.setState(false, "starting…");
+      try { buildInPage(scriptText()); } catch (e) { showScriptError(e); }
     } else {
-      setPill("starting…", "");
-      try { createPeripheral(editor.value); } catch (e) { showScriptError(e); }
+      head.setState(false, "connecting to localhost:7681…");
+      try { createPeripheral(scriptText()); } catch (e) { showScriptError(e); }
     }
   }
   mode = createBackendSelector($("backend"), {
@@ -387,9 +448,9 @@ export async function mount(root) {
   setModeHint();
 
   if (mode === "in-page") {
-    try { buildInPage(editor.value); } catch (e) { showScriptError(e); }
+    try { buildInPage(scriptText()); } catch (e) { showScriptError(e); }
   } else {
-    try { createPeripheral(editor.value); } catch (e) { showScriptError(e); }
+    try { createPeripheral(scriptText()); } catch (e) { showScriptError(e); }
   }
   timer = setInterval(loop, 100);
 }
@@ -408,10 +469,13 @@ export function unmount() {
   peripheral = null;
   link = null;
   linkIndex = -1;
+  gatt?.destroy();
+  head?.destroy();
+  gatt = head = null;
   document.getElementById(STYLE_ID)?.remove();
   // Clear our own markup rather than relying on the host to do it: the
   // standalone page has no shell to tidy up after us.
-  if (container) container.innerHTML = "";
-  container = null;
-  editor = connPill = setupPanel = picker = undefined;
+  if (root) root.innerHTML = "";
+  root = null;
+  setupPanel = picker = undefined;
 }

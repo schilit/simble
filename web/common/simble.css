@@ -131,6 +131,61 @@ details pre {
   border-radius: 6px; padding: 0.6rem; font-size: 11.5px; white-space: pre-wrap;
 }
 
+/* ---------------------------------------------------------------------------
+ * The device header (common/device-header.js)
+ *
+ * One shape for every simulated device on the site: state dot, name, kind and
+ * live state, the pen that reveals the device's script, the run/stop toggle
+ * (disabled, with the reason beside it, for a device whose lifetime is shared
+ * with others), and the on-air address hard right.
+ * ------------------------------------------------------------------------- */
+.dev-head {
+  display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap;
+  padding: 0.5rem 0.7rem; margin: 0 0 0.7rem;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--panel2);
+}
+.dev-head .dev-dot {
+  width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%;
+  background: var(--dim); box-shadow: inset 0 0 0 1px rgba(0,0,0,0.12);
+}
+.dev-head .dev-dot.on { background: var(--good); }
+.dev-head.accent-accent .dev-dot.on { background: var(--accent); }
+.dev-head.accent-warn .dev-dot.on { background: var(--warn); }
+.dev-head .dev-name { font-weight: 700; }
+.dev-head.accent-good .dev-name { color: var(--good); }
+.dev-head.accent-accent .dev-name { color: var(--accent); }
+.dev-head.accent-warn .dev-name { color: var(--warn); }
+.dev-head .dev-kind { color: var(--dim); font-size: 0.78rem; }
+.dev-head .dev-state { color: var(--dim); font-size: 0.78rem; }
+.dev-head .dev-state.ok { color: var(--good); }
+.dev-head .dev-state.bad { color: var(--bad); }
+.dev-head .dev-state.warn { color: var(--warn); }
+.dev-head .dev-icon {
+  border: 1px solid var(--border); background: transparent; border-radius: 6px;
+  cursor: pointer; font-size: 0.85rem; line-height: 1; padding: 0.18rem 0.42rem;
+  color: var(--dim);
+}
+.dev-head .dev-icon:hover:not(:disabled) { color: var(--text); border-color: var(--text); }
+.dev-head .dev-icon[aria-pressed="true"] { color: var(--text); border-color: var(--text); }
+.dev-head .dev-icon:disabled { opacity: 0.4; cursor: not-allowed; }
+/* Why a device cannot be stopped on its own. Visible, not only a tooltip:
+   the limitation is part of what these pages are explaining. */
+.dev-head .dev-why { color: var(--dim); font-size: 0.72rem; font-style: italic; }
+.dev-head .dev-addr {
+  margin-left: auto; font-family: ui-monospace, Menlo, monospace;
+  color: var(--dim); font-size: 0.76rem;
+}
+.dev-head .dev-addr.none { font-style: italic; font-family: inherit; }
+.dev-script { margin: 0 0 0.8rem; }
+.dev-script textarea {
+  width: 100%; height: 14rem; resize: vertical; background: var(--bg);
+  color: var(--text); border: 1px solid var(--border); border-radius: 6px;
+  padding: 0.6rem; tab-size: 4;
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.dev-script textarea[readonly] { background: var(--panel); }
+.dev-script .hint { margin: 0.35rem 0 0; }
+
 /* Generic GATT viewer */
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 0.15rem 0.9rem;
   font-size: 0.85rem; margin-bottom: 0.75rem; }
@@ -161,6 +216,23 @@ details pre {
   font-size: 0.76rem; margin-left: 0.4rem; }
 .sub-note { color: var(--good); font-size: 0.72rem; margin-left: 0.4rem; }
 .viewer-empty { color: var(--dim); font-size: 0.85rem; }
+
+/* The client half of the shared widget (common/gatt-view.js): a discovered
+   tree, nRF-Connect flavoured. The handle and the operation buttons appear
+   only here — a client addresses attributes by handle and can read, write and
+   subscribe; a server holding its own database can do none of those to
+   itself. */
+.gatt-view.client .chr-h {
+  color: var(--dim); font-size: 0.72rem; margin-left: auto;
+  font-family: ui-monospace, Menlo, monospace;
+}
+.gatt-view .chr-actions { margin-top: 0.35rem; display: flex; gap: 0.35rem; flex-wrap: wrap; }
+.gatt-view .chr-actions button {
+  background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 5px; padding: 0.12rem 0.5rem; font-size: 0.74rem; cursor: pointer;
+}
+.gatt-view .chr-actions button:hover { border-color: var(--accent); }
+.gatt-view .chr-actions button.on { color: var(--good); border-color: var(--good); }
 
 footer { color: var(--dim); font-size: 0.78rem; padding: 0 1.5rem 1.5rem;
   max-width: 75rem; margin: 0 auto; }

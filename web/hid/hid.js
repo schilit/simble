@@ -23,6 +23,13 @@
 // "hello" and walk the pointer in a square, which would fight with the user.
 
 import init, { WebLink } from "../pkg/simble.js";
+import { createDeviceHeader } from "../common/device-header.js";
+
+// All four devices share one `WebLink`, and `WebLink` has `add_peripheral` and
+// `add_central` and no way at all to remove either: freeing the link is the
+// only teardown there is, and it takes every device with it. So none of these
+// headers offers a working stop — they say so instead.
+const SHARED_LINK = "four devices, one in-page link — they stop together";
 
 // --- addresses --------------------------------------------------------------
 const ADDR = {
@@ -205,14 +212,6 @@ const STYLES = `
     gap: 1.25rem; padding: 1.25rem 1.5rem; max-width: 82rem; margin: 0 auto; }
   @media (max-width: 62rem) { .hid { grid-template-columns: 1fr; } }
   .hid .wide { grid-column: 1 / -1; }
-  .hid .statusbar { display: flex; align-items: center; gap: 0.6rem; }
-
-  .hid .devhead { display: flex; align-items: baseline; gap: 0.6rem; flex-wrap: wrap;
-    margin: 0 0 0.6rem; }
-  .hid .devhead .name { font-weight: 600; }
-  .hid .devhead .uuid { font-family: ui-monospace, Menlo, monospace; font-size: 0.78rem;
-    color: var(--dim); }
-
   .hid .typebox { width: 100%; font-size: 0.95rem; padding: 0.5rem 0.6rem;
     border: 1px solid var(--border); border-radius: 6px; background: var(--bg);
     color: var(--text); font-family: ui-monospace, Menlo, monospace; }
@@ -314,10 +313,7 @@ const STYLES = `
 
 const TEMPLATE = `
 <section class="panel wide prose">
-  <div class="statusbar">
-    <h2 style="margin:0">What is on this page</h2>
-    <span id="hid-conn" class="pill">starting…</span>
-  </div>
+  <h2 style="margin:0">What is on this page</h2>
   <p>
     Two GATT peripherals — a keyboard and a mouse — and two GATT centrals that connect to them,
     all four hosted in this tab on one simulated radio. Type on the left and the characters appear
@@ -335,11 +331,8 @@ const TEMPLATE = `
 <section class="panel">
   <h2>The device <span class="hint">— GATT peripheral, HID Service 0x1812</span></h2>
 
-  <div class="devhead">
-    <span class="name">SimKeyboard</span>
-    <span class="uuid" id="hid-kbd-addr">—</span>
-    <span class="pill" id="hid-kbd-pill">advertising…</span>
-  </div>
+  <div id="hid-kbd-head"></div>
+  <div id="hid-kbd-script"></div>
   <input id="hid-typebox" class="typebox" disabled
          placeholder="waiting for a host to connect…"
          autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
@@ -354,11 +347,8 @@ const TEMPLATE = `
     ErrorRollOver instead, because the matrix can no longer say which they are.
   </p>
 
-  <div class="devhead" style="margin-top:1.4rem">
-    <span class="name">SimMouse</span>
-    <span class="uuid" id="hid-mouse-addr">—</span>
-    <span class="pill" id="hid-mouse-pill">advertising…</span>
-  </div>
+  <div id="hid-mouse-head" style="margin-top:1.4rem"></div>
+  <div id="hid-mouse-script"></div>
   <div class="pad">
     <div class="pad-surface" id="hid-pad">drag here to move the pointer · shift-drag to scroll</div>
     <div class="pad-buttons">
@@ -379,6 +369,13 @@ const TEMPLATE = `
 
 <section class="panel">
   <h2>The host <span class="hint">— GATT central, a HID Host</span></h2>
+  <p class="hint" style="margin-top:0">
+    One computer, but two centrals: HOGP is a per-device connection, so the keyboard and the mouse
+    each get their own, and each host reads its peer's Report Map before it knows what it is
+    holding.
+  </p>
+  <div id="hid-kbdhost-head"></div>
+  <div id="hid-mousehost-head"></div>
 
   <div class="computer">
     <div class="monitor">
@@ -796,12 +793,6 @@ function sendQueued() {
   }
 }
 
-function setPill(id, text, cls) {
-  const pill = $(id);
-  pill.textContent = text;
-  pill.className = "pill" + (cls ? " " + cls : "");
-}
-
 function loop() {
   if (!S) return;                      // unmounted between frames
   S.raf = requestAnimationFrame(loop);
@@ -815,16 +806,26 @@ function loop() {
     $("error").textContent = String(e);
     cancelAnimationFrame(S.raf);
     S.raf = null;
-    setPill("conn", "stopped — see the error below", "bad");
+    for (const head of Object.values(S.heads)) head.setState(false, "stopped — see the error below", "bad");
     return;
   }
   refreshKeyStyles();
   renderHost();
 
+  // A HOGP peripheral's dot is lit when a host has actually subscribed to its
+  // Report characteristic: until then it is advertising into an empty room and
+  // every keystroke goes nowhere, which is the failure this page most often
+  // has to explain.
   const kbdReady = S.hidStarted.kbdHost;
   const mouseReady = S.hidStarted.mouseHost;
-  setPill("kbd-pill", kbdReady ? "connected · subscribed" : "advertising…", kbdReady ? "ok" : "");
-  setPill("mouse-pill", mouseReady ? "connected · subscribed" : "advertising…", mouseReady ? "ok" : "");
+  S.heads.keyboard.setState(kbdReady, kbdReady ? "a host is subscribed" : "advertising…",
+    kbdReady ? "ok" : "");
+  S.heads.mouse.setState(mouseReady, mouseReady ? "a host is subscribed" : "advertising…",
+    mouseReady ? "ok" : "");
+  S.heads.kbdHost.setState(kbdReady, kbdReady ? "subscribed to its peer's reports" : "connecting…",
+    kbdReady ? "ok" : "");
+  S.heads.mouseHost.setState(mouseReady, mouseReady ? "subscribed to its peer's reports" : "connecting…",
+    mouseReady ? "ok" : "");
   // Typing before the host has subscribed goes nowhere, which looks like a
   // broken page rather than a keyboard talking to no one.
   const box = $("typebox");
@@ -835,13 +836,62 @@ function loop() {
       : "waiting for a host to connect…";
     if (kbdReady) box.focus();
   }
-  setPill("conn", kbdReady && mouseReady ? "4 devices on one in-page link" : "connecting…",
-    kbdReady && mouseReady ? "ok" : "");
 }
 
 // ===========================================================================
 //  Mount / unmount
 // ===========================================================================
+
+/// The four device headers. The two peripherals show their scripts read-only:
+/// the Report Map this page spends its prose on is *in* those scripts, and it
+/// is worth being able to look at. They are not editable here because editing
+/// one would mean rebuilding the link and every device on it, which is the
+/// Playground's job. The two hosts have no script at all -- a `HidHost` is
+/// Rust, and SimBLE has no central-role scripting -- so they get no pen.
+function buildHeaders() {
+  const peripheral = (key, name, source, target) => {
+    const head = createDeviceHeader({
+      name,
+      kind: "peripheral · HOGP · Rhai script",
+      accent: "good",
+      address: ADDR[key],
+      dotMeans: "a host has subscribed to its Report characteristic",
+      script: {
+        text: source,
+        editable: false,
+        note: "<strong>Read-only here.</strong> This is the <code>hid_" +
+          (key === "keyboard" ? "keyboard" : "mouse") +
+          "</code> example MCP's <code>example</code> tool serves, minus its demo " +
+          "<code>tick</code> — that one types on its own and would fight with you. The " +
+          "<code>0x2A4B</code> Report Map in it is the descriptor the host parses.",
+      },
+      run: { running: true, disabled: true, reason: SHARED_LINK },
+    });
+    $(target + "-head").append(head.el);
+    $(target + "-script").append(head.panel);
+    head.setState(false, "starting…");
+    S.heads[key] = head;
+  };
+  peripheral("keyboard", "SimKeyboard", KEYBOARD_SCRIPT, "kbd");
+  peripheral("mouse", "SimMouse", MOUSE_SCRIPT, "mouse");
+
+  const host = (key, name, peer, target) => {
+    const head = createDeviceHeader({
+      name,
+      kind: `central · HidHost (Rust) → ${peer}`,
+      accent: "accent",
+      address: ADDR[key],
+      dotMeans: "it has read the peer's Report Map and subscribed to its reports",
+      run: { running: true, disabled: true, reason: SHARED_LINK },
+    });
+    $(target).append(head.el);
+    head.setState(false, "starting…");
+    S.heads[key] = head;
+  };
+  host("kbdHost", "Keyboard Host", "SimKeyboard", "kbdhost-head");
+  host("mouseHost", "Mouse Host", "SimMouse", "mousehost-head");
+}
+
 function injectStyles() {
   if (document.getElementById(STYLE_ID)) return;
   const style = document.createElement("style");
@@ -888,12 +938,12 @@ export async function mount(root) {
     },
     listeners: new AbortController(),
     timers: new Set(),
+    heads: {},
     t0: performance.now(),
     raf: null,
   };
 
-  $("kbd-addr").textContent = ADDR.keyboard;
-  $("mouse-addr").textContent = ADDR.mouse;
+  buildHeaders();
   renderKeyboard();
 
   const signal = S.listeners.signal;
@@ -923,6 +973,7 @@ export function unmount() {
   if (S.raf !== null) cancelAnimationFrame(S.raf);
   S.listeners.abort();
   for (const timer of S.timers) clearTimeout(timer);
+  for (const head of Object.values(S.heads)) head.destroy();
   // Dropping the WebLink drops all four devices with it; leaving it alive
   // would keep a scene running with nothing rendering it.
   try { S.link.free(); } catch (_) { /* already freed */ }

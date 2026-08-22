@@ -18,11 +18,25 @@
 // swap domains without leaving anything running.
 
 import init, { WebCarKit } from "../pkg/simble.js";
+import { createDeviceHeader } from "../common/device-header.js";
 
 // One timer for both endpoints. Chrome throttles a hidden tab hard enough
 // that a device hosted in one misses protocol deadlines, so a two-page design
 // would stall silently; both halves live here and share this interval.
 const TICK_MS = 120;
+
+// One `WebCarKit` holds both endpoints and the multiplexers between them, and
+// dropping it is the only teardown there is — so neither header offers a stop
+// that would take its neighbour down with it.
+const SHARED_KIT = "one kit — both endpoints stop together";
+
+// These two endpoints genuinely have no Bluetooth address. The page's own
+// prose says why: the two RFCOMM multiplexers hand frames straight to each
+// other, so there is no L2CAP channel and no ACL connection underneath, and a
+// BD_ADDR is a property of a link that does not exist here. Inventing one for
+// the header would be exactly the kind of decoration this component replaced.
+const NO_ADDRESS =
+  "no BD_ADDR: the two RFCOMM multiplexers are wired directly together, with no ACL underneath";
 
 let wasmReady = null;
 
@@ -124,6 +138,7 @@ const MARKUP = `
   <!-- ============ the phone: Audio Gateway ============ -->
   <section class="panel">
     <h2>The phone — Audio Gateway</h2>
+    <div id="car-ag-head"></div>
     <svg class="mock" viewBox="0 0 176 250" role="img" aria-label="a phone">
       <rect x="16" y="4" width="144" height="242" rx="18" fill="#2b3138"/>
       <rect x="23" y="16" width="130" height="218" rx="8" fill="#161b21"/>
@@ -196,6 +211,7 @@ const MARKUP = `
   <!-- ============ the head unit: Hands-Free ============ -->
   <section class="panel">
     <h2>The head unit — Hands-Free</h2>
+    <div id="car-hf-head"></div>
     <svg class="mock" viewBox="0 0 240 150" role="img" aria-label="a car head unit">
       <rect x="2" y="6" width="236" height="138" rx="12" fill="#2b3138"/>
       <rect x="12" y="16" width="216" height="118" rx="6" fill="#161b21"/>
@@ -367,6 +383,7 @@ let styleEl = null;
 let container = null;
 let nextSeq = 0;
 let showBytes = false;
+let heads = {};
 
 export async function mount(root) {
   if (kit) unmount();
@@ -386,6 +403,30 @@ export async function mount(root) {
   const $ = (id) => root.querySelector(`#${id}`);
   const tape = $("car-tape");
   let tapeEmpty = true;
+
+  // Both endpoints are Rust (`AgProtocol` and `HfProtocol`), so neither has a
+  // script and neither gets a pen.
+  heads.ag = createDeviceHeader({
+    name: "Phone",
+    kind: "Audio Gateway · AgProtocol",
+    accent: "accent",
+    address: null,
+    addressNote: NO_ADDRESS,
+    dotMeans: "the head unit has an established Service Level Connection to it",
+    run: { running: true, disabled: true, reason: SHARED_KIT },
+  });
+  $("car-ag-head").append(heads.ag.el);
+
+  heads.hf = createDeviceHeader({
+    name: "Head Unit",
+    kind: "Hands-Free · HfProtocol",
+    accent: "good",
+    address: null,
+    addressNote: NO_ADDRESS,
+    dotMeans: "it has an established Service Level Connection to the phone",
+    run: { running: true, disabled: true, reason: SHARED_KIT },
+  });
+  $("car-hf-head").append(heads.hf.el);
 
   // Every control is one call into the wasm object; the object refuses
   // anything the link cannot do yet, which is what drives the disabled
@@ -496,6 +537,26 @@ export async function mount(root) {
       ? `failed: ${status.error}`
       : LINK_TEXT[status.link] || status.link;
 
+    // The dot is the Service Level Connection: until it is up, an AG may not
+    // report indicators it was not asked for and the head unit's screen is
+    // showing nothing that arrived over the link. Each side's label is what
+    // *it* knows, which is the whole point of the page.
+    const tone = status.error ? "bad" : ready ? "ok" : "";
+    heads.ag.setState(
+      ready,
+      status.error ? `failed: ${status.error}`
+        : ready ? `${CALL_TEXT[status.call] || status.call} · ${status.operator}`
+        : LINK_TEXT[status.link] || status.link,
+      tone,
+    );
+    heads.hf.setState(
+      ready,
+      status.error ? `failed: ${status.error}`
+        : ready ? `${CALL_TEXT[status.call] || status.call} · codec ${status.codec}`
+        : LINK_TEXT[status.link] || status.link,
+      tone,
+    );
+
     // -- the phone --
     const byName = Object.fromEntries(status.indicators.map((i) => [i.name, i]));
     const signal = byName.signal ? byName.signal.value : 0;
@@ -570,6 +631,8 @@ export function unmount() {
     kit.free();
     kit = null;
   }
+  for (const head of Object.values(heads)) head.destroy();
+  heads = {};
   if (styleEl) {
     styleEl.remove();
     styleEl = null;

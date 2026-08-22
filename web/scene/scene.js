@@ -13,7 +13,7 @@
 // Rendering helpers are shared with the other pages via viewer.js.
 
 import init, { WebLink, WebPeripheral, WebScanner } from "../pkg/simble.js";
-import { renderGatt, nameFor, propChips, escapeHtml } from "../common/viewer.js";
+import { renderGatt, gattViewFor, escapeHtml } from "../common/viewer.js";
 import { createBackendSelector } from "../common/backend.js";
 
 const $ = (id) => document.getElementById(id);
@@ -345,31 +345,17 @@ function applyScript(spec) {
   }
 }
 
-// Discovered-GATT tree from a central's status JSON (nRF-Connect flavour).
+// Discovered-GATT tree from a central's status JSON. This used to be a
+// hand-rolled copy of the same tree the Generic page draws; it is now the
+// shared widget's client view, which knows the "connecting" and "discovering"
+// states a central passes through and shows attribute handles because a client
+// addresses things by handle. No operation handlers are passed, so no read /
+// write / subscribe buttons appear -- this inspector reads a device, it does
+// not drive one.
 function renderDiscovered(el, status) {
   const phaseEl = $("insp-phase");
   if (phaseEl) phaseEl.textContent = status.phase || "idle";
-  if (!status.connected) { el.innerHTML = '<p class="empty">Connecting…</p>'; return; }
-  if (!status.services || !status.services.length) {
-    el.innerHTML = `<p class="empty">Connected — ${escapeHtml(status.phase || "discovering")}…</p>`;
-    return;
-  }
-  el.innerHTML = status.services.map((s) => {
-    const sName = nameFor(s.uuid);
-    const headHtml = sName
-      ? `${escapeHtml(sName)}<span class="u">0x${s.uuid}</span>`
-      : `<span class="u">Service 0x${s.uuid}</span>`;
-    const chrs = (s.characteristics || []).map((c) => {
-      const cName = nameFor(c.uuid);
-      const nameHtml = cName
-        ? `<span class="chr-name">${escapeHtml(cName)}</span><span class="chr-uuid">0x${c.uuid}</span>`
-        : `<span class="chr-name chr-uuid">0x${c.uuid}</span>`;
-      const handle = "0x" + c.value_handle.toString(16).padStart(4, "0");
-      return `<div class="chr"><div class="chr-top">${nameHtml} ${propChips(c.properties, false)}
-        <span class="chr-h">handle ${handle}</span></div></div>`;
-    }).join("");
-    return `<div class="svc"><div class="svc-head">${headHtml}</div>${chrs}</div>`;
-  }).join("");
+  gattViewFor(el, { mode: "client" }).update(status);
 }
 
 // Aggregate advertisement reports per address and render them.
