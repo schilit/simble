@@ -18,12 +18,19 @@
 //! `rfcomm::Multiplexer`: [`Protocol::receive`] takes one incoming signaling
 //! PDU and returns `(outgoing PDUs, events)`.
 //!
-//! Scope: signaling only. The RTP media transport channel and packet pumping
-//! (Bumble's `MediaPacketPump`/`rtp.py`) are intentionally not modeled —
-//! Simble simulates stream negotiation, not audio. Consequently the CLOSING
-//! and ABORTING states, which exist to drain a real transport channel, are
-//! passed through instantly (Close/Abort go straight back to IDLE).
+//! Scope: signaling plus the **media transport channel**. Once a stream is
+//! OPENed, a second L2CAP channel — same PSM [`AVDTP_PSM`], distinct CID —
+//! carries RTP packets ([`crate::classic::rtp`]); [`Protocol::attach_media_channel`]
+//! registers it and [`Protocol::on_media_pdu`] delivers what arrives into a
+//! bounded queue a device drains with [`Protocol::take_media`], mirroring
+//! how the LE Audio path hands ISO SDUs to a sink.
+//!
+//! Codec payloads stay opaque: Simble models the transport, never the audio.
+//! The CLOSING and ABORTING states are still passed through instantly rather
+//! than draining the transport channel over time.
 
+use crate::classic::a2dp::codec_type;
+use crate::classic::rtp::{MediaPacket, MediaPacketError, RtpHeader, SbcReassembler, packetize_sbc};
 use crate::classic::sdp::{AttributeIdSpec, DataElement, SdpClient, SdpUuid, attribute_id};
 use crate::l2cap::classic::{ClassicChannelManager, ClassicChannelSpec};
 use crate::packets::l2cap_signaling::ConnectionRequestHeader;
@@ -365,6 +372,49 @@ impl MediaCodecCapabilities {
         })
     }
 }
+
+/// A media frame delivered up from the transport channel.
+///
+/// `payload` is codec data and stays opaque — Simble never decodes audio.
+/// For an SBC stream the A2DP payload header has been consumed and any
+/// fragmented frame reassembled, so this is whole codec frames; for other
+/// codecs it is the RTP payload exactly as it arrived.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaFrame {
+    /// The local stream endpoint the frame arrived on.
+    pub seid: u8,
+    /// RTP sequence number, so a sink can detect loss or reordering.
+    pub sequence_number: u16,
+    /// RTP timestamp in codec sample units.
+    pub timestamp: u32,
+    /// Codec payload, opaque to this layer.
+    pub payload: Vec<u8>,
+}
+
+/// The state one open media transport channel carries.
+///
+/// A stream's transport channel is a second L2CAP channel to the same PSM as
+/// signaling; the CID is how incoming media is matched back to a stream.
+#[derive(Debug)]
+pub(crate) struct MediaTransport {
+    /// The local endpoint this channel serves.
+    seid: u8,
+    /// Outgoing RTP sequence number; wraps at 16 bits.
+    sequence_number: u16,
+    /// Synchronization source for packets we send.
+    ssrc: u32,
+    /// Set when the configured codec is SBC, whose payloads carry an A2DP
+    /// framing header and may fragment one frame across packets.
+    sbc: bool,
+    /// Reassembles fragmented SBC frames.
+    reassembler: SbcReassembler,
+}
+
+/// How many media frames a sink may fall behind before the oldest are
+/// dropped. An unbounded queue would grow without limit when nothing
+/// drains it; dropping the oldest is what a real audio pipeline does on
+/// overrun.
+const MAX_QUEUED_MEDIA_FRAMES: usize = 256;
 
 /// One entry of a Discover response (AVDTP spec 8.6.2, SEP information).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1187,6 +1237,10 @@ pub struct Protocol {
     assembler: MessageAssembler,
     pending: HashMap<u8, Pending>,
     next_transaction: u8,
+    /// Open media transport channels, keyed by their L2CAP CID.
+    media_transports: HashMap<u16, MediaTransport>,
+    /// Frames received on any transport channel, oldest first.
+    media_rx: std::collections::VecDeque<MediaFrame>,
 }
 
 impl Protocol {
@@ -1205,6 +1259,8 @@ impl Protocol {
             assembler: MessageAssembler::new(),
             pending: HashMap::new(),
             next_transaction: 0,
+            media_transports: HashMap::new(),
+            media_rx: std::collections::VecDeque::new(),
         }
     }
 
@@ -1301,6 +1357,174 @@ impl Protocol {
                 });
             has_media_transport && has_codec
         })
+    }
+
+    // -- Media transport channel -----------------------------------------
+
+    /// Registers the L2CAP channel that will carry media for `seid`.
+    ///
+    /// AVDTP opens the transport channel *after* the OPEN signal succeeds,
+    /// on the same PSM as signaling but with its own CID, so the caller
+    /// (which owns L2CAP) tells the protocol which CID belongs to which
+    /// stream. Fails if the endpoint is unknown or not yet OPEN, because a
+    /// transport channel for an unconfigured stream has nowhere to deliver.
+    pub fn attach_media_channel(&mut self, seid: u8, cid: u16) -> Result<(), SimbleError> {
+        let endpoint = self
+            .get_local_endpoint_by_seid(seid)
+            .ok_or_else(|| SimbleError::DeviceError(format!("AVDTP: unknown SEID {seid}")))?;
+        if !matches!(endpoint.state, StreamState::Open | StreamState::Streaming) {
+            return Err(SimbleError::DeviceError(format!(
+                "AVDTP: SEID {seid} is {:?}, not OPEN - no media channel yet",
+                endpoint.state
+            )));
+        }
+        // An SBC stream's payloads carry the A2DP framing header; other
+        // codecs are passed through untouched.
+        let sbc = endpoint
+            .configuration
+            .iter()
+            .filter_map(MediaCodecCapabilities::from_capability)
+            .any(|codec| codec.media_codec_type == codec_type::SBC);
+        self.media_transports.insert(
+            cid,
+            MediaTransport {
+                seid,
+                sequence_number: 0,
+                // A single stream per endpoint, so the SEID identifies the
+                // source well enough for a simulation.
+                ssrc: u32::from(seid),
+                sbc,
+                reassembler: SbcReassembler::new(),
+            },
+        );
+        Ok(())
+    }
+
+    /// Drops the media transport channel belonging to `seid`, if any.
+    ///
+    /// AVDTP tears the transport channel down with the stream (spec 9.1):
+    /// leaving it registered would let media for a closed stream keep
+    /// arriving, and would leak a half-reassembled frame into the next
+    /// stream that reused the CID.
+    fn detach_media_by_seid(&mut self, seid: u8) {
+        self.media_transports.retain(|_, t| t.seid != seid);
+    }
+
+    /// Forgets the media channel with `cid` (the transport channel closed).
+    pub fn detach_media_channel(&mut self, cid: u16) -> Option<u8> {
+        self.media_transports.remove(&cid).map(|t| t.seid)
+    }
+
+    /// Whether `seid` currently has a media transport channel.
+    pub fn has_media_channel(&self, seid: u8) -> bool {
+        self.media_transports.values().any(|t| t.seid == seid)
+    }
+
+    /// Delivers one PDU received on media transport channel `cid`.
+    ///
+    /// A packet for an unknown CID, or one that is not well-formed RTP, is
+    /// rejected rather than guessed at: a sink that accepts malformed media
+    /// plays noise instead of reporting a fault.
+    pub fn on_media_pdu(&mut self, cid: u16, pdu: &[u8]) -> Result<(), SimbleError> {
+        let transport = self.media_transports.get_mut(&cid).ok_or_else(|| {
+            SimbleError::DeviceError(format!("AVDTP: no media channel with CID {cid:#06X}"))
+        })?;
+        let packet = MediaPacket::parse(pdu).map_err(|e: MediaPacketError| {
+            SimbleError::PacketParseError(format!("AVDTP media: {e}"))
+        })?;
+
+        // SBC payloads carry an A2DP header and may fragment one frame over
+        // several packets; anything else is delivered as it arrived.
+        let payload = if transport.sbc {
+            match transport.reassembler.push(&packet.payload) {
+                Some(frame) => frame,
+                // Still collecting fragments - nothing to deliver yet.
+                None => return Ok(()),
+            }
+        } else {
+            packet.payload
+        };
+
+        let frame = MediaFrame {
+            seid: transport.seid,
+            sequence_number: packet.sequence_number,
+            timestamp: packet.timestamp,
+            payload,
+        };
+        if self.media_rx.len() >= MAX_QUEUED_MEDIA_FRAMES {
+            self.media_rx.pop_front();
+        }
+        self.media_rx.push_back(frame);
+        Ok(())
+    }
+
+    /// Drains received media frames, oldest first - the sink's accessor.
+    pub fn take_media(&mut self) -> Vec<MediaFrame> {
+        self.media_rx.drain(..).collect()
+    }
+
+    /// Packetizes `frames` for the stream on `seid` and returns the RTP
+    /// packets to write to its transport channel.
+    ///
+    /// `timestamp` is in codec sample units and is the caller's business:
+    /// only a source that knows the codec's frame duration can advance it
+    /// correctly. Sequence numbers are stamped here and wrap at 16 bits.
+    /// Returns an error if the stream has no media channel or is not
+    /// STREAMING - media before START is a protocol violation.
+    pub fn send_media(
+        &mut self,
+        seid: u8,
+        frames: &[Vec<u8>],
+        timestamp: u32,
+    ) -> Result<Vec<Vec<u8>>, SimbleError> {
+        let state = self
+            .get_local_endpoint_by_seid(seid)
+            .map(|e| e.state)
+            .ok_or_else(|| SimbleError::DeviceError(format!("AVDTP: unknown SEID {seid}")))?;
+        if state != StreamState::Streaming {
+            return Err(SimbleError::DeviceError(format!(
+                "AVDTP: SEID {seid} is {state:?}, not STREAMING"
+            )));
+        }
+        let peer_mtu = self.peer_mtu;
+        let transport = self
+            .media_transports
+            .values_mut()
+            .find(|t| t.seid == seid)
+            .ok_or_else(|| {
+                SimbleError::DeviceError(format!("AVDTP: SEID {seid} has no media channel"))
+            })?;
+
+        // Every packet spends 12 bytes on the RTP header before any payload.
+        let max_payload = usize::from(peer_mtu).saturating_sub(RtpHeader::LEN);
+        let payloads = if transport.sbc {
+            packetize_sbc(frames, max_payload)
+        } else {
+            // Without codec framing each frame is its own payload; one too
+            // large for the MTU cannot be sent, and silently truncating it
+            // would corrupt the stream.
+            frames
+                .iter()
+                .filter(|f| f.len() <= max_payload)
+                .cloned()
+                .collect()
+        };
+
+        Ok(payloads
+            .into_iter()
+            .map(|payload| {
+                let packet = MediaPacket {
+                    sequence_number: transport.sequence_number,
+                    timestamp,
+                    ssrc: transport.ssrc,
+                    payload_type: crate::classic::rtp::DEFAULT_PAYLOAD_TYPE,
+                    marker: false,
+                    payload,
+                };
+                transport.sequence_number = transport.sequence_number.wrapping_add(1);
+                packet.to_bytes()
+            })
+            .collect())
     }
 
     // -- Initiator (INT) command builders --------------------------------
@@ -1603,6 +1827,7 @@ impl Protocol {
                 {
                     endpoint.state = StreamState::Idle;
                     endpoint.remote_seid = None;
+                    self.detach_media_by_seid(acp_seid);
                     events.push(AvdtpEvent::StreamClosed { seid: acp_seid });
                     Message::CloseResponse
                 }
@@ -1616,6 +1841,7 @@ impl Protocol {
                 {
                     endpoint.state = StreamState::Idle;
                     endpoint.remote_seid = None;
+                    self.detach_media_by_seid(acp_seid);
                     events.push(AvdtpEvent::StreamAborted { seid: acp_seid });
                 }
                 Message::AbortResponse
@@ -1876,6 +2102,7 @@ impl Protocol {
                     endpoint.state = StreamState::Idle;
                     endpoint.remote_seid = None;
                 }
+                self.detach_media_by_seid(int_seid);
                 vec![AvdtpEvent::StreamClosed { seid: int_seid }]
             }
             (Pending::Abort { int_seid }, Message::AbortResponse) => {
@@ -1883,6 +2110,7 @@ impl Protocol {
                     endpoint.state = StreamState::Idle;
                     endpoint.remote_seid = None;
                 }
+                self.detach_media_by_seid(int_seid);
                 vec![AvdtpEvent::StreamAborted { seid: int_seid }]
             }
             _ => Vec::new(),
