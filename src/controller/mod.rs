@@ -10,4 +10,5 @@
 //! controller present at all.
 
 pub mod lmp;
+pub mod propagation;
 pub mod sim;
