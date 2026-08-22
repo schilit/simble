@@ -1060,8 +1060,9 @@ fn tick(server, t) {
         "hid_mouse",
         "HID over GATT mouse (1812): relative-motion reports, buttons + X/Y",
         r#"// HOGP mouse — same shape as the keyboard, different report map.
-// The report is [buttons, dx, dy] with dx/dy as SIGNED relative motion,
-// which is why the descriptor declares Logical Minimum -127.
+// The report is [buttons, dx, dy, wheel] with dx/dy/wheel as SIGNED
+// relative motion, which is why the descriptor declares Logical Minimum
+// -127: read as unsigned, one step left becomes 255 steps right.
 let server = android::BluetoothGattServer("SimMouse");
 let hid = android::BluetoothGattService(uuid::from_u16(0x1812), android::SERVICE_TYPE_PRIMARY);
 
@@ -1087,8 +1088,9 @@ map.set_value([
     0x81, 0x01,       //     Input (Const) — 5 bits padding
     0x05, 0x01,       //     Usage Page (Generic Desktop)
     0x09, 0x30, 0x09, 0x31, //   Usage X, Y
+    0x09, 0x38,       //     Usage Wheel
     0x15, 0x81, 0x25, 0x7F, //   Logical -127..127
-    0x75, 0x08, 0x95, 0x02,
+    0x75, 0x08, 0x95, 0x03,
     0x81, 0x06,       //     Input (Data,Var,Rel) — relative motion
     0xC0, 0xC0,       // End Collection x2
 ]);
@@ -1096,7 +1098,7 @@ hid.add_characteristic(map);
 
 let report = android::BluetoothGattCharacteristic(uuid::from_u16(0x2A4D),
     android::PROPERTY_READ | android::PROPERTY_NOTIFY, android::PERMISSION_READ);
-report.set_value([0, 0, 0]); // [buttons, dx, dy]
+report.set_value([0, 0, 0, 0]); // [buttons, dx, dy, wheel]
 report.add_descriptor(android::BluetoothGattDescriptor(
     uuid::CLIENT_CHARACTERISTIC_CONFIGURATION,
     android::PERMISSION_READ | android::PERMISSION_WRITE));
@@ -1122,7 +1124,7 @@ fn tick(server, t) {
     if leg == 1 { dy = 5; }
     if leg == 2 { dx = 251; } // -5 as a signed byte
     if leg == 3 { dy = 251; }
-    server.update_value(uuid::from_u16(0x2A4D), [0, dx, dy]);
+    server.update_value(uuid::from_u16(0x2A4D), [0, dx, dy, 0]);
 }
 "#,
     ),
@@ -2372,6 +2374,33 @@ mod tests {
                 .unwrap()
                 .contains("0501"),
             "report map should be present: {map}"
+        );
+    }
+
+    /// The example's Report Map is not decoration: it is the only thing that
+    /// tells a host these bytes are pointer motion. Checked with the same
+    /// descriptor walker a real host uses, so an edit that breaks the item
+    /// encoding fails here rather than silently producing a device nothing
+    /// can interpret.
+    #[test]
+    fn test_hid_mouse_report_map_identifies_a_mouse_to_a_host() {
+        use crate::devices::helpers::hid_reports::top_level_usage;
+        let mut s = serve_example("hid_mouse");
+
+        let map = call(&mut s, "read", json!({"uuid": "2A4B"}));
+        let text = map["result"]["content"][0]["text"].as_str().unwrap();
+        let descriptor = characteristic_value(text, "2A4B").expect("report map");
+        // Generic Desktop (0x01), Mouse (0x02).
+        assert_eq!(top_level_usage(&descriptor), Some((0x01, 0x02)));
+
+        call(&mut s, "tick", json!({"seconds": 0.5}));
+        let read = call(&mut s, "read", json!({"uuid": "2A4D"}));
+        let text = read["result"]["content"][0]["text"].as_str().unwrap();
+        let report = characteristic_value(text, "2A4D").expect("input report");
+        assert_eq!(
+            report.len(),
+            4,
+            "the descriptor declares 3 relative axes plus the button byte"
         );
     }
 
