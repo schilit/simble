@@ -50,34 +50,36 @@ SimBLE gives the agent a repeatable device-testing environment. It can also:
 - **Reach real hardware when you want it.** With a USB Bluetooth dongle, a SimBLE device
   advertises over real RF and your actual phone can scan, connect, and pair with it.
 
+## Where scenes run
+
+The frontend you choose (MCP, Web, or Native) is separate from where its Bluetooth scene runs.
+
+| Scene host | MCP | Web | Native |
+|---|---|---|---|
+| **In-process** | Default | Default | Tests and CI |
+| **netsim** | `run_on("netsim")` | WebSocket controller | netsim examples |
+| **USB dongle** | Not available yet | Not available | `usb_hrm` example |
+
+The in-process host needs no external setup and is deterministic. netsim requires local
+`netsimd` with its WebSocket endpoint: MCP adds peripherals and the Android emulator is the
+central; Web uses its WebSocket controller. The
+[controller ladder](https://schilit.github.io/simble/controllers/) explains the fidelity and
+setup trade-offs in more detail.
+
 ## SimBLE MCP — the agent-first surface
 
 SimBLE ships an MCP server for stateful device construction and testing in an agent
 conversation. Once configured, the client works in a live scene: a session-scoped set of peripherals, plus a
 central and scanner to exercise them. The scene persists across calls, so an agent can build it,
-drive interactions, and inspect the result.
+drive interactions, and inspect the result. Calling `run_on` switches its host and starts a new scene.
 
 | Tools | What they do |
 |---|---|
 | `example`, `lookup` | Learn the API and the assigned numbers without leaving the session |
 | `lint`, `run_test` | Compile a script, or run it and check every `assert(...)` |
-| `run_on`, `add_peripheral`, `tick`, `status`, `scan` | Choose the controller, build the scene, drive the clock, see it as a whole or as a scanner hears it |
+| `run_on`, `add_peripheral`, `tick`, `status`, `scan` | Choose the scene host, build the scene, drive the clock, see it as a whole or as a scanner hears it |
 | `connect`, `read`, `write`, `assert` | Drive a central against a peripheral |
 | `subscribe`, `assert_over` | Monitor a value across a time window |
-
-### Where an MCP scene runs
-
-A scene uses one controller at a time. Changing it with `run_on` starts a new scene; add the
-devices again after switching.
-
-| Scene host | Choose it when | Notes |
-|---|---|---|
-| **In-process** (default) | You want fast, deterministic device tests | No external setup. MCP can add peripherals and use its central, scanner, and assertion tools. |
-| **netsim** (`run_on("netsim")`) | An Android emulator should scan, connect, or pair with the devices | Requires local `netsimd` with its WebSocket endpoint. Add peripherals through MCP, then use the emulator as the central. |
-| **USB** | A real phone should use a USB Bluetooth dongle | Not available through MCP yet; use the native `usb_hrm` example. |
-
-For the full controller trade-offs—from the in-process link to netsim and USB—see the
-[controller ladder](https://schilit.github.io/simble/controllers/).
 
 `example` serves 18 ready-to-run device scripts, `lookup` resolves SIG assigned numbers, and
 `assert_over` subscribes, advances the clock, and fails on the first violating sample. Tool
