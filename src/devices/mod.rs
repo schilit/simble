@@ -4,6 +4,7 @@
 //! Ready-to-use virtual BLE device models (Heart Rate Monitor, Keyboard, Mouse, Beacons).
 
 pub mod beacon;
+pub mod catalog;
 pub mod heart_rate_monitor;
 pub mod helpers;
 pub mod keyboard;

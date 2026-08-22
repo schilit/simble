@@ -18,6 +18,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use serde::{Deserialize, Serialize};
+
 use crate::smp::PairingKeys;
 use crate::types::Address;
 
@@ -25,18 +27,29 @@ use crate::types::Address;
 /// `ble_store_value_sec`: the distributed/derived keys plus the metadata
 /// needed to judge whether the bond satisfies a service's security
 /// requirements on reconnection.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+///
+/// Serializable so a bond can be *declared* rather than only earned: a JSON
+/// scene file (`crate::scene`) states a pre-existing bond with this exact
+/// shape, embedding the same [`PairingKeys`] record `KeyStore` persists, so
+/// key material can move between a Bumble keystore, a scene fixture and this
+/// runtime store without a translation layer to drift.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BondSecurity {
     /// LTK/EDIV/RAND, IRK, CSRK — the same record shape [`crate::smp::KeyStore`]
     /// persists, so the two stores never disagree on key schema.
+    #[serde(default)]
     pub keys: PairingKeys,
     /// Whether the keys came from an LE Secure Connections pairing (a single
     /// `f5`-derived LTK) rather than LE Legacy key distribution.
+    #[serde(default)]
     pub secure_connections: bool,
     /// Whether the pairing used a MITM-protected association model.
+    #[serde(default)]
     pub authenticated: bool,
     /// Negotiated encryption key size in bytes (7..=16, Core Spec Vol 3,
     /// Part H, Section 2.3.4).
+    #[serde(default)]
     pub key_size: u8,
 }
 

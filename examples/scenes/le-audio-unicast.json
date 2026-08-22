@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "name": "LE Audio unicast",
+  "description": "A source driving a sink's ASE and streaming to it over a CIS. The format expresses this today; the loader does not host the audio_source role yet (device::cis_central and profiles::ascs_client are being wired), so running this scene is refused by name rather than half-executed. The sink is the catalog's Volume Control device, which is the LE Audio peripheral that exists today.",
+  "controller": "netsim",
+  "devices": [
+    {
+      "id": "sink",
+      "role": "peripheral",
+      "name": "scene-speaker",
+      "address": "CC:1E:57:0F:00:06",
+      "device": "volume"
+    },
+    {
+      "id": "source",
+      "role": "audio_source",
+      "name": "scene-source",
+      "address": "CC:1E:57:0F:00:07",
+      "target": "sink",
+      "config": {
+        "sample_rate_hz": 16000,
+        "frame_duration_us": 10000,
+        "octets_per_frame": 40
+      }
+    }
+  ]
+}

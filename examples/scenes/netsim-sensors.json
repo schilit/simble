@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "name": "Three sensors on netsim",
+  "description": "Peripheral-only, because on netsim the Android emulator (or Bumble, or another netsim client) plays the central. Each device names the node label it registers under, so `netsim devices` lists something a human can tell apart. Needs netsimd with its WebSocket frontend: netsimd --logtostderr --no-shutdown --ws-port 7681.",
+  "controller": "netsim",
+  "devices": [
+    {
+      "id": "hrm",
+      "name": "scene-hrm",
+      "address": "CC:1E:57:0F:00:01",
+      "device": "hrm"
+    },
+    {
+      "id": "thermo",
+      "name": "scene-thermometer",
+      "address": "CC:1E:57:0F:00:02",
+      "device": "thermometer"
+    },
+    {
+      "id": "beacon",
+      "name": "scene-eddystone",
+      "address": "CC:1E:57:0F:00:03",
+      "device": "eddystone"
+    }
+  ]
+}

@@ -57,6 +57,7 @@ pub mod mcp;
 pub mod obex;
 pub mod packets;
 pub mod profiles;
+pub mod scene;
 pub mod scripting;
 pub mod service;
 pub mod smp;

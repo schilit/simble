@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "name": "A central and two peripherals",
+  "description": "Wiring by id: the central connects to the sensor it names, and neither device's address appears in the link. Centrals and scanners only exist on the in-process controller — on netsim the emulator plays that part.",
+  "controller": "self",
+  "devices": [
+    { "id": "sensor", "device": "env_sensor" },
+    { "id": "watch", "device": "fitness_tracker" },
+    { "id": "observer", "role": "scanner" },
+    { "id": "phone", "role": "central", "target": "sensor" }
+  ]
+}

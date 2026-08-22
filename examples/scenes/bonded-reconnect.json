@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "name": "A bond that already exists",
+  "description": "Starts where pairing has already succeeded, so what gets exercised is reconnection: encryption startup from a stored LTK and the restore of the lock's state subscription. The keys below are made up for the simulator and are safe to commit; never put a real device's or dongle's keys in a fixture.",
+  "controller": "self",
+  "devices": [
+    { "id": "lock", "device": "smart_lock" },
+    { "id": "phone", "role": "central", "target": "lock" }
+  ],
+  "bonds": [
+    {
+      "between": ["lock", "phone"],
+      "security": {
+        "keys": {
+          "ltk": { "value": "8f3b1c05d94e27a6b0113fd8c27ae415", "authenticated": true }
+        },
+        "secure_connections": true,
+        "authenticated": true,
+        "key_size": 16
+      },
+      "sides": {
+        "lock": {
+          "cccds": [{ "handle": 12, "value": 1 }]
+        },
+        "phone": {
+          "security": {
+            "keys": {
+              "ltk": { "value": "8f3b1c05d94e27a6b0113fd8c27ae415", "authenticated": true },
+              "irk": { "value": "4d6a2e91bb70c3f5182ad4e70c9b6321" }
+            },
+            "secure_connections": true,
+            "authenticated": true,
+            "key_size": 16
+          }
+        }
+      }
+    }
+  ]
+}
