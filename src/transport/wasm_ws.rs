@@ -1375,12 +1375,32 @@ impl CentralDevice {
     }
 
     /// On the first tick, request a connection to the target advertiser.
+    ///
+    /// LE Create Connection takes 25 parameter bytes (Vol 4, Part E, Section
+    /// 7.8.12). This used to send only the first 12 — everything from
+    /// Own_Address_Type onwards was missing. The in-process controller reads
+    /// the fields it needs at their fixed offsets and connected regardless,
+    /// so every scene test passed; a real controller rejects the command
+    /// outright and the central then sits in "connecting" having never
+    /// transmitted.
     fn produce(&mut self, channel: &HciChannel) {
         if !self.connect_requested && self.phase == CentralPhase::Connecting {
-            let mut params = vec![0x10, 0x00, 0x10, 0x00, 0x00, 0x00];
+            let mut params = Vec::with_capacity(25);
+            params.extend_from_slice(&0x0060u16.to_le_bytes()); // scan interval, 60 ms
+            params.extend_from_slice(&0x0030u16.to_le_bytes()); // scan window, 30 ms
+            params.push(0x00); // initiator filter policy: use the peer address
+            params.push(0x00); // peer address type: public
             let mut peer = self.target.to_be_bytes();
             peer.reverse(); // little-endian on the wire
             params.extend_from_slice(&peer);
+            params.push(0x00); // own address type: public
+            params.extend_from_slice(&0x0018u16.to_le_bytes()); // min interval, 30 ms
+            params.extend_from_slice(&0x0028u16.to_le_bytes()); // max interval, 50 ms
+            params.extend_from_slice(&0x0000u16.to_le_bytes()); // max latency
+            params.extend_from_slice(&0x00C8u16.to_le_bytes()); // supervision timeout, 2 s
+            params.extend_from_slice(&0x0000u16.to_le_bytes()); // min CE length
+            params.extend_from_slice(&0x0000u16.to_le_bytes()); // max CE length
+            debug_assert_eq!(params.len(), 25, "LE Create Connection is 25 bytes");
             let _ = queue_command(channel, [0x0D, 0x20], &params); // LE Create Connection
             self.connect_requested = true;
         }
@@ -2968,6 +2988,8 @@ mod web {
         /// queued the moment a file is loaded rather than only after the
         /// handshake finishes.
         pending_audio: VecDeque<Vec<u8>>,
+        /// SDUs discarded while waiting for the stream to open.
+        dropped: u32,
         error: Option<String>,
     }
 
@@ -2992,6 +3014,7 @@ mod web {
                 ase_requested: false,
                 cis_requested: false,
                 pending_audio: VecDeque::new(),
+                dropped: 0,
                 error: None,
             })
         }
@@ -3007,14 +3030,30 @@ mod web {
             self.cis.is_streaming()
         }
 
-        /// Hands one SDU to the stream. Audio offered before the CIS is up is
-        /// held briefly rather than dropped, so a page can start feeding a
-        /// decoded file as soon as the user picks it; the queue is bounded
-        /// because a stream that never opens must not grow without limit.
+        /// Hands one SDU to the stream.
+        ///
+        /// Once the stream is up this goes straight out. The queue exists
+        /// only to bridge the gap before the CIS opens, so that a page can
+        /// start feeding a decoded file the moment the user picks it — it is
+        /// deliberately not in the streaming path. Putting it there cost
+        /// real audio: a throttled browser tab wakes rarely and then hands
+        /// over a large burst, which overran the bound and silently
+        /// discarded the overflow.
+        ///
+        /// Pre-stream buffering is still bounded, because a handshake that
+        /// never completes must not grow the queue without limit; what it
+        /// drops is counted rather than lost quietly.
         pub fn send_audio(&mut self, sdu: Vec<u8>) {
+            if self.cis.is_streaming() {
+                if let Some(packet) = self.cis.send_sdu(&sdu) {
+                    let _ = self.channel.inject_host_packet(packet);
+                }
+                return;
+            }
             self.pending_audio.push_back(sdu);
             while self.pending_audio.len() > 200 {
                 self.pending_audio.pop_front();
+                self.dropped += 1;
             }
         }
 
@@ -3118,7 +3157,7 @@ mod web {
                 "offline"
             };
             format!(
-                r#"{{"stage":"{}","streaming":{},"cis_handle":{},"queued":{},"error":{}}}"#,
+                r#"{{"stage":"{}","streaming":{},"cis_handle":{},"queued":{},"dropped":{},"error":{}}}"#,
                 stage,
                 self.cis.is_streaming(),
                 match self.cis.cis_handle() {
@@ -3126,6 +3165,7 @@ mod web {
                     None => "null".to_string(),
                 },
                 self.pending_audio.len(),
+                self.dropped,
                 match &self.error {
                     Some(message) => format!("{message:?}"),
                     None => "null".to_string(),
