@@ -36,6 +36,10 @@ pub struct Server {
     elapsed: f64,
     /// Lazily-added scanner device index, reused across `scan` calls.
     scanner: Option<usize>,
+    /// Added peripherals as (device index, address) — `connect` targets one.
+    peripherals: Vec<(usize, Address)>,
+    /// The most recently connected central device index, driven by `read`.
+    central: Option<usize>,
 }
 
 impl Default for Server {
@@ -45,6 +49,8 @@ impl Default for Server {
             next_addr: 1,
             elapsed: 0.0,
             scanner: None,
+            peripherals: Vec::new(),
+            central: None,
         }
     }
 }
@@ -138,6 +144,18 @@ impl Server {
             }
             "status" => self.tool_status(id),
             "scan" => self.tool_scan(id),
+            "connect" => {
+                let to = args
+                    .and_then(|a| a.get("to"))
+                    .and_then(Value::as_u64)
+                    .map(|n| n as usize);
+                self.tool_connect(id, to)
+            }
+            "read" => match args.and_then(|a| a.get("uuid")).and_then(Value::as_str) {
+                Some(uuid) => self.tool_read(id, uuid),
+                None => tool_text(id, "read needs a uuid argument", true),
+            },
+            "assert" => self.tool_assert(id, args),
             other => error_response(id, -32602, &format!("unknown tool: {other}")),
         }
     }
@@ -175,10 +193,18 @@ impl Server {
 
     fn tool_add_peripheral(&mut self, id: Option<Value>, script: &str) -> Value {
         let address = self.alloc_address();
-        let scene = self.scene.get_or_insert_with(SceneEngine::new);
-        match scene.add_peripheral(address, script) {
+        if self.scene.is_none() {
+            self.scene = Some(SceneEngine::new());
+        }
+        // Take the result before re-borrowing self, so the push doesn't clash.
+        let result = self.scene.as_mut().unwrap().add_peripheral(address, script);
+        match result {
             Ok(index) => {
-                let status = scene
+                self.peripherals.push((index, address));
+                let status = self
+                    .scene
+                    .as_ref()
+                    .unwrap()
                     .peripheral_status_json(index)
                     .unwrap_or_else(|| "{}".to_string());
                 tool_text(
@@ -188,6 +214,143 @@ impl Server {
                 )
             }
             Err(e) => tool_text(id, &format!("device rejected: {e}"), true),
+        }
+    }
+
+    /// Connects a central to a peripheral (by index, or the first one) and lets
+    /// discovery complete, so a following `read` can name characteristics by
+    /// UUID. Returns the central's discovered GATT as JSON.
+    fn tool_connect(&mut self, id: Option<Value>, to: Option<usize>) -> Value {
+        let target = match to {
+            Some(i) => self
+                .peripherals
+                .iter()
+                .find(|(idx, _)| *idx == i)
+                .map(|(_, a)| *a),
+            None => self.peripherals.first().map(|(_, a)| *a),
+        };
+        let Some(target) = target else {
+            return tool_text(
+                id,
+                "no peripheral in the scene — add_peripheral first",
+                true,
+            );
+        };
+        let central_addr = self.alloc_address();
+        let scene = self.scene.get_or_insert_with(SceneEngine::new);
+        let index = scene.add_central(central_addr, target);
+        self.central = Some(index);
+        self.advance(30, 0.02); // connect + MTU + service/characteristic discovery
+        let status = self
+            .scene
+            .as_ref()
+            .unwrap()
+            .central_status_json(index)
+            .unwrap_or_default();
+        tool_text(id, &format!("connected central #{index}\n{status}"), false)
+    }
+
+    /// Reads a characteristic (matched by UUID against the connected central's
+    /// discovered database) and returns the central's updated state, including
+    /// the value just read.
+    fn tool_read(&mut self, id: Option<Value>, uuid: &str) -> Value {
+        let Some(central) = self.central else {
+            return tool_text(id, "not connected — call connect first", true);
+        };
+        let status = self
+            .scene
+            .as_ref()
+            .and_then(|s| s.central_status_json(central))
+            .unwrap_or_default();
+        let Some(handle) = handle_for_uuid(&status, uuid) else {
+            return tool_text(
+                id,
+                &format!("no discovered characteristic matching {uuid:?}\n{status}"),
+                true,
+            );
+        };
+        self.scene.as_mut().unwrap().central_read(central, handle);
+        self.advance(10, 0.02);
+        let after = self
+            .scene
+            .as_ref()
+            .unwrap()
+            .central_status_json(central)
+            .unwrap_or_default();
+        tool_text(
+            id,
+            &format!("read {uuid} (handle {handle}):\n{after}"),
+            false,
+        )
+    }
+
+    /// A behavioural assertion: read a characteristic, take one byte of its
+    /// value (default byte 1 — e.g. the 8-bit heart rate in a HR Measurement),
+    /// and check it against a threshold. PASS/FAIL as `isError`, so an agent's
+    /// "create a test that monitors HR < 200" is one machine-checked call.
+    fn tool_assert(&mut self, id: Option<Value>, args: Option<&Value>) -> Value {
+        let uuid = args.and_then(|a| a.get("uuid")).and_then(Value::as_str);
+        let op = args.and_then(|a| a.get("op")).and_then(Value::as_str);
+        let threshold = args.and_then(|a| a.get("value")).and_then(Value::as_i64);
+        let byte = args
+            .and_then(|a| a.get("byte"))
+            .and_then(Value::as_u64)
+            .unwrap_or(1) as usize;
+        let (Some(uuid), Some(op), Some(threshold)) = (uuid, op, threshold) else {
+            return tool_text(id, "assert needs: uuid, op (< > <= >= == !=), value", true);
+        };
+        let Some(central) = self.central else {
+            return tool_text(id, "not connected — call connect first", true);
+        };
+        let status = self
+            .scene
+            .as_ref()
+            .and_then(|s| s.central_status_json(central))
+            .unwrap_or_default();
+        let Some(handle) = handle_for_uuid(&status, uuid) else {
+            return tool_text(id, &format!("no characteristic matching {uuid:?}"), true);
+        };
+        self.scene.as_mut().unwrap().central_read(central, handle);
+        self.advance(10, 0.02);
+        let after = self
+            .scene
+            .as_ref()
+            .unwrap()
+            .central_status_json(central)
+            .unwrap_or_default();
+        let Some(actual) = value_byte(&after, handle, byte) else {
+            return tool_text(
+                id,
+                &format!("characteristic {uuid} has no byte {byte} yet\n{after}"),
+                true,
+            );
+        };
+        let held = match op {
+            "<" => actual < threshold,
+            ">" => actual > threshold,
+            "<=" => actual <= threshold,
+            ">=" => actual >= threshold,
+            "==" => actual == threshold,
+            "!=" => actual != threshold,
+            _ => return tool_text(id, &format!("unknown op {op:?}"), true),
+        };
+        let verb = if held { "PASS" } else { "FAIL" };
+        tool_text(
+            id,
+            &format!("{verb} — {uuid} byte {byte} = {actual}, expected {op} {threshold}"),
+            !held,
+        )
+    }
+
+    /// Advance the scene `steps` times by `dt` seconds each (the polling loop
+    /// connect/read need, since discovery and reads span several ticks).
+    fn advance(&mut self, steps: usize, dt: f64) {
+        for _ in 0..steps {
+            self.elapsed += dt;
+            let t = self.elapsed;
+            if let Some(scene) = self.scene.as_mut() {
+                scene.tick(t);
+            }
         }
     }
 
@@ -331,6 +494,42 @@ fn tools_list() -> Value {
                 would see them. Answers \"scan for devices\" (a subset of status).",
             "inputSchema": { "type": "object", "properties": {} },
         },
+        {
+            "name": "connect",
+            "description": "Connect a central to a peripheral (by index, or the first one) and run \
+                discovery, so read/assert can name characteristics by UUID. Returns the discovered \
+                GATT.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "to": { "type": "integer", "description": "Peripheral index (default: first)." } },
+            },
+        },
+        {
+            "name": "read",
+            "description": "Read a characteristic (matched by UUID) from the connected peripheral and \
+                return its value. Call connect first.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "uuid": { "type": "string", "description": "Characteristic UUID (16-bit or full)." } },
+                "required": ["uuid"],
+            },
+        },
+        {
+            "name": "assert",
+            "description": "Behavioural test: read a characteristic and check one byte of its value \
+                against a threshold. E.g. \"HR < 200\" is uuid 2A37, byte 1, op \"<\", value 200. \
+                Returns PASS/FAIL. Call connect first.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "uuid": { "type": "string" },
+                    "op": { "type": "string", "enum": ["<", ">", "<=", ">=", "==", "!="] },
+                    "value": { "type": "integer" },
+                    "byte": { "type": "integer", "description": "Byte index of the value (default 1)." },
+                },
+                "required": ["uuid", "op", "value"],
+            },
+        },
     ]})
 }
 
@@ -340,6 +539,51 @@ fn require_script(args: Option<&Value>) -> Result<&str, &'static str> {
     args.and_then(|a| a.get("script"))
         .and_then(Value::as_str)
         .ok_or("missing required argument: script")
+}
+
+/// Finds the `value_handle` of the first discovered characteristic whose UUID
+/// contains `uuid_query` (case-insensitive), in a central's `status_json`.
+fn handle_for_uuid(status_json: &str, uuid_query: &str) -> Option<u16> {
+    let view: Value = serde_json::from_str(status_json).ok()?;
+    let query = uuid_query.to_lowercase();
+    for svc in view.get("services")?.as_array()? {
+        for chr in svc
+            .get("characteristics")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let uuid = chr.get("uuid").and_then(Value::as_str).unwrap_or("");
+            if uuid.to_lowercase().contains(&query) {
+                return chr
+                    .get("value_handle")
+                    .and_then(Value::as_u64)
+                    .map(|h| h as u16);
+            }
+        }
+    }
+    None
+}
+
+/// Reads byte `index` of the characteristic at `handle` from a central's
+/// `status_json`, whose value is uppercase hex (e.g. "0048" -> byte 1 = 72).
+fn value_byte(status_json: &str, handle: u16, index: usize) -> Option<i64> {
+    let view: Value = serde_json::from_str(status_json).ok()?;
+    for svc in view.get("services")?.as_array()? {
+        for chr in svc
+            .get("characteristics")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if chr.get("value_handle").and_then(Value::as_u64) == Some(handle as u64) {
+                let hex = chr.get("value").and_then(Value::as_str)?;
+                let byte_hex = hex.get(index * 2..index * 2 + 2)?;
+                return u8::from_str_radix(byte_hex, 16).ok().map(i64::from);
+            }
+        }
+    }
+    None
 }
 
 fn result_response(id: Option<Value>, result: Value) -> Value {
@@ -482,6 +726,51 @@ mod tests {
             reports.contains("HRM"),
             "scanner should hear the HRM advert: {reports}"
         );
+    }
+
+    #[test]
+    fn test_connect_read_assert_hr_below_200() {
+        // The agentic flow behind "create a test that monitors HR < 200":
+        // add a peripheral with HR = 72, connect a central, assert HR < 200.
+        const HRM_72: &str = r#"
+            let server = android::BluetoothGattServer("HRM");
+            let hrs = android::BluetoothGattService(uuid::HEART_RATE_SERVICE, android::SERVICE_TYPE_PRIMARY);
+            let hr = android::BluetoothGattCharacteristic(uuid::HEART_RATE_MEASUREMENT,
+                android::PROPERTY_READ | android::PROPERTY_NOTIFY, android::PERMISSION_READ);
+            hr.set_value([0x00, 72]);
+            hrs.add_characteristic(hr);
+            server.add_service(hrs);
+        "#;
+        let mut s = Server::default();
+        call(&mut s, "add_peripheral", json!({"script": HRM_72}));
+        let connected = call(&mut s, "connect", json!({}));
+        assert_eq!(
+            connected["result"]["isError"], false,
+            "connect: {connected}"
+        );
+
+        let pass = call(
+            &mut s,
+            "assert",
+            json!({"uuid": "2A37", "op": "<", "value": 200}),
+        );
+        assert_eq!(
+            pass["result"]["isError"], false,
+            "HR 72 < 200 should PASS: {pass}"
+        );
+        assert!(
+            pass["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("PASS")
+        );
+
+        let fail = call(
+            &mut s,
+            "assert",
+            json!({"uuid": "2A37", "op": ">", "value": 200}),
+        );
+        assert_eq!(fail["result"]["isError"], true, "HR 72 > 200 should FAIL");
     }
 
     #[test]
