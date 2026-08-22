@@ -866,6 +866,26 @@ impl ScriptedPeripheral {
             .map_err(|status| format!("set_value failed: ATT error {status}"))
     }
 
+    /// Host-writes a characteristic and notifies it even if the bytes did not
+    /// change.
+    ///
+    /// The value-diff in [`Self::flush_value_notifications`] is right for a
+    /// characteristic that holds *state* — a battery level that has not moved
+    /// is not news. It is wrong for one that reports *change*: two identical
+    /// HID mouse reports mean the pointer moved twice by the same amount, and
+    /// suppressing the second stalls the pointer for anyone dragging at a
+    /// steady speed. The same applies to a keystroke repeated by auto-repeat.
+    pub fn notify_characteristic_value(&mut self, uuid: &str, bytes: &[u8]) -> Result<(), String> {
+        self.set_characteristic_value(uuid, bytes)?;
+        let uuid = uuid.parse::<Uuid>().map_err(|e| e.to_string())?;
+        if let Some(handle) = find_value_handle(self.primary(), uuid) {
+            // Forgetting the memo is what makes the next flush treat this
+            // value as new.
+            self.last_values.remove(&handle);
+        }
+        Ok(())
+    }
+
     /// Queues the peripheral's full HCI bring-up: reset, event masks,
     /// advertising parameters, advertising data + scan response carrying the
     /// script device's identity, then advertising enable.
@@ -1287,6 +1307,9 @@ struct CentralDevice {
     subscribed: std::collections::BTreeSet<u16>,
     /// Outgoing isochronous SDU sequence number (media plane).
     audio_tx_sequence: u16,
+    /// Decodes HID input reports as they are notified. Inert unless
+    /// `hid_start` has found a HID service on this peer.
+    hid: crate::device::HidHost,
 }
 
 impl CentralDevice {
@@ -1302,6 +1325,7 @@ impl CentralDevice {
             values: std::collections::BTreeMap::new(),
             subscribed: std::collections::BTreeSet::new(),
             audio_tx_sequence: 0,
+            hid: crate::device::HidHost::new(),
         }
     }
 
@@ -1456,6 +1480,10 @@ impl CentralDevice {
         if op == att_op::HANDLE_VALUE_NTF && att.len() >= 3 {
             let value_handle = u16::from_le_bytes([att[1], att[2]]);
             self.values.insert(value_handle, att[3..].to_vec());
+            // Decoded here rather than by polling `values`: consecutive input
+            // reports overwrite each other in that map, and a HID host that
+            // missed one would lose a keystroke or a click edge.
+            self.hid.on_notification(value_handle, &att[3..]);
             return;
         }
 
@@ -1517,6 +1545,7 @@ impl CentralDevice {
                     match pending {
                         CentralOp::Read(h) if op == att_op::READ_RSP => {
                             self.values.insert(h, att[1..].to_vec());
+                            self.hid.on_read(h, &att[1..]);
                         }
                         CentralOp::Subscribe(h) => {
                             self.subscribed.insert(h);
@@ -1608,6 +1637,74 @@ impl CentralDevice {
                         .collect(),
                 })
                 .collect(),
+        };
+        serde_json::to_string(&view).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    // --- HID host ----------------------------------------------------------
+    // The HOGP client half: a real computer's response to discovering a
+    // keyboard. Kept here rather than in a second central because everything
+    // it needs — the discovered GATT, the read/write queue, the notification
+    // path — already exists on this type; only the decoding is new, and that
+    // lives in [`crate::device::HidHost`].
+
+    /// Starts driving the peer as a HID device: reads its Report Map and
+    /// subscribes to every input Report. Returns false if discovery has not
+    /// finished or the peer exposes no HID service.
+    fn hid_start(&mut self) -> bool {
+        if self.phase != CentralPhase::Ready {
+            return false;
+        }
+        let plan = self.hid.plan(&self.client.services);
+        if plan.is_empty() {
+            return false;
+        }
+        // The Report Map is read first so the reports that follow can be
+        // decoded; the operation queue preserves that order.
+        for handle in plan.read {
+            self.queue_read(handle);
+        }
+        for handle in plan.subscribe {
+            self.queue_subscribe(handle);
+        }
+        true
+    }
+
+    /// The input decoded since the last call, plus what the host has learned
+    /// about the device: `{kind, ready, report_map, report, report_handle,
+    /// events:[…]}`. Draining, so a page polling each frame sees every event
+    /// exactly once. `report` is the raw bytes those events were decoded
+    /// from, so a caller can show the wire beside its meaning.
+    fn hid_events_json(&mut self) -> String {
+        #[derive(serde::Serialize)]
+        struct View {
+            kind: &'static str,
+            ready: bool,
+            /// The Report Map as uppercase hex, once read.
+            report_map: Option<String>,
+            /// The most recent input report, space-separated hex.
+            report: Option<String>,
+            /// The value handle that report arrived on.
+            report_handle: Option<u16>,
+            events: Vec<crate::device::HidEvent>,
+        }
+        let last = self.hid.last_report();
+        let view = View {
+            kind: self.hid.kind().label(),
+            ready: self.hid.is_ready(),
+            report_map: self
+                .hid
+                .report_map()
+                .map(|m| m.iter().map(|b| format!("{b:02X}")).collect()),
+            report: last.map(|(_, bytes)| {
+                bytes
+                    .iter()
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            }),
+            report_handle: last.map(|(handle, _)| handle),
+            events: self.hid.drain_events(),
         };
         serde_json::to_string(&view).unwrap_or_else(|_| "{}".to_string())
     }
@@ -1837,6 +1934,41 @@ impl SceneEngine {
         match self.devices.get_mut(index).map(|d| &mut d.role) {
             Some(SceneRole::Peripheral(p)) => p.set_characteristic_value(uuid, value),
             _ => Err("not a peripheral".to_string()),
+        }
+    }
+
+    /// Host-writes `value` into characteristic `uuid` of peripheral `index`
+    /// and notifies it even when the bytes are unchanged — see
+    /// [`ScriptedPeripheral::notify_characteristic_value`].
+    pub fn peripheral_notify_value(
+        &mut self,
+        index: usize,
+        uuid: &str,
+        value: &[u8],
+    ) -> Result<(), String> {
+        match self.devices.get_mut(index).map(|d| &mut d.role) {
+            Some(SceneRole::Peripheral(p)) => p.notify_characteristic_value(uuid, value),
+            _ => Err("not a peripheral".to_string()),
+        }
+    }
+
+    /// Drives central `index` as a HID host: reads the peer's Report Map and
+    /// subscribes to its input Reports. Returns false until the central has
+    /// finished discovery, so a caller polls this once per tick until it
+    /// takes.
+    pub fn central_start_hid(&mut self, index: usize) -> bool {
+        match self.devices.get_mut(index).map(|d| &mut d.role) {
+            Some(SceneRole::Central(c)) => c.hid_start(),
+            _ => false,
+        }
+    }
+
+    /// The HID input central `index` has decoded since the last call (see
+    /// [`CentralDevice::hid_events_json`]).
+    pub fn central_hid_events_json(&mut self, index: usize) -> String {
+        match self.devices.get_mut(index).map(|d| &mut d.role) {
+            Some(SceneRole::Central(c)) => c.hid_events_json(),
+            _ => "{}".to_string(),
         }
     }
 
@@ -2110,6 +2242,98 @@ mod scene_tests {
             .collect();
         assert_eq!(handles.len(), 4, "sink PAC, sink ASE, ASE CP, ranging data");
         assert!(!status.is_empty());
+    }
+
+    /// The HOGP keyboard the `web/hid/` page hosts, without its demo `tick` —
+    /// the page drives the reports itself. Kept here so the scene test and the
+    /// page exercise the same GATT layout.
+    #[cfg(test)]
+    const HOGP_KEYBOARD_SCRIPT: &str = r#"
+        let server = android::BluetoothGattServer("SimKeyboard");
+        let hid = android::BluetoothGattService(uuid::from_u16(0x1812), android::SERVICE_TYPE_PRIMARY);
+        let map = android::BluetoothGattCharacteristic(uuid::from_u16(0x2A4B),
+            android::PROPERTY_READ, android::PERMISSION_READ);
+        map.set_value([
+            0x05, 0x01, 0x09, 0x06, 0xA1, 0x01,
+            0x05, 0x07, 0x19, 0xE0, 0x29, 0xE7, 0x15, 0x00, 0x25, 0x01,
+            0x75, 0x01, 0x95, 0x08, 0x81, 0x02,
+            0x95, 0x01, 0x75, 0x08, 0x81, 0x01,
+            0x95, 0x06, 0x75, 0x08, 0x15, 0x00, 0x25, 0x65,
+            0x05, 0x07, 0x19, 0x00, 0x29, 0x65, 0x81, 0x00, 0xC0,
+        ]);
+        hid.add_characteristic(map);
+        let report = android::BluetoothGattCharacteristic(uuid::from_u16(0x2A4D),
+            android::PROPERTY_READ | android::PROPERTY_NOTIFY, android::PERMISSION_READ);
+        report.set_value([0, 0, 0, 0, 0, 0, 0, 0]);
+        report.add_descriptor(android::BluetoothGattDescriptor(
+            uuid::CLIENT_CHARACTERISTIC_CONFIGURATION,
+            android::PERMISSION_READ | android::PERMISSION_WRITE));
+        hid.add_characteristic(report);
+        server.add_service(hid);
+    "#;
+
+    /// The whole HOGP loop over the in-process radio: a scripted keyboard
+    /// peripheral, a central that discovers it, reads the Report Map, decides
+    /// it is a keyboard, subscribes, and turns the notified reports back into
+    /// text. Both endpoints are simble's, so this proves the plumbing, not the
+    /// report format — `hid_reports.rs` pins that against the published usage
+    /// tables.
+    #[test]
+    fn test_a_central_discovers_a_hogp_keyboard_and_decodes_its_typing() {
+        let keyboard_address = "AA:BB:CC:00:00:60".parse().unwrap();
+        let mut scene = SceneEngine::new();
+        let keyboard = scene
+            .add_peripheral(keyboard_address, HOGP_KEYBOARD_SCRIPT)
+            .unwrap();
+        let host = scene.add_central("AA:BB:CC:00:00:61".parse().unwrap(), keyboard_address);
+
+        let mut t = 0.0;
+        let mut started = false;
+        for _ in 0..80 {
+            scene.tick(t);
+            t += 0.05;
+            if !started {
+                started = scene.central_start_hid(host);
+            }
+        }
+        assert!(started, "the central never finished discovering the keyboard");
+
+        let identified: serde_json::Value =
+            serde_json::from_str(&scene.central_hid_events_json(host)).unwrap();
+        assert_eq!(
+            identified["kind"], "keyboard",
+            "the Report Map is what says so: {identified}"
+        );
+        assert_eq!(identified["ready"], true);
+
+        // Type "hi" as a real keyboard does: a report per key down, an empty
+        // report per key up. One report per tick, because the notification is
+        // raised by the change in the value.
+        let reports: [[u8; 8]; 4] = [
+            [0, 0, 0x0B, 0, 0, 0, 0, 0], // h
+            [0; 8],
+            [0, 0, 0x0C, 0, 0, 0, 0, 0], // i
+            [0; 8],
+        ];
+        let mut typed = String::new();
+        for report in reports {
+            scene.peripheral_set_value(keyboard, "2A4D", &report).unwrap();
+            scene.tick(t);
+            t += 0.05;
+            let decoded: serde_json::Value =
+                serde_json::from_str(&scene.central_hid_events_json(host)).unwrap();
+            for event in decoded["events"].as_array().unwrap() {
+                if event["type"] == "key_down"
+                    && let Some(c) = event["character"].as_str()
+                {
+                    typed.push_str(c);
+                }
+            }
+        }
+        assert_eq!(
+            typed, "hi",
+            "the host decoded the reports that crossed the radio"
+        );
     }
 
     /// `send_audio` and `take_audio` are the script's half of the media
@@ -2736,6 +2960,34 @@ mod web {
     /// Queue enabling notifications on `value_handle` for central `index`.
         pub fn central_subscribe(&mut self, index: usize, value_handle: u16) {
             self.scene.central_subscribe(index, value_handle);
+        }
+
+        /// Host-write `value` into characteristic `uuid` of peripheral
+        /// `index` and notify it even if the bytes are unchanged — what a
+        /// report of *change* (a relative mouse report, a repeated key)
+        /// needs.
+        pub fn peripheral_notify_value(
+            &mut self,
+            index: usize,
+            uuid: &str,
+            value: Vec<u8>,
+        ) -> Result<(), JsValue> {
+            self.scene
+                .peripheral_notify_value(index, uuid, &value)
+                .map_err(js_error)
+        }
+
+        /// Drive central `index` as a HID host — read the peer's Report Map
+        /// and subscribe to its input Reports. False until discovery is done,
+        /// so a page calls it each tick until it takes.
+        pub fn central_start_hid(&mut self, index: usize) -> bool {
+            self.scene.central_start_hid(index)
+        }
+
+        /// The HID input central `index` has decoded since the last call:
+        /// `{kind, ready, report_map, events:[…]}`. Draining.
+        pub fn central_hid_events_json(&mut self, index: usize) -> String {
+            self.scene.central_hid_events_json(index)
         }
 
         /// Host-write `value` into characteristic `uuid` of peripheral `index`
