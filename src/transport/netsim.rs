@@ -323,11 +323,31 @@ impl NetsimScene {
         address: crate::types::Address,
         script: &str,
     ) -> Result<usize, String> {
+        self.add_peripheral_named(address, script, None)
+    }
+
+    /// As [`Self::add_peripheral`], but registers the device under
+    /// `node_name` instead of the name its script gave the GATT server.
+    ///
+    /// The node name is *placement*, not identity: it is the label netsim
+    /// lists the device under (and the only handle a human has on it in
+    /// `netsim devices`), and a scene file names it so two devices built from
+    /// the same catalog script are still tellable apart. It does not change
+    /// what the device advertises, which still comes from the script.
+    pub fn add_peripheral_named(
+        &mut self,
+        address: crate::types::Address,
+        script: &str,
+        node_name: Option<&str>,
+    ) -> Result<usize, String> {
         let ws_url = self.ws_url.clone();
+        let node_name = node_name.map(str::to_string);
         self.scene.add_peripheral(address, script, |peripheral| {
             // The name goes verbatim into the query string; keep it URL-safe
             // (spaces are the only realistic offender in a device name).
-            let name = peripheral.device_name().replace(' ', "%20");
+            let name = node_name
+                .unwrap_or_else(|| peripheral.device_name())
+                .replace(' ', "%20");
             let addr_lsb = address.to_netsim_wire_string();
             let url = format!("{ws_url}/v1/websocket/bt?name={name}&address={addr_lsb}");
             let mut transport = NetsimTransport::connect(&url).map_err(|e| e.to_string())?;

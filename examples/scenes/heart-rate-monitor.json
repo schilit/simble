@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "name": "Heart-rate monitor",
+  "description": "The smallest complete scene: one catalog device, no placement given, so it takes a deterministic scene address. Run it with `simble examples/scenes/heart-rate-monitor.json`.",
+  "controller": "self",
+  "devices": [
+    { "id": "hrm", "device": "hrm" }
+  ]
+}
