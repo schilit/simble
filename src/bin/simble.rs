@@ -90,9 +90,11 @@ fn run_tests(args: &[String]) -> ExitCode {
     let mut lint_only = false;
     let mut scene_options = RunOptions::default();
     let mut controller_override = None;
-    let mut expecting = None;
+    let mut scene_flags: Vec<String> = Vec::new();
+    let mut expecting: Option<String> = None;
     for arg in args {
         if let Some(option) = expecting.take() {
+            scene_flags.push(option.clone());
             match parse_scene_option(option, arg, &mut scene_options, &mut controller_override) {
                 Ok(()) => continue,
                 Err(message) => {
@@ -129,6 +131,15 @@ fn run_tests(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
         return run_scenes(&scenes, lint_only, controller_override, &scene_options);
+    }
+    // A scene option with no scene to apply it to is a mistake, not a no-op:
+    // silently ignoring it is how someone concludes --controller doesn't work.
+    if !scene_flags.is_empty() {
+        eprintln!(
+            "simble: {} only applies to a scene file, and none was given\n\n{USAGE}",
+            scene_flags.join(", ")
+        );
+        return ExitCode::from(2);
     }
 
     if files.is_empty() {
