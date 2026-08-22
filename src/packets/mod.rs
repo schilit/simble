@@ -6,6 +6,8 @@
 pub mod att;
 pub mod ext_adv;
 pub mod hci;
+pub mod hci_events;
+pub mod iso;
 pub mod l2cap_frame;
 pub mod l2cap_signaling;
 pub mod smp;
@@ -29,6 +31,13 @@ pub use ext_adv::{
     ext_adv_subevent_code,
 };
 pub use hci::*;
+pub use iso::{
+    HciIsoHeader, IsoDataLoadHeader, IsoSdu, build_iso_packet, iso_boundary, parse_iso_packet,
+};
+pub use hci_events::{
+    ConnectionComplete, ConnectionRequest, DisconnectionComplete, EncryptionChange, HciEvent, HciEventHeader, LeConnectionCompletePrefix,
+    LeLongTermKeyRequest, event_code as hci_event_code, le_subevent,
+};
 pub use l2cap_frame::{AclPacketBoundary, HciAclHeader, L2capHeader, cid as l2cap_cid};
 pub use l2cap_signaling::{
     ConfigurationRequestHeader, ConfigurationResponseHeader, ConnectionRequestHeader,
