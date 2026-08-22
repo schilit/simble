@@ -156,6 +156,11 @@ impl Server {
                 None => tool_text(id, "read needs a uuid argument", true),
             },
             "assert" => self.tool_assert(id, args),
+            "subscribe" => match args.and_then(|a| a.get("uuid")).and_then(Value::as_str) {
+                Some(uuid) => self.tool_subscribe(id, uuid),
+                None => tool_text(id, "subscribe needs a uuid argument", true),
+            },
+            "assert_over" => self.tool_assert_over(id, args),
             other => error_response(id, -32602, &format!("unknown tool: {other}")),
         }
     }
@@ -325,20 +330,136 @@ impl Server {
                 true,
             );
         };
-        let held = match op {
-            "<" => actual < threshold,
-            ">" => actual > threshold,
-            "<=" => actual <= threshold,
-            ">=" => actual >= threshold,
-            "==" => actual == threshold,
-            "!=" => actual != threshold,
-            _ => return tool_text(id, &format!("unknown op {op:?}"), true),
+        let Some(held) = compare(actual, op, threshold) else {
+            return tool_text(id, &format!("unknown op {op:?}"), true);
         };
         let verb = if held { "PASS" } else { "FAIL" };
         tool_text(
             id,
             &format!("{verb} — {uuid} byte {byte} = {actual}, expected {op} {threshold}"),
             !held,
+        )
+    }
+
+    /// Subscribe the connected central to a characteristic's notifications, so
+    /// the peripheral's value changes (from its `fn tick`) push to the central.
+    fn tool_subscribe(&mut self, id: Option<Value>, uuid: &str) -> Value {
+        let Some(central) = self.central else {
+            return tool_text(id, "not connected — call connect first", true);
+        };
+        let status = self
+            .scene
+            .as_ref()
+            .and_then(|s| s.central_status_json(central))
+            .unwrap_or_default();
+        let Some(handle) = handle_for_uuid(&status, uuid) else {
+            return tool_text(id, &format!("no characteristic matching {uuid:?}"), true);
+        };
+        self.scene
+            .as_mut()
+            .unwrap()
+            .central_subscribe(central, handle);
+        self.advance(8, 0.02); // CCCD write + first notifications
+        let after = self
+            .scene
+            .as_ref()
+            .unwrap()
+            .central_status_json(central)
+            .unwrap_or_default();
+        tool_text(
+            id,
+            &format!("subscribed to {uuid} (handle {handle})\n{after}"),
+            false,
+        )
+    }
+
+    /// A *temporal* assertion — the honest "monitor": subscribe, run the clock
+    /// for `seconds`, and require the condition to hold on **every** notified
+    /// sample. FAILs on the first violation (with the offending value); PASSes
+    /// if it never breaks. This is what makes "monitor HR < 200" literally true.
+    fn tool_assert_over(&mut self, id: Option<Value>, args: Option<&Value>) -> Value {
+        let uuid = args.and_then(|a| a.get("uuid")).and_then(Value::as_str);
+        let op = args.and_then(|a| a.get("op")).and_then(Value::as_str);
+        let threshold = args.and_then(|a| a.get("value")).and_then(Value::as_i64);
+        let seconds = args
+            .and_then(|a| a.get("seconds"))
+            .and_then(Value::as_f64)
+            .unwrap_or(2.0);
+        let byte = args
+            .and_then(|a| a.get("byte"))
+            .and_then(Value::as_u64)
+            .unwrap_or(1) as usize;
+        let (Some(uuid), Some(op), Some(threshold)) = (uuid, op, threshold) else {
+            return tool_text(
+                id,
+                "assert_over needs: uuid, op, value (+ optional seconds, byte)",
+                true,
+            );
+        };
+        let Some(central) = self.central else {
+            return tool_text(id, "not connected — call connect first", true);
+        };
+        let status = self
+            .scene
+            .as_ref()
+            .and_then(|s| s.central_status_json(central))
+            .unwrap_or_default();
+        let Some(handle) = handle_for_uuid(&status, uuid) else {
+            return tool_text(id, &format!("no characteristic matching {uuid:?}"), true);
+        };
+        // Subscribe (so notify-capable peripherals push) and also poll each
+        // sample with a read, so a monitor works whether the value is pushed
+        // or steady.
+        self.scene
+            .as_mut()
+            .unwrap()
+            .central_subscribe(central, handle);
+        self.advance(6, 0.02);
+
+        let steps = ((seconds / 0.1).ceil() as usize).max(1);
+        let mut samples = 0u32;
+        let mut extreme: Option<i64> = None;
+        for _ in 0..steps {
+            self.scene.as_mut().unwrap().central_read(central, handle);
+            self.advance(5, 0.02);
+            let now = self
+                .scene
+                .as_ref()
+                .unwrap()
+                .central_status_json(central)
+                .unwrap_or_default();
+            if let Some(actual) = value_byte(&now, handle, byte) {
+                samples += 1;
+                extreme = Some(extreme.map_or(actual, |e| extreme_for(op, e, actual)));
+                match compare(actual, op, threshold) {
+                    Some(true) => {}
+                    Some(false) => {
+                        return tool_text(
+                            id,
+                            &format!(
+                                "FAIL — {uuid} byte {byte} = {actual} violated {op} {threshold} while monitoring"
+                            ),
+                            true,
+                        );
+                    }
+                    None => return tool_text(id, &format!("unknown op {op:?}"), true),
+                }
+            }
+        }
+        if samples == 0 {
+            return tool_text(
+                id,
+                &format!("no samples for {uuid} — did discovery find a readable value?"),
+                true,
+            );
+        }
+        tool_text(
+            id,
+            &format!(
+                "PASS — {uuid} byte {byte} held {op} {threshold} across {samples} samples over {seconds:.1}s (extreme {})",
+                extreme.unwrap_or_default()
+            ),
+            false,
         )
     }
 
@@ -530,6 +651,34 @@ fn tools_list() -> Value {
                 "required": ["uuid", "op", "value"],
             },
         },
+        {
+            "name": "subscribe",
+            "description": "Enable notifications on a characteristic (matched by UUID) for the \
+                connected central, so the peripheral's fn tick value changes push to it. Call \
+                connect first.",
+            "inputSchema": {
+                "type": "object",
+                "properties": { "uuid": { "type": "string" } },
+                "required": ["uuid"],
+            },
+        },
+        {
+            "name": "assert_over",
+            "description": "Temporal test (a real monitor): subscribe, run the clock for `seconds`, \
+                and require the condition to hold on EVERY notified sample — FAIL on the first \
+                violation. \"monitor HR < 200 for 5s\" is uuid 2A37, op \"<\", value 200, seconds 5.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "uuid": { "type": "string" },
+                    "op": { "type": "string", "enum": ["<", ">", "<=", ">=", "==", "!="] },
+                    "value": { "type": "integer" },
+                    "seconds": { "type": "number", "description": "Monitor window (default 2)." },
+                    "byte": { "type": "integer", "description": "Byte index (default 1)." },
+                },
+                "required": ["uuid", "op", "value"],
+            },
+        },
     ]})
 }
 
@@ -563,6 +712,28 @@ fn handle_for_uuid(status_json: &str, uuid_query: &str) -> Option<u16> {
         }
     }
     None
+}
+
+/// Evaluates `actual <op> threshold`; `None` for an unrecognized operator.
+fn compare(actual: i64, op: &str, threshold: i64) -> Option<bool> {
+    Some(match op {
+        "<" => actual < threshold,
+        ">" => actual > threshold,
+        "<=" => actual <= threshold,
+        ">=" => actual >= threshold,
+        "==" => actual == threshold,
+        "!=" => actual != threshold,
+        _ => return None,
+    })
+}
+
+/// The sample furthest toward violating `op` — the max for `<`/`<=`, the min
+/// for `>`/`>=` — reported so a passing monitor shows how close it came.
+fn extreme_for(op: &str, a: i64, b: i64) -> i64 {
+    match op {
+        ">" | ">=" => a.min(b),
+        _ => a.max(b),
+    }
 }
 
 /// Reads byte `index` of the characteristic at `handle` from a central's
@@ -771,6 +942,60 @@ mod tests {
             json!({"uuid": "2A37", "op": ">", "value": 200}),
         );
         assert_eq!(fail["result"]["isError"], true, "HR 72 > 200 should FAIL");
+    }
+
+    #[test]
+    fn test_assert_over_monitors_notifications() {
+        // A peripheral that updates HR every tick (fn tick + update_value), so
+        // the monitor samples notified values over time.
+        fn hrm(hr: u8) -> String {
+            format!(
+                r#"
+                let server = android::BluetoothGattServer("HRM");
+                let hrs = android::BluetoothGattService(uuid::HEART_RATE_SERVICE, android::SERVICE_TYPE_PRIMARY);
+                let hr = android::BluetoothGattCharacteristic(uuid::HEART_RATE_MEASUREMENT,
+                    android::PROPERTY_READ | android::PROPERTY_NOTIFY, android::PERMISSION_READ);
+                hr.set_value([0x00, {hr}]);
+                hrs.add_characteristic(hr);
+                server.add_service(hrs);
+                fn tick(server, t) {{ server.update_value(uuid::HEART_RATE_MEASUREMENT, [0x00, {hr}]); }}
+            "#
+            )
+        }
+
+        // Safe HR (72): monitoring "< 200" holds across all samples.
+        let mut s = Server::default();
+        call(&mut s, "add_peripheral", json!({"script": hrm(72)}));
+        call(&mut s, "connect", json!({}));
+        let ok = call(
+            &mut s,
+            "assert_over",
+            json!({"uuid":"2A37","op":"<","value":200,"seconds":0.5}),
+        );
+        assert_eq!(
+            ok["result"]["isError"], false,
+            "72 < 200 over time should PASS: {ok}"
+        );
+        assert!(
+            ok["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("PASS")
+        );
+
+        // Unsafe HR (220): monitoring "< 200" catches the violation.
+        let mut s2 = Server::default();
+        call(&mut s2, "add_peripheral", json!({"script": hrm(220)}));
+        call(&mut s2, "connect", json!({}));
+        let bad = call(
+            &mut s2,
+            "assert_over",
+            json!({"uuid":"2A37","op":"<","value":200,"seconds":0.5}),
+        );
+        assert_eq!(
+            bad["result"]["isError"], true,
+            "220 < 200 should FAIL: {bad}"
+        );
     }
 
     #[test]
