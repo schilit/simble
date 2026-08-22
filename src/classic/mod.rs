@@ -14,4 +14,5 @@ pub mod avrcp;
 pub mod hfp;
 pub mod hid;
 pub mod rfcomm;
+pub mod rtp;
 pub mod sdp;
