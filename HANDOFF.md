@@ -25,16 +25,20 @@ Python stack that inspired the positioning) is credited once, in the README.
 
 The *same* stack drives all three; only the frontend differs.
 
-1. **Web (wasm)** — `web/`, compiled to WebAssembly. Interactive demos: Playground,
-   Testing, Scanner, Scripted device, Color Bulb, Server+Client, Scene, Shared,
-   Controllers. For authoring and exploration. Light theme, `color-scheme: light`.
-2. **CLI** — `src/bin/simble.rs`. `simble FILE.rhai ...` runs device scripts as
-   tests (exit 0 all-pass / 1 any-fail); `simble --no-run FILE` lints (compile
-   only); `simble --usb [VID:PID]` is the USB↔WebSocket bridge; `simble mcp` is
-   the MCP server. This is the CI + human path.
-3. **MCP server** — `src/mcp.rs`. `simble mcp` speaks JSON-RPC over stdio so an
-   **agent** builds and tests BLE devices as tool calls in a conversation. This is
-   the interactive, stateful version of the AI-first loop.
+1. **SimBLE MCP — agent-first** — `src/mcp.rs`. `simble mcp` speaks JSON-RPC over
+   stdio so an **agent** builds and tests BLE devices as tool calls in a
+   conversation: the interactive, stateful version of the AI-first loop, and the
+   surface this project is increasingly organized around. An agent needs no
+   checkout and no build step — `example` hands it a working device script and
+   `lookup` answers the assigned-number questions.
+2. **Web (wasm)** — `web/`, compiled to WebAssembly. Interactive demos: Playground,
+   Testing, Scanner, Scripted device, Color Bulb, Speaker, Server+Client, Scene,
+   Shared, Controllers. For authoring and exploration. Light theme,
+   `color-scheme: light`.
+3. **Native (CLI + library)** — `src/bin/simble.rs`. `simble FILE.rhai ...` runs
+   device scripts as tests (exit 0 all-pass / 1 any-fail); `simble --no-run FILE`
+   lints (compile only); `simble --usb [VID:PID]` is the USB↔WebSocket bridge;
+   `simble mcp` is the MCP server. This is the CI + human path.
 
 The core functions are shared so the surfaces can't diverge: `run_test_script`
 and `lint_script` (in `src/transport/wasm_ws.rs`) back the CLI, the web Testing
@@ -64,13 +68,20 @@ verified end-to-end by `tests/ws_bridge_loopback.rs` (our client ↔ our server)
 (`Server` in `src/mcp.rs`). Tools shipped and tested (`tests/mcp_scenarios.rs`
 + unit tests):
 
+- **Discover** (stateless): `example` (serve one of 16 ready-to-run device
+  scripts — the "no repo needed" path), `lookup` (SIG assigned numbers by name
+  fragment or UUID, from the vendored registry in `gatt/sig_names.rs`)
 - **Author/check** (stateless): `lint`, `run_test`
-- **Scene**: `run_on` (controller select), `add_peripheral`, `tick`, `status`
-  (god-view of hosted devices), `scan` (radio-view — what a scanner hears)
-- **Behavioural**: `connect`, `read`, `assert` (a central against a peripheral;
-  characteristics named by **UUID**, resolved to handles internally)
+- **Scene**: `run_on` (controller select — `self` and `netsim` wired, `usb` not),
+  `add_peripheral`, `tick`, `status` (god-view of hosted devices), `scan`
+  (radio-view — what a scanner hears, deduplicated per advertiser)
+- **Behavioural**: `connect`, `read`, `write`, `assert` (a central against a
+  peripheral; characteristics named by **UUID**, resolved to handles internally)
 - **Temporal**: `subscribe`, `assert_over` (a real monitor — a condition that
   must hold across a window; FAILs on first violation)
+
+Agent-facing output conventions: UUIDs are annotated with their SIG names, and
+failures return `isError` so a failing test is machine-detectable.
 
 Model: **a scene is the set of device scripts the agent adds; the controller is
 where they run.** `run_on(target)` re-targets the controller. The agent's
@@ -114,11 +125,10 @@ future notifications.
 
 Ordered by leverage; each independently landable.
 
-1. **`run_on("netsim", port)` — pump-on-tick.** Give each peripheral its own
-   `NetsimTransport`; `tick` pumps them (adverts out, emulator packets in). Needs
-   a backend enum (`SelfScene` vs `Netsim`) threaded through the tools. Connect =
-   check-and-connect (the "start netsimd" error already exists; **no auto-launch**).
-   Loopback-testable; the emulator path needs a running emulator to confirm.
+1. ~~**`run_on("netsim", port)` — pump-on-tick.**~~ **Done.** Each peripheral gets
+   its own `NetsimTransport` (`LiveScene<T>` over the `HciTransport` trait); the
+   actor loop pumps them between requests, so devices answer the emulator even
+   while no tool call is active. Verified against a real Android emulator.
 2. **`run_on("usb", vid:pid)`.** Single device on a real dongle (a dongle *is* one
    controller — pick which device). Reuses `UsbTransport` in-process (no bridge —
    the bridge exists only because a *browser* can't open USB).
@@ -132,10 +142,10 @@ Ordered by leverage; each independently landable.
 5. **Skills** to pair with the MCP: `author-ble-device` (the `android::*`/`uuid::*`
    API + "lint then run_test" loop), `write-ble-test`, `reproduce-ble-bug`,
    `test-app-against-emulator`.
-6. **Smaller polish:** `scan` should report **distinct** devices (it currently
-   returns every accumulated advert). A **symbol lint** in `--no-run` (flag
-   `android::BluetoothGattServ` typos before running) needs Rhai's `metadata`
-   feature — `gen_fn_signatures` isn't compiled in without it.
+6. **Smaller polish:** ~~`scan` should report **distinct** devices~~ **done** (one
+   entry per advertiser plus a `reports` count). A **symbol lint** in `--no-run`
+   (flag `android::BluetoothGattServ` typos before running) needs Rhai's
+   `metadata` feature — `gen_fn_signatures` isn't compiled in without it.
 
 ## The bigger long-range plan (separate track)
 

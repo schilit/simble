@@ -26,6 +26,18 @@ explicitly retired.
   `receive(...) -> (outgoing, events)` shapes.
   **No async anywhere. No tokio.**
 
+## The MCP surface
+
+`src/mcp.rs` is SimBLE's agent-first frontend (`simble mcp`, JSON-RPC over
+stdio), alongside the web (wasm) and native (library + CLI) ones. Two
+consequences for changes here:
+
+- An MCP client launches the **release** binary, so `cargo build --release`
+  after touching tools — a stale binary silently serves the old tool list.
+- Tool descriptions and the `EXAMPLES` table are user-facing documentation:
+  an agent reads them instead of this repo. Keep them accurate, and keep the
+  tool list in `README.md`, `HANDOFF.md` and the `mcp` module doc in sync.
+
 ## Layering rule
 
 Host-stack code (`src/classic/`, `src/gatt/`, `src/smp/`, `src/l2cap/`,

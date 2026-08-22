@@ -10,18 +10,31 @@ hardware to charge, pair, or lose: every device is defined in code, behaves the 
 every run, and can misbehave on command when that's what your test needs.
 
 Inspired by [Bumble](https://github.com/google/bumble) and
-[NimBLE](https://github.com/apache/mynewt-nimble), SimBLE exposes the
-[Rhai](https://rhai.rs) scripting language to make device creation and testing a snap.
+[NimBLE](https://github.com/apache/mynewt-nimble), SimBLE embeds
+[Rhai](https://rhai.rs) for device definitions and tests.
 SimBLE is written in pure Rust and is a native companion to
 [netsim](https://android.googlesource.com/platform/tools/netsim), the Android emulator's
 network simulator.
 
-**▶ Try it now in your browser: the [SimBLE Playground](https://schilit.github.io/simble/playground/)** —
-write a device in Rhai and run it live (compiled to WebAssembly, no install).
+### Choose a surface
+
+| Surface | Use it when | Start here |
+|---|---|---|
+| **Web** | You want no-install interactive examples and device showcases | **[Start with the web demos](https://schilit.github.io/simble/)** |
+| **MCP** | An AI agent is creating, running, and testing devices | [Quick start 1](#quick-start-1-drive-it-from-an-ai-agent-mcp) |
+| **Native** | You need Rust integration, CI fixtures, netsim, or a USB dongle | [Quick start 4](#quick-start-4-use-it-as-a-library) |
+
+All three use the same host stack with different frontends and transports.
 
 ---
 
 ## What can I do with it?
+
+In a chat with SimBLE available, say:
+
+> *“Create a simulated heart-rate monitor, connect to it, and check that its rate stays below 200 bpm for five seconds.”*
+
+SimBLE gives the agent a repeatable device-testing environment. It can also:
 
 - **Test Android apps against Bluetooth accessories that don't exist yet** — or that you
   don't want a drawer full of. Your app in the Android emulator, SimBLE as the accessory,
@@ -29,22 +42,65 @@ write a device in Rhai and run it live (compiled to WebAssembly, no install).
 - **Reproduce the unreproducible.** A peripheral that drops the connection mid-notification,
   sends a stale pairing value, or advertises malformed data — real accessories won't
   misbehave on cue; simulated ones will, identically, every run.
-- **Exercise the whole stack, not a mock.** SimBLE speaks real HCI, L2CAP, ATT/GATT, SMP
-  pairing (Legacy and Secure Connections), SDP, RFCOMM, HFP, A2DP/AVDTP, AVRCP, and HID —
-  what connects to it is talking to a real protocol implementation, packet by packet.
+- **Exercise LE protocol layers.** SimBLE implements HCI, L2CAP, ATT/GATT, and SMP pairing
+  (Legacy and Secure Connections). The Classic (BR/EDR) protocols —
+  SDP, RFCOMM, HFP, A2DP/AVDTP, AVRCP, HID — are implemented and tested as libraries, but
+  are not yet on the air; see [the peripheral assessment](docs/android-peripherals.md) for
+  what is *reachable* versus *library-only*.
 - **Reach real hardware when you want it.** With a USB Bluetooth dongle, a SimBLE device
   advertises over real RF and your actual phone can scan, connect, and pair with it.
 
+## SimBLE MCP — the agent-first surface
+
+SimBLE ships an MCP server for stateful device construction and testing in an agent
+conversation. Once configured, the client works in a live scene: a session-scoped set of peripherals, plus a
+central and scanner to exercise them. The scene persists across calls, so an agent can build it,
+drive interactions, and inspect the result.
+
+| Tools | What they do |
+|---|---|
+| `example`, `lookup` | Learn the API and the assigned numbers without leaving the session |
+| `lint`, `run_test` | Compile a script, or run it and check every `assert(...)` |
+| `run_on`, `add_peripheral`, `tick`, `status`, `scan` | Choose the controller, build the scene, drive the clock, see it as a whole or as a scanner hears it |
+| `connect`, `read`, `write`, `assert` | Drive a central against a peripheral |
+| `subscribe`, `assert_over` | Monitor a value across a time window |
+
+### Where an MCP scene runs
+
+A scene uses one controller at a time. Changing it with `run_on` starts a new scene; add the
+devices again after switching.
+
+| Scene host | Choose it when | Notes |
+|---|---|---|
+| **In-process** (default) | You want fast, deterministic device tests | No external setup. MCP can add peripherals and use its central, scanner, and assertion tools. |
+| **netsim** (`run_on("netsim")`) | An Android emulator should scan, connect, or pair with the devices | Requires local `netsimd` with its WebSocket endpoint. Add peripherals through MCP, then use the emulator as the central. |
+| **USB** | A real phone should use a USB Bluetooth dongle | Not available through MCP yet; use the native `usb_hrm` example. |
+
+For the full controller trade-offs—from the in-process link to netsim and USB—see the
+[controller ladder](https://schilit.github.io/simble/controllers/).
+
+`example` serves 18 ready-to-run device scripts, `lookup` resolves SIG assigned numbers, and
+`assert_over` subscribes, advances the clock, and fails on the first violating sample. Tool
+output annotates 16-bit UUIDs with their SIG names; failures use `isError` for clients to detect.
+
+A whole flow — *"build a heart-rate monitor and check HR stays under 200"* — is four calls:
+
+```jsonc
+example    {"name": "hrm"}        // → the Rhai script, ready to paste
+add_peripheral {"script": "..."}  // → "added peripheral #0", its GATT as JSON
+connect    {}                     // → the discovered services
+assert_over {"uuid": "2A37", "op": "<", "value": 200, "seconds": 5}
+// → "PASS — 2A37 byte 1 held < 200 across 30 samples over 5.0s (extreme 76)"
+```
+
+The scripts are the same artifact throughout: `simble FILE.rhai` runs one headless for CI
+(exit 0 / 1), and `simble --no-run FILE.rhai` lints without running.
+
 ## Devices are scripts
 
-A SimBLE device doesn't have to be Rust you compile — it can be a short
-[Rhai](https://rhai.rs) script you edit and re-run in seconds. Rhai is a small, Rust-flavored
-scripting language embedded in SimBLE, and it exposes an API that **mirrors the platform
-Bluetooth framework you already know** — not an invented one. Today that's the
-**Android-shaped** surface (`BluetoothGattServer`, `BluetoothGattService`, characteristics,
-`notify…`) straight out of `android.bluetooth`; a **CoreBluetooth-shaped** surface
-(`CBPeripheralManager` for macOS/iOS developers) is the planned sibling, built on the same
-internal hook. Pick the vocabulary that matches the app you're testing against.
+A SimBLE device can be a short [Rhai](https://rhai.rs) script that you edit and re-run without
+rebuilding Rust. Its API is Android-shaped: `BluetoothGattServer`, `BluetoothGattService`,
+characteristics, and notifications correspond to familiar `android.bluetooth` concepts.
 
 ```rhai
 // A heart-rate monitor, defined entirely in a text file:
@@ -60,66 +116,64 @@ hrs.add_characteristic(hr);
 server.add_service(hrs);
 ```
 
-The same script defines a **device** to run, or a **test** to check — add `assert(...)` and
-you've written a test instead of a peripheral. No rebuild, sandboxed by construction (bounded
-execution, no filesystem or network), and identical every run. The behavior lives in the
-script; SimBLE's real protocol stack does the work underneath.
+The same script can define a device or a test: add `assert(...)` for a test. Execution is
+bounded and has no filesystem or network access; the script can run identically in local tests,
+netsim fixtures, and CI.
 
-## AI-first testing
+## What devices come built in?
 
-Because a device is a small script against an API that's already in every LLM's training data,
-the natural way to make one is to ask:
+**Eighteen ready-to-run device scripts** are served by the MCP `example` tool and can also be
+used from the web pages or CLI. They include heart-rate, thermometer, thermostat,
+environmental, battery, HID, cycling, pulse-oximeter, weight-scale, smart-lock, fitness,
+volume-control, beacon, Fast Pair, and Channel Sounding examples. Call `example` with no name
+to list them.
 
-> *"Write a test where a phone connects to a heart-rate monitor, the monitor drops the
-> connection mid-notification, and the phone's re-read after reconnect gets the latest value."*
+Underneath sits the profile catalog to build your own: Battery, Device Information,
+LE Audio (BAP, ASCS, PACS, volume/input control, broadcast scan, media control, hearing
+access, and the coordinator profiles), Apple ANCS/AMS, and Bluetooth 6.0 **Channel
+Sounding** distance ranging with **AoA/AoD** direction finding.
 
-An LLM emits the Rhai, SimBLE runs it **deterministically** — so a generation mistake shows up
-immediately and reproducibly, and the generate-check-fix loop actually converges instead of
-chasing flaky failures. The validated script is itself the artifact: the same file ships into
-netsim as a CI fixture, unchanged. No hand-translation between "the test the AI wrote" and "the
-test CI runs."
+Two honest caveats. **LE Audio streaming is incomplete** — the control plane (PACS, ASCS,
+volume control) works and is reachable, but CIS establishment and the LC3 codec are not
+implemented, so no audio flows yet. **Classic (BR/EDR) profiles** — A2DP, AVRCP, HFP,
+HID, SDP, RFCOMM — are implemented and well tested as libraries, but are not yet on the
+air. [`docs/android-peripherals.md`](docs/android-peripherals.md) tracks exactly what is
+reachable versus library-only.
 
-This is the direction SimBLE is built for: describe the Bluetooth scenario you want in plain
-language, get back a runnable, checkable, shippable test — and lean on the cases real hardware
-can't stage on demand (the peripheral that misbehaves at exactly the wrong moment, reproducibly,
-every time).
+---
 
-## Drive it from an AI agent (MCP)
+## Quick start 1: drive it from an AI agent (MCP)
 
-SimBLE ships an **MCP server**, so an agent can build and test BLE devices as tool calls in a
-conversation — the AI-first loop above, made interactive and stateful. MCP is JSON-RPC over
-stdio (no gRPC, no extra dependencies). Register the binary once:
+From a source checkout, build and register the server:
 
 ```bash
 cargo build --release --bin simble
 claude mcp add simble -- "$PWD/target/release/simble" mcp
-# any other MCP client: run `simble mcp` (stdio) and point the client at it
 ```
 
-The agent then gets a **live, deterministic scene** — no netsim, no hardware — and these tools:
+Then ask the agent, for example:
 
-- `lint` / `run_test` — compile a script, or run it and check every `assert(...)`
-- `add_peripheral` / `scan` / `status` — build the scene; see it on the air, or as a whole
-- `connect` / `read` / `assert` — drive a central against a peripheral
-- `subscribe` / `assert_over` — monitor a value across a time window
+> **Create and test a device**
+>
+> *“Add a heart-rate monitor and check its rate stays under 200 for five seconds.”*
 
-So *"build a heart-rate monitor and check HR stays under 200"* becomes `add_peripheral` →
-`connect` → `assert_over` — a reproducible test the agent authors and runs live. The same
-`.rhai` scripts still run headless via `simble FILE.rhai` (exit 0 / 1) for CI, and
-`simble --no-run FILE.rhai` lints without running.
+> **Explore a built-in device**
+>
+> *“Add the smart-lock example, connect to it, and show me its services and characteristics.”*
 
-## What devices come built in?
+> **Build a scene**
+>
+> *“Add a heart-rate monitor and a scanner to a scene, advance the clock for five seconds, and show me what the scanner sees.”*
 
-Ready-made simulated devices: **heart-rate monitor**, **keyboard**, **mouse**,
-**Eddystone and iBeacon beacons** — plus the full profile catalog to build your own:
-Battery, Device Information, LE Audio (BAP, ASCS, PACS, volume/input control, broadcast
-scan, media control, hearing access, and the coordinator profiles), Apple ANCS/AMS,
-Classic audio and telephony (A2DP, AVRCP, HFP), Classic HID, and Bluetooth 6.0
-**Channel Sounding** distance ranging with **AoA/AoD** direction finding.
+> **Use the Android emulator**
+>
+> *“Switch the scene to netsim, add a thermometer, and tell me when my Android emulator can discover it.”*
 
----
+For the first prompt, the agent calls `example` → `add_peripheral` → `connect` → `assert_over`
+and reports PASS or FAIL. The in-process run is deterministic. See
+[SimBLE MCP](#simble-mcp--the-agent-first-surface) for the full tool list.
 
-## Quick start 1: talk to the Android emulator (netsim)
+## Quick start 2: talk to the Android emulator (netsim)
 
 SimBLE connects to netsim over a WebSocket, naming its device right in the URL. This needs
 the **canary-channel emulator** (37.2.5+) — the stable emulator's netsim doesn't have the
@@ -171,7 +225,7 @@ address come straight from the connection URL:
 ws://localhost:7681/v1/websocket/bt?name=my-hrm&address=11:22:33:44:55:01
 ```
 
-## Quick start 2: talk to a real phone (USB dongle)
+## Quick start 3: talk to a real phone (USB dongle)
 
 Plug in a USB Bluetooth dongle (macOS's built-in radio is not accessible — a generic
 CSR-style dongle works out of the box), then:
@@ -187,7 +241,7 @@ cargo run --example usb_hrm -- 0a12:0001
 If opening the dongle fails on macOS, check whether the OS claimed it; on Linux you'll need
 device permissions (a udev rule, or `sudo`).
 
-## Quick start 3: use it as a library
+## Quick start 4: use it as a library
 
 The full crate API — every module, profile, and packet type — is documented at
 **https://schilit.github.io/simble/doc/** (generated by `cargo doc`; build it locally with
@@ -244,11 +298,15 @@ server.add_service(hrs);
 ## Verifying a change
 
 ```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
+cargo doc --no-deps --all-features
 ```
 
-The suite is 850+ tests covering every protocol layer, largely ported from Bumble's test
-suite (see Acknowledgments) plus spec-derived coverage of its gaps.
+CI also builds the release CLI and runs the Rhai fixtures used by the web testing page. The
+suite contains hundreds of tests across the protocol layers, including ports of Bumble tests
+and spec-derived coverage.
 
 ---
 

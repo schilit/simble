@@ -54,6 +54,7 @@
     <a href="scanner/">Scanner</a>
     <a href="hrm/">Scripted device</a>
     <a href="lightbulb/">Color Bulb</a>
+    <a href="speaker/">Speaker</a>
     <a href="dual/">Server + Client</a>
     <a href="scene/">Scene</a>
     <a href="testing/">Testing</a>
@@ -75,6 +76,10 @@
       hosts a whole scene of devices in the tab. Flip a page's backend selector to <strong>WebSocket</strong>
       to join a real <code>netsim</code> scene — and the Android emulator — when you want radio-level fidelity.
       The demos below are a guided tour; the tabs above jump straight to any of them.</p>
+    <p>The browser is one of <strong>three surfaces</strong>. The same stack is a Rust library and the
+      <code>simble</code> CLI for tests and CI — and a <strong>SimBLE MCP server</strong>, the agent-first way in,
+      where an AI agent builds and tests devices as tool calls with no checkout and no build step.
+      See <a href="https://github.com/schilit/simble#simble-mcp--the-agent-first-surface">SimBLE MCP</a>.</p>
   </div>
 
   <section class="group">
@@ -116,6 +121,12 @@
         <p>A PLAYBULB-style smart light: a writable <code>[R,G,B]</code> characteristic on a custom 128-bit
            service. Pick a color, the glowing bulb reacts, and a subscribed central is notified.</p>
       </a>
+      <a class="card" href="./speaker/">
+        <h3>Speaker <span class="tag">showcase</span></h3>
+        <p>An LE Audio Volume Control device you can <em>hear</em>: every control writes an opcode to the
+           write-only control point, the device's own script applies it, and the tone's gain follows the
+           <code>Volume State</code> characteristic.</p>
+      </a>
       <a class="card" href="./dual/">
         <h3>Server + Client <span class="tag">showcase</span></h3>
         <p>Two real devices in one tab: a scripted <strong>server</strong> and a <strong>client</strong> that
@@ -152,6 +163,12 @@
         <h3>Android Emulator workflow <span class="tag">guide</span></h3>
         <p>Develop and test a BLE app with no hardware: your app in the emulator, netsim as the radio,
            SimBLE as the simulated devices — and the Scene creator as the device manager.</p>
+      </a>
+      <a class="card" href="https://github.com/schilit/simble#simble-mcp--the-agent-first-surface">
+        <h3>SimBLE MCP <span class="tag">agentic</span></h3>
+        <p>The agent-first surface: <code>simble mcp</code> over stdio, so an AI agent builds, runs and
+           tests devices as tool calls — <code>example</code> hands it a working script, <code>assert_over</code>
+           turns "monitor HR &lt; 200 for 5s" into one call.</p>
       </a>
       <a class="card" href="./doc/">
         <h3>Crate documentation <span class="tag">reference</span></h3>
