@@ -9,8 +9,8 @@ rather than describe one needs an encoder and a decoder.
 
 **Recommendation: implement SBC from the specification.** Every SBC
 implementation in wide use is LGPL, no pure-Rust SBC *encoder* exists on
-crates.io at all, and the codec is small enough (~700 lines) that the
-dependency question mostly evaporates. **This was done** —
+crates.io at all, and the codec is small enough (~1,100 lines, no
+dependencies) that the dependency question mostly evaporates. **This was done** —
 `src/audio/sbc.rs`, verified against bluez's `libsbc` in both directions; the
 measurements are below.
 
@@ -81,7 +81,8 @@ allocator and frame layout.
 `mini_sbc` was read rather than assumed about. It is a real, independent
 decoder (it derives its fixed-point tables from the specification's decimal
 values at compile time), it is `no_std`, and its licence is compatible. Its
-weaknesses: 1,752 lines against the ~700 written here, no encoder, no activity
+weaknesses: 1,752 lines for a decoder alone against 1,090 for both halves
+here, no encoder, no activity
 since March 2023, **its two tests assert nothing** — they `println!` the
 decoded samples and pass unconditionally — and it already trips a
 future-incompatibility lint (`#[macro_export(crate)]`, "will become a hard
@@ -209,7 +210,8 @@ CI. Closing that would take five more vector sets; it was judged not worth the
 
 ## 5. What was built
 
-`src/audio/sbc.rs`, ~1,100 lines including tests, no dependencies:
+`src/audio/sbc.rs` — 1,090 lines of codec plus 336 of unit tests, no
+dependencies:
 
 - **Encoder and decoder**, all four channel modes, both subband counts, both
   block-length ranges, both allocation methods, all four sampling frequencies.
@@ -270,7 +272,7 @@ intensity stereo, TNS (an LPC filter applied in the frequency domain), and
 PNS. An *encoder* needs all of that plus a psychoacoustic model — which is
 where AAC's quality actually comes from and which the specification does not
 give you. This is tens of thousands of lines and a research problem, against
-SBC's ~700 lines of fully specified arithmetic.
+SBC's ~1,100 lines of fully specified arithmetic.
 
 ### Unlike SBC, the crate ecosystem here is *not* empty
 
