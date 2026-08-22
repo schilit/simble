@@ -6,6 +6,7 @@
 pub(crate) mod att_server;
 pub(crate) mod bond_store;
 pub(crate) mod connection;
+pub mod car_kit;
 pub mod classic_host;
 pub mod cis_central;
 pub mod host;
@@ -13,6 +14,7 @@ pub(crate) mod observer;
 pub(crate) mod virtual_device;
 
 pub use bond_store::{BondSecurity, BondStore, MemoryBondStore};
+pub use car_kit::{AtLine, CallPhase, CarKit, CarKitEvent, LinkPhase};
 pub use classic_host::{
     ClassicHost, ProtocolHandler, RfcommHandler, RfcommPort, SdpHandler, SharedRfcommPort,
 };
