@@ -3819,9 +3819,25 @@ mod web {
     // -- end Car page ------------------------------------------------------
 
     /// The default HRM script, so the page needs no separate fetch.
+    ///
+    /// Despite the name this builds a *thermometer* — the Playground serves it
+    /// as exactly that. Kept for the Playground; a page that wants a specific
+    /// device should ask [`catalog_script`] for it by name.
     #[wasm_bindgen]
     pub fn default_heart_rate_script() -> String {
         DEFAULT_HEART_RATE_SCRIPT.to_string()
+    }
+
+    /// A device script from the shared catalog, by name.
+    ///
+    /// The catalog is the one definition of what `"hrm"` or `"thermometer"`
+    /// means: MCP's `example` tool, the scene loader and now the demo pages
+    /// all read it, so a device cannot mean one thing to an agent and another
+    /// in a browser. Returns `undefined` for an unknown name rather than a
+    /// placeholder, so a typo fails where it is made.
+    #[wasm_bindgen]
+    pub fn catalog_script(name: &str) -> Option<String> {
+        crate::devices::catalog::script(name).map(str::to_string)
     }
 
     /// Runs a Rhai test script (device-building + `assert(...)`) and returns

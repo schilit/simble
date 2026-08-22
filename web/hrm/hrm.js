@@ -16,7 +16,7 @@
 // that beats at whatever rate the Heart Rate Measurement characteristic
 // currently holds.
 
-import init, { WebPeripheral, default_heart_rate_script } from "../pkg/simble.js";
+import init, { WebPeripheral, catalog_script } from "../pkg/simble.js";
 import { createDeviceHeader } from "../common/device-header.js";
 import { createGattView } from "../common/gatt-view.js";
 import { bpmFromHex } from "../common/viewer-format.js";
@@ -87,8 +87,9 @@ const WS_URL =
   `ws://localhost:7681/v1/websocket/bt?name=web-device&address=${ADDRESS}`;
 
 const SCRIPT_NOTE =
-  `<strong>Read-only here.</strong> This is <code>default_heart_rate_script()</code> from the ` +
-  `library — the same device MCP's <code>example</code> tool serves. To change it, take it to the ` +
+  `<strong>Read-only here.</strong> This is the catalog's <code>hrm</code> device — the same one ` +
+  `MCP's <code>example</code> tool serves, so it cannot mean one thing to an agent and another ` +
+  `here. To change it, take it to the ` +
   `<a href="../playground/">Playground</a>, which is where authoring lives.`;
 
 // --- state -----------------------------------------------------------------
@@ -269,7 +270,11 @@ export async function mount(container) {
   }
   root = container;
   root.innerHTML = MARKUP;
-  script = default_heart_rate_script();
+  // The catalog's heart-rate monitor, not default_heart_rate_script(): that
+  // one is named for history and actually builds a thermometer, which the
+  // Playground serves as its thermometer example. This tab is Health, and it
+  // has a heartbeat to drive.
+  script = catalog_script("hrm");
 
   head = createDeviceHeader({
     name: "starting…", // replaced by the device's own advertised name
