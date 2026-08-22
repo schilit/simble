@@ -24,6 +24,8 @@ use crate::transport::wasm_ws::{SceneEngine, lint_script, run_test_script};
 use crate::types::Address;
 use serde_json::{Value, json};
 use std::io::{BufRead, Write};
+use std::sync::mpsc;
+use std::time::Duration;
 
 /// The MCP revision this server implements (returned from `initialize`).
 const PROTOCOL_VERSION: &str = "2024-11-05";
@@ -59,30 +61,72 @@ impl Default for Server {
 /// request out, until stdin reaches EOF. Notifications (no `id`) get no reply.
 pub fn serve_stdio() -> std::io::Result<()> {
     let mut server = Server::default();
-    let stdin = std::io::stdin();
-    let mut reader = stdin.lock();
+
+    // A tiny reader thread ferries stdin *lines* over a channel — it never
+    // touches the scene, so the (non-`Send`) scripting engine stays on this
+    // thread. The main loop then polls the channel without ever blocking on
+    // stdin, which is what leaves room to pump live backends and push
+    // notifications between requests (self-only for now).
+    let (tx, rx) = mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        let mut reader = stdin.lock();
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => break, // EOF: stdin closed
+                Ok(_) => {
+                    if tx.send(std::mem::take(&mut line)).is_err() {
+                        break; // main loop gone
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
-    let mut line = String::new();
     loop {
-        line.clear();
-        if reader.read_line(&mut line)? == 0 {
-            return Ok(()); // client closed the pipe
+        // Drain every request that has arrived, without blocking.
+        let mut idle = true;
+        loop {
+            match rx.try_recv() {
+                Ok(line) => {
+                    idle = false;
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let response = match serde_json::from_str::<Value>(trimmed) {
+                        Ok(request) => server.handle(&request),
+                        Err(e) => Some(error_response(None, -32700, &format!("parse error: {e}"))),
+                    };
+                    if let Some(response) = response {
+                        write_message(&mut out, &response)?;
+                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => return Ok(()), // stdin closed
+            }
         }
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let response = match serde_json::from_str::<Value>(trimmed) {
-            Ok(request) => server.handle(&request),
-            Err(e) => Some(error_response(None, -32700, &format!("parse error: {e}"))),
-        };
-        if let Some(response) = response {
-            serde_json::to_writer(&mut out, &response)?;
-            out.write_all(b"\n")?;
-            out.flush()?;
+
+        // Self-only: nothing to pump between requests yet. (Live backends will
+        // pump their sockets and push notifications here.) Idle briefly so an
+        // otherwise-quiet loop doesn't spin a core.
+        if idle {
+            std::thread::sleep(Duration::from_millis(5));
         }
     }
+}
+
+/// Writes one JSON-RPC message as a single newline-delimited line — used for
+/// responses now, and for server-initiated notifications once live.
+fn write_message<W: Write>(out: &mut W, message: &Value) -> std::io::Result<()> {
+    serde_json::to_writer(&mut *out, message)?;
+    out.write_all(b"\n")?;
+    out.flush()
 }
 
 impl Server {
