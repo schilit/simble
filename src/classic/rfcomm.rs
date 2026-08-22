@@ -44,6 +44,11 @@ pub const RFCOMM_PSM: u16 = 0x0003;
 pub const DEFAULT_L2CAP_MTU: u16 = 2048;
 /// Default initial RFCOMM credit grant per DLC.
 pub const DEFAULT_INITIAL_CREDITS: u8 = 7;
+/// Largest initial credit grant the PN command can carry: the field is 3 bits
+/// wide (RFCOMM 1.1 5.5.3). Larger requests are clamped to this, not masked,
+/// so both ends end up believing the same (large) number rather than the
+/// nonsense a truncating `& 0x07` would produce.
+pub const MAX_INITIAL_CREDITS: u8 = 7;
 /// Maximum RFCOMM credits held per DLC.
 pub(crate) const DEFAULT_MAX_CREDITS: u8 = 32;
 /// Credit low-water mark that triggers a credit top-up.
@@ -369,7 +374,11 @@ impl MccPn {
             (self.max_frame_size & 0xFF) as u8,
             ((self.max_frame_size >> 8) & 0xFF) as u8,
             self.max_retransmissions,
-            self.initial_credits & 0x07,
+            // Clamp, don't mask: the field is 3 bits, and `& 0x07` would turn
+            // a request for 8 credits into a grant of 0 — a stall the peer
+            // cannot diagnose. Callers are clamped at the `listen`/`open_dlc`
+            // boundary too, so this only backstops direct `MccPn` users.
+            self.initial_credits.min(MAX_INITIAL_CREDITS),
         ]
     }
 
@@ -672,7 +681,12 @@ fn reserve_listen_channel(
     if listen_configs.contains_key(&channel) {
         return false;
     }
-    listen_configs.insert(channel, (max_frame_size, initial_credits));
+    // Clamp here rather than at encode time so `Dlc::rx_credits` and the PN
+    // command's 3-bit field cannot disagree (see [`MAX_INITIAL_CREDITS`]).
+    listen_configs.insert(
+        channel,
+        (max_frame_size, initial_credits.min(MAX_INITIAL_CREDITS)),
+    );
     true
 }
 
@@ -737,6 +751,7 @@ impl Multiplexer {
 
     /// Reserves `channel` (a server channel number, 1-30) to be accepted the
     /// next time a peer's PN command requests it. `false` if already reserved.
+    /// `initial_credits` above [`MAX_INITIAL_CREDITS`] is clamped to it.
     pub fn listen(&mut self, channel: u8, max_frame_size: u16, initial_credits: u8) -> bool {
         reserve_listen_channel(
             &mut self.listen_configs,
@@ -748,6 +763,7 @@ impl Multiplexer {
 
     /// Starts opening a new DLC on `channel` (a server channel number,
     /// 1-30): sends the PN command. Either role may call this once connected.
+    /// `initial_credits` above [`MAX_INITIAL_CREDITS`] is clamped to it.
     pub fn open_dlc(
         &mut self,
         channel: u8,
@@ -766,7 +782,7 @@ impl Multiplexer {
             ack_timer: 0,
             max_frame_size,
             max_retransmissions: 0,
-            initial_credits,
+            initial_credits: initial_credits.min(MAX_INITIAL_CREDITS),
         };
         self.pending_open = Some(pn);
         self.state = MultiplexerState::Opening;
@@ -1932,6 +1948,42 @@ mod tests {
             ]
         );
         assert!(initiator.dlcs.is_empty());
+    }
+
+    #[test]
+    fn test_initial_credits_beyond_the_field_width_are_clamped_not_masked() {
+        // `& 0x07` turns a request for 8 credits into a grant of 0: simble
+        // believes it granted 8, the peer reads 0 and never transmits.
+        let mut responder = connected_responder();
+        responder.listen(1, DEFAULT_MAX_FRAME_SIZE, 20);
+
+        let (out, _) = responder
+            .receive(&pn_command_frame(2, pn_cl::CFC_COMMAND, 7))
+            .unwrap();
+
+        let pn = sole_pn_response(&out);
+        assert_eq!(pn.initial_credits, MAX_INITIAL_CREDITS);
+        assert_eq!(
+            responder.dlcs.get(&2).unwrap().rx_credits,
+            MAX_INITIAL_CREDITS,
+            "what we think we granted must match what went on the wire"
+        );
+    }
+
+    #[test]
+    fn test_open_dlc_clamps_initial_credits_to_the_field_width() {
+        let mut initiator = Multiplexer::new(Role::Initiator, DEFAULT_L2CAP_MTU);
+        initiator.start().unwrap();
+        initiator
+            .receive(&RfcommFrame::ua(0, 0).to_bytes())
+            .unwrap();
+
+        let bytes = initiator.open_dlc(1, DEFAULT_MAX_FRAME_SIZE, 200).unwrap();
+
+        let frame = RfcommFrame::parse(&bytes).expect("valid frame");
+        let (_, _, value) = parse_mcc(&frame.information).expect("valid mcc");
+        let pn = MccPn::parse(value).expect("valid PN");
+        assert_eq!(pn.initial_credits, MAX_INITIAL_CREDITS);
     }
 
     #[test]
