@@ -199,7 +199,14 @@ impl Server {
         if self.netsim.is_some()
             && matches!(
                 name,
-                "scan" | "connect" | "read" | "write" | "assert" | "subscribe" | "assert_over"
+                "scan"
+                    | "connect"
+                    | "read"
+                    | "write"
+                    | "assert"
+                    | "subscribe"
+                    | "assert_over"
+                    | "add_central"
             )
         {
             return tool_text(
@@ -237,6 +244,16 @@ impl Server {
             }
             "add_peripheral" => match require_script(args) {
                 Ok(s) => self.tool_add_peripheral(id, s),
+                Err(msg) => tool_text(id, msg, true),
+            },
+            "add_central" => match require_script(args) {
+                Ok(s) => {
+                    let to = args
+                        .and_then(|a| a.get("to"))
+                        .and_then(Value::as_u64)
+                        .map(|n| n as usize);
+                    self.tool_add_central(id, s, to)
+                }
                 Err(msg) => tool_text(id, msg, true),
             },
             "tick" => {
@@ -374,6 +391,81 @@ impl Server {
                 )
             }
             Err(e) => tool_text(id, &format!("device rejected: {e}"), true),
+        }
+    }
+
+    /// Adds a scripted GATT client to the scene, points it at a peripheral,
+    /// and lets discovery complete — so what comes back already says whether
+    /// the script's `assert`s held.
+    ///
+    /// The counterpart of `add_peripheral`: without it an agent can build a
+    /// device but not the thing that drives it, and every interaction has to
+    /// be spelled out one `read`/`write` tool call at a time.
+    fn tool_add_central(&mut self, id: Option<Value>, script: &str, to: Option<usize>) -> Value {
+        let address = self.alloc_address();
+        if self.scene.is_none() {
+            self.scene = Some(SceneEngine::new());
+        }
+        let scene = self.scene.as_mut().unwrap();
+        let index = match scene.add_scripted_central(address, script) {
+            Ok(index) => index,
+            Err(e) => return tool_text(id, &format!("client rejected: {e}"), true),
+        };
+
+        // The script named an address; the scene allocated the real ones. If
+        // the two disagree the script could never connect, so re-point it —
+        // and say so, rather than silently changing what the script asked for.
+        let requested = scene
+            .scripted_central(index)
+            .map(|c| c.client().with_central(|inner| inner.target()));
+        let explicit = to.and_then(|i| {
+            self.peripherals
+                .iter()
+                .find(|(idx, _)| *idx == i)
+                .map(|(_, a)| *a)
+        });
+        let known = requested.is_some_and(|r| self.peripherals.iter().any(|(_, a)| *a == r));
+        let retarget = explicit.or_else(|| {
+            if known {
+                None
+            } else {
+                self.peripherals.first().map(|(_, a)| *a)
+            }
+        });
+        let mut note = String::new();
+        if let Some(target) = retarget
+            && let Some(central) = self.scene.as_mut().unwrap().scripted_central_mut(index)
+        {
+            central.set_target(target);
+            note = format!(
+                " (pointed at {target}; the script asked for {})",
+                requested.map(|r| r.to_string()).unwrap_or_default()
+            );
+        }
+        if to.is_some() && explicit.is_none() {
+            return tool_text(id, "no peripheral with that index — call status", true);
+        }
+
+        // connect + MTU + service and characteristic discovery, plus room for
+        // whatever the script queued from on_services_discovered.
+        self.advance(40, 0.02);
+        let scene = self.scene.as_mut().unwrap();
+        let Some(central) = scene.scripted_central_mut(index) else {
+            return tool_text(id, "central vanished from the scene", true);
+        };
+        let failure = central.failure().map(str::to_string);
+        let emitted = central.take_emitted();
+        let status = central.status_json();
+        let mut body = format!("added central #{index}{note}\n{}", annotate_json(&status));
+        if !emitted.is_empty() {
+            body.push_str(&format!("\nemitted: {}", emitted.join(", ")));
+        }
+        match failure {
+            Some(failure) => {
+                body.push_str(&format!("\nFAIL — {failure}"));
+                tool_text(id, &body, true)
+            }
+            None => tool_text(id, &body, false),
         }
     }
 
@@ -740,9 +832,23 @@ impl Server {
             );
         };
         let devices: Vec<Value> = (0..scene.device_count())
-            .map(|i| match scene.peripheral_status_json(i) {
-                Some(j) => serde_json::from_str(&j).unwrap_or(Value::String(j)),
-                None => json!({ "index": i, "role": "non-peripheral" }),
+            .map(|i| {
+                // A scripted central is a device of the scene like any other,
+                // and its assertion state is the whole result of a client
+                // script — reporting it as "non-peripheral" hid the answer.
+                if let Some(central) = scene.scripted_central(i) {
+                    let mut view: Value = serde_json::from_str(&central.status_json())
+                        .unwrap_or_else(|_| json!({ "index": i }));
+                    view["role"] = json!("central");
+                    if let Some(failure) = central.failure() {
+                        view["failure"] = json!(failure);
+                    }
+                    return view;
+                }
+                match scene.peripheral_status_json(i) {
+                    Some(j) => serde_json::from_str(&j).unwrap_or(Value::String(j)),
+                    None => json!({ "index": i, "role": "non-peripheral" }),
+                }
             })
             .collect();
         let mut body = json!({ "controller": "self", "devices": devices });
@@ -880,6 +986,31 @@ fn tools_list() -> Value {
                 tool). Returns the device index; call tick then status to run it. A bad script is \
                 rejected with its error.",
             "inputSchema": script_schema("A Rhai peripheral script (creates a BluetoothGattServer)."),
+        },
+        {
+            "name": "add_central",
+            "description": "Add a scripted GATT *client* to the live scene — the counterpart of \
+                add_peripheral, and the way to drive a device with behaviour rather than one tool \
+                call at a time. The script must create an android::BluetoothGatt and connect it, \
+                e.g.: let c = android::BluetoothGatt(\"Probe\"); c.connect(\"AA:BB:CC:00:00:01\"); \
+                fn on_services_discovered(client) { client.subscribe(\
+                uuid::HEART_RATE_MEASUREMENT); } fn on_characteristic_changed(client, uuid, value) \
+                { assert(value[1] < 200, \"plausible\"); } — callbacks are on_connection_state_change\
+                /on_services_discovered/on_characteristic_read/on_characteristic_write/\
+                on_characteristic_changed/on_subscribed/on_mtu_changed/on_error, plus fn tick(\
+                client, t) and a catch-all fn on_event(client, event). assert(...) inside a \
+                callback fails the run, which is what makes a client script a test. Pass `to` to \
+                point it at a peripheral by index (otherwise the scene's first peripheral is used \
+                when the script's address matches none). Self-controller only. Client samples: \
+                the example tool.",
+            "inputSchema": json!({
+                "type": "object",
+                "properties": {
+                    "script": { "type": "string", "description": "A Rhai central script (creates a BluetoothGatt)." },
+                    "to": { "type": "integer", "description": "Peripheral device index to connect to." },
+                },
+                "required": ["script"],
+            }),
         },
         {
             "name": "lookup",
@@ -1202,13 +1333,21 @@ fn annotate_json(raw: &str) -> String {
 fn tool_example(id: Option<Value>, name: Option<&str>) -> Value {
     match name {
         None | Some("") => {
-            let listing: String = EXAMPLES
+            let peripherals: String = EXAMPLES
                 .iter()
                 .map(|e| format!("{} — {}\n", e.name, e.summary))
                 .collect();
+            let centrals: String = catalog::CENTRAL_EXAMPLES
+                .iter()
+                .map(|e| format!("{} — {} (drives: {})\n", e.name, e.summary, e.peer))
+                .collect();
             tool_text(
                 id,
-                &format!("{listing}Call example with a name to get its script."),
+                &format!(
+                    "Peripherals (add_peripheral):\n{peripherals}\n\
+                     Clients (add_central):\n{centrals}\n\
+                     Call example with a name to get its script."
+                ),
                 false,
             )
         }
@@ -1285,6 +1424,57 @@ mod tests {
         ] {
             assert!(names.contains(&expected), "missing tool {expected}");
         }
+    }
+
+    #[test]
+    fn add_central_points_a_scripted_client_at_the_peripheral_the_scene_allocated() {
+        // The script names an address it cannot know — MCP allocates them —
+        // so the tool re-points it and says so. Without that, every client
+        // script an agent copied out of `example` would sit in "connecting".
+        let mut s = Server::default();
+        call(&mut s, "add_peripheral", json!({ "script": catalog::script("hrm").unwrap() }));
+        let added = call(
+            &mut s,
+            "add_central",
+            json!({ "script": catalog::script("hrm_client").unwrap() }),
+        );
+        assert_eq!(added["result"]["isError"], false);
+        let text = added["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("pointed at"), "{text}");
+        assert!(text.contains("\"phase\": \"ready\""), "{text}");
+        assert!(text.contains("2A37"), "{text}");
+    }
+
+    #[test]
+    fn add_central_reports_a_failed_assertion_as_a_tool_error() {
+        // A client script is a test; if its assertions do not hold, the agent
+        // must be told so rather than reading a healthy-looking GATT dump.
+        let mut s = Server::default();
+        call(&mut s, "add_peripheral", json!({ "script": catalog::script("hrm").unwrap() }));
+        let added = call(
+            &mut s,
+            "add_central",
+            json!({ "script": r#"
+                let client = android::BluetoothGatt("Probe");
+                client.connect("AA:BB:CC:00:00:01");
+                fn on_services_discovered(client) {
+                    assert(client.services().len() == 99, "impossible service count");
+                }
+            "# }),
+        );
+        assert_eq!(added["result"]["isError"], true);
+        let text = added["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("impossible service count"), "{text}");
+    }
+
+    #[test]
+    fn add_central_is_refused_on_netsim_where_the_far_side_plays_the_central() {
+        let mut s = Server::default();
+        call(&mut s, "run_on", json!({ "target": "netsim" }));
+        let added = call(&mut s, "add_central", json!({ "script": "let c = 1;" }));
+        assert_eq!(added["result"]["isError"], true);
+        let text = added["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("self-mode only"), "{text}");
     }
 
     #[test]

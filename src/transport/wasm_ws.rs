@@ -39,7 +39,7 @@ pub use crate::gap::advertising::{build_adv_payload, build_adv_payload_with_extr
 use crate::l2cap::{AclReassembler, HciAclHeader, L2capHeader};
 use crate::packets::att::opcode as att_op;
 use crate::scripting::bindings::{dynamic_to_bytes, runtime_error};
-use crate::scripting::{ScriptGattServer, new_engine};
+use crate::scripting::{ScriptGattServer, ScriptedCentral, new_engine};
 use crate::types::{Address, AddressType, SimbleError, Uuid};
 use rhai::{AST, Array, Blob, CallFnOptions, Dynamic, Engine, EvalAltResult, Map, Scope};
 use serde::Serialize;
@@ -1719,6 +1719,9 @@ enum SceneRole {
     Scanner(Vec<ScanReport>),
     /// A central that connects to a peripheral and discovers its GATT.
     Central(Box<CentralDevice>),
+    /// A central whose behaviour is a Rhai script (`android::BluetoothGatt`).
+    /// Boxed for the same reason the peripheral is: it carries an engine.
+    ScriptedCentral(Box<ScriptedCentral>),
 }
 
 /// One device in a scene: the controller-side [`HciChannel`] it shares with the
@@ -1795,6 +1798,25 @@ impl SceneEngine {
         index
     }
 
+    /// Adds a *scripted* central at `address`: a Rhai script that builds an
+    /// `android::BluetoothGatt`, connects it and reacts in callbacks. Returns
+    /// its device index, or the script error.
+    ///
+    /// The script names its own target with `client.connect("AA:BB:…")`, so
+    /// unlike [`Self::add_central`] the scene does not supply one — the
+    /// script is the whole behaviour.
+    pub fn add_scripted_central(&mut self, address: Address, script: &str) -> Result<usize, String> {
+        let central = ScriptedCentral::run_script(script)?;
+        let channel = self.link.add_device(address);
+        let index = self.devices.len();
+        self.devices.push(SceneDevice {
+            channel,
+            role: SceneRole::ScriptedCentral(Box::new(central)),
+            started: false,
+        });
+        Ok(index)
+    }
+
     /// The number of devices in the scene.
     pub fn device_count(&self) -> usize {
         self.devices.len()
@@ -1810,7 +1832,10 @@ impl SceneEngine {
                 let _ = match &device.role {
                     SceneRole::Peripheral(p) => p.queue_start(&device.channel),
                     SceneRole::Scanner(_) => queue_scanner_start(&device.channel),
-                    SceneRole::Central(_) => Ok(()),
+                    // Both centrals queue their own bring-up: the scene one
+                    // in `produce`, the scripted one when its script called
+                    // `connect`.
+                    SceneRole::Central(_) | SceneRole::ScriptedCentral(_) => Ok(()),
                 };
                 device.started = true;
             }
@@ -1825,6 +1850,11 @@ impl SceneEngine {
                     }
                 }
                 SceneRole::Central(c) => c.produce(&device.channel),
+                SceneRole::ScriptedCentral(c) => {
+                    for packet in c.tick(t_seconds) {
+                        let _ = device.channel.inject_host_packet(packet);
+                    }
+                }
                 SceneRole::Scanner(_) => {}
             }
         }
@@ -1850,7 +1880,33 @@ impl SceneEngine {
                         c.consume(&device.channel, &pkt);
                     }
                 }
+                SceneRole::ScriptedCentral(c) => {
+                    while let Some(pkt) = device.channel.poll_controller_packet() {
+                        for out in c.on_packet(&pkt) {
+                            let _ = device.channel.inject_host_packet(out);
+                        }
+                    }
+                }
             }
+        }
+    }
+
+    /// The scripted central at `index`, or `None` if that device is something
+    /// else — the handle a host needs for its status, its emitted messages
+    /// and whether one of its `assert`s failed.
+    pub fn scripted_central(&self, index: usize) -> Option<&ScriptedCentral> {
+        match self.devices.get(index)?.role {
+            SceneRole::ScriptedCentral(ref c) => Some(c),
+            _ => None,
+        }
+    }
+
+    /// Mutable access to the scripted central at `index` (draining emitted
+    /// messages needs it).
+    pub fn scripted_central_mut(&mut self, index: usize) -> Option<&mut ScriptedCentral> {
+        match self.devices.get_mut(index)?.role {
+            SceneRole::ScriptedCentral(ref mut c) => Some(c),
+            _ => None,
         }
     }
 
@@ -1859,7 +1915,7 @@ impl SceneEngine {
     pub fn peripheral_status_json(&self, index: usize) -> Option<String> {
         match self.devices.get(index)?.role {
             SceneRole::Peripheral(ref p) => Some(p.status_json()),
-            SceneRole::Scanner(_) | SceneRole::Central(_) => None,
+            SceneRole::Scanner(_) | SceneRole::Central(_) | SceneRole::ScriptedCentral(_) => None,
         }
     }
 
@@ -1868,6 +1924,7 @@ impl SceneEngine {
     pub fn central_status_json(&self, index: usize) -> Option<String> {
         match self.devices.get(index)?.role {
             SceneRole::Central(ref c) => Some(c.status_json()),
+            SceneRole::ScriptedCentral(ref c) => Some(c.status_json()),
             SceneRole::Peripheral(_) | SceneRole::Scanner(_) => None,
         }
     }
@@ -3010,6 +3067,108 @@ mod web {
             let address = address.parse().map_err(js_error)?;
             let target = target.parse().map_err(js_error)?;
             Ok(self.scene.add_central(address, target))
+        }
+
+        /// Adds a *scripted* central at `address` — a Rhai script that builds
+        /// an `android::BluetoothGatt`, connects it, and reacts in callbacks.
+        /// Returns its device index, or the script/address error, so a page
+        /// can show a compile failure on the line that caused it.
+        pub fn add_scripted_central(
+            &mut self,
+            address: &str,
+            script: &str,
+        ) -> Result<usize, JsValue> {
+            let address = address.parse().map_err(js_error)?;
+            self.scene
+                .add_scripted_central(address, script)
+                .map_err(js_error)
+        }
+
+        /// Points scripted central `index` at `target`, overriding the address
+        /// its script named — for a page that allocates addresses itself.
+        pub fn scripted_central_set_target(
+            &mut self,
+            index: usize,
+            target: &str,
+        ) -> Result<(), JsValue> {
+            let target = target.parse().map_err(js_error)?;
+            match self.scene.scripted_central_mut(index) {
+                Some(central) => {
+                    central.set_target(target);
+                    Ok(())
+                }
+                None => Err(js_error("not a scripted central")),
+            }
+        }
+
+        /// Drains what scripted central `index` emitted with
+        /// `client.emit(kind, payload)` — the script's channel to the page.
+        pub fn scripted_central_emitted(&mut self, index: usize) -> js_sys::Array {
+            let out = js_sys::Array::new();
+            if let Some(central) = self.scene.scripted_central_mut(index) {
+                for message in central.take_emitted() {
+                    out.push(&JsValue::from_str(&message));
+                }
+            }
+            out
+        }
+
+        /// Queues a read on scripted central `index`, naming the
+        /// characteristic by UUID string (`"2A37"` or a full 128-bit UUID) —
+        /// what the discovered tree a page renders already holds.
+        pub fn scripted_central_read(&mut self, index: usize, uuid: &str) -> Result<(), JsValue> {
+            let uuid: crate::types::Uuid = uuid.parse().map_err(js_error)?;
+            match self.scene.scripted_central_mut(index) {
+                Some(central) => {
+                    central.read(uuid);
+                    Ok(())
+                }
+                None => Err(js_error("not a scripted central")),
+            }
+        }
+
+        /// Queues a write (Write Request) on scripted central `index`.
+        pub fn scripted_central_write(
+            &mut self,
+            index: usize,
+            uuid: &str,
+            value: Vec<u8>,
+        ) -> Result<(), JsValue> {
+            let uuid: crate::types::Uuid = uuid.parse().map_err(js_error)?;
+            match self.scene.scripted_central_mut(index) {
+                Some(central) => {
+                    central.write(uuid, value, true);
+                    Ok(())
+                }
+                None => Err(js_error("not a scripted central")),
+            }
+        }
+
+        /// Queues enabling (or disabling) notifications on scripted central
+        /// `index`.
+        pub fn scripted_central_subscribe(
+            &mut self,
+            index: usize,
+            uuid: &str,
+            enable: bool,
+        ) -> Result<(), JsValue> {
+            let uuid: crate::types::Uuid = uuid.parse().map_err(js_error)?;
+            match self.scene.scripted_central_mut(index) {
+                Some(central) => {
+                    central.subscribe(uuid, enable);
+                    Ok(())
+                }
+                None => Err(js_error("not a scripted central")),
+            }
+        }
+
+        /// The first error a scripted central's callbacks raised — a failed
+        /// `assert`, or an operation naming a characteristic the peer does not
+        /// have. `undefined` while the script is behaving.
+        pub fn scripted_central_failure(&self, index: usize) -> Option<String> {
+            self.scene
+                .scripted_central(index)
+                .and_then(|c| c.failure().map(str::to_string))
         }
 
         /// The discovered-GATT JSON of central `index` (`undefined` if not a

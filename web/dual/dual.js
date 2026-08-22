@@ -1,7 +1,12 @@
 // SimBLE Server + Client dual view. Two real devices share one in-page wasm
-// Link: a scripted peripheral (server) and a central (client) that connects to
-// it and discovers its GATT. The left panel renders the server's own database;
-// the right panel renders what the client discovered — the nRF-Connect flow.
+// Link, and **both are scripts**: a peripheral (android::BluetoothGattServer)
+// on the left, a central (android::BluetoothGatt) on the right. The left panel
+// renders the server's own database; the right renders what the client
+// discovered — the nRF-Connect flow.
+//
+// The client panel used to display the page's own WebLink calls, because
+// central-role scripting did not exist. It does now, so the panel is an
+// editor like the other one and the two halves are the same kind of thing.
 
 import init, { WebLink } from "../pkg/simble.js";
 import { renderGatt, nameFor, propChips, escapeHtml, decodeValue } from "../common/viewer.js";
@@ -46,7 +51,12 @@ const STYLE = `main { max-width: 78rem; margin: 0 auto; padding: 1rem 1.25rem 2r
   margin-left: 0.3rem; }
 .device header .icon:hover { color: var(--fg); border-color: var(--fg); }
 .device header .icon[aria-pressed="true"] { color: var(--fg); border-color: var(--fg); }
-#client-script-text { width: 100%; min-height: 8.5rem; }
+#client-script-text { width: 100%; height: 12rem; resize: vertical; background: var(--bg);
+  color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 0.6rem;
+  tab-size: 4; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+#client-log { margin-top: 0.4rem; max-height: 6rem; overflow-y: auto;
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim); }
+#client-log .bad { color: var(--bad, #b00); }
 .svc-head { background: #eaeef2; padding: 0.4rem 0.7rem; font-size: 0.85rem; font-weight: 500; }
   .svc-head .u { font-family: ui-monospace, Menlo, monospace; color: var(--dim); font-size: 0.76rem; margin-left: 0.4rem; }
   .chr { padding: 0.45rem 0.7rem; border-top: 1px solid var(--border); }
@@ -74,9 +84,10 @@ const STYLE = `main { max-width: 78rem; margin: 0 auto; padding: 1rem 1.25rem 2r
 const MARKUP = `<div class="domain-status"><span id="conn" class="pill">starting…</span></div>
 <p class="intro">This page runs <strong>two real SimBLE devices</strong> in the same tab, sharing one in-process
     <a href="../controllers/">in-browser controller</a> — no netsim. On the left, a <strong class="role" style="color:var(--good)">Server</strong>
-    (peripheral) defined by the editable Rhai script. On the right, a <strong style="color:var(--accent)">Client</strong>
-    (central) that connects to it and discovers its GATT, the way nRF Connect shows a connected device. What looks like
-    "a device and a UI" is really a peripheral and a central talking to each other.</p>
+    (peripheral) defined by an editable Rhai script. On the right, a <strong style="color:var(--accent)">Client</strong>
+    (central) defined by another one — <code>android::BluetoothGatt</code>, Android's client API — that connects,
+    discovers its GATT, and reacts in callbacks the way nRF Connect shows a connected device. What looks like
+    "a device and a UI" is really a peripheral and a central talking to each other, and both halves are editable.</p>
 
   <div class="two">
     <section class="device server">
@@ -100,16 +111,17 @@ const MARKUP = `<div class="domain-status"><span id="conn" class="pill">starting
     <section class="device client">
       <header>
         <span class="role"><i class="dot" id="client-dot"></i>Client</span>
-        <span class="kind">central · Rust, not scripted</span>
-        <button class="icon" id="client-pen" aria-pressed="false" title="Show or hide what the client is doing">✎</button>
+        <span class="kind">central · Rhai script</span>
+        <button class="icon" id="client-pen" aria-pressed="true" title="Show or hide the script">✎</button>
         <span class="addr" id="client-addr">—</span>
       </header>
       <div class="body">
-        <div id="client-script" hidden>
-          <textarea id="client-script-text" spellcheck="false" readonly></textarea>
-          <p class="hint"><strong>Not a script.</strong> The client is Rust (<code>CentralDevice</code>);
-             SimBLE has no central-role scripting. These are the real <code>WebLink</code> binding
-             calls this page issues, appended as they happen.</p>
+        <div id="client-script">
+          <textarea id="client-script-text" spellcheck="false"></textarea>
+          <p class="hint">Android's <code>BluetoothGatt</code> and its callbacks, in Rhai.
+             Press ▶ to run both devices with your edits. <code>assert(...)</code> inside a
+             callback makes this a test — a failure shows below.</p>
+          <div id="client-log"></div>
         </div>
         <div class="phase">Connection: <b id="client-phase">idle</b> · peer <span id="client-peer">—</span></div>
         <h2 class="sub">Discovered services (client view)</h2>
@@ -122,19 +134,30 @@ const $ = (id) => document.getElementById(id);
 const SERVER_ADDR = "AA:BB:CC:00:00:01";
 const CLIENT_ADDR = "AA:BB:CC:00:00:02";
 
-// NOT a script, and deliberately not written as one. The client is Rust --
-// CentralDevice -- and SimBLE has no central-role scripting, so any script
-// shown here would be an invented API that no one can run. What it shows
-// instead are the real binding calls this page makes, appended as they
-// happen, which is the linkage between a button and its effect.
-const CLIENT_TRACE_HEADER = `// The client is not scripted. It is CentralDevice (Rust), driven by this
-// page through the WebLink bindings below -- these are the real function
-// names, and each line is appended when the call is actually issued.
-//
-// On mount:
-link.add_central(CLIENT_ADDR, SERVER_ADDR);   // connect + discover
-//
-// From the discovered tree:
+// The client, as a script. Every call below exists -- this is the same
+// android::BluetoothGatt surface the MCP add_central tool and the interop
+// tests use, not an illustration.
+const DEFAULT_CLIENT_SCRIPT = `// The client: Android's BluetoothGatt, in Rhai.
+let client = android::BluetoothGatt("HRM Client");
+client.connect("${SERVER_ADDR}");
+
+// Discovery is what makes UUIDs usable, so subscribe from here rather than
+// at top level -- before it finishes the peer's handles are unknown.
+fn on_services_discovered(client) {
+    client.emit("log", "discovered " + client.services().len() + " services");
+    client.subscribe(uuid::HEART_RATE_MEASUREMENT);
+    client.read(uuid::BATTERY_LEVEL);
+}
+
+fn on_characteristic_read(client, uuid, value) {
+    // value is a blob; Battery Level is one byte of percent.
+    client.emit("log", "read " + uuid.to_string() + " = " + value[0]);
+}
+
+// assert() inside a callback is what makes a client script a test.
+fn on_characteristic_changed(client, uuid, value) {
+    assert(value[1] > 30 && value[1] < 220, "a plausible heart rate");
+}
 `;
 
 const DEFAULT_SCRIPT = `// The server the client will connect to and discover.
@@ -173,6 +196,8 @@ let serverIndex = 0;
 let clientIndex = 1;
 let t0 = performance.now();
 const prevValues = new Map();
+/// The last failure already written to the log, so it is not repeated.
+let reportedFailure = null;
 
 function setPill(text, cls) {
   const pill = $("conn");
@@ -198,7 +223,7 @@ function setRunning(on) {
 
 function startDevices() {
   try {
-    build(editor.value);
+    build(editor.value, clientEditor.value);
     setRunning(true);
     $("run-state").textContent = "running — client reconnecting";
     setTimeout(() => ($("run-state").textContent = ""), 2500);
@@ -220,23 +245,37 @@ function stopDevices() {
   $("client-phase").textContent = "idle";
 }
 
-/// Appends one line to the client's live transcript. The point of the panel
-/// is the linkage between a button and the call it makes, so a line only
-/// appears because an operation was actually issued.
-function traceClient(line) {
-  const box = $("client-script-text");
+/// Appends one line to the client's log — what the script emitted, and any
+/// error its callbacks raised.
+function logClient(text, bad) {
+  const box = $("client-log");
   if (!box) return;
-  box.value += line + "\n";
+  const line = document.createElement("div");
+  if (bad) line.className = "bad";
+  line.textContent = text;
+  box.append(line);
+  while (box.childElementCount > 200) box.firstElementChild.remove();
   box.scrollTop = box.scrollHeight;
 }
 
-function build(script) {
+function build(serverScript, clientScript) {
   if (link) { try { link.free(); } catch (_) { /* gone */ } }
   link = new WebLink();
-  serverIndex = link.add_peripheral(SERVER_ADDR, script);
-  clientIndex = link.add_central(CLIENT_ADDR, SERVER_ADDR);
+  serverIndex = link.add_peripheral(SERVER_ADDR, serverScript);
+  reportedFailure = null;
   t0 = performance.now();
   prevValues.clear();
+  $("client-log").innerHTML = "";
+  // A client script error belongs beside the client's editor, not in the
+  // server's status line: the message has to name the panel to fix. The
+  // server still runs, so a broken client script leaves a working device to
+  // reconnect to once it is fixed.
+  try {
+    clientIndex = link.add_scripted_central(CLIENT_ADDR, clientScript);
+  } catch (e) {
+    clientIndex = -1;
+    logClient(String(e), true);
+  }
   $("server-addr").textContent = SERVER_ADDR;
   $("client-addr").textContent = CLIENT_ADDR;
   $("client-gatt").innerHTML = '<p class="empty">Connecting…</p>';
@@ -268,11 +307,14 @@ function renderClient(status) {
       const valHtml = c.value
         ? `${decoded ? `<span class="decoded">${escapeHtml(decoded)}</span>` : ""}<span class="raw">${c.value}</span>`
         : `<span class="raw">— not read —</span>`;
+      // The script surface names characteristics by UUID, so the buttons do
+      // too — a click joins the same operation queue the script's own calls
+      // use, rather than a second path with its own ordering.
       const actions = [];
-      if (p & 0x02) actions.push(`<button data-op="read" data-h="${c.value_handle}">read ↓</button>`);
-      if (p & 0x0c) actions.push(`<button data-op="write" data-h="${c.value_handle}">write ↑</button>`);
+      if (p & 0x02) actions.push(`<button data-op="read" data-u="${c.uuid}">read ↓</button>`);
+      if (p & 0x0c) actions.push(`<button data-op="write" data-u="${c.uuid}">write ↑</button>`);
       if (p & 0x30) actions.push(
-        `<button data-op="sub" data-h="${c.value_handle}" class="${c.subscribed ? "on" : ""}">${c.subscribed ? "🔔 subscribed" : "subscribe 🔔"}</button>`);
+        `<button data-op="sub" data-u="${c.uuid}" class="${c.subscribed ? "on" : ""}">${c.subscribed ? "🔔 unsubscribe" : "subscribe 🔔"}</button>`);
       return `<div class="chr">
         <div class="chr-top">${nameHtml} ${propChips(p, c.subscribed)}
           <span class="chr-h">handle ${handle}</span></div>
@@ -284,15 +326,34 @@ function renderClient(status) {
   }).join("");
 }
 
-function loop() {
-  if (!link) return;
+/// Advances the link. Separate from `loop`, and much more often, because an
+/// ATT request and its response cross on successive ticks: at the rendering
+/// rate the client visibly crawls through a two-service database, and the
+/// cost of a tick is nothing beside the cost of re-rendering two panels.
+function pump() {
   if (!link) return;
   link.tick((performance.now() - t0) / 1000);
+}
+
+function loop() {
+  if (!link) return;
   try {
     const server = JSON.parse(link.peripheral_status_json(serverIndex));
     renderGatt($("server-gatt"), server, prevValues);
   } catch (e) { console.error("server render:", e); }
+  if (clientIndex < 0) return;
   try {
+    for (const message of link.scripted_central_emitted(clientIndex)) {
+      const { event, payload } = JSON.parse(message);
+      logClient(event === "log" ? String(payload) : `${event}: ${JSON.stringify(payload)}`);
+    }
+    // Sticky, so a failed assertion is reported once and stays readable
+    // rather than being redrawn every 100 ms.
+    const failure = link.scripted_central_failure(clientIndex);
+    if (failure && failure !== reportedFailure) {
+      reportedFailure = failure;
+      logClient(failure, true);
+    }
     const client = JSON.parse(link.central_status_json(clientIndex));
     renderClient(client);
     setPill(client.connected ? `client · ${client.phase}` : "client connecting…", client.connected ? "ok" : "");
@@ -303,8 +364,10 @@ function loop() {
 // --- lifecycle -------------------------------------------------------------
 
 let timer = null;
+let ticker = null;
 let container = null;
 let editor = null;
+let clientEditor = null;
 
 /// Builds the domain into `root` and starts it.
 export async function mount(root) {
@@ -326,20 +389,20 @@ export async function mount(root) {
   $("client-gatt").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-op]");
     if (!btn || !link) return;
-    const handle = parseInt(btn.dataset.h, 10);
+    const uuid = btn.dataset.u;
     if (btn.dataset.op === "read") {
-      link.central_read(clientIndex, handle);
-      traceClient(`link.central_read(clientIndex, 0x${handle.toString(16).padStart(4, "0")});`);
+      link.scripted_central_read(clientIndex, uuid);
+      logClient(`client.read(${uuid})`);
     } else if (btn.dataset.op === "sub") {
-      link.central_subscribe(clientIndex, handle);
-      traceClient(`link.central_subscribe(clientIndex, 0x${handle.toString(16).padStart(4, "0")});`);
+      const on = btn.classList.contains("on");
+      link.scripted_central_subscribe(clientIndex, uuid, !on);
+      logClient(`client.${on ? "unsubscribe" : "subscribe"}(${uuid})`);
     } else if (btn.dataset.op === "write") {
       const input = prompt("Bytes to write (hex, space-separated, e.g. 00 5A):", "00");
       if (input == null) return;
       const bytes = input.trim().split(/\s+/).map((x) => parseInt(x, 16)).filter((n) => !Number.isNaN(n));
-      link.central_write(clientIndex, handle, new Uint8Array(bytes));
-      traceClient(`link.central_write(clientIndex, 0x${handle.toString(16).padStart(4, "0")}, [${
-        bytes.map((b) => "0x" + b.toString(16).padStart(2, "0")).join(", ")}]);`);
+      link.scripted_central_write(clientIndex, uuid, new Uint8Array(bytes));
+      logClient(`client.write(${uuid}, [${bytes.map((b) => "0x" + b.toString(16).padStart(2, "0")).join(", ")}])`);
     }
   });
   $("run").addEventListener("click", () => (running ? stopDevices() : startDevices()));
@@ -354,9 +417,11 @@ export async function mount(root) {
     });
   }
 
-  $("client-script-text").value = CLIENT_TRACE_HEADER;
+  clientEditor = $("client-script-text");
+  clientEditor.value = DEFAULT_CLIENT_SCRIPT;
   startDevices();
   timer = setInterval(loop, 100);
+  ticker = setInterval(pump, 20);
 }
 
 /// Releases everything this domain owns: the shell hosts one domain at a
@@ -366,10 +431,15 @@ export function unmount() {
     clearInterval(timer);
     timer = null;
   }
+  if (ticker !== null) {
+    clearInterval(ticker);
+    ticker = null;
+  }
   try { link?.free(); } catch (_) { /* already gone */ }
   link = null;
   document.getElementById(STYLE_ID)?.remove();
   if (container) container.innerHTML = "";
   container = null;
   editor = null;
+  clientEditor = null;
 }

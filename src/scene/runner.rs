@@ -12,9 +12,11 @@
 //! scene is pumped between ticks, exactly as the MCP server's actor loop does.
 //!
 //! What a run *proves* is deliberately modest: every device compiled, came up,
-//! and reported no error. Assertions live in the device scripts (a failing
-//! `assert(...)` fails the script, and the device never instantiates), and
-//! nothing here invents a second place to put them.
+//! and reported no error. Assertions live in the scripts, and nothing here
+//! invents a second place to put them — in a peripheral's body a failing
+//! `assert(...)` stops the device instantiating, and in a scripted central's
+//! callbacks it fails the run, which is how a scene becomes a test rather
+//! than only a topology.
 
 use std::time::{Duration, Instant};
 
@@ -148,7 +150,28 @@ fn run_in_process(scene: &ResolvedScene, options: &RunOptions) -> Result<RunRepo
             Role::Central => {
                 // `resolve` has already proved a central has a target.
                 let (_, target) = device.target.as_ref().expect("central without a target");
-                engine.add_central(device.address, *target)
+                match device.script.as_deref() {
+                    // A central with a script is a *scripted* client
+                    // (`android::BluetoothGatt`): it connects, discovers and
+                    // asserts on its own, so a scene can be a test rather
+                    // than only a topology. Without one it is the built-in
+                    // discover-everything central.
+                    Some(script) => {
+                        let index = engine
+                            .add_scripted_central(device.address, script)
+                            .map_err(|e| {
+                                SceneError::device(&device.id, format!("client rejected: {e}"))
+                            })?;
+                        // The scene decides who talks to whom, so `target`
+                        // overrides the address the script named — a script
+                        // cannot know the addresses the scene allocated.
+                        if let Some(central) = engine.scripted_central_mut(index) {
+                            central.set_target(*target);
+                        }
+                        index
+                    }
+                    None => engine.add_central(device.address, *target),
+                }
             }
             _ => return Err(unsupported_role(device, Controller::InProcess)),
         };
@@ -167,7 +190,11 @@ fn run_in_process(scene: &ResolvedScene, options: &RunOptions) -> Result<RunRepo
         .iter()
         .zip(&indices)
         .map(|(device, &index)| {
-            let status = engine.peripheral_status_json(index);
+            // A central has no peripheral status; its own view is what says
+            // whether it connected and whether its assertions held.
+            let status = engine
+                .peripheral_status_json(index)
+                .or_else(|| engine.central_status_json(index));
             outcome(device, status.as_deref())
         })
         .collect();
@@ -225,8 +252,8 @@ fn run_on_netsim(scene: &ResolvedScene, options: &RunOptions) -> Result<RunRepor
     })
 }
 
-/// Reads a device's post-run status JSON into an outcome. Scanners and
-/// centrals have no peripheral status, which is not a failure.
+/// Reads a device's post-run status JSON into an outcome. A scanner has no
+/// status at all, which is not a failure.
 fn outcome(device: &Placement, status_json: Option<&str>) -> DeviceOutcome {
     let status: Option<serde_json::Value> =
         status_json.and_then(|s| serde_json::from_str(s).ok());
@@ -242,7 +269,10 @@ fn outcome(device: &Placement, status_json: Option<&str>) -> DeviceOutcome {
         role: device.role,
         address: device.address.to_string(),
         name: field("name").filter(|n| !n.is_empty()),
-        error: field("last_error"),
+        // `failure` first: on a scripted client it is the verdict (a failed
+        // `assert`) and it never clears, while `last_error` is only whatever
+        // the most recent callback did.
+        error: field("failure").or_else(|| field("last_error")),
         bonds_declared: device.bonded_peers(),
     }
 }
@@ -284,6 +314,66 @@ mod tests {
         assert!(report.ok(), "{report:?}");
         assert_eq!(report.devices.len(), 2);
         assert_eq!(report.devices[1].role, Role::Central);
+    }
+
+    #[test]
+    fn a_central_with_a_script_drives_the_peer_and_is_pointed_at_it_by_the_scene() {
+        // A scripted central makes a scene a test: the client asserts about
+        // the peer it was wired to. The script cannot know the address the
+        // scene allocated, so `target` overrides the one it names.
+        let scene = scene_from(
+            r#"{
+                 "version": 1,
+                 "devices": [
+                   { "id": "hr", "device": "hrm" },
+                   { "id": "phone", "role": "central", "target": "hr",
+                     "device": "hrm_client" }
+                 ]
+               }"#,
+        );
+        let report = run(
+            &scene,
+            &RunOptions {
+                seconds: 4.0,
+                tick_ms: 50,
+            },
+        )
+        .unwrap();
+        assert!(report.ok(), "{report:?}");
+        assert_eq!(report.devices[1].name.as_deref(), Some("HRM Client"));
+    }
+
+    #[test]
+    fn a_failing_assertion_in_a_client_callback_fails_the_run() {
+        // The assertion runs *during* the run, not at instantiation — the
+        // client only learns what the peer has after discovery — so the
+        // verdict has to survive to the report.
+        let scene = scene_from(
+            r#"{
+                 "version": 1,
+                 "devices": [
+                   { "id": "hr", "device": "hrm" },
+                   { "id": "phone", "role": "central", "target": "hr",
+                     "script": "let c = android::BluetoothGatt(\"Strict\"); c.connect(\"AA:BB:CC:00:00:01\"); fn on_services_discovered(client) { assert(client.services().len() == 99, \"impossible service count\"); }" }
+                 ]
+               }"#,
+        );
+        let report = run(
+            &scene,
+            &RunOptions {
+                seconds: 4.0,
+                tick_ms: 50,
+            },
+        )
+        .unwrap();
+        assert!(!report.ok(), "the run must fail: {report:?}");
+        assert!(
+            report.devices[1]
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("impossible service count")),
+            "{report:?}"
+        );
     }
 
     #[test]

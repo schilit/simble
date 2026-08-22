@@ -14,7 +14,9 @@
 // value, and a color picker writes new values into the device's own GATT
 // database via the host set_value path — so the bulb changes here AND a
 // connected central is notified. The script is the device; the page supplies
-// the "write" a phone app would send (central-role scripting doesn't exist yet).
+// the "write" a phone app would send. (A scripted central could send a real
+// one -- android::BluetoothGatt, as the Generic domain does -- but the point
+// here is the bulb, so the picker writes the device's own database directly.)
 
 import init, { WebPeripheral, WebLink } from "../pkg/simble.js";
 import { renderGatt } from "../common/viewer.js";
@@ -69,8 +71,9 @@ const MARKUP = `<div class="domain-status"><span id="conn" class="pill">starting
       (Magic-Blue-style). The picker writes the value into the device's live GATT database via the
       host <code>set_value</code> path — the same one the script's <code>update_value</code> uses — so
       you see the bulb change here <strong>and</strong> any connected central is notified of the new
-      color. (The script is the peripheral; central-role scripting doesn't exist yet, so the page
-      supplies the "write" a phone app would send.)
+      color. (The script is the peripheral, and the page supplies the "write" a phone app would
+      send. To send a <em>real</em> one, script a central with <code>android::BluetoothGatt</code> —
+      the <a href="../devices/#generic">Generic</a> domain does.)
     </p>
     <p class="hint" id="mode-hint" style="margin-top:0.5rem"></p>
     <div id="script-error" class="error"></div>

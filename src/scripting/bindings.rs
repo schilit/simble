@@ -689,6 +689,11 @@ fn register_android_module(engine: &mut Engine, events: SessionEvents) {
         },
     );
 
+    // The client half lives in its own module but shares the `android`
+    // namespace: `android::BluetoothGatt` sits beside
+    // `android::BluetoothGattServer`, as it does on Android.
+    super::client::register(engine, &mut android);
+
     engine.register_static_module("android", android.into());
 }
 
