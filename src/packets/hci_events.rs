@@ -199,6 +199,21 @@ pub struct LeCisEstablishedPrefix {
     pub cis_connection_handle: U16,
 }
 
+/// The fixed part of a Command Complete event (Vol 4, Part E, Section
+/// 7.7.14). The return parameters that follow are command-specific — LE Set
+/// CIG Parameters answers with the CIS handles a central then creates
+/// streams on, which is the only way to learn them.
+#[repr(C)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
+)]
+pub struct CommandCompletePrefix {
+    /// How many further command packets the controller can accept.
+    pub num_hci_command_packets: u8,
+    /// Which command completed.
+    pub command_opcode: U16,
+}
+
 /// The fixed part of one LE Advertising Report (Vol 4, Part E, Section
 /// 7.7.65.2); the AD data and a trailing RSSI byte follow it.
 #[repr(C)]
@@ -286,6 +301,14 @@ pub enum HciEvent<'a> {
     ConnectionRequest(&'a ConnectionRequest),
     /// Connection Complete (BR/EDR).
     ConnectionComplete(&'a ConnectionComplete),
+    /// Command Complete, split into its fixed header and the completed
+    /// command's own return parameters.
+    CommandComplete {
+        /// Which command completed, and the controller's command credit.
+        header: &'a CommandCompletePrefix,
+        /// Return parameters, whose layout depends on the opcode.
+        return_parameters: &'a [u8],
+    },
     /// Any other event, with its raw parameters (LE Meta events keep their
     /// subevent code as the first parameter byte).
     Other {
@@ -321,6 +344,14 @@ impl<'a> HciEvent<'a> {
                 ),
                 _ => Self::Other { code, parameters },
             },
+            event_code::COMMAND_COMPLETE => {
+                let (header, return_parameters) =
+                    CommandCompletePrefix::ref_from_prefix(parameters).ok()?;
+                Self::CommandComplete {
+                    header,
+                    return_parameters,
+                }
+            }
             event_code::ENCRYPTION_CHANGE => {
                 Self::EncryptionChange(EncryptionChange::ref_from_prefix(parameters).ok()?.0)
             }
@@ -425,8 +456,30 @@ mod tests {
         assert!(HciEvent::parse_h4(&[0x02, 0x40, 0x00]).is_none());
         // Unknown event code still parses, as Other.
         assert!(matches!(
-            HciEvent::parse_h4(&[0x04, 0x0E, 0x01, 0x01]),
-            Some(HciEvent::Other { code: 0x0E, .. })
+            HciEvent::parse_h4(&[0x04, 0x7F, 0x01, 0x01]),
+            Some(HciEvent::Other { code: 0x7F, .. })
         ));
+        // A Command Complete too short to hold its own header is rejected
+        // rather than read as an opcode that isn't there.
+        assert!(HciEvent::parse_h4(&[0x04, 0x0E, 0x01, 0x01]).is_none());
+    }
+
+    #[test]
+    fn test_command_complete_splits_header_from_return_parameters() {
+        // LE Set CIG Parameters completing: one command credit, opcode
+        // 0x2062, then status / CIG_ID / CIS_Count / one CIS handle.
+        let packet = [
+            0x04, 0x0E, 0x08, 0x01, 0x62, 0x20, 0x00, 0x01, 0x01, 0x00, 0x0E,
+        ];
+        let Some(HciEvent::CommandComplete {
+            header,
+            return_parameters,
+        }) = HciEvent::parse_h4(&packet)
+        else {
+            panic!("expected a Command Complete");
+        };
+        assert_eq!(header.command_opcode.get(), 0x2062);
+        assert_eq!(header.num_hci_command_packets, 1);
+        assert_eq!(return_parameters, &[0x00, 0x01, 0x01, 0x00, 0x0E]);
     }
 }

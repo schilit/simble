@@ -7,6 +7,7 @@ pub(crate) mod att_server;
 pub(crate) mod bond_store;
 pub(crate) mod connection;
 pub mod classic_host;
+pub mod cis_central;
 pub mod host;
 pub(crate) mod observer;
 pub(crate) mod virtual_device;
@@ -15,6 +16,7 @@ pub use bond_store::{BondSecurity, BondStore, MemoryBondStore};
 pub use classic_host::{
     ClassicHost, ProtocolHandler, RfcommHandler, RfcommPort, SdpHandler, SharedRfcommPort,
 };
+pub use cis_central::{CisCentral, CisConfig, CisState};
 pub use host::LeHost;
 pub use connection::{ConnectionRole, ConnectionState, PrepareWriteChunk};
 pub use observer::{AttServerObserver, SubscriptionReason};

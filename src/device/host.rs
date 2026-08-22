@@ -21,7 +21,7 @@ use crate::types::{Address, AddressType, SimbleError};
 use zerocopy::IntoBytes;
 
 /// HCI command opcodes this host issues (Vol 4, Part E, Section 7.8).
-mod opcode {
+pub(crate) mod opcode {
     /// Reset.
     pub const RESET: [u8; 2] = [0x03, 0x0C];
     /// Set Event Mask.
@@ -42,6 +42,11 @@ mod opcode {
     pub const LE_LTK_REQUEST_NEGATIVE_REPLY: [u8; 2] = [0x1B, 0x20];
     /// LE Accept CIS Request.
     pub const LE_ACCEPT_CIS_REQUEST: [u8; 2] = [0x66, 0x20];
+    /// LE Set CIG Parameters — a central defines the isochronous group and
+    /// learns the CIS handles it may then create streams on.
+    pub const LE_SET_CIG_PARAMETERS: [u8; 2] = [0x62, 0x20];
+    /// LE Create CIS — a central opens the stream to a peer's ACL link.
+    pub const LE_CREATE_CIS: [u8; 2] = [0x64, 0x20];
     /// LE Setup ISO Data Path.
     pub const LE_SETUP_ISO_DATA_PATH: [u8; 2] = [0x6E, 0x20];
     /// LE Set Host Feature.
@@ -49,7 +54,7 @@ mod opcode {
 }
 
 /// LE host feature bit numbers (Assigned Numbers, "LE Host Feature Bits").
-mod le_host_feature {
+pub(crate) mod le_host_feature {
     /// Connected Isochronous Stream, Host Support. A controller refuses
     /// LE Create CIS with Command Disallowed until both hosts have set
     /// this — which is why a CIS cannot be opened to a device that never
@@ -58,11 +63,8 @@ mod le_host_feature {
 }
 
 /// Data path directions for LE Setup ISO Data Path (Vol 4, Part E, 7.8.109).
-mod iso_data_path {
-    /// Host to Controller — the device is a source. Unused while simble's
-    /// devices are sinks; kept so the source direction is named rather than
-    /// re-derived when a scripted microphone or broadcast source lands.
-    #[allow(dead_code)]
+pub(crate) mod iso_data_path {
+    /// Host to Controller — the device is a source, sending audio.
     pub const INPUT: u8 = 0x00;
     /// Controller to Host — the device is a sink, receiving audio.
     pub const OUTPUT: u8 = 0x01;
