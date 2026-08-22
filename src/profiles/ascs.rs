@@ -476,7 +476,7 @@ impl AudioStreamControlService {
 
         let mut ases = Vec::with_capacity(sink_ase_ids.len() + source_ase_ids.len());
         for &ase_id in sink_ase_ids {
-            let (_, value_handle) = db.add_characteristic(
+            let (_, value_handle) = db.add_characteristic_with_cccd(
                 ascs_uuid::SINK_ASE,
                 CharacteristicProperties(
                     CharacteristicProperties::READ | CharacteristicProperties::NOTIFY,
@@ -491,7 +491,7 @@ impl AudioStreamControlService {
             ));
         }
         for &ase_id in source_ase_ids {
-            let (_, value_handle) = db.add_characteristic(
+            let (_, value_handle) = db.add_characteristic_with_cccd(
                 ascs_uuid::SOURCE_ASE,
                 CharacteristicProperties(
                     CharacteristicProperties::READ | CharacteristicProperties::NOTIFY,
@@ -506,7 +506,7 @@ impl AudioStreamControlService {
             ));
         }
 
-        let (control_point_handle, control_point_value_handle) = db.add_characteristic(
+        let (control_point_handle, control_point_value_handle) = db.add_characteristic_with_cccd(
             ascs_uuid::ASE_CONTROL_POINT,
             CharacteristicProperties(
                 CharacteristicProperties::WRITE

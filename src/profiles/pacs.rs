@@ -56,16 +56,27 @@ impl PublishedAudioCapabilitiesService {
     pub fn register(db: &mut GattDatabase, sink_location: u32, source_location: u32) -> Self {
         let service_handle = db.add_service(pacs_uuid::PACS_SERVICE, true);
 
-        // 1. Sink PAC (0x2BC9) - LC3 audio codec record (Codec ID 0x06 = LC3)
-        // 1 record: Codec ID (5 bytes: 0x06 LC3), Cap length, Caps, Metadata length, Metadata
+        // 1. Sink PAC (0x2BC9) — one LC3 PAC record.
+        //
+        // The codec-specific capabilities are four LTV structures (BAP
+        // Table 3.4 / Assigned Numbers "Codec_Specific_Capabilities"):
+        // Supported_Sampling_Frequencies, _Frame_Durations,
+        // Audio_Channel_Counts and _Octets_Per_Codec_Frame. All four are
+        // mandatory for LC3 — a record carrying only the frequency bitmap
+        // is accepted by lenient clients but rejected by a real Android
+        // stack, which then never offers the device as an audio output.
         let pac_record = vec![
-            0x01, // 1 PAC Record
+            0x01, // 1 PAC record
             0x06, 0x00, 0x00, 0x00, 0x00, // Coding format: LC3 (0x06)
-            0x04, // Codec Specific Caps length (4 bytes)
-            0x03, 0x01, 0x14, 0x00, // Sampling frequency: 16 kHz (bit 2) + 48 kHz (bit 4)
-            0x00, // Metadata length: 0
+            0x10, // Codec-specific capabilities length (16 bytes)
+            0x03, 0x01, 0x14, 0x00, // Sampling frequencies: 16 kHz | 48 kHz
+            0x02, 0x02, 0x03, // Frame durations: 7.5 ms | 10 ms
+            0x02, 0x03, 0x01, // Audio channel counts: 1
+            0x05, 0x04, 0x1A, 0x00, 0x78, 0x00, // Octets per frame: 26..120
+            0x04, // Metadata length
+            0x03, 0x02, 0x06, 0x00, // Preferred contexts: conversational | media
         ];
-        let (_, sink_pac_value_handle) = db.add_characteristic(
+        let (_, sink_pac_value_handle) = db.add_characteristic_with_cccd(
             pacs_uuid::SINK_PAC,
             CharacteristicProperties(
                 CharacteristicProperties::READ | CharacteristicProperties::NOTIFY,
@@ -75,7 +86,7 @@ impl PublishedAudioCapabilitiesService {
         );
 
         // 2. Sink Audio Locations (0x2BCA) - Read | Notify
-        let (_, sink_locations_value_handle) = db.add_characteristic(
+        let (_, sink_locations_value_handle) = db.add_characteristic_with_cccd(
             pacs_uuid::SINK_AUDIO_LOCATIONS,
             CharacteristicProperties(
                 CharacteristicProperties::READ | CharacteristicProperties::NOTIFY,
@@ -85,7 +96,7 @@ impl PublishedAudioCapabilitiesService {
         );
 
         // 3. Source PAC (0x2BCB)
-        let (_, source_pac_value_handle) = db.add_characteristic(
+        let (_, source_pac_value_handle) = db.add_characteristic_with_cccd(
             pacs_uuid::SOURCE_PAC,
             CharacteristicProperties(
                 CharacteristicProperties::READ | CharacteristicProperties::NOTIFY,
@@ -95,7 +106,7 @@ impl PublishedAudioCapabilitiesService {
         );
 
         // 4. Source Audio Locations (0x2BCC)
-        let (_, source_locations_value_handle) = db.add_characteristic(
+        let (_, source_locations_value_handle) = db.add_characteristic_with_cccd(
             pacs_uuid::SOURCE_AUDIO_LOCATIONS,
             CharacteristicProperties(
                 CharacteristicProperties::READ | CharacteristicProperties::NOTIFY,
@@ -105,7 +116,7 @@ impl PublishedAudioCapabilitiesService {
         );
 
         // 5. Available Audio Contexts (0x2BCD) - Context bits: Media (0x0002), Conversational (0x0004)
-        let (_, available_contexts_value_handle) = db.add_characteristic(
+        let (_, available_contexts_value_handle) = db.add_characteristic_with_cccd(
             pacs_uuid::AVAILABLE_AUDIO_CONTEXTS,
             CharacteristicProperties(
                 CharacteristicProperties::READ | CharacteristicProperties::NOTIFY,
@@ -115,7 +126,7 @@ impl PublishedAudioCapabilitiesService {
         );
 
         // 6. Supported Audio Contexts (0x2BCE)
-        let (_, supported_contexts_value_handle) = db.add_characteristic(
+        let (_, supported_contexts_value_handle) = db.add_characteristic_with_cccd(
             pacs_uuid::SUPPORTED_AUDIO_CONTEXTS,
             CharacteristicProperties(
                 CharacteristicProperties::READ | CharacteristicProperties::NOTIFY,

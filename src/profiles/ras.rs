@@ -58,15 +58,16 @@ impl RangingService {
         );
 
         // 2. Real-Time Ranging Data (0x2B70) - Notify
-        let (realtime_data_handle, realtime_data_value_handle) = db.add_characteristic(
-            ras_uuid::RANGING_REALTIME_DATA,
-            CharacteristicProperties(CharacteristicProperties::NOTIFY),
-            vec![0x00; 8],
-            AttributePermissions::default(),
-        );
+        let (realtime_data_handle, realtime_data_value_handle) = db
+            .add_characteristic_with_cccd(
+                ras_uuid::RANGING_REALTIME_DATA,
+                CharacteristicProperties(CharacteristicProperties::NOTIFY),
+                vec![0x00; 8],
+                AttributePermissions::default(),
+            );
 
         // 3. Ranging Control Point (0x2B72) - Write | Indicate
-        let (control_point_handle, control_point_value_handle) = db.add_characteristic(
+        let (control_point_handle, control_point_value_handle) = db.add_characteristic_with_cccd(
             ras_uuid::RANGING_CONTROL_POINT,
             CharacteristicProperties(
                 CharacteristicProperties::WRITE | CharacteristicProperties::INDICATE,

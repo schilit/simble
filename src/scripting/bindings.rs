@@ -21,6 +21,7 @@ use crate::android::gatt_service::{
     BluetoothGattCharacteristic, BluetoothGattDescriptor, BluetoothGattService,
 };
 use crate::device::VirtualDevice;
+use crate::gap::advertising::AdvertisingData;
 use crate::types::{Address, AddressType, Uuid};
 
 /// One recorded callback event, as plain owned data — every field is `Send`
@@ -50,6 +51,12 @@ pub struct ScriptEvent {
     pub mtu: Option<i32>,
     /// Whether a write event expects a response, if applicable.
     pub response_needed: Option<bool>,
+    /// Free-form payload for host-pushed events (a UI action, a simulated
+    /// condition), as a JSON object. Kept as a string rather than a
+    /// `rhai::Map` because `ScriptEvent` must stay `Send` (it is produced
+    /// inside the `Send` callback); it becomes real Dynamic values in
+    /// `into_map`, and its keys merge in so `event.action` reads naturally.
+    pub extra: Option<String>,
 }
 
 impl ScriptEvent {
@@ -65,7 +72,17 @@ impl ScriptEvent {
             status: None,
             mtu: None,
             response_needed: None,
+            extra: None,
         }
+    }
+
+    /// An event pushed in from outside the stack — a UI control, a test, a
+    /// host simulating a condition. `kind` is what the script matches on
+    /// (`event.event == "ui"`), `payload` is merged in alongside.
+    pub fn custom(kind: &str, server: &str, payload_json: String) -> Self {
+        let mut event = Self::new(kind, server);
+        event.extra = Some(payload_json);
+        event
     }
 
     /// Converts to the object-map shape scripts see (`event.uuid`,
@@ -98,6 +115,16 @@ impl ScriptEvent {
         }
         if let Some(response_needed) = self.response_needed {
             map.insert("response_needed".into(), Dynamic::from(response_needed));
+        }
+        // Payload keys last: a host-pushed event owns its own vocabulary.
+        // A payload that isn't a JSON object (or doesn't parse) is dropped
+        // rather than corrupting the event's shape.
+        if let Some(extra) = self.extra
+            && let Ok(value) = serde_json::from_str::<serde_json::Value>(&extra)
+            && let Ok(dynamic) = rhai::serde::to_dynamic(value)
+            && let Some(payload) = dynamic.try_cast::<Map>()
+        {
+            map.extend(payload);
         }
         map
     }
@@ -239,6 +266,9 @@ impl BluetoothGattServerCallback for QueueCallback {
 pub struct ScriptGattServer {
     inner: Rc<RefCell<BluetoothGattServer>>,
     events: SessionEvents,
+    /// Messages the script has emitted for the host/page, as JSON strings.
+    /// The return path of the event channel: `server.emit(kind, payload)`.
+    emitted: Rc<RefCell<Vec<String>>>,
 }
 
 impl ScriptGattServer {
@@ -254,6 +284,7 @@ impl ScriptGattServer {
                 Box::new(callback),
             ))),
             events,
+            emitted: Rc::new(RefCell::new(Vec::new())),
         }
     }
 
@@ -269,9 +300,31 @@ impl ScriptGattServer {
         self.inner.borrow().device.name.clone()
     }
 
+    /// Queues an event for this server's script, as if the stack had raised
+    /// it. Delivered on the next dispatch (see `ScriptedPeripheral`).
+    pub fn push_event(&self, kind: &str, payload_json: String) {
+        let event = ScriptEvent::custom(kind, &self.name(), payload_json);
+        self.events.lock().unwrap().push_back(event);
+    }
+
+    /// Records a message the script emitted for the host.
+    pub fn push_emitted(&self, message: String) {
+        const MAX_EMITTED: usize = 512;
+        let mut queue = self.emitted.borrow_mut();
+        if queue.len() >= MAX_EMITTED {
+            queue.remove(0);
+        }
+        queue.push(message);
+    }
+
+    /// Drains what the script has emitted for the host, oldest first.
+    pub fn take_emitted(&self) -> Vec<String> {
+        std::mem::take(&mut *self.emitted.borrow_mut())
+    }
+
     /// Drains only this server's events, leaving other servers' events
     /// queued (one session queue serves all servers; see `SessionEvents`).
-    fn take_own_events(&self) -> Array {
+    pub fn take_own_events(&self) -> Array {
         let name = self.name();
         let mut queue = self.events.lock().unwrap();
         let mut own = Array::new();
@@ -516,6 +569,63 @@ fn register_types(engine: &mut Engine) {
                     &dynamic_to_bytes(value)?,
                 );
                 Ok(())
+            },
+        )
+        .register_fn(
+            // Stages 16-bit Service Data for the device's advertisement (the
+            // beacon idiom: Fast Pair, Eddystone, Quick Share nudges). Folded
+            // into the on-air payload at bring-up.
+            "advertise_service_data",
+            |server: &mut ScriptGattServer,
+             uuid16: i64,
+             data: Dynamic|
+             -> Result<(), Box<EvalAltResult>> {
+                let uuid16 = u16::try_from(uuid16).map_err(|_| {
+                    runtime_error(format!("advertise_service_data: not a 16-bit uuid: {uuid16}"))
+                })?;
+                let bytes = dynamic_to_bytes(data)?;
+                server.with_server(|s| {
+                    s.device
+                        .advertising_data
+                        .get_or_insert_with(AdvertisingData::new)
+                        .service_data_16
+                        .push((uuid16, bytes.clone()));
+                });
+                Ok(())
+            },
+        )
+        .register_fn(
+            // Stages manufacturer-specific data (company ID + payload) for
+            // the device's advertisement.
+            "advertise_manufacturer_data",
+            |server: &mut ScriptGattServer,
+             company_id: i64,
+             data: Dynamic|
+             -> Result<(), Box<EvalAltResult>> {
+                let company_id = u16::try_from(company_id).map_err(|_| {
+                    runtime_error(format!(
+                        "advertise_manufacturer_data: not a 16-bit company id: {company_id}"
+                    ))
+                })?;
+                let bytes = dynamic_to_bytes(data)?;
+                server.with_server(|s| {
+                    let staged = s
+                        .device
+                        .advertising_data
+                        .get_or_insert_with(AdvertisingData::new);
+                    *staged = staged.clone().with_manufacturer_data(company_id, &bytes);
+                });
+                Ok(())
+            },
+        )
+        .register_fn(
+            // Marks the device a pure beacon: it advertises non-connectable
+            // (ADV_NONCONN_IND), so scanners show it as a broadcast-only
+            // beacon and never offer a connect — what real iBeacon /
+            // Eddystone / Quick Share nudge advertisers do.
+            "advertise_connectable",
+            |server: &mut ScriptGattServer, connectable: bool| {
+                server.with_server(|s| s.device.connectable = connectable);
             },
         )
         .register_fn("take_events", |server: &mut ScriptGattServer| {
