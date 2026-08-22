@@ -6,10 +6,14 @@
 pub(crate) mod att_server;
 pub(crate) mod bond_store;
 pub(crate) mod connection;
+pub mod classic_host;
+pub mod host;
 pub(crate) mod observer;
 pub(crate) mod virtual_device;
 
 pub use bond_store::{BondSecurity, BondStore, MemoryBondStore};
+pub use classic_host::{ClassicHost, ProtocolHandler, SdpHandler};
+pub use host::LeHost;
 pub use connection::{ConnectionRole, ConnectionState, PrepareWriteChunk};
 pub use observer::{AttServerObserver, SubscriptionReason};
 pub use virtual_device::VirtualDevice;

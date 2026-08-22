@@ -66,7 +66,7 @@ impl VirtualDevice {
                 for (handle, uuid) in info {
                     if (format == 0x01 && uuid.len() == 2) || (format == 0x02 && uuid.len() == 16) {
                         resp.extend_from_slice(&handle.to_le_bytes());
-                        resp.extend_from_slice(&uuid.to_128_bit_bytes()[..uuid.len()]);
+                        resp.extend_from_slice(&uuid.to_att_bytes());
                     }
                 }
 
@@ -181,6 +181,15 @@ impl VirtualDevice {
             } => {
                 let start_handle = header.start_handle.get();
                 let end_handle = header.end_handle.get();
+                // ATT 3.4.4.9: an invalid handle range gets an Error Response,
+                // and a walking client treats it as end-of-discovery.
+                if start_handle == 0 || start_handle > end_handle {
+                    return Ok(Some(att_error(
+                        opcode::READ_BY_GROUP_TYPE_REQ,
+                        start_handle,
+                        error_code::INVALID_HANDLE,
+                    )));
+                }
                 let Some(uuid) = Uuid::from_bytes(group_type_bytes) else {
                     return Ok(Some(att_error(
                         opcode::READ_BY_GROUP_TYPE_REQ,
@@ -198,14 +207,23 @@ impl VirtualDevice {
                     )));
                 }
 
+                // Every entry in one Attribute Data List must be the same
+                // length (Core Spec Vol 3, Part F, 3.4.4.10). A 16-bit
+                // service followed by a 128-bit one must therefore stop at
+                // the boundary; the client re-requests from the last handle
+                // it saw. Emitting both under one length header makes the
+                // client slice a 128-bit UUID into phantom 16-bit services.
+                let value_len = matches[0].1.len();
                 let mut resp = Vec::new();
                 resp.push(opcode::READ_BY_GROUP_TYPE_RSP);
-                let item_len = 4 + matches[0].1.len();
-                resp.push(item_len as u8);
+                resp.push((4 + value_len) as u8);
 
                 for (handle, value) in matches {
+                    if value.len() != value_len {
+                        break;
+                    }
                     resp.extend_from_slice(&handle.to_le_bytes());
-                    resp.extend_from_slice(&0xFFFFu16.to_le_bytes());
+                    resp.extend_from_slice(&self.gatt_db.group_end_handle(handle).to_le_bytes());
                     resp.extend_from_slice(value);
                 }
 
@@ -214,6 +232,14 @@ impl VirtualDevice {
             AttPdu::ReadByTypeReq { header, uuid_bytes } => {
                 let start_handle = header.start_handle.get();
                 let end_handle = header.end_handle.get();
+                // ATT 3.4.4.1: same invalid-range rule as Read By Group Type.
+                if start_handle == 0 || start_handle > end_handle {
+                    return Ok(Some(att_error(
+                        opcode::READ_BY_TYPE_REQ,
+                        start_handle,
+                        error_code::INVALID_HANDLE,
+                    )));
+                }
                 let Some(uuid) = Uuid::from_bytes(uuid_bytes) else {
                     return Ok(Some(att_error(
                         opcode::READ_BY_TYPE_REQ,
@@ -231,12 +257,19 @@ impl VirtualDevice {
                     )));
                 }
 
+                // Same equal-length rule as Read By Group Type (Core Spec
+                // Vol 3, Part F, 3.4.4.2): a characteristic declaration with
+                // a 128-bit UUID is longer than a 16-bit one, so the list
+                // stops at the first entry of a different size.
+                let value_len = matches[0].1.len();
                 let mut resp = Vec::new();
                 resp.push(opcode::READ_BY_TYPE_RSP);
-                let item_len = 2 + matches[0].1.len();
-                resp.push(item_len as u8);
+                resp.push((2 + value_len) as u8);
 
                 for (handle, value) in matches {
+                    if value.len() != value_len {
+                        break;
+                    }
                     resp.extend_from_slice(&handle.to_le_bytes());
                     resp.extend_from_slice(value);
                 }

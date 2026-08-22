@@ -171,6 +171,25 @@ impl Address {
         &self.bytes
     }
 
+    /// The address as netsim wants it in a connection URI: colon-separated
+    /// hex, **least-significant byte first**.
+    ///
+    /// netsim reads the `address=` query parameter LSB-first, so a URI
+    /// written in display order puts the address on the air reversed — the
+    /// device is then unreachable, and SMP computes with an identity that
+    /// does not match the air. This bit us three separate times (the native
+    /// netsim path, the browser path, and a Classic example), so the
+    /// conversion lives here once.
+    pub fn to_netsim_wire_string(&self) -> String {
+        // `bytes` is already stored least-significant-first, so this is a
+        // straight walk — no reversal.
+        self.bytes
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect::<Vec<_>>()
+            .join(":")
+    }
+
     /// Returns the address in big-endian byte array.
     pub fn to_be_bytes(&self) -> [u8; 6] {
         [
@@ -321,6 +340,21 @@ impl Uuid {
             Some(Self::Uuid128(b))
         } else {
             None
+        }
+    }
+
+    /// The UUID as it appears on the wire in an ATT PDU: two little-endian
+    /// bytes for a 16-bit UUID, sixteen for a 128-bit one — the exact
+    /// inverse of [`Self::from_bytes`].
+    ///
+    /// Note this is **not** `to_128_bit_bytes()[..len()]`: the 128-bit form
+    /// carries a 16-bit UUID at offset 12, so truncating from the front
+    /// yields the tail of the Bluetooth base UUID (`…9b34fb`) instead of the
+    /// UUID itself.
+    pub fn to_att_bytes(&self) -> Vec<u8> {
+        match self {
+            Self::Uuid16(val) => val.to_le_bytes().to_vec(),
+            Self::Uuid128(bytes) => bytes.to_vec(),
         }
     }
 
@@ -511,4 +545,19 @@ impl fmt::Display for GapDataType {
             _ => write!(f, "Unknown ({:#04X})", self.0),
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    /// netsim wants the address least-significant byte first; getting this
+    /// backwards makes a device unreachable and breaks SMP, which is why it
+    /// has its own test.
+    #[test]
+    fn test_netsim_wire_string_is_lsb_first() {
+        let address: Address = "CC:1E:57:00:00:06".parse().unwrap();
+        assert_eq!(address.to_netsim_wire_string(), "06:00:00:57:1E:CC");
+        assert_eq!(address.to_string(), "CC:1E:57:00:00:06", "display unchanged");
+    }
+
 }

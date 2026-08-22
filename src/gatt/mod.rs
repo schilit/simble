@@ -4,6 +4,7 @@
 //! GATT (Generic Attribute Profile) Server Database and handle management.
 
 pub mod database;
+pub mod sig_names;
 
 pub use database::{
     Attribute, AttributePermissions, CharacteristicProperties, GattDatabase, desc_uuid,

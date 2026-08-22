@@ -369,6 +369,55 @@ impl GattDatabase {
         Ok(&attr.value[offset..])
     }
 
+    /// Adds a characteristic together with the Client Characteristic
+    /// Configuration descriptor its properties require.
+    ///
+    /// A characteristic that declares Notify or Indicate is useless without
+    /// a CCCD — a client has nowhere to write its subscription, so it can
+    /// never receive a value (Core Spec Vol 3, Part G, Section 3.3.3.3).
+    /// Registrars kept forgetting it one characteristic at a time, so the
+    /// pairing is expressed once, here.
+    pub fn add_characteristic_with_cccd(
+        &mut self,
+        uuid: impl Into<Uuid>,
+        properties: CharacteristicProperties,
+        value: Vec<u8>,
+        permissions: AttributePermissions,
+    ) -> (u16, u16) {
+        let handles = self.add_characteristic(uuid, properties, value, permissions);
+        let notifying = CharacteristicProperties::NOTIFY | CharacteristicProperties::INDICATE;
+        if properties.0 & notifying != 0 {
+            self.add_descriptor(
+                desc_uuid::CLIENT_CHARACTERISTIC_CONFIGURATION,
+                vec![0x00, 0x00],
+                AttributePermissions::default(),
+            );
+        }
+        handles
+    }
+
+    /// The value handle of the first characteristic with `uuid`.
+    ///
+    /// Characteristic *declarations* carry UUID 0x2803 and the value
+    /// attribute carries the characteristic's own UUID, so matching on the
+    /// UUID finds the value attribute directly. This is how a script
+    /// addresses characteristics created by a Rust profile registrar, which
+    /// writes into the database rather than into the script's service list.
+    pub fn value_handle_for_uuid(&self, uuid: Uuid) -> Option<u16> {
+        self.attributes
+            .iter()
+            .find(|(_, attr)| attr.uuid == uuid)
+            .map(|(&handle, _)| handle)
+    }
+
+    /// Reads an attribute value from the host simulation, without checking
+    /// client permissions — the read-side mirror of [`Self::set_value`]. A
+    /// device's own logic must see its whole database, including write-only
+    /// attributes like a control point the peer just wrote.
+    pub fn value(&self, handle: u16) -> Option<&[u8]> {
+        self.attributes.get(&handle).map(|attr| attr.value.as_slice())
+    }
+
     fn check_write_permitted(&mut self, handle: u16) -> Result<&mut Attribute, u8> {
         let attr = self
             .attributes
@@ -448,7 +497,11 @@ impl GattDatabase {
     }
 
     /// Finds attributes within handle range `[start..=end]` matching `uuid`.
+    /// An inverted range matches nothing (`BTreeMap::range` would panic).
     pub fn read_by_type(&self, start: u16, end: u16, uuid: Uuid) -> Vec<(u16, &[u8])> {
+        if start > end {
+            return Vec::new();
+        }
         self.attributes
             .range(start..=end)
             .filter(|(_, attr)| attr.uuid == uuid && attr.permissions.read)
@@ -456,8 +509,33 @@ impl GattDatabase {
             .collect()
     }
 
+    /// The last handle in the service group that begins at `service_handle`
+    /// (Core Spec Vol 3, Part G, 2.5.2): every attribute up to — but not
+    /// including — the next service declaration, or the end of the database.
+    ///
+    /// A Read By Group Type Response must carry this, not a blanket 0xFFFF:
+    /// a client told that the first service spans the whole database will
+    /// find every later service's characteristics inside it, and report the
+    /// same characteristic once per service.
+    pub fn group_end_handle(&self, service_handle: u16) -> u16 {
+        let primary = Uuid::from(service_uuid::PRIMARY_SERVICE);
+        let secondary = Uuid::from(service_uuid::SECONDARY_SERVICE);
+        let mut end = service_handle;
+        for (&handle, attr) in self.attributes.range((service_handle + 1)..) {
+            if attr.uuid == primary || attr.uuid == secondary {
+                break;
+            }
+            end = handle;
+        }
+        end
+    }
+
     /// Finds information (Handle + UUID) within handle range `[start..=end]`.
+    /// An inverted range matches nothing (`BTreeMap::range` would panic).
     pub fn find_information(&self, start: u16, end: u16) -> Vec<(u16, Uuid)> {
+        if start > end {
+            return Vec::new();
+        }
         self.attributes
             .range(start..=end)
             .map(|(&h, attr)| (h, attr.uuid))

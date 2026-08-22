@@ -43,6 +43,26 @@ pub struct VirtualDevice {
     /// state are recorded here, keyed by peer identity address, and
     /// subscriptions are restored when a bonded peer reconnects.
     pub bond_store: Option<Box<dyn BondStore>>,
+    /// Whether SMP key distribution waits for the real Encryption Change
+    /// event ([`Self::on_encryption_changed`]) — set by runtimes with a
+    /// real controller; bare in-process devices distribute eagerly.
+    pub defer_key_distribution: bool,
+    /// Whether the device advertises as connectable (ADV_IND). A pure
+    /// beacon sets this false (ADV_NONCONN_IND) so scanners don't offer a
+    /// connect. Default true — a device is a GATT server unless it opts out.
+    pub connectable: bool,
+    /// Isochronous SDUs received from a peer (LE Audio media plane), oldest
+    /// first. A sink drains these; see [`Self::take_audio`].
+    pub audio_rx: std::collections::VecDeque<Vec<u8>>,
+    /// Outgoing SDU sequence number, incremented per sent SDU.
+    pub audio_tx_sequence: u16,
+    /// H4 ISO packets a script queued with `send_audio`, flushed to the
+    /// controller by the runtime after the script's tick returns.
+    pub audio_tx_pending: Vec<Vec<u8>>,
+    /// The established CIS handle, mirrored here by the host layer. ISO SDUs
+    /// must be addressed to the isochronous stream, never to the ACL
+    /// connection — a real controller drops them otherwise.
+    pub cis_handle: Option<u16>,
 }
 
 /// The address a peer's bond records are keyed by: the identity address it
@@ -88,6 +108,12 @@ impl Clone for VirtualDevice {
             // and unbonded.
             observer: None,
             bond_store: None,
+            defer_key_distribution: self.defer_key_distribution,
+            connectable: self.connectable,
+            audio_rx: self.audio_rx.clone(),
+            audio_tx_sequence: self.audio_tx_sequence,
+            audio_tx_pending: self.audio_tx_pending.clone(),
+            cis_handle: self.cis_handle,
         }
     }
 }
@@ -106,6 +132,12 @@ impl VirtualDevice {
             default_mtu: 23,
             observer: None,
             bond_store: None,
+            defer_key_distribution: false,
+            connectable: true,
+            audio_rx: std::collections::VecDeque::new(),
+            audio_tx_sequence: 0,
+            audio_tx_pending: Vec::new(),
+            cis_handle: None,
         }
     }
 
@@ -138,6 +170,67 @@ impl VirtualDevice {
             observer.on_connection_state_changed(handle, peer_address, true);
         }
         self.restore_bonded_subscriptions(handle, peer_address);
+    }
+
+    /// Records the peer's address type from the LE Connection Complete
+    /// event, so SMP pairing computes with what was actually on the air —
+    /// a wrong type (or address) fails the confirm/DHKey check against a
+    /// real stack, which Android surfaces as "incorrect PIN".
+    pub fn set_peer_address_type(&mut self, handle: u16, peer_address_type: AddressType) {
+        if let Some(conn) = self.connections.get_mut(&handle) {
+            conn.peer_address_type = peer_address_type;
+        }
+    }
+
+    /// Drains the SDUs received on the media plane, oldest first — what a
+    /// sink's audio output (a decoder, a page's Web Audio graph) consumes.
+    pub fn take_audio(&mut self) -> Vec<Vec<u8>> {
+        self.audio_rx.drain(..).collect()
+    }
+
+    /// Records an SDU received from a peer. Bounded, because a sink that
+    /// never drains must not grow without limit — the oldest frames are
+    /// dropped, which is what a real audio pipeline does under overrun.
+    pub fn on_iso_sdu(&mut self, payload: Vec<u8>) {
+        const MAX_QUEUED_SDUS: usize = 256;
+        if self.audio_rx.len() >= MAX_QUEUED_SDUS {
+            self.audio_rx.pop_front();
+        }
+        self.audio_rx.push_back(payload);
+    }
+
+    /// The handle isochronous data should travel on: the CIS when a stream
+    /// is established, otherwise the ACL connection (which the in-process
+    /// scene accepts, but a real controller does not).
+    pub fn audio_handle(&self) -> Option<u16> {
+        self.cis_handle
+            .or_else(|| self.connections.keys().copied().next())
+    }
+
+    /// Builds the H4 ISO packet carrying `sdu` on `handle`, stamping the
+    /// next sequence number. `None` if there is no connection.
+    pub fn build_audio_packet(&mut self, handle: u16, sdu: &[u8]) -> Option<Vec<u8>> {
+        if self.cis_handle != Some(handle) {
+            self.connections.get(&handle)?;
+        }
+        let sequence = self.audio_tx_sequence;
+        self.audio_tx_sequence = self.audio_tx_sequence.wrapping_add(1);
+        Some(crate::packets::build_iso_packet(handle, sequence, sdu))
+    }
+
+    /// Handles the HCI Encryption Change event: marks the link encrypted
+    /// and lets a deferred SMP session start phase-3 key distribution (the
+    /// spec sends keys only over the encrypted link; real stacks reject
+    /// early ones). Any queued key PDUs are then available via
+    /// [`Self::poll_smp_pdu`].
+    pub fn on_encryption_changed(&mut self, handle: u16, enabled: bool) {
+        if let Some(conn) = self.connections.get_mut(&handle) {
+            conn.is_encrypted = enabled;
+            if enabled && let Some(session) = conn.pairing_session.as_mut() {
+                session.on_link_encrypted();
+            }
+        }
+        self.maybe_record_bond(handle);
     }
 
     /// Looks up the active connection to `peer_address`, if any.
@@ -362,11 +455,14 @@ impl VirtualDevice {
             }
             conn.pairing_session = Some(PairingSession::new(
                 SmpRole::Responder,
-                PairingConfig::default(),
+                PairingConfig {
+                    defer_key_distribution: self.defer_key_distribution,
+                    ..PairingConfig::default()
+                },
                 self.address,
                 self.address_type,
                 conn.peer_address,
-                AddressType::Random,
+                conn.peer_address_type,
             ));
         }
 
@@ -404,7 +500,7 @@ impl VirtualDevice {
             self.address,
             self.address_type,
             conn.peer_address,
-            AddressType::Random,
+            conn.peer_address_type,
         );
         let request = session.start();
         conn.pairing_session = Some(session);
