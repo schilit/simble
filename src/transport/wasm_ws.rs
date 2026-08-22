@@ -1322,6 +1322,38 @@ impl CentralDevice {
             .push_back(CentralOp::Subscribe(value_handle));
     }
 
+    /// True once the connection is up and its GATT has been discovered.
+    ///
+    /// These four accessors exist for [`WebSource`](web::WebSource), which is
+    /// browser-only, so they are gated with it rather than carried as dead
+    /// code in native builds.
+    #[cfg(target_arch = "wasm32")]
+    fn is_ready(&self) -> bool {
+        self.phase == CentralPhase::Ready
+    }
+
+    /// True when every queued operation has been sent *and* answered — the
+    /// only safe moment to act on the result of a sequence of writes, since
+    /// a queued operation has not reached the peer yet.
+    #[cfg(target_arch = "wasm32")]
+    fn is_idle(&self) -> bool {
+        self.pending_ops.is_empty() && self.in_flight.is_none()
+    }
+
+    /// The ACL connection handle, which a CIS is opened against.
+    #[cfg(target_arch = "wasm32")]
+    fn connection_handle(&self) -> u16 {
+        self.client.connection_handle
+    }
+
+    /// The value handle of a discovered characteristic, by UUID.
+    #[cfg(target_arch = "wasm32")]
+    fn characteristic_handle(&self, uuid: crate::types::Uuid) -> Option<u16> {
+        self.client
+            .find_characteristic(uuid)
+            .map(|characteristic| characteristic.value_handle)
+    }
+
     /// Send the next queued operation when discovery is done and nothing is in
     /// flight.
     fn pump_ops(&mut self, channel: &HciChannel) {
@@ -2906,6 +2938,199 @@ mod web {
             }
             self.transport.pump(&self.channel)?;
             Ok(self.peripheral.status_json())
+        }
+    }
+
+    /// An LE Audio **source** hosted in the page and running on netsim: the
+    /// central that connects to a sink, configures its endpoint, opens a real
+    /// CIS, and streams SDUs to it.
+    ///
+    /// [`WebPeripheral`] is the sink half. Until this existed a foreign stack
+    /// had to be the source for any LE Audio test, because simble could
+    /// accept a CIS but never open one. The pieces it drives —
+    /// [`CisCentral`](crate::device::CisCentral) for the media plane and
+    /// [`AseConfig`](crate::profiles::ascs_client::AseConfig) for the control
+    /// plane — live in the library, so this type is only the browser's
+    /// WebSocket and a running order.
+    #[wasm_bindgen]
+    pub struct WebSource {
+        transport: WasmWsTransport,
+        channel: HciChannel,
+        central: super::CentralDevice,
+        cis: crate::device::CisCentral,
+        ase: crate::profiles::ascs_client::AseConfig,
+        started: bool,
+        /// Whether the three ASE Control Point writes have been queued.
+        ase_requested: bool,
+        /// Whether CIS establishment has been kicked off.
+        cis_requested: bool,
+        /// SDUs handed over before the stream was ready, so audio can be
+        /// queued the moment a file is loaded rather than only after the
+        /// handshake finishes.
+        pending_audio: VecDeque<Vec<u8>>,
+        error: Option<String>,
+    }
+
+    #[wasm_bindgen]
+    impl WebSource {
+        /// Connects a source to netsim at `url` and aims it at `target`
+        /// (e.g. "CC:1E:57:00:00:06").
+        #[wasm_bindgen(constructor)]
+        pub fn new(url: &str, target: &str) -> Result<WebSource, JsValue> {
+            install_panic_hook();
+            let target: Address = target
+                .parse()
+                .map_err(|_| JsValue::from_str("target is not a Bluetooth address"))?;
+            let url = ws_url_with_wire_address(url);
+            Ok(Self {
+                transport: WasmWsTransport::connect(&url)?,
+                channel: HciChannel::new(),
+                central: super::CentralDevice::new(target),
+                cis: crate::device::CisCentral::new(crate::device::CisConfig::default()),
+                ase: crate::profiles::ascs_client::AseConfig::default(),
+                started: false,
+                ase_requested: false,
+                cis_requested: false,
+                pending_audio: VecDeque::new(),
+                error: None,
+            })
+        }
+
+        /// Returns the underlying WebSocket ready state (per the WebSocket API).
+        pub fn ready_state(&self) -> u16 {
+            self.transport.ready_state()
+        }
+
+        /// True once SDUs handed to [`send_audio`](Self::send_audio) will
+        /// actually reach the sink.
+        pub fn is_streaming(&self) -> bool {
+            self.cis.is_streaming()
+        }
+
+        /// Hands one SDU to the stream. Audio offered before the CIS is up is
+        /// held briefly rather than dropped, so a page can start feeding a
+        /// decoded file as soon as the user picks it; the queue is bounded
+        /// because a stream that never opens must not grow without limit.
+        pub fn send_audio(&mut self, sdu: Vec<u8>) {
+            self.pending_audio.push_back(sdu);
+            while self.pending_audio.len() > 200 {
+                self.pending_audio.pop_front();
+            }
+        }
+
+        /// One pump: bring the controller up, advance the connection, the ASE
+        /// configuration and the CIS, then drain queued audio onto the
+        /// stream. Returns render-ready status JSON.
+        pub fn tick(&mut self) -> Result<String, JsValue> {
+            self.transport.pump(&self.channel)?;
+
+            if !self.started && self.transport.is_open() {
+                // Reset and both event masks, then the CIS host feature —
+                // which must be declared before any connection exists, or LE
+                // Create CIS is refused later for reasons that look unrelated.
+                for packet in crate::device::host::init_commands().into_iter().take(3) {
+                    self.channel.send_command(&packet[1..]).map_err(js_error)?;
+                }
+                for packet in crate::device::CisCentral::init_commands() {
+                    self.channel.send_command(&packet[1..]).map_err(js_error)?;
+                }
+                self.started = true;
+            }
+
+            while let Some(packet) = self.channel.poll_controller_packet() {
+                self.central.consume(&self.channel, &packet);
+                for command in self.cis.on_packet(&packet) {
+                    self.channel.send_command(&command[1..]).map_err(js_error)?;
+                }
+            }
+            self.central.produce(&self.channel);
+
+            self.advance_stream();
+            self.drain_audio();
+            self.transport.pump(&self.channel)?;
+            Ok(self.status_json())
+        }
+
+        /// Drives the control plane: configure the endpoint once discovery
+        /// finds it, then open the stream once those writes have landed.
+        fn advance_stream(&mut self) {
+            if !self.central.is_ready() {
+                return;
+            }
+            if !self.ase_requested {
+                let uuid = crate::profiles::ascs::ascs_uuid::ASE_CONTROL_POINT;
+                let Some(control_point) = self.central.characteristic_handle(uuid) else {
+                    self.error =
+                        Some("the peer has no ASE Control Point — it is not an LE Audio sink".into());
+                    self.ase_requested = true;
+                    return;
+                };
+                // Queued together: the central sends one at a time and waits
+                // for each response, so this is the ASCS order, not a burst.
+                self.central.queue_write(control_point, self.ase.config_codec());
+                self.central.queue_write(control_point, self.ase.config_qos());
+                self.central.queue_write(control_point, self.ase.enable());
+                self.ase_requested = true;
+                return;
+            }
+            // The endpoint is Enabling once the writes have drained; only
+            // then does opening a CIS mean anything.
+            if !self.cis_requested && self.central.is_idle() && self.error.is_none() {
+                let acl_handle = self.central.connection_handle();
+                for command in self.cis.start(acl_handle) {
+                    let _ = self.channel.send_command(&command[1..]);
+                }
+                self.cis_requested = true;
+            }
+        }
+
+        /// Moves queued SDUs onto the stream once it will carry them.
+        fn drain_audio(&mut self) {
+            if !self.cis.is_streaming() {
+                return;
+            }
+            while let Some(sdu) = self.pending_audio.pop_front() {
+                match self.cis.send_sdu(&sdu) {
+                    Some(packet) => {
+                        let _ = self.channel.inject_host_packet(packet);
+                    }
+                    None => break,
+                }
+            }
+        }
+
+        /// What the page renders: where the handshake has got to, and why it
+        /// stopped if it did.
+        pub fn status_json(&self) -> String {
+            let stage = if self.error.is_some() {
+                "error"
+            } else if self.cis.is_streaming() {
+                "streaming"
+            } else if self.cis_requested {
+                "opening the stream"
+            } else if self.ase_requested {
+                "configuring the endpoint"
+            } else if self.central.is_ready() {
+                "discovered"
+            } else if self.transport.is_open() {
+                "connecting"
+            } else {
+                "offline"
+            };
+            format!(
+                r#"{{"stage":"{}","streaming":{},"cis_handle":{},"queued":{},"error":{}}}"#,
+                stage,
+                self.cis.is_streaming(),
+                match self.cis.cis_handle() {
+                    Some(handle) => handle.to_string(),
+                    None => "null".to_string(),
+                },
+                self.pending_audio.len(),
+                match &self.error {
+                    Some(message) => format!("{message:?}"),
+                    None => "null".to_string(),
+                }
+            )
         }
     }
 

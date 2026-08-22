@@ -13,15 +13,14 @@
 //! Streaming. Receiver Start Ready is deliberately absent: a client sends it
 //! only for *Source* ASEs, where the client is the one receiving.
 //!
+//! The characteristic UUIDs live in [`ascs_uuid`](super::ascs::ascs_uuid) —
+//! the server module owns them, and a client naming its own copies is how
+//! the two drift apart.
+//!
 //! The operations are pure encoders — no I/O, no connection — so the payload
 //! layouts can be tested directly, which matters because a malformed control
 //! point write is answered with a response code rather than a link failure
 //! and is easy to mistake for a working stream.
-
-/// ASE Control Point characteristic (ASCS Section 3.3).
-pub const ASE_CONTROL_POINT_UUID: u16 = 0x2BC6;
-/// Sink ASE characteristic (ASCS Section 3.1).
-pub const SINK_ASE_UUID: u16 = 0x2BC4;
 
 /// ASE Control Point opcodes (ASCS Table 4.1).
 mod opcode {
