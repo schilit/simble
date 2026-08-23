@@ -37,6 +37,17 @@ script yields `{command → Command Complete | Command Status, follow-up events}
 Distribution in 6.3: **258 Command Complete, 57 Command Status only, 1
 conditional.**
 
+> **Corrected when the script was actually written** (`scripts/check_hci_command_answers.py`):
+> **339 opcodes, 278 Command Complete, 61 Command Status only.** The first
+> count was per *section*; several sections carry a `[v1]`/`[v2]` summary
+> table with two opcodes in it — LE Extended Create Connection, LE Generate
+> DHKey, LE Set Extended Advertising Parameters and others — and those are
+> separate opcodes a controller must answer separately. Two traps: the
+> published HTML breaks long names with soft hyphens (U+00AD), so
+> `HCI_Command_­Status` does not match until they are stripped — miss that and
+> the table silently halves; and `bluetooth.com` answers urllib's default
+> User-Agent with 403.
+
 That single derived table covers the bug class that hit this project **four
 times in one week**:
 
@@ -49,18 +60,35 @@ times in one week**:
 
 The fourth was found *by* this method and fixed in `9d10663`.
 
-### Still open: 17 latent instances
+### Closed — and what the lint found that nobody predicted
 
-`sim.rs`'s catch-all answers every unhandled opcode with Command Complete. **57
-Core-6.3 commands are Command-Status-only, and 17 of those have no explicit
-arm**: LE Set PHY, LE Connection Update, LE Create CIS, LE Accept CIS Request,
-LE Enable Encryption, LE Extended Create Connection, LE Generate DHKey, LE Read
-Local P-256 Public Key, LE Request Peer SCA, LE Subrate Request, LE Read All
-Remote Features, LE Read Remote Transmit Power Level, LE Frame Space Update,
-LE Create BIG Test, LE CS Test End, LE CS Read Remote FAE Table, LE CS Read
-Remote Supported Capabilities.
+`scripts/check_hci_command_answers.py` exists, and `sim.rs`'s catch-all no
+longer answers a Command-Status command with a Command Complete: it consults
+`COMMAND_STATUS_OPCODES`, the derived 61-opcode table, and answers anything in
+it with a Command Status carrying `UNKNOWN_HCI_COMMAND`. **19 of the 61 now
+have real arms; the other 42 get the right shape and no modelled behaviour.**
 
-Each is the same bug waiting for a host to send that command.
+Three things the estimate above got wrong, all found by running the derivation
+rather than reading:
+
+- **61, not 57.** The `[v1]`/`[v2]` opcode pairs were missed.
+- **The "17 latent" list was wrong in both directions.** It named LE
+  Periodic Advertising Create Sync's neighbours but not the command itself
+  (already handled, correctly); it listed LE Read Local P-256 Public Key, LE
+  Generate DHKey, LE Subrate Request and LE Read Remote Transmit Power Level
+  without noticing that 42 commands — not 17 — had no arm. The estimate was
+  built from a hand-scan of names that looked familiar.
+- **Nothing was implemented with the wrong event type.** The lint checks every
+  explicit match arm, not just the missing ones, and all 43 arms in `sim.rs`
+  emitted exactly the kind the spec assigns. The bug was entirely in the
+  catch-all — which is the more interesting result, because it means the
+  failure mode was never "someone got a command wrong", it was "nobody got the
+  *default* right".
+
+The cross-check paid for itself in confidence rather than corrections: Bumble
+covers 197 of the 339 commands and **agrees with the scraped table on every
+one**. A scrape that agrees with an independently maintained implementation on
+197 rows is a scrape worth trusting on the other 142.
 
 ---
 
@@ -169,12 +197,15 @@ honest justification for this project's own axis sweeps and fuzz tests.
 
 ## Ranked, if picking one thing
 
-1. **HCI command→answer lint.** ~150 lines, same shape as
-   `scripts/check_sig_assigned_numbers.py`. Closes the bug class permanently
-   and flags the 17 latent cases today. One caveat found: follow-up event names
-   in the prose are inconsistent (`LE_CS_­Config_­Complete` with soft hyphens,
-   no `HCI_` prefix), so answer-kind extraction is reliable while follow-up
-   extraction needs a fuzzier matcher.
+1. ~~**HCI command→answer lint.**~~ **Done** —
+   `scripts/check_hci_command_answers.py`, wired into `ci.yml` beside the
+   assigned-numbers check. The caveat predicted here was real: follow-up event
+   names in the prose are inconsistent (`LE_CS_­Config_­Complete` with soft
+   hyphens, no `HCI_` prefix), so the script derives the *answer kind* — which
+   is the part that hangs a host — and leaves follow-up extraction alone. It
+   checks three things: the derived table against Bumble, `sim.rs`'s table
+   against the derived one, and every explicit match arm's answer kind against
+   the spec.
 2. **ASCS Table 3.2 transition check.** 21 rows, one HTML table, ~20 lines.
    Cheapest win available.
 3. **TCRL as a coverage ledger.** No automation; a to-do list naming exactly

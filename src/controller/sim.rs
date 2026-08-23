@@ -102,6 +102,14 @@ mod opcode {
     pub const LE_CREATE_CONNECTION: u16 = 0x200D;
     /// LE Create Connection Cancel (OGF 0x08, OCF 0x000E).
     pub const LE_CREATE_CONNECTION_CANCEL: u16 = 0x200E;
+    /// LE Connection Update (OGF 0x08, OCF 0x0013).
+    pub const LE_CONNECTION_UPDATE: u16 = 0x2013;
+    /// LE Set PHY (OGF 0x08, OCF 0x0032).
+    pub const LE_SET_PHY: u16 = 0x2032;
+    /// LE Create CIS (OGF 0x08, OCF 0x0064).
+    pub const LE_CREATE_CIS: u16 = 0x2064;
+    /// LE Accept CIS Request (OGF 0x08, OCF 0x0066).
+    pub const LE_ACCEPT_CIS_REQUEST: u16 = 0x2066;
     /// LE CS Security Enable (OGF 0x08, OCF 0x008C).
     pub const LE_CS_SECURITY_ENABLE: u16 = cs_opcode::LE_CS_SECURITY_ENABLE.as_u16();
     /// LE CS Create Config (OGF 0x08, OCF 0x0090).
@@ -215,6 +223,27 @@ mod event {
     pub const LE_CS_PROCEDURE_ENABLE_COMPLETE: u8 = 0x30;
     /// LE CS Subevent Result subevent (0x31).
     pub const LE_CS_SUBEVENT_RESULT: u8 = 0x31;
+    /// LE Connection Update Complete subevent (0x03) — the completion event
+    /// LE Connection Update promises. Without it the host's Command Status is
+    /// a promise the controller never keeps.
+    pub const LE_CONNECTION_UPDATE_COMPLETE: u8 = 0x03;
+    /// LE PHY Update Complete subevent (0x0C).
+    pub const LE_PHY_UPDATE_COMPLETE: u8 = 0x0C;
+    /// LE CIS Established subevent (0x19), version 1.
+    pub const LE_CIS_ESTABLISHED: u8 = 0x19;
+    /// LE CIS Request subevent (0x1A) — how a peripheral's host learns a
+    /// central wants an isochronous stream to it.
+    pub const LE_CIS_REQUEST: u8 = 0x1A;
+}
+
+/// LE PHY identifiers (Vol 4, Part E, Section 7.8.49).
+mod le_phy {
+    /// LE 1M.
+    pub const LE_1M: u8 = 0x01;
+    /// LE 2M.
+    pub const LE_2M: u8 = 0x02;
+    /// LE Coded.
+    pub const LE_CODED: u8 = 0x03;
 }
 
 /// Channel Sounding parameters this controller models.
@@ -301,6 +330,127 @@ const STATUS_CONNECTION_ALREADY_EXISTS: u8 = 0x0B;
 /// `CONNECTION_REJECTED_DUE_TO_LIMITED_RESOURCES` (0x0D) — what a host that
 /// answers a page with Reject Connection Request usually says.
 const STATUS_CONNECTION_REJECTED_RESOURCES: u8 = 0x0D;
+/// `UNKNOWN_HCI_COMMAND` (0x01) — this controller does not implement the
+/// command at all. Said out loud, in a Command Status, rather than implied by
+/// silence or contradicted by a success: a host can retry, fall back, or fail
+/// fast on it, and none of those is possible if the answer is a lie.
+const STATUS_UNKNOWN_HCI_COMMAND: u8 = 0x01;
+
+/// The opcodes the Core specification answers with a **Command Status** and
+/// never a Command Complete (Core v6.3, Vol 4, Part E — 61 of the 339
+/// commands).
+///
+/// A controller gets exactly one choice per command: Command Complete, which
+/// *is* the result, or Command Status, which promises a later completion
+/// event. Answering a Command-Status-only command with a Command Complete
+/// does not fail — it hangs. The host takes the Complete as "in progress,
+/// wait for the real event" is not needed, or worse, never sees the event it
+/// is blocked on. Nothing crashes and nothing logs. That shape produced five
+/// bugs here in two weeks, all of them because the catch-all below answered
+/// everything it did not recognise with Command Complete.
+///
+/// So the catch-all consults this table. An opcode listed here that this
+/// controller does not model is answered with a Command Status carrying
+/// [`STATUS_UNKNOWN_HCI_COMMAND`] — still wrong about the *behaviour*, but no
+/// longer wrong about the *shape*, which is the part that hangs.
+///
+/// `scripts/check_hci_command_answers.py` derives this list from the SIG's
+/// published Core HTML, cross-checks it against Bumble's
+/// `HCI_AsyncCommand`/`HCI_SyncCommand` split, and fails if this table or any
+/// explicit arm below drifts from it. Do not edit it by hand — run
+/// `--emit-table`.
+#[rustfmt::skip]
+const COMMAND_STATUS_OPCODES: &[u16] = &[
+    0x0401, // 7.1.1     HCI_Inquiry
+    0x0405, // 7.1.5     HCI_Create_Connection
+    0x0406, // 7.1.6     HCI_Disconnect
+    0x0409, // 7.1.8     HCI_Accept_Connection_Request
+    0x040A, // 7.1.9     HCI_Reject_Connection_Request
+    0x040F, // 7.1.14    HCI_Change_Connection_Packet_Type
+    0x0411, // 7.1.15    HCI_Authentication_Requested
+    0x0413, // 7.1.16    HCI_Set_Connection_Encryption
+    0x0415, // 7.1.17    HCI_Change_Connection_Link_Key
+    0x0417, // 7.1.18    HCI_Link_Key_Selection
+    0x0419, // 7.1.19    HCI_Remote_Name_Request
+    0x041B, // 7.1.21    HCI_Read_Remote_Supported_Features
+    0x041C, // 7.1.22    HCI_Read_Remote_Extended_Features
+    0x041D, // 7.1.23    HCI_Read_Remote_Version_Information
+    0x041F, // 7.1.24    HCI_Read_Clock_Offset
+    0x0428, // 7.1.26    HCI_Setup_Synchronous_Connection
+    0x0429, // 7.1.27    HCI_Accept_Synchronous_Connection_Request
+    0x042A, // 7.1.28    HCI_Reject_Synchronous_Connection_Request
+    0x043D, // 7.1.45    HCI_Enhanced_Setup_Synchronous_Connection
+    0x043E, // 7.1.46    HCI_Enhanced_Accept_Synchronous_Connection_Request
+    0x043F, // 7.1.47    HCI_Truncated_Page
+    0x0443, // 7.1.51    HCI_Start_Synchronization_Train
+    0x0444, // 7.1.52    HCI_Receive_Synchronization_Train
+    0x0801, // 7.2.1     HCI_Hold_Mode
+    0x0803, // 7.2.2     HCI_Sniff_Mode
+    0x0804, // 7.2.3     HCI_Exit_Sniff_Mode
+    0x0807, // 7.2.6     HCI_QoS_Setup
+    0x080B, // 7.2.8     HCI_Switch_Role
+    0x0810, // 7.2.13    HCI_Flow_Specification
+    0x0C53, // 7.3.57    HCI_Refresh_Encryption_Key
+    0x0C5F, // 7.3.66    HCI_Enhanced_Flush
+    0x200D, // 7.8.12    HCI_LE_Create_Connection
+    0x2013, // 7.8.18    HCI_LE_Connection_Update
+    0x2016, // 7.8.21    HCI_LE_Read_Remote_Features_Page_0
+    0x2019, // 7.8.24    HCI_LE_Enable_Encryption
+    0x2025, // 7.8.36    HCI_LE_Read_Local_P-256_Public_Key
+    0x2026, // 7.8.37    HCI_LE_Generate_DHKey [v1]
+    0x2032, // 7.8.49    HCI_LE_Set_PHY
+    0x2043, // 7.8.66    HCI_LE_Extended_Create_Connection [v1]
+    0x2044, // 7.8.67    HCI_LE_Periodic_Advertising_Create_Sync
+    0x205E, // 7.8.37    HCI_LE_Generate_DHKey [v2]
+    0x2064, // 7.8.99    HCI_LE_Create_CIS
+    0x2066, // 7.8.101   HCI_LE_Accept_CIS_Request
+    0x2068, // 7.8.103   HCI_LE_Create_BIG
+    0x2069, // 7.8.104   HCI_LE_Create_BIG_Test
+    0x206A, // 7.8.105   HCI_LE_Terminate_BIG
+    0x206B, // 7.8.106   HCI_LE_BIG_Create_Sync
+    0x206D, // 7.8.108   HCI_LE_Request_Peer_SCA
+    0x2077, // 7.8.118   HCI_LE_Read_Remote_Transmit_Power_Level
+    0x207E, // 7.8.124   HCI_LE_Subrate_Request
+    0x2085, // 7.8.66    HCI_LE_Extended_Create_Connection [v2]
+    0x2088, // 7.8.129   HCI_LE_Read_All_Remote_Features
+    0x208A, // 7.8.131   HCI_LE_CS_Read_Remote_Supported_Capabilities
+    0x208C, // 7.8.133   HCI_LE_CS_Security_Enable
+    0x208E, // 7.8.135   HCI_LE_CS_Read_Remote_FAE_Table
+    0x2090, // 7.8.137   HCI_LE_CS_Create_Config
+    0x2091, // 7.8.138   HCI_LE_CS_Remove_Config
+    0x2094, // 7.8.141   HCI_LE_CS_Procedure_Enable
+    0x2096, // 7.8.143   HCI_LE_CS_Test_End
+    0x209D, // 7.8.151   HCI_LE_Frame_Space_Update
+    0x20A1, // 7.8.154   HCI_LE_Connection_Rate_Request
+];
+
+/// Whether the Core specification answers `opcode` with a Command Status.
+fn answered_by_command_status(opcode: u16) -> bool {
+    COMMAND_STATUS_OPCODES.contains(&opcode)
+}
+
+/// Which PHY to move to, given the bitmask of the ones the host will allow
+/// (bit 0 LE 1M, bit 1 LE 2M, bit 2 LE Coded) and the one in use now.
+///
+/// The spec leaves the choice to the controller. This one takes the fastest
+/// the host permits, and keeps the current PHY when the host permits nothing —
+/// which is what an empty mask means, not an error.
+fn preferred_phy(allowed: u8, current: u8) -> u8 {
+    if allowed & 0x02 != 0 {
+        le_phy::LE_2M
+    } else if allowed & 0x01 != 0 {
+        le_phy::LE_1M
+    } else if allowed & 0x04 != 0 {
+        le_phy::LE_CODED
+    } else {
+        current
+    }
+}
+
+/// The connection interval every link starts at, in 1.25 ms units (30 ms).
+const DEFAULT_CONN_INTERVAL: u16 = 0x0018;
+/// The supervision timeout every link starts at, in 10 ms units (420 ms).
+const DEFAULT_SUPERVISION_TIMEOUT: u16 = 0x002A;
 
 /// Scan Enable bits (Vol 4, Part E, Section 7.3.18). A device with neither
 /// bit set is genuinely invisible: not discoverable, not connectable. That is
@@ -520,6 +670,56 @@ struct DisconnectionCompleteBody {
 struct Connection {
     handle: u16,
     peer: usize,
+    /// Connection interval in 1.25 ms units, as last agreed. Carried so that
+    /// LE Connection Update's completion event reports what the *connection*
+    /// now is rather than echoing what the host asked for.
+    interval: u16,
+    /// Peripheral latency, in connection events.
+    latency: u16,
+    /// Supervision timeout in 10 ms units.
+    timeout: u16,
+    /// Central-to-peripheral PHY (1 = LE 1M, 2 = LE 2M, 3 = LE Coded).
+    tx_phy: u8,
+    /// Peripheral-to-central PHY.
+    rx_phy: u8,
+}
+
+impl Connection {
+    /// A new connection at the parameters [`le_connection_complete`] reports
+    /// at establishment: 30 ms interval, no latency, 420 ms supervision
+    /// timeout, LE 1M both ways. A real controller negotiates these; this one
+    /// states them, and LE Connection Update / LE Set PHY move them.
+    fn new(handle: u16, peer: usize) -> Self {
+        Self {
+            handle,
+            peer,
+            interval: DEFAULT_CONN_INTERVAL,
+            latency: 0,
+            timeout: DEFAULT_SUPERVISION_TIMEOUT,
+            tx_phy: le_phy::LE_1M,
+            rx_phy: le_phy::LE_1M,
+        }
+    }
+}
+
+/// An isochronous stream (CIS) one host has asked for on top of an existing
+/// ACL connection.
+///
+/// What is modelled is the *handshake*: LE Create CIS on the central, LE CIS
+/// Request to the peripheral's host, LE Accept CIS Request back, LE CIS
+/// Established at both ends. What is not modelled is the isochronous link
+/// itself — there is no CIG scheduling, no ISO interval, no flush timeout,
+/// and ISO SDUs are still routed over the ACL handle by [`Action::Iso`]. The
+/// handshake is what a host's state machine blocks on; the scheduling is what
+/// a real radio would do with the time in between.
+#[derive(Clone, Copy)]
+struct CisLink {
+    /// The stream's own connection handle, chosen by the central's host.
+    cis_handle: u16,
+    /// The ACL connection the stream was set up over.
+    acl_handle: u16,
+    /// Whether LE CIS Established has been sent for it.
+    established: bool,
 }
 
 /// A Channel Sounding configuration a host has created on one connection, and
@@ -746,6 +946,8 @@ struct SimController {
     big: Option<BigSource>,
     /// BIGs this controller has joined as a receiver.
     big_sinks: Vec<BigSink>,
+    /// Isochronous streams asked for or carried on this controller's links.
+    cis_links: Vec<CisLink>,
     /// Everything BR/EDR: scan enable, inquiry, paging, name, Class of Device.
     classic: ClassicState,
     /// H4 packets to deliver to this device's host at the end of the tick.
@@ -772,6 +974,7 @@ impl SimController {
             pa_syncs: Vec::new(),
             big: None,
             big_sinks: Vec::new(),
+            cis_links: Vec::new(),
             classic: ClassicState::default(),
             outbox: VecDeque::new(),
         }
@@ -818,6 +1021,7 @@ impl SimController {
         self.pa_syncs.clear();
         self.big = None;
         self.big_sinks.clear();
+        self.cis_links.clear();
         // Scan Enable returns to 0x00 on Reset, which is why every BR/EDR
         // bring-up sequence writes it *after* the Reset rather than before.
         self.classic = ClassicState::default();
@@ -891,6 +1095,38 @@ enum Action {
         peer: Address,
         /// `Some(reason)` to reject, `None` to accept.
         reject: Option<u8>,
+    },
+    /// LE Connection Update. A connection has two ends and one set of
+    /// parameters, so both hosts get an LE Connection Update Complete — a
+    /// peripheral that only ever heard about the update from its own host
+    /// would be a fiction no real link produces.
+    ConnectionUpdate {
+        from: usize,
+        handle: u16,
+        interval: u16,
+        latency: u16,
+        timeout: u16,
+    },
+    /// LE Set PHY. Symmetric for the same reason: the PHY is a property of
+    /// the link, and the peer's host is told with its own LE PHY Update
+    /// Complete, with the directions swapped.
+    PhyUpdate {
+        from: usize,
+        handle: u16,
+        tx_phy: u8,
+        rx_phy: u8,
+    },
+    /// LE Create CIS. The peer's host is told with an LE CIS Request, which
+    /// is the only way it learns a stream is being opened to it.
+    CisRequest {
+        from: usize,
+        acl_handle: u16,
+        cis_handle: u16,
+    },
+    /// LE Accept CIS Request. Establishes the stream at both ends at once.
+    CisAccept {
+        from: usize,
+        cis_handle: u16,
     },
     /// LE BIG Create Sync. Needs the source controller's BIG to answer, and
     /// the handle counter to name the receiver's own BIS handles.
@@ -1129,6 +1365,25 @@ impl Link {
                     broadcast_code,
                     &indices,
                 ),
+                Action::ConnectionUpdate {
+                    from,
+                    handle,
+                    interval,
+                    latency,
+                    timeout,
+                } => self.route_connection_update(from, handle, interval, latency, timeout),
+                Action::PhyUpdate {
+                    from,
+                    handle,
+                    tx_phy,
+                    rx_phy,
+                } => self.route_phy_update(from, handle, tx_phy, rx_phy),
+                Action::CisRequest {
+                    from,
+                    acl_handle,
+                    cis_handle,
+                } => self.route_cis_request(from, acl_handle, cis_handle),
+                Action::CisAccept { from, cis_handle } => self.route_cis_accept(from, cis_handle),
             }
         }
 
@@ -1246,6 +1501,147 @@ impl Link {
                 c.pending_connect = None;
                 c.outbox
                     .push_back(command_complete(opcode, &[STATUS_SUCCESS]));
+            }
+            opcode::LE_CONNECTION_UPDATE => {
+                // handle(2) interval_min(2) interval_max(2) latency(2)
+                // supervision_timeout(2) min_ce(2) max_ce(2).
+                //
+                // Vol 4, Part E, Section 7.8.18: Command Status, then an LE
+                // Connection Update Complete when the *link layer* has
+                // changed the parameters. The Complete carries the
+                // connection's new values, not the host's request, so the
+                // controller has to pick something inside the requested
+                // range and remember it. This one takes the maximum interval,
+                // which is what a controller with nothing else scheduled
+                // would settle on.
+                //
+                // Not modelled: the LL_CONNECTION_UPDATE_IND procedure and
+                // its instant, so the change is immediate rather than taking
+                // effect six connection events later; and a peripheral's
+                // right to reject via LL_REJECT_EXT_IND, so an update here is
+                // never refused by the peer.
+                let handle = le_u16(params, 0);
+                if !c.is_connected(handle) {
+                    c.outbox
+                        .push_back(command_status(STATUS_UNKNOWN_CONNECTION, opcode));
+                } else if params.len() < 14 {
+                    c.outbox
+                        .push_back(command_status(STATUS_INVALID_PARAMETERS, opcode));
+                } else {
+                    c.outbox.push_back(command_status(STATUS_SUCCESS, opcode));
+                    actions.push(Action::ConnectionUpdate {
+                        from: i,
+                        handle,
+                        interval: le_u16(params, 4),
+                        latency: le_u16(params, 6),
+                        timeout: le_u16(params, 8),
+                    });
+                }
+            }
+            opcode::LE_SET_PHY => {
+                // handle(2) all_phys(1) tx_phys(1) rx_phys(1) phy_options(2).
+                //
+                // Vol 4, Part E, Section 7.8.49: Command Status, then an LE
+                // PHY Update Complete — which the spec says is sent even when
+                // nothing changed, so a host that asks for the PHY it already
+                // has is still unblocked. Bit 0 of All_PHYs means "the host
+                // has no preference for TX", bit 1 the same for RX; in that
+                // case the current PHY stays.
+                //
+                // Not modelled: the LL_PHY_REQ/LL_PHY_RSP exchange, PHY
+                // Options (S=2/S=8 coding), and any reason a controller might
+                // decline — the best PHY the host allows is simply taken.
+                let handle = le_u16(params, 0);
+                if !c.is_connected(handle) {
+                    c.outbox
+                        .push_back(command_status(STATUS_UNKNOWN_CONNECTION, opcode));
+                } else if params.len() < 7 {
+                    c.outbox
+                        .push_back(command_status(STATUS_INVALID_PARAMETERS, opcode));
+                } else {
+                    let all_phys = params[2];
+                    let current = c
+                        .connections
+                        .iter()
+                        .find(|conn| conn.handle == handle)
+                        .map(|conn| (conn.tx_phy, conn.rx_phy))
+                        .unwrap_or((le_phy::LE_1M, le_phy::LE_1M));
+                    let tx_phy = if all_phys & 0x01 != 0 {
+                        current.0
+                    } else {
+                        preferred_phy(params[3], current.0)
+                    };
+                    let rx_phy = if all_phys & 0x02 != 0 {
+                        current.1
+                    } else {
+                        preferred_phy(params[4], current.1)
+                    };
+                    c.outbox.push_back(command_status(STATUS_SUCCESS, opcode));
+                    actions.push(Action::PhyUpdate {
+                        from: i,
+                        handle,
+                        tx_phy,
+                        rx_phy,
+                    });
+                }
+            }
+            opcode::LE_CREATE_CIS => {
+                // cis_count(1) then (cis_handle(2), acl_handle(2)) per stream.
+                //
+                // Vol 4, Part E, Section 7.8.99: Command Status, and then one
+                // LE CIS Established per stream — but only after the
+                // peripheral's host has answered the LE CIS Request this
+                // sends it. A host that got a Command Complete here would sit
+                // on a stream that never establishes and never fails.
+                let count = params.first().copied().unwrap_or(0) as usize;
+                let pairs: Vec<(u16, u16)> = (0..count)
+                    .filter_map(|n| {
+                        let at = 1 + n * 4;
+                        (params.len() >= at + 4)
+                            .then(|| (le_u16(params, at), le_u16(params, at + 2)))
+                    })
+                    .collect();
+                if pairs.len() != count || count == 0 {
+                    c.outbox
+                        .push_back(command_status(STATUS_INVALID_PARAMETERS, opcode));
+                } else if pairs.iter().any(|(_, acl)| !c.is_connected(*acl)) {
+                    // A stream is opened *on* an ACL link. Naming a handle
+                    // that is not one is the same mistake as a CS command on
+                    // a dead connection, and gets the same answer.
+                    c.outbox
+                        .push_back(command_status(STATUS_UNKNOWN_CONNECTION, opcode));
+                } else {
+                    c.outbox.push_back(command_status(STATUS_SUCCESS, opcode));
+                    for (cis_handle, acl_handle) in pairs {
+                        c.cis_links.push(CisLink {
+                            cis_handle,
+                            acl_handle,
+                            established: false,
+                        });
+                        actions.push(Action::CisRequest {
+                            from: i,
+                            acl_handle,
+                            cis_handle,
+                        });
+                    }
+                }
+            }
+            opcode::LE_ACCEPT_CIS_REQUEST => {
+                // connection_handle(2) — the CIS handle from LE CIS Request.
+                //
+                // Vol 4, Part E, Section 7.8.101: Command Status, then LE CIS
+                // Established at both ends.
+                let cis_handle = le_u16(params, 0);
+                if c.cis_links.iter().any(|l| l.cis_handle == cis_handle) {
+                    c.outbox.push_back(command_status(STATUS_SUCCESS, opcode));
+                    actions.push(Action::CisAccept {
+                        from: i,
+                        cis_handle,
+                    });
+                } else {
+                    c.outbox
+                        .push_back(command_status(STATUS_UNKNOWN_CONNECTION, opcode));
+                }
             }
             opcode::LE_CS_SECURITY_ENABLE => {
                 // The CS security start procedure derives the keys that
@@ -1537,6 +1933,19 @@ impl Link {
             // Set Event Mask, LE Set Event Mask, scan/adv params, scan-response
             // data, and anything else: accept with a success Command Complete so
             // the host's bring-up never stalls on an unimplemented command.
+            //
+            // Except that "anything else" used to include the 61 commands the
+            // spec answers with a Command *Status*, and for those a cheerful
+            // Command Complete is not a harmless stub — it is the answer to a
+            // question the host did not ask, and the event it *is* waiting for
+            // never arrives. So the shape is looked up even where the
+            // behaviour is not modelled: an unmodelled Command-Status command
+            // gets a Command Status saying Unknown HCI Command, which a host
+            // can act on. See [`COMMAND_STATUS_OPCODES`].
+            _ if answered_by_command_status(opcode) => {
+                c.outbox
+                    .push_back(command_status(STATUS_UNKNOWN_HCI_COMMAND, opcode));
+            }
             _ => {
                 c.outbox
                     .push_back(command_complete(opcode, &[STATUS_SUCCESS]));
@@ -1762,11 +2171,10 @@ impl Link {
         let handle = self.alloc_handle();
         self.controllers[initiator]
             .connections
-            .push(Connection { handle, peer: from });
-        self.controllers[from].connections.push(Connection {
-            handle,
-            peer: initiator,
-        });
+            .push(Connection::new(handle, from));
+        self.controllers[from]
+            .connections
+            .push(Connection::new(handle, initiator));
         self.controllers[initiator]
             .outbox
             .push_back(connection_complete(
@@ -2022,14 +2430,12 @@ impl Link {
         let central_addr = self.controllers[central].address;
         let peripheral_addr = self.controllers[peripheral].address;
 
-        self.controllers[central].connections.push(Connection {
-            handle,
-            peer: peripheral,
-        });
-        self.controllers[peripheral].connections.push(Connection {
-            handle,
-            peer: central,
-        });
+        self.controllers[central]
+            .connections
+            .push(Connection::new(handle, peripheral));
+        self.controllers[peripheral]
+            .connections
+            .push(Connection::new(handle, central));
         self.controllers[peripheral].advertising = false;
 
         // Role 0x00 = Central, 0x01 = Peripheral.
@@ -2064,6 +2470,11 @@ impl Link {
             {
                 self.controllers[index].cs = None;
             }
+            // An isochronous stream is set up over an ACL link and cannot
+            // outlive it, for the same reason.
+            self.controllers[index]
+                .cis_links
+                .retain(|l| l.acl_handle != handle);
         }
         self.controllers[from]
             .outbox
@@ -2071,6 +2482,102 @@ impl Link {
         self.controllers[peer]
             .outbox
             .push_back(disconnection_complete(handle, REASON_REMOTE_USER));
+    }
+
+    /// Apply an LE Connection Update to both ends of `handle` and tell both
+    /// hosts with an LE Connection Update Complete.
+    fn route_connection_update(
+        &mut self,
+        from: usize,
+        handle: u16,
+        interval: u16,
+        latency: u16,
+        timeout: u16,
+    ) {
+        let Some(peer) = self.peer_of(from, handle) else {
+            return;
+        };
+        for index in [from, peer] {
+            if let Some(conn) = self.controllers[index]
+                .connections
+                .iter_mut()
+                .find(|c| c.handle == handle)
+            {
+                conn.interval = interval;
+                conn.latency = latency;
+                conn.timeout = timeout;
+            }
+            self.controllers[index]
+                .outbox
+                .push_back(le_connection_update_complete(
+                    handle, interval, latency, timeout,
+                ));
+        }
+    }
+
+    /// Apply an LE Set PHY to both ends of `handle`. The peer sees the
+    /// directions swapped: one end's TX is the other end's RX.
+    fn route_phy_update(&mut self, from: usize, handle: u16, tx_phy: u8, rx_phy: u8) {
+        let Some(peer) = self.peer_of(from, handle) else {
+            return;
+        };
+        for (index, (tx, rx)) in [(from, (tx_phy, rx_phy)), (peer, (rx_phy, tx_phy))] {
+            if let Some(conn) = self.controllers[index]
+                .connections
+                .iter_mut()
+                .find(|c| c.handle == handle)
+            {
+                conn.tx_phy = tx;
+                conn.rx_phy = rx;
+            }
+            self.controllers[index]
+                .outbox
+                .push_back(le_phy_update_complete(handle, tx, rx));
+        }
+    }
+
+    /// Tell the peer's host that a central wants an isochronous stream on
+    /// `acl_handle`, and record the stream so its LE Accept CIS Request has
+    /// something to name.
+    fn route_cis_request(&mut self, from: usize, acl_handle: u16, cis_handle: u16) {
+        let Some(peer) = self.peer_of(from, acl_handle) else {
+            return;
+        };
+        self.controllers[peer].cis_links.push(CisLink {
+            cis_handle,
+            acl_handle,
+            established: false,
+        });
+        self.controllers[peer]
+            .outbox
+            .push_back(le_cis_request(acl_handle, cis_handle));
+    }
+
+    /// The peripheral's host accepted: establish the stream at both ends.
+    fn route_cis_accept(&mut self, from: usize, cis_handle: u16) {
+        let Some(acl_handle) = self.controllers[from]
+            .cis_links
+            .iter()
+            .find(|l| l.cis_handle == cis_handle)
+            .map(|l| l.acl_handle)
+        else {
+            return;
+        };
+        let Some(peer) = self.peer_of(from, acl_handle) else {
+            return;
+        };
+        for index in [from, peer] {
+            if let Some(link) = self.controllers[index]
+                .cis_links
+                .iter_mut()
+                .find(|l| l.cis_handle == cis_handle)
+            {
+                link.established = true;
+            }
+            self.controllers[index]
+                .outbox
+                .push_back(le_cis_established(STATUS_SUCCESS, cis_handle));
+        }
     }
 
     /// Forward an ACL packet from `from` to the peer on `handle`.
@@ -2716,12 +3223,82 @@ fn le_connection_complete(handle: u16, role: u8, peer: Address) -> Vec<u8> {
         role,
         peer_address_type: 0x00, // public
         peer_address: addr_le(peer),
-        connection_interval: U16::new(0x0018), // 30 ms
+        connection_interval: U16::new(DEFAULT_CONN_INTERVAL),
         peripheral_latency: U16::new(0),
-        supervision_timeout: U16::new(0x002A),
+        supervision_timeout: U16::new(DEFAULT_SUPERVISION_TIMEOUT),
         central_clock_accuracy: 0x00,
     };
     event_packet(event::LE_META, body.as_bytes())
+}
+
+/// LE Connection Update Complete subevent (Vol 4, Part E, Section 7.7.65.3) —
+/// the event LE Connection Update's Command Status promises, carrying what the
+/// connection's parameters now *are*.
+fn le_connection_update_complete(
+    handle: u16,
+    interval: u16,
+    latency: u16,
+    timeout: u16,
+) -> Vec<u8> {
+    let mut body = vec![event::LE_CONNECTION_UPDATE_COMPLETE, STATUS_SUCCESS];
+    body.extend_from_slice(&handle.to_le_bytes());
+    body.extend_from_slice(&interval.to_le_bytes());
+    body.extend_from_slice(&latency.to_le_bytes());
+    body.extend_from_slice(&timeout.to_le_bytes());
+    event_packet(event::LE_META, &body)
+}
+
+/// LE PHY Update Complete subevent (Vol 4, Part E, Section 7.7.65.12). Sent
+/// even when neither PHY changed — the spec is explicit about that, and a host
+/// that asked for the PHY it already had would otherwise wait forever.
+fn le_phy_update_complete(handle: u16, tx_phy: u8, rx_phy: u8) -> Vec<u8> {
+    let mut body = vec![event::LE_PHY_UPDATE_COMPLETE, STATUS_SUCCESS];
+    body.extend_from_slice(&handle.to_le_bytes());
+    body.push(tx_phy);
+    body.push(rx_phy);
+    event_packet(event::LE_META, &body)
+}
+
+/// LE CIS Request subevent (Vol 4, Part E, Section 7.7.65.26) — a central is
+/// opening a stream on an existing ACL link.
+///
+/// CIG_ID and CIS_ID are reported as 0: this controller does not model
+/// isochronous groups, so there is only ever one group and one stream in it,
+/// and inventing identifiers a host could not have chosen would be worse than
+/// naming the only ones there are.
+fn le_cis_request(acl_handle: u16, cis_handle: u16) -> Vec<u8> {
+    let mut body = vec![event::LE_CIS_REQUEST];
+    body.extend_from_slice(&acl_handle.to_le_bytes());
+    body.extend_from_slice(&cis_handle.to_le_bytes());
+    body.push(0x00); // CIG_ID
+    body.push(0x00); // CIS_ID
+    event_packet(event::LE_META, &body)
+}
+
+/// LE CIS Established \[v1\] subevent (Vol 4, Part E, Section 7.7.65.25).
+///
+/// The timing parameters are stated, not simulated: sync delays and transport
+/// latencies are the values a 10 ms ISO interval would plausibly produce, and
+/// no part of this controller schedules against them. What is real is the
+/// handle and the status — which is all a host's state machine advances on.
+fn le_cis_established(status: u8, cis_handle: u16) -> Vec<u8> {
+    let mut body = vec![event::LE_CIS_ESTABLISHED, status];
+    body.extend_from_slice(&cis_handle.to_le_bytes());
+    body.extend_from_slice(&[0x40, 0x9C, 0x00]); // CIG_Sync_Delay, 40 ms
+    body.extend_from_slice(&[0x40, 0x9C, 0x00]); // CIS_Sync_Delay
+    body.extend_from_slice(&[0x40, 0x9C, 0x00]); // Transport_Latency_C_To_P
+    body.extend_from_slice(&[0x40, 0x9C, 0x00]); // Transport_Latency_P_To_C
+    body.push(le_phy::LE_2M); // PHY_C_To_P
+    body.push(le_phy::LE_2M); // PHY_P_To_C
+    body.push(1); // NSE
+    body.push(1); // BN_C_To_P
+    body.push(1); // BN_P_To_C
+    body.push(1); // FT_C_To_P
+    body.push(1); // FT_P_To_C
+    body.extend_from_slice(&100u16.to_le_bytes()); // Max_PDU_C_To_P
+    body.extend_from_slice(&100u16.to_le_bytes()); // Max_PDU_P_To_C
+    body.extend_from_slice(&8u16.to_le_bytes()); // ISO_Interval, 10 ms
+    event_packet(event::LE_META, &body)
 }
 
 /// LE Advertising Report subevent carrying one report for `addr`, stamped
@@ -4160,5 +4737,459 @@ mod tests {
                 "the {who} must be told the link is gone: {evts:?}"
             );
         }
+    }
+
+    // --- the Command Status contract -------------------------------------
+    //
+    // One test per Command-Status-only command this controller implements,
+    // each asserting the same two things: that the *answer* is a Command
+    // Status and not a Command Complete, and that the completion event the
+    // Status promises actually arrives, after it. Getting either wrong does
+    // not fail — it hangs, silently, in whatever host sent the command.
+    //
+    // scripts/check_hci_command_answers.py keeps the list itself honest
+    // against the Core specification; these keep the behaviour honest.
+
+    /// The LE Meta subevents of `subevent` among events already drained.
+    fn le_subevents_in(evts: &[(u8, Vec<u8>)], subevent: u8) -> Vec<Vec<u8>> {
+        evts.iter()
+            .filter(|(code, p)| *code == event::LE_META && p.first() == Some(&subevent))
+            .map(|(_, p)| p.clone())
+            .collect()
+    }
+
+    /// Where the Command Status answering `opcode` sits in the event stream,
+    /// and where the LE Meta subevent `subevent` sits. Both must exist, and
+    /// the Status must come first — a completion event that arrives before
+    /// the answer to the command is a different bug with the same symptom.
+    fn status_then_subevent(evts: &[(u8, Vec<u8>)], opcode: u16, subevent: u8) -> (usize, usize) {
+        let status = evts
+            .iter()
+            .position(|(code, p)| {
+                *code == event::COMMAND_STATUS
+                    && p.len() >= 4
+                    && u16::from_le_bytes([p[2], p[3]]) == opcode
+            })
+            .unwrap_or_else(|| panic!("no Command Status for {opcode:#06X}: {evts:?}"));
+        let complete = evts
+            .iter()
+            .position(|(code, p)| *code == event::LE_META && p.first() == Some(&subevent))
+            .unwrap_or_else(|| {
+                panic!("no completion subevent {subevent:#04X} for {opcode:#06X}: {evts:?}")
+            });
+        assert!(
+            status < complete,
+            "the Command Status must precede the completion event: {evts:?}"
+        );
+        (status, complete)
+    }
+
+    /// LE Connection Update parameters: the same interval both ways, so the
+    /// value the completion event reports is unambiguous.
+    fn connection_update_params(handle: u16, interval: u16, latency: u16, timeout: u16) -> Vec<u8> {
+        let mut p = handle.to_le_bytes().to_vec();
+        p.extend_from_slice(&interval.to_le_bytes()); // Conn_Interval_Min
+        p.extend_from_slice(&interval.to_le_bytes()); // Conn_Interval_Max
+        p.extend_from_slice(&latency.to_le_bytes());
+        p.extend_from_slice(&timeout.to_le_bytes());
+        p.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Min/Max_CE_Length
+        p
+    }
+
+    #[test]
+    fn test_le_connection_update_answers_with_status_then_update_complete() {
+        let mut link = Link::new();
+        let central = link.add_device(addr("AA:BB:CC:00:00:01"));
+        let peripheral_address = addr("AA:BB:CC:00:00:02");
+        let peripheral = link.add_device(peripheral_address);
+        let handle = connect(&mut link, &central, &peripheral, peripheral_address);
+        let _ = events(&central);
+        let _ = events(&peripheral);
+
+        central
+            .send_command(&cmd(
+                opcode::LE_CONNECTION_UPDATE,
+                &connection_update_params(handle, 0x0028, 0x0004, 0x0100),
+            ))
+            .unwrap();
+        link.tick();
+
+        let evts = events(&central);
+        assert!(
+            command_complete_for(&evts, opcode::LE_CONNECTION_UPDATE).is_none(),
+            "a Command Complete here strands the host on an LE Connection \
+             Update Complete that never comes: {evts:?}"
+        );
+        assert_eq!(
+            command_status_for(&evts, opcode::LE_CONNECTION_UPDATE),
+            Some(STATUS_SUCCESS)
+        );
+        status_then_subevent(
+            &evts,
+            opcode::LE_CONNECTION_UPDATE,
+            event::LE_CONNECTION_UPDATE_COMPLETE,
+        );
+        // subevent, status, handle(2), interval(2), latency(2), timeout(2)
+        let update = &le_subevents_in(&evts, event::LE_CONNECTION_UPDATE_COMPLETE)[0];
+        assert_eq!(update[1], STATUS_SUCCESS);
+        assert_eq!(u16::from_le_bytes([update[2], update[3]]), handle);
+        assert_eq!(u16::from_le_bytes([update[4], update[5]]), 0x0028);
+        assert_eq!(u16::from_le_bytes([update[6], update[7]]), 0x0004);
+        assert_eq!(u16::from_le_bytes([update[8], update[9]]), 0x0100);
+    }
+
+    #[test]
+    fn test_le_connection_update_tells_the_peripheral_too() {
+        // A connection has one set of parameters and two ends. A peripheral
+        // that was never told its own link had changed would be a fiction no
+        // real link produces — and hosts do act on this event.
+        let mut link = Link::new();
+        let central = link.add_device(addr("AA:BB:CC:00:00:01"));
+        let peripheral_address = addr("AA:BB:CC:00:00:02");
+        let peripheral = link.add_device(peripheral_address);
+        let handle = connect(&mut link, &central, &peripheral, peripheral_address);
+        let _ = events(&peripheral);
+
+        central
+            .send_command(&cmd(
+                opcode::LE_CONNECTION_UPDATE,
+                &connection_update_params(handle, 0x0028, 0, 0x0100),
+            ))
+            .unwrap();
+        link.tick();
+
+        let evts = events(&peripheral);
+        let updates = le_subevents_in(&evts, event::LE_CONNECTION_UPDATE_COMPLETE);
+        assert_eq!(updates.len(), 1, "the peripheral is told once: {evts:?}");
+        assert_eq!(u16::from_le_bytes([updates[0][4], updates[0][5]]), 0x0028);
+    }
+
+    #[test]
+    fn test_le_connection_update_on_a_dead_handle_is_refused_with_status() {
+        // The error path answers with a Command Status too. Answering an
+        // error with a Command Complete is the same hang as answering a
+        // success with one.
+        let mut link = Link::new();
+        let a = link.add_device(addr("AA:BB:CC:00:00:01"));
+        link.tick();
+        let _ = events(&a);
+
+        a.send_command(&cmd(
+            opcode::LE_CONNECTION_UPDATE,
+            &connection_update_params(0x0BAD, 0x0028, 0, 0x0100),
+        ))
+        .unwrap();
+        link.tick();
+
+        let evts = events(&a);
+        assert_eq!(
+            command_status_for(&evts, opcode::LE_CONNECTION_UPDATE),
+            Some(STATUS_UNKNOWN_CONNECTION),
+            "{evts:?}"
+        );
+        assert!(command_complete_for(&evts, opcode::LE_CONNECTION_UPDATE).is_none());
+        assert!(
+            le_subevents_in(&evts, event::LE_CONNECTION_UPDATE_COMPLETE).is_empty(),
+            "a refused update completes nothing"
+        );
+    }
+
+    #[test]
+    fn test_le_set_phy_answers_with_status_then_phy_update_complete() {
+        let mut link = Link::new();
+        let central = link.add_device(addr("AA:BB:CC:00:00:01"));
+        let peripheral_address = addr("AA:BB:CC:00:00:02");
+        let peripheral = link.add_device(peripheral_address);
+        let handle = connect(&mut link, &central, &peripheral, peripheral_address);
+        let _ = events(&central);
+        let _ = events(&peripheral);
+
+        // All_PHYs = 0 (the host has a preference both ways), TX and RX both
+        // LE 2M only.
+        let mut params = handle.to_le_bytes().to_vec();
+        params.extend_from_slice(&[0x00, 0x02, 0x02, 0x00, 0x00]);
+        central
+            .send_command(&cmd(opcode::LE_SET_PHY, &params))
+            .unwrap();
+        link.tick();
+
+        let evts = events(&central);
+        assert!(
+            command_complete_for(&evts, opcode::LE_SET_PHY).is_none(),
+            "LE Set PHY is Command Status only (Vol 4, Part E, 7.8.49): {evts:?}"
+        );
+        assert_eq!(
+            command_status_for(&evts, opcode::LE_SET_PHY),
+            Some(STATUS_SUCCESS)
+        );
+        status_then_subevent(&evts, opcode::LE_SET_PHY, event::LE_PHY_UPDATE_COMPLETE);
+        // subevent, status, handle(2), tx_phy, rx_phy
+        let phy = &le_subevents_in(&evts, event::LE_PHY_UPDATE_COMPLETE)[0];
+        assert_eq!(phy[1], STATUS_SUCCESS);
+        assert_eq!(u16::from_le_bytes([phy[2], phy[3]]), handle);
+        assert_eq!((phy[4], phy[5]), (le_phy::LE_2M, le_phy::LE_2M));
+
+        // And the peer sees the same change with the directions swapped —
+        // one end's TX is the other end's RX.
+        let peer = events(&peripheral);
+        let phy = &le_subevents_in(&peer, event::LE_PHY_UPDATE_COMPLETE)[0];
+        assert_eq!((phy[4], phy[5]), (le_phy::LE_2M, le_phy::LE_2M));
+    }
+
+    #[test]
+    fn test_le_set_phy_with_no_preference_still_completes() {
+        // All_PHYs bits 0 and 1 set means "no preference either way", and the
+        // spec still requires the completion event: a host that asks for the
+        // PHY it already has must not be left waiting.
+        let mut link = Link::new();
+        let central = link.add_device(addr("AA:BB:CC:00:00:01"));
+        let peripheral_address = addr("AA:BB:CC:00:00:02");
+        let peripheral = link.add_device(peripheral_address);
+        let handle = connect(&mut link, &central, &peripheral, peripheral_address);
+        let _ = events(&central);
+
+        let mut params = handle.to_le_bytes().to_vec();
+        params.extend_from_slice(&[0x03, 0x00, 0x00, 0x00, 0x00]);
+        central
+            .send_command(&cmd(opcode::LE_SET_PHY, &params))
+            .unwrap();
+        link.tick();
+
+        let evts = events(&central);
+        let phy = &le_subevents_in(&evts, event::LE_PHY_UPDATE_COMPLETE)[0];
+        assert_eq!(
+            (phy[4], phy[5]),
+            (le_phy::LE_1M, le_phy::LE_1M),
+            "no preference keeps the PHY the connection was established on"
+        );
+    }
+
+    #[test]
+    fn test_le_set_phy_on_a_dead_handle_is_refused_with_status() {
+        let mut link = Link::new();
+        let a = link.add_device(addr("AA:BB:CC:00:00:01"));
+        link.tick();
+        let _ = events(&a);
+
+        a.send_command(&cmd(
+            opcode::LE_SET_PHY,
+            &[0xAD, 0x0B, 0x00, 0x02, 0x02, 0x00, 0x00],
+        ))
+        .unwrap();
+        link.tick();
+
+        let evts = events(&a);
+        assert_eq!(
+            command_status_for(&evts, opcode::LE_SET_PHY),
+            Some(STATUS_UNKNOWN_CONNECTION),
+            "{evts:?}"
+        );
+        assert!(command_complete_for(&evts, opcode::LE_SET_PHY).is_none());
+    }
+
+    /// LE Create CIS for one stream: count, then the CIS handle the host
+    /// picked and the ACL link it runs over.
+    fn create_cis_params(cis_handle: u16, acl_handle: u16) -> Vec<u8> {
+        let mut p = vec![0x01];
+        p.extend_from_slice(&cis_handle.to_le_bytes());
+        p.extend_from_slice(&acl_handle.to_le_bytes());
+        p
+    }
+
+    #[test]
+    fn test_le_create_cis_answers_with_status_then_asks_the_peer() {
+        // LE Create CIS's completion event is an LE CIS Established that only
+        // arrives once the peripheral's host has answered — so what the
+        // central's Command Status promises first is the peer's LE CIS
+        // Request. A Command Complete here would tell the host the stream was
+        // done before anyone had been asked.
+        let mut link = Link::new();
+        let central = link.add_device(addr("AA:BB:CC:00:00:01"));
+        let peripheral_address = addr("AA:BB:CC:00:00:02");
+        let peripheral = link.add_device(peripheral_address);
+        let acl = connect(&mut link, &central, &peripheral, peripheral_address);
+        let _ = events(&central);
+        let _ = events(&peripheral);
+
+        central
+            .send_command(&cmd(opcode::LE_CREATE_CIS, &create_cis_params(0x0060, acl)))
+            .unwrap();
+        link.tick();
+
+        let evts = events(&central);
+        assert!(
+            command_complete_for(&evts, opcode::LE_CREATE_CIS).is_none(),
+            "LE Create CIS is Command Status only (Vol 4, Part E, 7.8.99): {evts:?}"
+        );
+        assert_eq!(
+            command_status_for(&evts, opcode::LE_CREATE_CIS),
+            Some(STATUS_SUCCESS)
+        );
+        assert!(
+            le_subevents_in(&evts, event::LE_CIS_ESTABLISHED).is_empty(),
+            "nothing is established until the peripheral accepts: {evts:?}"
+        );
+
+        let peer = events(&peripheral);
+        let requests = le_subevents_in(&peer, event::LE_CIS_REQUEST);
+        assert_eq!(requests.len(), 1, "the peer's host is asked: {peer:?}");
+        // subevent, acl_handle(2), cis_handle(2), cig_id, cis_id
+        assert_eq!(u16::from_le_bytes([requests[0][1], requests[0][2]]), acl);
+        assert_eq!(u16::from_le_bytes([requests[0][3], requests[0][4]]), 0x0060);
+    }
+
+    #[test]
+    fn test_le_create_cis_on_a_dead_acl_handle_is_refused_with_status() {
+        let mut link = Link::new();
+        let a = link.add_device(addr("AA:BB:CC:00:00:01"));
+        link.tick();
+        let _ = events(&a);
+
+        a.send_command(&cmd(
+            opcode::LE_CREATE_CIS,
+            &create_cis_params(0x0060, 0x0BAD),
+        ))
+        .unwrap();
+        link.tick();
+
+        let evts = events(&a);
+        assert_eq!(
+            command_status_for(&evts, opcode::LE_CREATE_CIS),
+            Some(STATUS_UNKNOWN_CONNECTION),
+            "a stream is opened on an ACL link, and that one does not \
+             exist: {evts:?}"
+        );
+        assert!(command_complete_for(&evts, opcode::LE_CREATE_CIS).is_none());
+    }
+
+    #[test]
+    fn test_le_accept_cis_request_answers_with_status_then_establishes_both_ends() {
+        let mut link = Link::new();
+        let central = link.add_device(addr("AA:BB:CC:00:00:01"));
+        let peripheral_address = addr("AA:BB:CC:00:00:02");
+        let peripheral = link.add_device(peripheral_address);
+        let acl = connect(&mut link, &central, &peripheral, peripheral_address);
+        central
+            .send_command(&cmd(opcode::LE_CREATE_CIS, &create_cis_params(0x0060, acl)))
+            .unwrap();
+        link.tick();
+        let _ = events(&central);
+        let _ = events(&peripheral);
+
+        peripheral
+            .send_command(&cmd(
+                opcode::LE_ACCEPT_CIS_REQUEST,
+                &0x0060u16.to_le_bytes(),
+            ))
+            .unwrap();
+        link.tick();
+
+        let evts = events(&peripheral);
+        assert!(
+            command_complete_for(&evts, opcode::LE_ACCEPT_CIS_REQUEST).is_none(),
+            "LE Accept CIS Request is Command Status only (Vol 4, Part E, \
+             7.8.101): {evts:?}"
+        );
+        assert_eq!(
+            command_status_for(&evts, opcode::LE_ACCEPT_CIS_REQUEST),
+            Some(STATUS_SUCCESS)
+        );
+        status_then_subevent(
+            &evts,
+            opcode::LE_ACCEPT_CIS_REQUEST,
+            event::LE_CIS_ESTABLISHED,
+        );
+        let established = &le_subevents_in(&evts, event::LE_CIS_ESTABLISHED)[0];
+        assert_eq!(established[1], STATUS_SUCCESS);
+        assert_eq!(u16::from_le_bytes([established[2], established[3]]), 0x0060);
+
+        // The central, which has been waiting since its own Command Status,
+        // is told at the same moment.
+        let evts = events(&central);
+        let established = le_subevents_in(&evts, event::LE_CIS_ESTABLISHED);
+        assert_eq!(
+            established.len(),
+            1,
+            "the central's LE Create CIS finally completes: {evts:?}"
+        );
+        assert_eq!(established[0][1], STATUS_SUCCESS);
+    }
+
+    #[test]
+    fn test_le_accept_cis_request_for_a_stream_nobody_asked_for_is_refused() {
+        let mut link = Link::new();
+        let a = link.add_device(addr("AA:BB:CC:00:00:01"));
+        link.tick();
+        let _ = events(&a);
+
+        a.send_command(&cmd(opcode::LE_ACCEPT_CIS_REQUEST, &[0x60, 0x00]))
+            .unwrap();
+        link.tick();
+
+        let evts = events(&a);
+        assert_eq!(
+            command_status_for(&evts, opcode::LE_ACCEPT_CIS_REQUEST),
+            Some(STATUS_UNKNOWN_CONNECTION),
+            "{evts:?}"
+        );
+        assert!(command_complete_for(&evts, opcode::LE_ACCEPT_CIS_REQUEST).is_none());
+    }
+
+    #[test]
+    fn test_no_command_status_command_is_ever_answered_with_command_complete() {
+        // The catch-all used to answer *everything* it did not recognise with
+        // a success Command Complete, which is the right shape for 278 of the
+        // 339 commands in Core v6.3 and a silent hang for the other 61. This
+        // sweeps the whole derived table: modelled or not, none of them may
+        // come back as a Command Complete, and every one must be answered.
+        //
+        // scripts/check_hci_command_answers.py checks the table against the
+        // specification; this checks the controller against the table.
+        let mut link = Link::new();
+        let a = link.add_device(addr("AA:BB:CC:00:00:01"));
+        link.tick();
+        let _ = events(&a);
+
+        for &opcode in COMMAND_STATUS_OPCODES {
+            a.send_command(&cmd(opcode, &[])).unwrap();
+        }
+        link.tick();
+
+        let evts = events(&a);
+        for &opcode in COMMAND_STATUS_OPCODES {
+            assert!(
+                command_complete_for(&evts, opcode).is_none(),
+                "{opcode:#06X} is Command-Status-only; a Command Complete \
+                 leaves its host waiting for an event that never comes"
+            );
+            assert!(
+                command_status_for(&evts, opcode).is_some(),
+                "{opcode:#06X} was answered with nothing at all, which hangs \
+                 a host just as thoroughly"
+            );
+        }
+    }
+
+    #[test]
+    fn test_an_unmodelled_command_status_command_says_so() {
+        // The honest minimum for a command this controller does not model:
+        // the right *shape* and an error a host can act on, rather than a
+        // success it cannot.
+        let mut link = Link::new();
+        let a = link.add_device(addr("AA:BB:CC:00:00:01"));
+        link.tick();
+        let _ = events(&a);
+
+        // LE Enable Encryption (0x2019) — this controller models no link
+        // encryption at all, and says so instead of pretending.
+        a.send_command(&cmd(0x2019, &[0x00; 28])).unwrap();
+        link.tick();
+
+        let evts = events(&a);
+        assert_eq!(
+            command_status_for(&evts, 0x2019),
+            Some(STATUS_UNKNOWN_HCI_COMMAND),
+            "{evts:?}"
+        );
     }
 }

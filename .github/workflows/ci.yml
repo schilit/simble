@@ -97,6 +97,37 @@ jobs:
       - name: Diff sig_names.rs against the SIG registry
         run: python3 scripts/check_sig_assigned_numbers.py
 
+  hci-command-answers:
+    name: HCI command-answer drift (non-blocking)
+    runs-on: ubuntu-latest
+    # Non-blocking for the same reason as the job above: it fetches from two
+    # third-party hosts, and a network blip must not fail an unrelated PR. The
+    # script exits 2 for "could not reach a source", distinct from 1 for real
+    # drift, so the log says which happened.
+    #
+    # The half of this check that can run offline is not left to chance: the
+    # unit test `test_no_command_status_command_is_ever_answered_with_command
+    # _complete` sweeps the same table through the controller on every
+    # `cargo test`, and that one blocks. This job is what keeps the *table*
+    # honest against the specification.
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # A controller answers a command with either Command Complete or Command
+      # Status, and choosing wrong does not fail -- it hangs the host, with
+      # nothing logged anywhere. Five bugs here came from exactly that, all
+      # because sim.rs's catch-all answered every unhandled opcode with
+      # Command Complete while 61 of Core 6.3's 339 commands are
+      # Command-Status-only. Both ends of every test in this repo are simble,
+      # so they agree with each other and none of them can notice. This
+      # derives the table from the SIG's published Core HTML, cross-checks it
+      # against Bumble's Async/Sync command split, and diffs both against
+      # sim.rs. It starts green, so any output is real drift.
+      - name: Diff sim.rs's command answers against the Core specification
+        run: python3 scripts/check_hci_command_answers.py
+
   duplication-report:
     name: Duplication Report (non-blocking)
     runs-on: ubuntu-latest
