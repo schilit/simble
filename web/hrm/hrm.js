@@ -37,10 +37,10 @@ const CLIENT_NETSIM = "CC:1E:57:00:00:12";
 const WS = (name, address) =>
   `ws://localhost:7681/v1/websocket/bt?name=${name}&address=${address}`;
 
-const STYLE = `main {
-    display: grid; gap: 1.25rem; padding: 1.25rem 1.5rem;
-    max-width: 52rem; margin: 0 auto;
-  }
+// Only what this domain owns. The two-column layout is `.domain.two-up` in
+// common/simble.css -- the pair reads left to right, the monitor and then
+// what the client heard from it.
+const STYLE = `
   /* The heart, which is the whole reason this domain has a page of its own:
      the animation period is 60/bpm, so what you see beating is the
      characteristic's value and not a fixed loop. */
@@ -60,7 +60,7 @@ const STYLE = `main {
   .bpm { font-size: 1.8rem; font-weight: 600; }
   .bpm small { color: var(--dim); font-size: 0.9rem; font-weight: 400; }`;
 
-const MARKUP = `<div id="backend"></div>
+const MARKUP = `<div id="backend" class="full"></div>
 
   <section class="panel">
     <div id="monitor-head"></div>
@@ -256,6 +256,7 @@ export async function mount(container) {
     document.head.append(el);
   }
   root = container;
+  root.classList.add("domain", "two-up");
   root.innerHTML = MARKUP;
 
   monitorScript = catalog_script("hrm");
@@ -304,7 +305,10 @@ export function unmount() {
   monitorHead?.destroy();
   clientHead?.destroy();
   document.getElementById(STYLE_ID)?.remove();
-  if (root) root.innerHTML = "";
+  if (root) {
+    root.classList.remove("domain", "two-up");
+    root.innerHTML = "";
+  }
   root = null; link = null;
   monitorHead = clientHead = monitorGatt = clientGatt = null;
 }

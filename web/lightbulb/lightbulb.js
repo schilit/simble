@@ -26,9 +26,9 @@ import { createBackendSelector } from "../common/backend.js";
 
 const STYLE_ID = "simble-home-style";
 
-const STYLE = `main { display: grid; grid-template-columns: minmax(20rem, 1fr) minmax(18rem, 1fr);
-    gap: 1.25rem; padding: 1.25rem 1.5rem; max-width: 72rem; margin: 0 auto; }
-  @media (max-width: 56rem) { main { grid-template-columns: 1fr; } }
+// The two-column layout is `.domain.two-up` in common/simble.css; only what
+// this domain owns lives here.
+const STYLE = `
   .bulb-stage { display: flex; flex-direction: column; align-items: center;
     padding: 1rem 0 0.5rem; }
   #bulbSvg { width: 190px; height: auto; transition: filter 0.25s; }
@@ -45,7 +45,7 @@ const STYLE = `main { display: grid; grid-template-columns: minmax(20rem, 1fr) m
   .rgb-readout { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
     font-size: 0.85rem; }`;
 
-const MARKUP = `<div id="backend" style="grid-column:1/-1"></div>
+const MARKUP = `<div id="backend" class="full" style="grid-column:1/-1"></div>
   <section class="panel">
     <h2>The light</h2>
     <div class="bulb-stage">
@@ -349,6 +349,7 @@ export async function mount(container) {
     document.head.append(el);
   }
   root = container;
+  root.classList.add("domain", "two-up");
   root.innerHTML = MARKUP;
 
   setupPanel = $("setup");
@@ -475,7 +476,10 @@ export function unmount() {
   document.getElementById(STYLE_ID)?.remove();
   // Clear our own markup rather than relying on the host to do it: the
   // standalone page has no shell to tidy up after us.
-  if (root) root.innerHTML = "";
+  if (root) {
+    root.classList.remove("domain", "two-up");
+    root.innerHTML = "";
+  }
   root = null;
   setupPanel = picker = undefined;
 }
