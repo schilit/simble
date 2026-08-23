@@ -39,9 +39,10 @@
 //     reason spelled out beside it, rather than a button that quietly does
 //     nothing or takes its neighbour down with it.
 //   * the address is the on-air identity, right-aligned. A device that has no
-//     Bluetooth address (the car endpoints are two RFCOMM multiplexers wired
-//     directly together — no ACL, so no BD_ADDR) says so instead of showing a
-//     plausible-looking one.
+//     Bluetooth address — a protocol object with no link under it, say — says
+//     so via `addressNote` instead of showing a plausible-looking one. Nothing
+//     on the site is in that state today; the escape hatch stays because the
+//     alternative, when it happens again, is an invented address.
 //
 // Everything is returned as element references. Nothing here is reachable by
 // `document.getElementById`, on purpose: the domain shell mounts one domain at

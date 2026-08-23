@@ -8,9 +8,18 @@
 //
 // The centre column is the reason this domain is worth a page. HFP is the one
 // Bluetooth profile whose wire is human-readable, so the dialogue you see is
-// the actual bytes SimBLE's HfProtocol and AgProtocol produced, carried in
-// real RFCOMM frames — not a scripted animation. Toggle "bytes" to see the
-// hex of each line as it was written.
+// the actual bytes SimBLE's HfProtocol and AgProtocol produced — and those
+// bytes go into an RFCOMM data link, an L2CAP channel on PSM 3, an ACL
+// connection, and across the simulated BR/EDR controller before the far end's
+// ClassicHost hands them up. Toggle "bytes" to see the hex of each line as it
+// was written.
+//
+// The two endpoints are two BR/EDR devices with real BD_ADDRs in one
+// SceneEngine. The head unit is told the phone's address and nothing else:
+// the Class of Device, the name and the RFCOMM channel it opens are all
+// learned over the air, by inquiry, Remote Name Request and SDP. Turn the
+// phone's inquiry scan off and the head unit never finds it — which is the
+// difference between this page and the one it replaced.
 //
 // This module is a domain module: mount(root) builds everything into the
 // container it is given and starts the single timer; unmount() stops that
@@ -24,8 +33,13 @@ import { createAboutBox } from "../common/about-box.js";
 /// Which controllers this domain can run on. The shell's controller bar
 /// reads this: an option mapped to a string is offered disabled, with that
 /// string as the reason, rather than hidden.
+///
+/// The link is real now, but it is real *in this page*: WebCarKit builds its
+/// own SceneEngine around the simulated BR/EDR controller. Nothing in SimBLE
+/// puts a ClassicHost on a WebSocket, so the netsim backend still cannot run
+/// this domain — the reason has changed, the answer has not.
 export const SUPPORTS = { "in-page": true,
-  "websocket": "the phone and head unit hand frames straight to each other — nothing sits between them" };
+  "websocket": "both hosts run on this page's own simulated BR/EDR controller — no transport carries a ClassicHost to netsim" };
 
 
 // One timer for both endpoints. Chrome throttles a hidden tab hard enough
@@ -33,18 +47,10 @@ export const SUPPORTS = { "in-page": true,
 // would stall silently; both halves live here and share this interval.
 const TICK_MS = 120;
 
-// One `WebCarKit` holds both endpoints and the multiplexers between them, and
-// dropping it is the only teardown there is — so neither header offers a stop
-// that would take its neighbour down with it.
-const SHARED_KIT = "one kit — both endpoints stop together";
-
-// These two endpoints genuinely have no Bluetooth address. The page's own
-// prose says why: the two RFCOMM multiplexers hand frames straight to each
-// other, so there is no L2CAP channel and no ACL connection underneath, and a
-// BD_ADDR is a property of a link that does not exist here. Inventing one for
-// the header would be exactly the kind of decoration this component replaced.
-const NO_ADDRESS =
-  "no BD_ADDR: the two RFCOMM multiplexers are wired directly together, with no ACL underneath";
+// One `WebCarKit` holds the whole scene — both hosts and the controller
+// between them — and dropping it is the only teardown there is, so neither
+// header offers a stop that would take its neighbour down with it.
+const SHARED_KIT = "one scene — both devices stop together";
 
 let wasmReady = null;
 
@@ -120,6 +126,12 @@ const STYLE = `
 .inds td.n { color: var(--dim); }
 .inds tr.stale td { color: var(--warn); }
 
+/* What the head unit learned over the air, in the order it learned it. The
+   middle column is the answer, so it is the one that reads as data. */
+.inds.bredr td:first-child { width: 9rem; white-space: nowrap; }
+.inds.bredr td:nth-child(2) { color: var(--accent); white-space: nowrap; padding-right: 1rem; }
+.inds.bredr td:last-child { font-family: inherit; font-size: var(--fs-meta); width: 55%; }
+
 /* Roles: what this head unit would also be, and is not yet. */
 .roles { display: grid; gap: 0.7rem; grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
   margin-top: 0.3rem; }
@@ -136,11 +148,17 @@ const STYLE = `
 .role code { color: var(--text); }
 `;
 
-const ABOUT = `<p>A phone and a car head unit over one link. SDP finds the Hands-Free service, RFCOMM
-   opens a channel, and the two ends negotiate a service-level connection before any call can
-   ring. Every AT line in the dialogue is bytes the protocol layers actually produced.</p>
+const ABOUT = `<p>A phone and a car head unit, as two Bluetooth Classic devices on one simulated
+   controller. The head unit is given the phone's BD_ADDR and nothing else: it inquires for it,
+   asks its name, pages it to open an ACL connection, searches its SDP server for the Hands-Free
+   Audio Gateway record, opens the RFCOMM channel that record names, and only then starts the
+   service-level connection that lets a call ring.</p>
+   <p>Every AT line in the dialogue is bytes <code>HfProtocol</code> and <code>AgProtocol</code>
+   actually produced, and every one of them crosses RFCOMM, L2CAP and an ACL connection to reach
+   the other end. Nothing is wired straight through.</p>
    <p>Call <em>audio</em> would ride an SCO link, which SimBLE does not implement — the gap is
-   marked where the audio path would be, rather than faked.</p>`;
+   marked where the audio path would be, rather than faked. So is pairing: this link is
+   unauthenticated and unencrypted, where a real head unit would bond once and remember.</p>`;
 
 const MARKUP = `
 <div class="car domain two-up">
@@ -269,6 +287,9 @@ const MARKUP = `
       <code>HfProtocol</code> and <code>AgProtocol</code> actually wrote into the
       RFCOMM data link connection — commands are <code>\\r</code>-terminated, responses
       are wrapped in <code>\\r\\n</code>. Turn on <b>bytes</b> to see each line's hex.
+      Each one leaves as a UIH frame and arrives on the other side of an ACL connection;
+      the profile itself never learns that, which is the property that lets the same
+      <code>AT</code> layer sit on a serial cable.
     </p>
   </section>
 
@@ -279,18 +300,43 @@ const MARKUP = `
     <div class="layers">
       <span class="real">AT / HFP</span><b>rides</b>
       <span class="real">RFCOMM</span><b>rides</b>
-      <span class="absent">L2CAP PSM 3</span><b>rides</b>
-      <span class="absent">ACL / baseband</span>
+      <span class="real">L2CAP PSM 3</span><b>rides</b>
+      <span class="real">ACL / BR/EDR controller</span><b>·</b>
+      <span class="absent">SCO</span>
     </div>
     <p class="hint" style="margin-top:0.7rem">
-      Solid boxes are exercised on this page; dashed ones are not. The two RFCOMM
-      multiplexers hand frames straight to each other here — the L2CAP channel and the
-      ACL connection those frames would ride on a real link are
-      <code>ClassicHost</code>'s job, not this page's. Everything above that line is
-      genuine protocol: SDP PDUs answered by <code>SdpServer</code>, the
-      PN/SABM/UA handshake, and credit accounting
+      Solid boxes are exercised on this page; the dashed one is not. Every AT line above
+      becomes a UIH frame with a credit octet, an L2CAP SDU on PSM 3, and an ACL packet
+      handed to the simulated controller in <code>controller::sim</code>, which routes it to
+      the other device's <code>ClassicHost</code>. Credit accounting is live
       (<span id="car-credits" class="mono">—</span>).
+      Only the call audio has nowhere to go: SCO is the one box with nothing behind it.
     </p>
+  </section>
+
+  <!-- ============ how the two found each other ============ -->
+  <section class="panel full">
+    <h2>How they found each other</h2>
+    <p class="hint" style="margin-top:0">
+      The head unit is given one thing — the phone's address. Everything in the right-hand
+      column it learned over the air, in the order below.
+    </p>
+    <table class="inds bredr">
+      <tbody>
+        <tr><td class="n">head unit</td><td id="car-hu-addr">—</td>
+            <td class="n">its own BD_ADDR, and the only device it pages</td></tr>
+        <tr><td class="n">inquiry</td><td id="car-found">—</td>
+            <td class="n">who answered the General Inquiry Access Code</td></tr>
+        <tr><td class="n">remote name</td><td id="car-found-name">—</td>
+            <td class="n">an inquiry result carries no name; this took its own request</td></tr>
+        <tr><td class="n">class of device</td><td id="car-found-cod">—</td>
+            <td class="n">the number a pairing list turns into a phone icon</td></tr>
+        <tr><td class="n">ACL</td><td id="car-acl">—</td>
+            <td class="n">the connection handle every layer above rides inside</td></tr>
+        <tr><td class="n">BR/EDR phase</td><td id="car-classic">—</td>
+            <td class="n">where <code>ClassicDevice</code>'s plan has got to</td></tr>
+      </tbody>
+    </table>
   </section>
 
   <!-- ============ the other roles ============ -->
@@ -304,8 +350,9 @@ const MARKUP = `
       <div class="role built">
         <span class="tag">built</span>
         <h4>Hands-Free — telephony</h4>
-        <p>Everything on this page: SDP discovery, an RFCOMM DLC, the Service Level
-           Connection, and the call state machine, both directions.</p>
+        <p>Everything on this page: inquiry and paging, SDP discovery, an RFCOMM DLC over
+           L2CAP, the Service Level Connection, and the call state machine, both
+           directions.</p>
       </div>
       <div class="role gap">
         <span class="tag">not built</span>
@@ -362,9 +409,10 @@ const PHONE_CALL_TEXT = {
 
 const LINK_TEXT = {
   down: "link down",
+  inquiring: "BR/EDR: inquiry, then the remote name",
+  paging: "BR/EDR: paging — opening the ACL connection",
   discovering: "SDP: searching the phone",
-  "starting-multiplexer": "RFCOMM: starting the multiplexer",
-  "opening-dlc": "RFCOMM: opening the data link connection",
+  "opening-dlc": "RFCOMM: L2CAP PSM 3, then the data link connection",
   "establishing-slc": "HFP: service level connection",
   configuring: "HFP: head-unit setup",
   ready: "linked",
@@ -414,13 +462,16 @@ export async function mount(root) {
   let tapeEmpty = true;
 
   // Both endpoints are Rust (`AgProtocol` and `HfProtocol`), so neither has a
-  // script and neither gets a pen.
+  // script and neither gets a pen. They do have BD_ADDRs, though — read them
+  // out of the kit rather than writing them twice, so the header can never
+  // disagree with the device it names.
+  const identity = JSON.parse(kit.status_json(0));
+
   heads.ag = createDeviceHeader({
     name: "Phone",
     kind: "Audio Gateway · AgProtocol",
     accent: "accent",
-    address: null,
-    addressNote: NO_ADDRESS,
+    address: identity.phone_address,
     dotMeans: "the head unit has an established Service Level Connection to it",
     run: { running: true, disabled: true, reason: SHARED_KIT },
   });
@@ -430,8 +481,7 @@ export async function mount(root) {
     name: "Head Unit",
     kind: "Hands-Free · HfProtocol",
     accent: "good",
-    address: null,
-    addressNote: NO_ADDRESS,
+    address: identity.head_unit_address,
     dotMeans: "it has an established Service Level Connection to the phone",
     run: { running: true, disabled: true, reason: SHARED_KIT },
   });
@@ -624,6 +674,21 @@ export async function mount(root) {
     $("car-credits").textContent = status.credits_out
       ? `${status.credits_out} credits to send, ${status.credits_in} granted to the phone`
       : "no data link connection yet";
+
+    // -- how the two found each other --
+    // Everything here except the head unit's own address arrived over the
+    // air, so an em-dash is the honest answer until it does.
+    const found = status.discovered.find((d) => d.address === status.phone_address);
+    $("car-hu-addr").textContent = status.head_unit_address;
+    $("car-found").textContent = found ? found.address : "nothing yet";
+    $("car-found-name").textContent = found && found.name ? found.name : "—";
+    $("car-found-cod").textContent = found ? found.class_of_device : "—";
+    $("car-acl").textContent =
+      status.acl_handle == null
+        ? "—"
+        : `handle 0x${status.acl_handle.toString(16).padStart(4, "0")}` +
+          (status.phone_linked ? " · the phone sees it too" : " · the phone has not seen it");
+    $("car-classic").textContent = status.classic;
   }
 
   render();

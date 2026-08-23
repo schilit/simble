@@ -284,6 +284,17 @@ pub struct SdpQueryResults {
     /// like a peer with fewer services, and acting on it opens a DLC on a
     /// channel nobody is listening to.
     pub truncated: bool,
+    /// The profile version from the matched record's
+    /// BluetoothProfileDescriptorList — the *profile* the peer implements,
+    /// which is not the same claim as the feature bits it later makes over
+    /// the channel, and worth being able to compare against them.
+    pub profile_version: Option<u16>,
+    /// Bytes of request written, and of response read. Cheap to record and
+    /// the only evidence a UI has that the search was a real transaction
+    /// rather than a lookup in a table.
+    pub request_bytes: usize,
+    /// See [`Self::request_bytes`].
+    pub response_bytes: usize,
 }
 
 impl SdpQueryResults {
@@ -330,6 +341,15 @@ pub struct SdpQueryHandler {
     continuations: u32,
     /// Where the answer is put for the driver to read.
     results: SharedSdpQueryResults,
+    /// Whether to ask for the BluetoothProfileDescriptorList as well.
+    ///
+    /// Off by default, and deliberately: `tests/classic_foreign_bytes_test`
+    /// pins the exact request bytes a real Bumble server accepted, and that
+    /// session asked for two attributes. A third would still be a valid
+    /// request, but nothing has ever proved a foreign server answers it —
+    /// so the verified request stays the default and the extra attribute is
+    /// opt-in for callers that need the version and can live with that.
+    want_profile_version: bool,
 }
 
 impl SdpQueryHandler {
@@ -345,9 +365,18 @@ impl SdpQueryHandler {
                 partial: Vec::new(),
                 continuations: 0,
                 results: results.clone(),
+                want_profile_version: false,
             },
             results,
         )
+    }
+
+    /// As [`Self::searching`], but also asks for the profile version. See
+    /// [`Self::want_profile_version`] for why that is not the default.
+    pub fn searching_with_profile_version(uuid: SdpUuid) -> (Self, SharedSdpQueryResults) {
+        let (mut handler, results) = Self::searching(uuid);
+        handler.want_profile_version = true;
+        (handler, results)
     }
 
     /// The ServiceSearchAttributeRequest this client asks with. The search
@@ -356,28 +385,39 @@ impl SdpQueryHandler {
     /// same builder produces both the first request and every follow-up.
     fn request(&self, transaction_id: u16, continuation_state: Vec<u8>) -> Vec<u8> {
         // Ask for the protocol descriptor (which carries the RFCOMM channel)
-        // and the service class list (which says what the channel is *for*).
+        // the service class list (which says what the channel is *for*) and
+        // the profile descriptor (which says which version of that profile).
         // Asking for both in one request is what makes the answer actionable.
         crate::classic::sdp::SdpPdu::ServiceSearchAttributeRequest {
             transaction_id,
             service_search_pattern: DataElement::sequence(vec![DataElement::uuid(self.uuid)]),
             maximum_attribute_byte_count: 0xFFFF,
-            attribute_id_list: DataElement::sequence(vec![
-                DataElement::unsigned_integer_16(attribute_id::PROTOCOL_DESCRIPTOR_LIST),
-                DataElement::unsigned_integer_16(attribute_id::SERVICE_CLASS_ID_LIST),
-            ]),
+            attribute_id_list: DataElement::sequence({
+                let mut ids = vec![
+                    DataElement::unsigned_integer_16(attribute_id::PROTOCOL_DESCRIPTOR_LIST),
+                    DataElement::unsigned_integer_16(attribute_id::SERVICE_CLASS_ID_LIST),
+                ];
+                if self.want_profile_version {
+                    ids.push(DataElement::unsigned_integer_16(
+                        attribute_id::BLUETOOTH_PROFILE_DESCRIPTOR_LIST,
+                    ));
+                }
+                ids
+            }),
             continuation_state,
         }
         .to_bytes()
     }
 
-    /// Pulls the RFCOMM server channel and service classes out of one
+    /// Pulls the RFCOMM server channel, service classes and profile version
+    /// out of one
     /// record's attribute list. The protocol descriptor is
     /// `[[L2CAP], [RFCOMM, channel]]`, so the channel is the second element
-    /// of the second layer.
-    fn read_record(attributes: &[ServiceAttribute]) -> Option<(u8, Vec<SdpUuid>)> {
+    /// of the second layer; the profile descriptor is `[[UUID, version]]`.
+    fn read_record(attributes: &[ServiceAttribute]) -> Option<(u8, Vec<SdpUuid>, Option<u16>)> {
         let mut channel = None;
         let mut classes = Vec::new();
+        let mut version = None;
         for attribute in attributes {
             match attribute.id {
                 attribute_id::PROTOCOL_DESCRIPTOR_LIST => {
@@ -397,10 +437,22 @@ impl SdpQueryHandler {
                         classes = list.iter().filter_map(DataElement::as_uuid).collect();
                     }
                 }
+                attribute_id::BLUETOOTH_PROFILE_DESCRIPTOR_LIST => {
+                    if let Some((value, _)) = attribute
+                        .value
+                        .as_sequence()
+                        .and_then(<[DataElement]>::first)
+                        .and_then(DataElement::as_sequence)
+                        .and_then(|profile| profile.get(1))
+                        .and_then(DataElement::as_unsigned_integer)
+                    {
+                        version = Some(value as u16);
+                    }
+                }
                 _ => {}
             }
         }
-        channel.map(|channel| (channel, classes))
+        channel.map(|channel| (channel, classes, version))
     }
 }
 
@@ -441,6 +493,7 @@ impl ProtocolHandler for SdpQueryHandler {
                     return vec![self.request(transaction_id, continuation_state)];
                 }
                 results.answered = true;
+                results.response_bytes += data.len();
                 let records = DataElement::from_bytes(&self.partial)
                     .as_ref()
                     .and_then(DataElement::as_sequence)
@@ -452,13 +505,15 @@ impl ProtocolHandler for SdpQueryHandler {
                         continue;
                     };
                     let attributes = ServiceAttribute::list_from_data_elements(items);
-                    if let Some(found) = Self::read_record(&attributes) {
-                        results.rfcomm_channels.push(found);
+                    if let Some((channel, classes, version)) = Self::read_record(&attributes) {
+                        results.rfcomm_channels.push((channel, classes));
+                        results.profile_version = results.profile_version.or(version);
                     }
                 }
             }
             Some(SdpPdu::ErrorResponse { error_code, .. }) => {
                 results.answered = true;
+                results.response_bytes += data.len();
                 results.error = Some(error_code);
             }
             // Anything else is not an answer to what we asked. Saying so
@@ -474,7 +529,11 @@ impl ProtocolHandler for SdpQueryHandler {
         }
         self.sent = true;
         // A null continuation state — one zero byte — opens the exchange.
-        vec![self.request(1, vec![0x00])]
+        let bytes = self.request(1, vec![0x00]);
+        if let Ok(mut results) = self.results.lock() {
+            results.request_bytes += bytes.len();
+        }
+        vec![bytes]
     }
 
     fn on_channel_closed(&mut self) {
@@ -486,6 +545,31 @@ impl ProtocolHandler for SdpQueryHandler {
         self.partial = Vec::new();
         self.continuations = 0;
     }
+}
+
+/// What the DLC underneath a port negotiated, and how much of its credit
+/// window is left right now.
+///
+/// The [`Dlc`](crate::classic::rfcomm::Dlc) itself belongs to the
+/// [`RfcommHandler`], which a port holder cannot reach — the handler is a
+/// `Box<dyn ProtocolHandler>` inside the host. So the handler mirrors these
+/// numbers out to the port after every frame. Without this, credit
+/// accounting is a thing the stack does that nothing can observe.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DlcWindow {
+    /// The data link's DLCI — server channel × 2, plus the direction bit.
+    pub dlci: u8,
+    /// Largest frame this end may send, as PN settled it.
+    pub tx_max_frame_size: u16,
+    /// Largest frame this end will accept.
+    pub rx_max_frame_size: u16,
+    /// Credits granted to the peer when the DLC opened.
+    pub rx_initial_credits: u8,
+    /// Credits this end holds now: how many more frames it may send before
+    /// the peer has to top it up.
+    pub tx_credits: u8,
+    /// Credits the peer holds now.
+    pub rx_credits: u8,
 }
 
 /// The device-facing end of an RFCOMM serial port: what arrived from the
@@ -511,6 +595,9 @@ pub struct RfcommPort {
     /// Total payloads received, which survives draining so a test or a UI
     /// can tell "nothing yet" from "nothing since I last looked".
     received_count: usize,
+    /// The data link's negotiated parameters and live credit window, as the
+    /// handler last mirrored them out.
+    window: Option<DlcWindow>,
 }
 
 impl RfcommPort {
@@ -541,6 +628,12 @@ impl RfcommPort {
     /// or poll; nothing is sent if no data link is open.
     pub fn write(&mut self, data: impl Into<Vec<u8>>) {
         self.outbound.push_back(data.into());
+    }
+
+    /// The DLC's negotiated frame sizes and its credit window as of the last
+    /// frame, or `None` before a data link exists.
+    pub fn window(&self) -> Option<DlcWindow> {
+        self.window
     }
 }
 
@@ -696,6 +789,27 @@ impl RfcommHandler {
         }
     }
 
+    /// Copies the open DLC's negotiated sizes and live credit counts out to
+    /// the port, so the device end can see the flow control it is subject to.
+    fn mirror_window(&mut self) {
+        let Some(multiplexer) = self.multiplexer.as_ref() else {
+            return;
+        };
+        let Ok(mut port) = self.port.lock() else {
+            return;
+        };
+        port.window = port.open_dlci.and_then(|dlci| {
+            multiplexer.dlcs.get(&dlci).map(|dlc| DlcWindow {
+                dlci,
+                tx_max_frame_size: dlc.tx_max_frame_size,
+                rx_max_frame_size: dlc.rx_max_frame_size,
+                rx_initial_credits: dlc.rx_initial_credits,
+                tx_credits: dlc.tx_credits,
+                rx_credits: dlc.rx_credits,
+            })
+        });
+    }
+
     /// Turns whatever the device queued into UIH frames on the open DLC.
     fn drain_outbound(&mut self) -> Vec<Vec<u8>> {
         let Some(multiplexer) = self.multiplexer.as_mut() else {
@@ -737,12 +851,14 @@ impl ProtocolHandler for RfcommHandler {
         // answering its SABM is what lets it ask for a DLC.
         frames.extend(self.drive_initiator(peer_mtu));
         frames.extend(self.drain_outbound());
+        self.mirror_window();
         frames
     }
 
     fn poll_output(&mut self, peer_mtu: u16) -> Vec<Vec<u8>> {
         let mut out = self.drive_initiator(peer_mtu);
         out.extend(self.drain_outbound());
+        self.mirror_window();
         out
     }
 
@@ -756,6 +872,7 @@ impl ProtocolHandler for RfcommHandler {
         self.dlc_requested = false;
         if let Ok(mut port) = self.port.lock() {
             port.open_dlci = None;
+            port.window = None;
         }
     }
 }
@@ -858,6 +975,11 @@ impl ClassicHost {
     /// The current ACL connection as `(handle, peer address)`, if any.
     pub fn connection(&self) -> Option<(u16, Address)> {
         self.connection
+    }
+
+    /// The name this host answers a Remote Name Request with.
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// Whether any L2CAP channel is open (i.e. a peer has completed the

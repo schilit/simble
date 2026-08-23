@@ -2240,7 +2240,7 @@ impl CentralDevice {
 // ---------------------------------------------------------------------------
 
 use crate::classic::rfcomm::RFCOMM_PSM;
-use crate::classic::sdp::{SDP_PSM, SdpServer, SdpUuid};
+use crate::classic::sdp::{SDP_PSM, SdpServer, SdpUuid, Service};
 use crate::device::classic_host::{self, spp_service_record};
 use crate::device::{
     ClassicHost, DiscoveredDevice, RfcommHandler, SdpHandler, SdpQueryHandler, SharedRfcommPort,
@@ -2282,6 +2282,24 @@ pub enum ClassicPhase {
     Accepting,
 }
 
+impl ClassicPhase {
+    /// Stable identifier for a UI or a status document.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Inquiring => "inquiring",
+            Self::ResolvingNames => "resolving-names",
+            Self::Paging => "paging",
+            Self::QueryingSdp => "querying-sdp",
+            Self::OpeningRfcomm => "opening-rfcomm",
+            Self::Exchanging => "exchanging",
+            Self::Done => "done",
+            Self::Failed => "failed",
+            Self::Accepting => "accepting",
+        }
+    }
+}
+
 /// One BR/EDR device in a [`SceneEngine`]: a [`ClassicHost`], the plan it is
 /// following, and the handles a test or a page reads its progress from.
 ///
@@ -2306,6 +2324,12 @@ pub struct ClassicDevice {
     to_send: Vec<u8>,
     /// What came back over the serial port.
     received: Vec<Vec<u8>>,
+    /// When set, the plan stops at [`ClassicPhase::Exchanging`] and stays
+    /// there: the link is a *seam* for someone else — a profile holding the
+    /// port — rather than a errand to run and finish. Without it the plan
+    /// disconnects as soon as one payload comes back, which is right for the
+    /// send-one-thing demo it was written for and fatal for a conversation.
+    hold_open: bool,
     error: Option<String>,
 }
 
@@ -2314,14 +2338,55 @@ impl ClassicDevice {
     /// RFCOMM port on `rfcomm_channel`, advertised in its SDP record under
     /// the Serial Port service class.
     pub fn acceptor(name: &str, class_of_device: [u8; 3], rfcomm_channel: u8) -> Self {
+        let (rfcomm, port) = RfcommHandler::echoing(rfcomm_channel);
+        Self::accepting(
+            name,
+            class_of_device,
+            vec![(
+                0x00010001,
+                spp_service_record(0x00010001, rfcomm_channel, name),
+            )],
+            rfcomm,
+            port,
+        )
+    }
+
+    /// An acceptor that serves the SDP `records` it is given and an RFCOMM
+    /// responder on `rfcomm_channel`, handing back the port so the *caller's*
+    /// profile drives the serial connection.
+    ///
+    /// [`Self::acceptor`] is this with an SPP record and a port that echoes.
+    /// A profile whose answer is not "the bytes you just sent" — HFP's Audio
+    /// Gateway, for one — needs its own record and its own hand on the port,
+    /// and that is the whole difference.
+    pub fn serving(
+        name: &str,
+        class_of_device: [u8; 3],
+        rfcomm_channel: u8,
+        records: Vec<(u32, Service)>,
+    ) -> (Self, SharedRfcommPort) {
+        let port: SharedRfcommPort =
+            std::sync::Arc::new(std::sync::Mutex::new(crate::device::RfcommPort::default()));
+        let rfcomm = RfcommHandler::new(rfcomm_channel, port.clone());
+        let mut device = Self::accepting(name, class_of_device, records, rfcomm, port.clone());
+        device.hold_open = true;
+        (device, port)
+    }
+
+    /// The shared body of [`Self::acceptor`] and [`Self::serving`].
+    fn accepting(
+        name: &str,
+        class_of_device: [u8; 3],
+        records: Vec<(u32, Service)>,
+        rfcomm: RfcommHandler,
+        port: SharedRfcommPort,
+    ) -> Self {
         let mut host = ClassicHost::new(name, class_of_device);
         let mut sdp = SdpHandler::new(SdpServer::new());
-        sdp.server_mut().service_records.insert(
-            0x00010001,
-            spp_service_record(0x00010001, rfcomm_channel, name),
-        );
+        for (handle, record) in records {
+            sdp.server_mut().service_records.insert(handle, record);
+        }
         let _ = host.register_handler(Box::new(sdp));
-        let (rfcomm, port) = RfcommHandler::echoing(rfcomm_channel);
         let _ = host.register_handler(Box::new(rfcomm));
         Self {
             host,
@@ -2333,6 +2398,7 @@ impl ClassicDevice {
             port: Some(port),
             to_send: Vec::new(),
             received: Vec::new(),
+            hold_open: false,
             error: None,
         }
     }
@@ -2345,8 +2411,43 @@ impl ClassicDevice {
         target: Address,
         payload: impl Into<Vec<u8>>,
     ) -> Self {
+        let mut device = Self::seeking(name, class_of_device, target, SERIAL_PORT_SERVICE_CLASS);
+        device.to_send = payload.into();
+        device
+    }
+
+    /// An initiator that discovers `target`, searches its SDP server for
+    /// `service`, opens the RFCOMM channel that record advertises — and then
+    /// **stops**, holding the data link open for the caller to drive through
+    /// the port it returns.
+    ///
+    /// [`Self::initiator`] is a whole errand: find a serial port, say one
+    /// thing on it, hang up. This is the same machinery with the errand
+    /// removed, which is what a profile above RFCOMM needs — the conversation
+    /// belongs to the profile, and the link must outlive the first payload
+    /// rather than being torn down by it.
+    pub fn client(
+        name: &str,
+        class_of_device: [u8; 3],
+        target: Address,
+        service: SdpUuid,
+    ) -> (Self, SharedRfcommPort) {
+        let port: SharedRfcommPort =
+            std::sync::Arc::new(std::sync::Mutex::new(crate::device::RfcommPort::default()));
+        let mut device = Self::seeking(name, class_of_device, target, service);
+        device.hold_open = true;
+        // The port is created here rather than in `advance_sdp`, so the
+        // profile above can start writing into it before SDP has answered —
+        // there is nowhere else to put bytes it produces while connecting.
+        device.port = Some(port.clone());
+        (device, port)
+    }
+
+    /// The shared body of [`Self::initiator`] and [`Self::client`]: a device
+    /// that inquires for `target` and searches its SDP for `service`.
+    fn seeking(name: &str, class_of_device: [u8; 3], target: Address, service: SdpUuid) -> Self {
         let mut host = ClassicHost::new(name, class_of_device);
-        let (sdp, results) = SdpQueryHandler::searching(SERIAL_PORT_SERVICE_CLASS);
+        let (sdp, results) = SdpQueryHandler::searching_with_profile_version(service);
         let _ = host.register_handler(Box::new(sdp));
         Self {
             host,
@@ -2355,13 +2456,25 @@ impl ClassicDevice {
             // the one doing the finding.
             scan_enable: classic_host::scan_enable::NONE,
             phase: ClassicPhase::Starting,
-            wanted_service: SERIAL_PORT_SERVICE_CLASS,
+            wanted_service: service,
             sdp_results: Some(results),
             port: None,
-            to_send: payload.into(),
+            to_send: Vec::new(),
             received: Vec::new(),
+            hold_open: false,
             error: None,
         }
+    }
+
+    /// This device's SDP query results, for a caller that wants to report
+    /// what the search actually cost and found.
+    pub fn sdp_results(&self) -> Option<&SharedSdpQueryResults> {
+        self.sdp_results.as_ref()
+    }
+
+    /// The serial port this device's RFCOMM handler serves, once there is one.
+    pub fn port(&self) -> Option<&SharedRfcommPort> {
+        self.port.as_ref()
     }
 
     /// Makes this device's Scan Enable `value` — used to build a device that
@@ -2474,17 +2587,22 @@ impl ClassicDevice {
                     Vec::new()
                 } else {
                     self.phase = ClassicPhase::Exchanging;
-                    if let Some(port) = self.port.as_ref()
+                    let payload = std::mem::take(&mut self.to_send);
+                    // An empty write is a zero-length UIH frame the peer has
+                    // to make sense of; a client with nothing to say of its
+                    // own should say nothing.
+                    if !payload.is_empty()
+                        && let Some(port) = self.port.as_ref()
                         && let Ok(mut port) = port.lock()
                     {
-                        port.write(std::mem::take(&mut self.to_send));
+                        port.write(payload);
                     }
                     Vec::new()
                 }
             }
             ClassicPhase::Exchanging => {
                 self.drain_port();
-                if self.received.is_empty() {
+                if self.hold_open || self.received.is_empty() {
                     Vec::new()
                 } else {
                     self.phase = ClassicPhase::Done;
@@ -2533,7 +2651,13 @@ impl ClassicDevice {
         };
         drop(results);
 
-        let (rfcomm, port) = RfcommHandler::initiator(rfcomm_channel);
+        // Reuse the port the caller was already given, if there is one: a
+        // profile holding a clone of it must not be handed a *different*
+        // port once SDP answers, or everything it queued goes nowhere.
+        let port = self.port.clone().unwrap_or_else(|| {
+            std::sync::Arc::new(std::sync::Mutex::new(crate::device::RfcommPort::default()))
+        });
+        let rfcomm = RfcommHandler::initiating(rfcomm_channel, port.clone());
         if let Err(e) = self.host.register_handler(Box::new(rfcomm)) {
             self.fail(e.to_string());
             return Vec::new();
@@ -2550,12 +2674,102 @@ impl ClassicDevice {
     }
 
     /// Move anything the serial port received into this device's record of it.
+    ///
+    /// A device holding the link open for a profile above it must *not* do
+    /// this: the port is the seam, and taking from it here would swallow the
+    /// bytes the profile is waiting for. That is not hypothetical — it is
+    /// what a plan written for "send one payload and read the echo" does to
+    /// its second consumer, silently, with the link up and every phase green.
     fn drain_port(&mut self) {
+        if self.hold_open {
+            return;
+        }
         if let Some(port) = self.port.as_ref()
             && let Ok(mut port) = port.lock()
         {
             self.received.extend(port.take_received());
         }
+    }
+
+    /// Everything a page renders about this device's BR/EDR link, as JSON:
+    /// the phase, what the inquiry turned up, the ACL connection, and the
+    /// state of the serial port on top of it.
+    ///
+    /// A BR/EDR link has no equivalent of an advertising report to look at,
+    /// so a page that shows nothing but "connected" cannot say *how* it
+    /// connected — which stage it is stuck in, or whether the peer was even
+    /// found. That is what this exists to make visible.
+    pub fn status_json(&self) -> String {
+        #[derive(serde::Serialize)]
+        struct FoundJson {
+            address: String,
+            class_of_device: String,
+            name: Option<String>,
+        }
+        #[derive(serde::Serialize)]
+        struct DlcJson {
+            dlci: u8,
+            tx_max_frame_size: u16,
+            rx_max_frame_size: u16,
+            rx_initial_credits: u8,
+            credits_out: u8,
+            credits_in: u8,
+        }
+        #[derive(serde::Serialize)]
+        struct ClassicJson {
+            phase: &'static str,
+            error: Option<String>,
+            name: String,
+            discovered: Vec<FoundJson>,
+            acl_handle: Option<u16>,
+            peer: Option<String>,
+            sdp_channel: Option<u8>,
+            sdp_profile_version: Option<u16>,
+            sdp_request_bytes: usize,
+            sdp_response_bytes: usize,
+            dlc: Option<DlcJson>,
+            received: usize,
+        }
+
+        let connection = self.host.connection();
+        let results = self.sdp_results.as_ref().and_then(|r| r.lock().ok());
+        let port = self.port.as_ref().and_then(|p| p.lock().ok());
+        let status = ClassicJson {
+            phase: self.phase.name(),
+            error: self.error.clone(),
+            name: self.host.name().to_string(),
+            discovered: self
+                .host
+                .discovered()
+                .iter()
+                .map(|d| FoundJson {
+                    address: d.address.to_string(),
+                    class_of_device: format!(
+                        "{:02X}{:02X}{:02X}",
+                        d.class_of_device[2], d.class_of_device[1], d.class_of_device[0]
+                    ),
+                    name: d.name.clone(),
+                })
+                .collect(),
+            acl_handle: connection.map(|(handle, _)| handle),
+            peer: connection.map(|(_, address)| address.to_string()),
+            sdp_channel: results
+                .as_ref()
+                .and_then(|r| r.channel_for(self.wanted_service)),
+            sdp_profile_version: results.as_ref().and_then(|r| r.profile_version),
+            sdp_request_bytes: results.as_ref().map(|r| r.request_bytes).unwrap_or(0),
+            sdp_response_bytes: results.as_ref().map(|r| r.response_bytes).unwrap_or(0),
+            dlc: port.as_ref().and_then(|p| p.window()).map(|w| DlcJson {
+                dlci: w.dlci,
+                tx_max_frame_size: w.tx_max_frame_size,
+                rx_max_frame_size: w.rx_max_frame_size,
+                rx_initial_credits: w.rx_initial_credits,
+                credits_out: w.tx_credits,
+                credits_in: w.rx_credits,
+            }),
+            received: port.as_ref().map(|p| p.received_count()).unwrap_or(0),
+        };
+        serde_json::to_string(&status).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"))
     }
 
     /// Feed one controller packet to the host and send back what it answers.
@@ -2716,6 +2930,12 @@ impl SceneEngine {
             SceneRole::Classic(ref d) => Some(d),
             _ => None,
         }
+    }
+
+    /// The BR/EDR status JSON of classic device `index` (see
+    /// [`ClassicDevice::status_json`]), or `None` if it isn't one.
+    pub fn classic_status_json(&self, index: usize) -> Option<String> {
+        Some(self.classic_device(index)?.status_json())
     }
 
     /// The number of devices in the scene.
@@ -4000,6 +4220,61 @@ mod web {
             let address = address.parse().map_err(js_error)?;
             let target = target.parse().map_err(js_error)?;
             Ok(self.scene.add_central(address, target))
+        }
+
+        /// Adds a **BR/EDR** device at `address` — the fifth thing a scene can
+        /// host, and the only one that is not LE.
+        ///
+        /// `role` is `"acceptor"` for a device that makes itself discoverable
+        /// and connectable and serves an echoing serial port on
+        /// `rfcomm_channel`, or `"initiator"` for one that inquires for
+        /// `target`, resolves its name, pages it, queries its SDP, opens the
+        /// serial port that record advertises and sends `payload` over it.
+        /// `target` is ignored for an acceptor, and `rfcomm_channel` for an
+        /// initiator — which channel to open is exactly what SDP is asked.
+        ///
+        /// Read its progress back with
+        /// [`Self::classic_status_json`]; a BR/EDR link has no advertising
+        /// report to watch, so the phase list is the only view of it there is.
+        pub fn add_classic_device(
+            &mut self,
+            address: &str,
+            role: &str,
+            name: &str,
+            rfcomm_channel: u8,
+            target: &str,
+            payload: &str,
+        ) -> Result<usize, JsValue> {
+            let address = address.parse().map_err(js_error)?;
+            let device = match role {
+                "acceptor" => super::ClassicDevice::acceptor(
+                    name,
+                    // Rendering / audio-video, wearable headset: what a
+                    // simble peripheral has always claimed to be.
+                    [0x04, 0x04, 0x24],
+                    rfcomm_channel,
+                ),
+                "initiator" => super::ClassicDevice::initiator(
+                    name,
+                    [0x0C, 0x02, 0x5A], // smartphone
+                    target.parse().map_err(js_error)?,
+                    payload.as_bytes().to_vec(),
+                ),
+                other => {
+                    return Err(js_error(format!(
+                        "unknown classic role {other:?}: expected \"acceptor\" or \"initiator\""
+                    )));
+                }
+            };
+            Ok(self.scene.add_classic_device(address, device))
+        }
+
+        /// The BR/EDR status of classic device `index`: its phase, what its
+        /// inquiry found, the ACL connection, what SDP answered, and the
+        /// RFCOMM data link's credit window. `undefined` if that device is
+        /// not a classic one.
+        pub fn classic_status_json(&self, index: usize) -> Option<String> {
+            self.scene.classic_status_json(index)
         }
 
         /// Adds a *scripted* central at `address` — a Rhai script that builds
@@ -6184,6 +6459,99 @@ mod classic_scene_tests {
             server.host().connection().is_none(),
             "the initiator disconnected, and the acceptor was told"
         );
+    }
+
+    /// The seam a profile above RFCOMM uses: both ends hold the link open and
+    /// talk through their ports for as long as they like, in both directions.
+    ///
+    /// The plan in `initiator`/`acceptor` is an errand — say one thing, read
+    /// the echo, hang up — and its two habits are silently fatal to anything
+    /// else: it tears the ACL down after the first payload, and it *drains
+    /// the port itself*, swallowing the bytes the profile above is waiting
+    /// for. Both are covered here, because both look like a working link
+    /// right up to the point where nothing arrives.
+    #[test]
+    fn test_a_held_open_link_carries_a_conversation_in_both_directions() {
+        let mut scene = SceneEngine::new();
+        let server_address = addr("AA:BB:CC:00:00:02");
+        let (server_device, server_port) = ClassicDevice::serving(
+            "Simble Service",
+            [0x04, 0x04, 0x24],
+            SPP_CHANNEL,
+            vec![(
+                0x00010001,
+                spp_service_record(0x00010001, SPP_CHANNEL, "Simble Service"),
+            )],
+        );
+        let server = scene.add_classic_device(server_address, server_device);
+        let (client_device, client_port) = ClassicDevice::client(
+            "Simble Client",
+            [0x04, 0x02, 0x5A],
+            server_address,
+            SERIAL_PORT_SERVICE_CLASS,
+        );
+        let client = scene.add_classic_device(addr("AA:BB:CC:00:00:01"), client_device);
+
+        // Bring the link up and wait for the data link, not for a payload.
+        let ticks = run_until(&mut scene, 200, |_| {
+            client_port.lock().is_ok_and(|p| p.is_open())
+        });
+        assert!(
+            client_port.lock().unwrap().is_open(),
+            "the data link never opened after {ticks} ticks: {:?}",
+            scene.classic_device(client).and_then(ClassicDevice::error)
+        );
+
+        // Three exchanges, alternating who speaks first — a conversation, not
+        // an errand.
+        for round in 0..3u8 {
+            client_port.lock().unwrap().write(vec![round, 0xC1]);
+            run_until(&mut scene, 40, |_| {
+                server_port
+                    .lock()
+                    .is_ok_and(|p| p.received_count() > usize::from(round))
+            });
+            assert_eq!(
+                server_port.lock().unwrap().take_received(),
+                [vec![round, 0xC1]],
+                "round {round}: the server's port, not the plan, must get the bytes"
+            );
+            server_port.lock().unwrap().write(vec![round, 0x5E]);
+            run_until(&mut scene, 40, |_| {
+                client_port
+                    .lock()
+                    .is_ok_and(|p| p.received_count() > usize::from(round))
+            });
+            assert_eq!(
+                client_port.lock().unwrap().take_received(),
+                [vec![round, 0x5E]],
+                "round {round}: and the answer must come back"
+            );
+        }
+
+        // The link is still up: nothing tore it down after the first payload.
+        assert_eq!(
+            scene.classic_device(client).map(ClassicDevice::phase),
+            Some(ClassicPhase::Exchanging),
+            "a held-open client stays in Exchanging rather than disconnecting"
+        );
+        assert!(
+            scene
+                .classic_device(server)
+                .and_then(|d| d.host().connection())
+                .is_some(),
+            "and the server still has the ACL"
+        );
+
+        // The credit window is visible from the device end, which is the only
+        // place a page or a test can see RFCOMM flow control at all.
+        let window = client_port
+            .lock()
+            .unwrap()
+            .window()
+            .expect("the port reports its DLC");
+        assert_eq!(window.dlci, SPP_CHANNEL << 1);
+        assert!(window.tx_credits > 0, "the client may still write");
     }
 
     /// The negative half, and the reason Scan Enable is modelled at all: a

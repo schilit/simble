@@ -1,8 +1,8 @@
 // Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
-//! The hands-free car kit: a phone and a head unit, wired to each other
-//! through the layers a real pair would use.
+//! The hands-free car kit: a phone and a head unit, on the simulated
+//! BR/EDR link a real pair would use.
 //!
 //! A car head unit is not "an HFP device". It is one endpoint playing
 //! several profile roles over one link at once — Hands-Free for telephony,
@@ -13,35 +13,36 @@
 //!
 //! What it owns:
 //!
-//! * an [`AgProtocol`] and an [`SdpServer`] — the phone, in the Audio
-//!   Gateway role, which owns the calls and the indicators;
-//! * an [`HfProtocol`] and an [`SdpClient`] — the head unit, in the
-//!   Hands-Free role, which discovers the phone and drives the call;
-//! * two RFCOMM [`Multiplexer`]s, initiator and responder, whose frames are
-//!   handed to each other.
+//! * a [`SceneEngine`] holding two BR/EDR devices — a phone with a real
+//!   BD_ADDR that is discoverable and connectable, and a head unit that
+//!   inquires for it, resolves its name, pages it, and opens L2CAP;
+//! * an [`AgProtocol`] — the phone, in the Audio Gateway role, which owns
+//!   the calls and the indicators;
+//! * an [`HfProtocol`] — the head unit, in the Hands-Free role, which
+//!   drives the call.
 //!
-//! Everything above the frame boundary is real: the AT lines in
-//! [`CarKit::transcript`] are the bytes [`HfProtocol`] and [`AgProtocol`]
-//! produced, the SDP exchange is real PDUs answered by a real
-//! [`SdpServer`], and the DLC is opened with a real PN/SABM/UA handshake and
-//! real credit accounting.
+//! The two protocol objects are attached to the ends of one RFCOMM data link
+//! by a pair of [`SharedRfcommPort`]s: AT bytes written to a port become UIH
+//! frames, ride an L2CAP Basic Mode channel on PSM 3, ride an ACL connection,
+//! and cross the simulated controller in [`crate::controller::sim`] before
+//! the far end's [`ClassicHost`](super::ClassicHost) hands them up. There is
+//! nothing wired directly together: unplug the phone's inquiry scan and the
+//! head unit never finds it.
 //!
 //! Transport-free in the same sense as [`CisCentral`](super::CisCentral):
-//! no sockets, no clock of its own, no HCI. The caller pumps it with
+//! no sockets and no clock of its own. The caller pumps it with
 //! [`CarKit::tick`] and reads state back out.
 //!
 //! ## What is not here
 //!
-//! * **L2CAP and the baseband.** The two multiplexers exchange RFCOMM
-//!   frames directly. On a real link those frames ride an L2CAP Basic Mode
-//!   channel on PSM 3 over an ACL connection — that path is
-//!   [`ClassicHost`](super::ClassicHost)'s job, not this type's.
 //! * **SCO/eSCO — the call audio.** Simble has no synchronous connection
 //!   at all: no `Setup Synchronous Connection`, no SCO handle, no audio
 //!   path. Codec negotiation here (`AT+BAC`/`+BCS`) settles *which* codec
 //!   would be used and then stops, because there is nothing to carry it.
 //!   SCO is the BR/EDR counterpart of the CIS work in
 //!   [`CisCentral`](super::CisCentral), and it is not implemented.
+//! * **Pairing.** The link is unauthenticated and unencrypted: no Secure
+//!   Simple Pairing, no link key. A real head unit pairs once and bonds.
 //! * **A2DP, AVRCP, PBAP.** Not wired here.
 
 use std::collections::VecDeque;
@@ -52,14 +53,12 @@ use crate::classic::hfp::{
     AgConfiguration, AgIndicator, AgIndicatorState, AgProtocol, AudioCodec, CallHoldOperation,
     CallInfo, CallInfoDirection, CallInfoMode, CallInfoMultiParty, CallInfoStatus,
     CallLineIdentification, HfConfiguration, HfIndicator, HfProtocol, HfpEvent, ProfileVersion,
-    VoiceRecognitionState, ag_feature, find_ag_sdp_record, hf_feature, make_ag_sdp_records,
-    parse_network_operator,
+    VoiceRecognitionState, ag_feature, hf_feature, make_ag_sdp_records, parse_network_operator,
 };
-use crate::classic::rfcomm::{
-    DEFAULT_INITIAL_CREDITS, DEFAULT_L2CAP_MTU, DEFAULT_MAX_FRAME_SIZE, Multiplexer,
-    MultiplexerEvent, Role,
-};
-use crate::classic::sdp::{SdpClient, SdpServer};
+use crate::classic::sdp::SdpUuid;
+use crate::device::SharedRfcommPort;
+use crate::transport::wasm_ws::{ClassicDevice, ClassicPhase, SceneEngine};
+use crate::types::Address;
 
 /// Server channel the phone advertises its Audio Gateway record on. Nothing
 /// in the profile fixes it — the head unit learns it from SDP, which is the
@@ -69,9 +68,45 @@ pub const AG_RFCOMM_CHANNEL: u8 = 4;
 /// SDP record handle for the phone's Audio Gateway record.
 const AG_SERVICE_RECORD_HANDLE: u32 = 0x0001_0004;
 
-/// L2CAP MTU claimed for the (notional) SDP channel, used to decide when an
-/// SDP response needs continuation.
-const SDP_MTU: u16 = 672;
+/// The Handsfree Audio Gateway service class (Assigned Numbers) — what the
+/// phone's record advertises itself as, and what the head unit searches the
+/// phone's SDP server for.
+const HANDSFREE_AUDIO_GATEWAY: SdpUuid = SdpUuid::Uuid16(0x111F);
+
+/// The phone's BD_ADDR. A BR/EDR address is a fixed public identity — there
+/// is no privacy, no resolvable address and no rotation on this transport,
+/// which is exactly why a car remembers a phone for years.
+pub const PHONE_ADDRESS: Address = Address::new([0x0A, 0x11, 0x00, 0xCC, 0xBB, 0xAA]);
+
+/// The head unit's BD_ADDR.
+pub const HEAD_UNIT_ADDRESS: Address = Address::new([0x0C, 0x22, 0x00, 0xCC, 0xBB, 0xAA]);
+
+/// The phone's Class of Device, 0x5A020C: major class Phone, minor class
+/// Smartphone, with the Networking / Capturing / Object Transfer / Telephony
+/// service bits set. This is the number a car's pairing list turns into a
+/// phone icon, and the reason a head unit can filter its inquiry results
+/// before any name has been resolved.
+const PHONE_CLASS_OF_DEVICE: [u8; 3] = [0x0C, 0x02, 0x5A];
+
+/// The head unit's Class of Device, 0x240420: major class Audio/Video,
+/// minor class Car audio, Audio + Rendering service bits.
+const HEAD_UNIT_CLASS_OF_DEVICE: [u8; 3] = [0x20, 0x04, 0x24];
+
+/// Simulated seconds one scene step advances. The BR/EDR half of the
+/// simulated controller counts *ticks* rather than reading this clock, so
+/// this value only has to be monotonic; it is here so the LE devices that
+/// may share a scene see a sensible rate.
+const SCENE_STEP_SECONDS: f64 = 0.01;
+
+/// Scene steps one [`CarKit::tick`] may spend.
+///
+/// Bring-up — inquiry, Remote Name Request, page, L2CAP, SDP, RFCOMM — is
+/// dozens of HCI round trips with nothing to print, so a page ticking at
+/// 8 Hz would take ten seconds to reach the first AT line if it spent one
+/// step per frame. The loop stops early as soon as an AT line is produced,
+/// which keeps the dialogue paced at roughly a line per frame once the
+/// silent part is over.
+const SCENE_STEPS_PER_TICK: usize = 24;
 
 /// How often the AG repeats `RING` while a call is alerting the head unit.
 /// HFP does not fix the period; real AGs sit between 2 and 5 seconds.
@@ -93,15 +128,24 @@ const TRANSCRIPT_LIMIT: usize = 400;
 // ---------------------------------------------------------------------------
 
 /// How far the head unit has got in reaching the phone's Hands-Free service.
+///
+/// The first three are the BR/EDR link coming up and belong to
+/// [`ClassicDevice`]; the rest are HFP's own and belong to this type. They
+/// are one list because from the dashboard's point of view there is one
+/// question — can I make a call yet — and the interesting failures are in
+/// the half nobody usually shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkPhase {
     /// Nothing started.
     Down,
+    /// Inquiring on the GIAC for the phone, then asking it its name.
+    Inquiring,
+    /// Paging the phone: the ACL connection is being made.
+    Paging,
     /// Searching the phone's SDP server for an Audio Gateway record.
     Discovering,
-    /// Opening the RFCOMM multiplexer session (DLCI 0).
-    StartingMultiplexer,
-    /// Opening the data link connection on the discovered channel.
+    /// Opening L2CAP PSM 3, the RFCOMM multiplexer session, and the data
+    /// link connection on the channel SDP named.
     OpeningDlc,
     /// Running the Service Level Connection procedure.
     EstablishingSlc,
@@ -118,14 +162,24 @@ impl LinkPhase {
     pub fn name(self) -> &'static str {
         match self {
             Self::Down => "down",
+            Self::Inquiring => "inquiring",
+            Self::Paging => "paging",
             Self::Discovering => "discovering",
-            Self::StartingMultiplexer => "starting-multiplexer",
             Self::OpeningDlc => "opening-dlc",
             Self::EstablishingSlc => "establishing-slc",
             Self::ConfiguringHeadUnit => "configuring",
             Self::Ready => "ready",
             Self::Failed => "failed",
         }
+    }
+
+    /// Whether HFP, rather than the BR/EDR link underneath it, is what the
+    /// phase is now reporting on.
+    fn is_profile_phase(self) -> bool {
+        matches!(
+            self,
+            Self::EstablishingSlc | Self::ConfiguringHeadUnit | Self::Ready | Self::Failed
+        )
     }
 }
 
@@ -217,23 +271,30 @@ enum HeadUnitCommand {
 // ---------------------------------------------------------------------------
 
 /// A phone and a head unit on one link.
-#[derive(Debug)]
 pub struct CarKit {
+    // --- the BR/EDR link: two devices, one simulated controller ---
+    scene: SceneEngine,
+    /// Index of the phone (the acceptor) in `scene`.
+    phone: usize,
+    /// Index of the head unit (the initiator) in `scene`.
+    head_unit: usize,
+    /// Monotonic simulated time handed to `scene.tick`.
+    scene_time: f64,
+    /// Whether [`CarKit::start`] has been called.
+    started: bool,
+
     // --- the phone, in the Audio Gateway role ---
     ag: AgProtocol,
-    ag_sdp: SdpServer,
-    ag_mux: Multiplexer,
+    /// The phone's end of the RFCOMM data link: AT responses go in here and
+    /// come out of the head unit's port, having crossed L2CAP, the ACL
+    /// connection, and the simulated controller.
+    ag_port: SharedRfcommPort,
 
     // --- the head unit, in the Hands-Free role ---
     hf: HfProtocol,
-    hf_sdp: SdpClient,
-    hf_mux: Multiplexer,
-
-    // --- the wire between them: RFCOMM frames in flight ---
-    to_ag: Vec<Vec<u8>>,
-    to_hf: Vec<Vec<u8>>,
-    dlci: Option<u8>,
-    channel: Option<u8>,
+    /// The head unit's end of the same data link. It exists before the DLC
+    /// does, because the profile has to have somewhere to write.
+    hf_port: SharedRfcommPort,
 
     phase: LinkPhase,
     error: Option<String>,
@@ -276,34 +337,67 @@ impl Default for CarKit {
     }
 }
 
+/// A [`SceneEngine`] is not `Debug` — it holds boxed protocol handlers — so
+/// this reports what is actually worth seeing in a panic message.
+impl std::fmt::Debug for CarKit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CarKit")
+            .field("link", &self.phase)
+            .field("classic", &self.classic_phase())
+            .field("call", &self.call)
+            .field("error", &self.error)
+            .field("at_lines", &self.next_seq)
+            .finish()
+    }
+}
+
 impl CarKit {
-    /// Builds a phone and a head unit that have never met.
+    /// Builds a phone and a head unit that have never met, in a scene of
+    /// their own.
     pub fn new() -> Self {
         let mut ag = AgProtocol::new(phone_configuration());
         ag.network_operator = "Simble Mobile".into();
 
-        let mut ag_sdp = SdpServer::new();
-        ag_sdp.service_records.insert(
-            AG_SERVICE_RECORD_HANDLE,
-            make_ag_sdp_records(
+        let mut scene = SceneEngine::new();
+        // The phone is the acceptor: discoverable, connectable, and serving
+        // the one SDP record that says where its Audio Gateway lives.
+        let (phone_device, ag_port) = ClassicDevice::serving(
+            "Simble Phone",
+            PHONE_CLASS_OF_DEVICE,
+            AG_RFCOMM_CHANNEL,
+            vec![(
                 AG_SERVICE_RECORD_HANDLE,
-                AG_RFCOMM_CHANNEL,
-                &phone_configuration(),
-                ProfileVersion::V1_9,
-            ),
+                make_ag_sdp_records(
+                    AG_SERVICE_RECORD_HANDLE,
+                    AG_RFCOMM_CHANNEL,
+                    &phone_configuration(),
+                    ProfileVersion::V1_9,
+                ),
+            )],
         );
+        let phone = scene.add_classic_device(PHONE_ADDRESS, phone_device);
+
+        // The head unit is the initiator, and it is told *the address*, not
+        // the channel: which RFCOMM channel to open is what the SDP search
+        // is for.
+        let (car_device, hf_port) = ClassicDevice::client(
+            "Simble Head Unit",
+            HEAD_UNIT_CLASS_OF_DEVICE,
+            PHONE_ADDRESS,
+            HANDSFREE_AUDIO_GATEWAY,
+        );
+        let head_unit = scene.add_classic_device(HEAD_UNIT_ADDRESS, car_device);
 
         Self {
+            scene,
+            phone,
+            head_unit,
+            scene_time: 0.0,
+            started: false,
             ag,
-            ag_sdp,
-            ag_mux: Multiplexer::new(Role::Responder, DEFAULT_L2CAP_MTU),
+            ag_port,
             hf: HfProtocol::new(head_unit_configuration()),
-            hf_sdp: SdpClient::new(),
-            hf_mux: Multiplexer::new(Role::Initiator, DEFAULT_L2CAP_MTU),
-            to_ag: Vec::new(),
-            to_hf: Vec::new(),
-            dlci: None,
-            channel: None,
+            hf_port,
             phase: LinkPhase::Down,
             error: None,
             now_ms: 0,
@@ -330,30 +424,46 @@ impl CarKit {
     // -- driving ------------------------------------------------------------
 
     /// Starts the head unit reaching for the phone. Idempotent.
+    ///
+    /// The phase stays [`LinkPhase::Down`] until the first [`Self::tick`]:
+    /// the head unit has not inquired yet, and saying it has before any HCI
+    /// has moved would cost the caller the one frame in which it could draw
+    /// the inquiry.
     pub fn start(&mut self) {
-        if self.phase == LinkPhase::Down {
-            self.phase = LinkPhase::Discovering;
-        }
+        self.started = true;
     }
 
     /// One step. `now_ms` is a monotonic millisecond clock supplied by the
     /// caller — this type keeps no clock of its own, so it stays usable from
     /// a test with a fabricated one.
     ///
-    /// Exactly one round trip of RFCOMM frames moves per call, which is what
-    /// makes the AT dialogue readable as it happens rather than appearing
-    /// all at once.
+    /// The simulated stack is pumped until something a caller can see has
+    /// happened — an AT line crossed the data link, or the link reached a new
+    /// phase — or [`SCENE_STEPS_PER_TICK`] steps are spent.
+    ///
+    /// Stopping on a phase change is what makes the BR/EDR bring-up visible
+    /// at all: inquiry, paging, SDP and the DLC are dozens of HCI round trips
+    /// with nothing to print, and a pump that only watched the transcript
+    /// would run the lot inside one tick and leave a page that has been given
+    /// the phases with no frame in which to draw them.
     pub fn tick(&mut self, now_ms: u64) -> Vec<CarKitEvent> {
         self.now_ms = now_ms;
         let mut events = Vec::new();
-
-        if self.phase == LinkPhase::Discovering {
-            self.run_sdp(&mut events);
+        if !self.started {
+            return events;
         }
+
         self.service_ringing();
         self.service_outgoing();
-        self.pump(&mut events);
         self.pump_command_queue();
+
+        let (seq, phase) = (self.next_seq, self.phase);
+        for _ in 0..SCENE_STEPS_PER_TICK {
+            self.step_scene(&mut events);
+            if self.next_seq != seq || self.phase != phase {
+                break;
+            }
+        }
 
         if self.reported_phase != self.phase {
             self.reported_phase = self.phase;
@@ -364,6 +474,92 @@ impl CarKit {
             events.push(CarKitEvent::CallPhase(self.call));
         }
         events
+    }
+
+    /// One step of the simulated stack: advance the scene, then move
+    /// whatever came out of each RFCOMM port up into the AT layer.
+    fn step_scene(&mut self, events: &mut Vec<CarKitEvent>) {
+        self.scene_time += SCENE_STEP_SECONDS;
+        self.scene.tick(self.scene_time);
+        self.follow_link(events);
+
+        // Bytes that arrived at the phone were written by the head unit, and
+        // vice versa. This is the whole of the attachment between HFP and
+        // RFCOMM: two byte queues, one at each end of a real data link.
+        for data in drain(&self.ag_port) {
+            let (out, hfp_events) = self.ag.receive(&data);
+            for line in out {
+                self.ag_send(line);
+            }
+            for event in hfp_events {
+                self.on_ag_hfp_event(event, events);
+            }
+        }
+        for data in drain(&self.hf_port) {
+            let (out, hfp_events) = self.hf.receive(&data);
+            for line in out {
+                self.hf_send(line);
+            }
+            for event in hfp_events {
+                self.on_hf_hfp_event(event, events);
+            }
+        }
+    }
+
+    /// The BR/EDR half of [`LinkPhase`]: mirror the head unit's
+    /// [`ClassicPhase`] until the data link opens, then hand over to HFP.
+    fn follow_link(&mut self, events: &mut Vec<CarKitEvent>) {
+        let classic = self.classic_phase();
+        if classic == ClassicPhase::Failed && self.phase != LinkPhase::Failed {
+            let reason = self
+                .scene
+                .classic_device(self.head_unit)
+                .and_then(ClassicDevice::error)
+                .unwrap_or("the BR/EDR link could not be established")
+                .to_string();
+            return self.fail(&reason, events);
+        }
+        if self.phase.is_profile_phase() {
+            return;
+        }
+
+        // The DLC opening is the handover: everything below it was the link,
+        // everything above it is the profile.
+        if self.dlc_is_open() {
+            self.record_details();
+            self.phase = LinkPhase::EstablishingSlc;
+            let bytes = self.hf.start_slc();
+            self.hf_send(bytes);
+            return;
+        }
+        self.phase = match classic {
+            ClassicPhase::Starting | ClassicPhase::Inquiring | ClassicPhase::ResolvingNames => {
+                LinkPhase::Inquiring
+            }
+            ClassicPhase::Paging => LinkPhase::Paging,
+            ClassicPhase::QueryingSdp => LinkPhase::Discovering,
+            ClassicPhase::OpeningRfcomm | ClassicPhase::Exchanging | ClassicPhase::Done => {
+                LinkPhase::OpeningDlc
+            }
+            ClassicPhase::Failed => LinkPhase::Failed,
+            ClassicPhase::Accepting => self.phase,
+        };
+    }
+
+    /// How far the head unit's BR/EDR link has got.
+    fn classic_phase(&self) -> ClassicPhase {
+        self.scene
+            .classic_device(self.head_unit)
+            .map(ClassicDevice::phase)
+            .unwrap_or(ClassicPhase::Failed)
+    }
+
+    /// Whether the RFCOMM data link carrying AT is open at the head unit.
+    fn dlc_is_open(&self) -> bool {
+        self.hf_port
+            .lock()
+            .ok()
+            .is_some_and(|port| port.window().is_some())
     }
 
     // -- the phone's controls ------------------------------------------------
@@ -527,132 +723,43 @@ impl CarKit {
 
     // -- the link ------------------------------------------------------------
 
-    /// Runs the whole SDP transaction in one tick. It is request/response
-    /// with no waiting in between here, so spreading it over ticks would
-    /// only be theatre.
-    fn run_sdp(&mut self, events: &mut Vec<CarKitEvent>) {
-        let mut request_bytes = 0usize;
-        let mut response_bytes = 0usize;
-        let mut round_trips = 0usize;
-
-        let found = {
-            let Self { hf_sdp, ag_sdp, .. } = self;
-            find_ag_sdp_record(hf_sdp, |request| {
-                request_bytes += request.len();
-                round_trips += 1;
-                let response = ag_sdp.handle_request(request, SDP_MTU);
-                response_bytes += response.len();
-                response
-            })
-        };
-
-        let (channel, version, features) = match found {
-            Ok(Some(record)) => record,
-            Ok(None) => {
-                return self.fail("the phone has no Hands-Free Audio Gateway record", events);
-            }
-            Err(error) => return self.fail(&format!("SDP: {error}"), events),
-        };
-
-        self.sdp_detail = Some(format!(
-            "ServiceSearchAttributeRequest for Handsfree Audio Gateway (0x111F) — \
-             {round_trips} round trip(s), {request_bytes} bytes out, {response_bytes} in. \
-             Answer: RFCOMM server channel {channel}, HFP v1.{}, SDP features {features:#06x}.",
-            version_minor(version)
-        ));
-        self.channel = Some(channel);
-
-        self.ag_mux
-            .listen(channel, DEFAULT_MAX_FRAME_SIZE, DEFAULT_INITIAL_CREDITS);
-        match self.hf_mux.start() {
-            Ok(frame) => {
-                self.to_ag.push(frame);
-                self.phase = LinkPhase::StartingMultiplexer;
-            }
-            Err(error) => self.fail(&format!("RFCOMM: {error}"), events),
+    /// Snapshots what SDP answered and what the DLC negotiated, once both
+    /// have happened. These are the two facts about the link a dashboard can
+    /// show and a spec-reader will check.
+    fn record_details(&mut self) {
+        if let Some(results) = self
+            .scene
+            .classic_device(self.head_unit)
+            .and_then(ClassicDevice::sdp_results)
+            .and_then(|r| r.lock().ok())
+            && results.answered
+        {
+            let channel = results
+                .channel_for(HANDSFREE_AUDIO_GATEWAY)
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "none".into());
+            // A BluetoothProfileDescriptorList version is `major << 8 | minor`
+            // with both in *decimal*, so HFP 1.9 is 0x0109 — not a nibble
+            // pair, which is what turns v1.9 into "v1.0" if you assume one.
+            let version = results
+                .profile_version
+                .map(|v| format!("HFP v{}.{}", v >> 8, v & 0xFF))
+                .unwrap_or_else(|| "no profile descriptor".into());
+            self.sdp_detail = Some(format!(
+                "ServiceSearchAttributeRequest for Handsfree Audio Gateway (0x111F) on \
+                 L2CAP PSM 1 — {} bytes out, {} in. Answer: RFCOMM server channel {channel}, \
+                 {version}.",
+                results.request_bytes, results.response_bytes
+            ));
         }
-    }
-
-    /// Moves one round trip of RFCOMM frames: head unit to phone, then
-    /// phone back to head unit.
-    fn pump(&mut self, events: &mut Vec<CarKitEvent>) {
-        for frame in std::mem::take(&mut self.to_ag) {
-            match self.ag_mux.receive(&frame) {
-                Ok((out, mux_events)) => {
-                    self.to_hf.extend(out);
-                    for event in mux_events {
-                        self.on_ag_mux_event(event, events);
-                    }
-                }
-                Err(error) => return self.fail(&format!("RFCOMM (phone): {error}"), events),
-            }
-        }
-        for frame in std::mem::take(&mut self.to_hf) {
-            match self.hf_mux.receive(&frame) {
-                Ok((out, mux_events)) => {
-                    self.to_ag.extend(out);
-                    for event in mux_events {
-                        self.on_hf_mux_event(event, events);
-                    }
-                }
-                Err(error) => return self.fail(&format!("RFCOMM (head unit): {error}"), events),
-            }
-        }
-    }
-
-    fn on_hf_mux_event(&mut self, event: MultiplexerEvent, events: &mut Vec<CarKitEvent>) {
-        match event {
-            MultiplexerEvent::Started => {
-                let channel = self.channel.unwrap_or(AG_RFCOMM_CHANNEL);
-                match self
-                    .hf_mux
-                    .open_dlc(channel, DEFAULT_MAX_FRAME_SIZE, DEFAULT_INITIAL_CREDITS)
-                {
-                    Ok(frame) => {
-                        self.to_ag.push(frame);
-                        self.phase = LinkPhase::OpeningDlc;
-                    }
-                    Err(error) => self.fail(&format!("RFCOMM: {error}"), events),
-                }
-            }
-            MultiplexerEvent::DlcOpened(dlci) => {
-                self.dlci = Some(dlci);
-                self.record_dlc_detail();
-                self.phase = LinkPhase::EstablishingSlc;
-                let bytes = self.hf.start_slc();
-                self.hf_send(bytes);
-            }
-            MultiplexerEvent::DlcOpenRejected(_) => {
-                self.fail("the phone refused the data link connection", events);
-            }
-            MultiplexerEvent::DataReceived(_, data) => {
-                let (out, hfp_events) = self.hf.receive(&data);
-                for line in out {
-                    self.hf_send(line);
-                }
-                for event in hfp_events {
-                    self.on_hf_hfp_event(event, events);
-                }
-            }
-            MultiplexerEvent::Disconnected | MultiplexerEvent::DlcClosed(_) => {
-                self.fail("the link went down", events);
-            }
-        }
-    }
-
-    fn on_ag_mux_event(&mut self, event: MultiplexerEvent, events: &mut Vec<CarKitEvent>) {
-        match event {
-            MultiplexerEvent::DataReceived(_, data) => {
-                let (out, hfp_events) = self.ag.receive(&data);
-                for line in out {
-                    self.ag_send(line);
-                }
-                for event in hfp_events {
-                    self.on_ag_hfp_event(event, events);
-                }
-            }
-            MultiplexerEvent::DlcOpened(_) => self.record_dlc_detail(),
-            _ => {}
+        if let Some(window) = self.hf_port.lock().ok().and_then(|p| p.window()) {
+            self.dlc_detail = Some(format!(
+                "DLCI {} — frame size {} out / {} in, {} credits granted at open",
+                window.dlci,
+                window.tx_max_frame_size,
+                window.rx_max_frame_size,
+                window.rx_initial_credits
+            ));
         }
     }
 
@@ -911,24 +1018,25 @@ impl CarKit {
 
     // -- byte plumbing --------------------------------------------------------
 
-    /// Sends one AT command line from the head unit, recording exactly what
-    /// crossed the DLC.
+    /// Sends one AT command line from the head unit into its RFCOMM port.
+    ///
+    /// This is the attachment, seen from above: HFP hands a line of bytes to
+    /// the serial port and is done with it. What happens next — a UIH frame,
+    /// a credit, an L2CAP SDU on PSM 3, an ACL packet, the controller — is
+    /// none of the profile's business, which is exactly the property that
+    /// makes an AT profile portable across transports in the first place.
     fn hf_send(&mut self, line: Vec<u8>) {
         self.log(true, &line);
-        let Some(dlci) = self.dlci else { return };
-        match self.hf_mux.write(dlci, &line) {
-            Ok(frames) => self.to_ag.extend(frames),
-            Err(error) => self.error = Some(format!("RFCOMM (head unit): {error}")),
+        if let Ok(mut port) = self.hf_port.lock() {
+            port.write(line);
         }
     }
 
     /// Sends one AT response line from the phone.
     fn ag_send(&mut self, line: Vec<u8>) {
         self.log(false, &line);
-        let Some(dlci) = self.dlci else { return };
-        match self.ag_mux.write(dlci, &line) {
-            Ok(frames) => self.to_hf.extend(frames),
-            Err(error) => self.error = Some(format!("RFCOMM (phone): {error}")),
+        if let Ok(mut port) = self.ag_port.lock() {
+            port.write(line);
         }
     }
 
@@ -961,31 +1069,13 @@ impl CarKit {
         self.phase = LinkPhase::Failed;
         events.push(CarKitEvent::Failed(message.to_string()));
     }
-
-    /// Snapshots the credit window the DLC actually negotiated, which is the
-    /// part of RFCOMM that is easiest to claim and hardest to see.
-    fn record_dlc_detail(&mut self) {
-        let Some(dlci) = self.dlci.or(self.channel.map(|c| c << 1)) else {
-            return;
-        };
-        let Some(dlc) = self.hf_mux.dlcs.get(&dlci) else {
-            return;
-        };
-        self.dlc_detail = Some(format!(
-            "DLCI {dlci} — frame size {} out / {} in, {} credits granted at open",
-            dlc.tx_max_frame_size, dlc.rx_max_frame_size, dlc.rx_initial_credits
-        ));
-    }
 }
 
-fn version_minor(version: ProfileVersion) -> u8 {
-    match version {
-        ProfileVersion::V1_5 => 5,
-        ProfileVersion::V1_6 => 6,
-        ProfileVersion::V1_7 => 7,
-        ProfileVersion::V1_8 => 8,
-        ProfileVersion::V1_9 => 9,
-    }
+/// Takes everything that arrived at one end of the data link.
+fn drain(port: &SharedRfcommPort) -> Vec<Vec<u8>> {
+    port.lock()
+        .map(|mut port| port.take_received())
+        .unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------
@@ -1072,9 +1162,30 @@ struct IndicatorJson {
     mirrored: Option<u32>,
 }
 
+/// One device the head unit's inquiry turned up.
+#[derive(Serialize)]
+struct FoundJson {
+    address: String,
+    class_of_device: String,
+    name: Option<String>,
+}
+
 #[derive(Serialize)]
 struct CarKitStatusJson {
     link: &'static str,
+    /// The head unit's BR/EDR phase, which is where `link` comes from until
+    /// the data link opens. Shown separately so a page can say *inquiry*
+    /// rather than only "connecting".
+    classic: &'static str,
+    phone_address: String,
+    head_unit_address: String,
+    /// What the head unit's inquiry found — the acid test that this is a
+    /// link and not a wire: a phone that stops inquiry-scanning vanishes.
+    discovered: Vec<FoundJson>,
+    acl_handle: Option<u16>,
+    /// Whether the *phone* also has the ACL connection. Both ends agreeing
+    /// is what separates a link from a page that drew one.
+    phone_linked: bool,
     error: Option<String>,
     steps: Vec<StepJson>,
     call: &'static str,
@@ -1103,9 +1214,34 @@ impl CarKit {
     /// transcript tail the caller has not seen yet, so a page can append
     /// rather than redraw.
     pub fn status_json(&self, since_seq: u64) -> String {
-        let dlc = self.dlci.and_then(|dlci| self.hf_mux.dlcs.get(&dlci));
+        let window = self.hf_port.lock().ok().and_then(|p| p.window());
+        let head_unit = self.scene.classic_device(self.head_unit);
         let status = CarKitStatusJson {
             link: self.phase.name(),
+            classic: self.classic_phase().name(),
+            phone_address: PHONE_ADDRESS.to_string(),
+            head_unit_address: HEAD_UNIT_ADDRESS.to_string(),
+            discovered: head_unit
+                .map(ClassicDevice::discovered)
+                .unwrap_or_default()
+                .iter()
+                .map(|d| FoundJson {
+                    address: d.address.to_string(),
+                    class_of_device: format!(
+                        "0x{:02X}{:02X}{:02X}",
+                        d.class_of_device[2], d.class_of_device[1], d.class_of_device[0]
+                    ),
+                    name: d.name.clone(),
+                })
+                .collect(),
+            acl_handle: head_unit
+                .and_then(|d| d.host().connection())
+                .map(|(handle, _)| handle),
+            phone_linked: self
+                .scene
+                .classic_device(self.phone)
+                .and_then(|d| d.host().connection())
+                .is_some(),
             error: self.error.clone(),
             steps: self.steps(),
             call: self.call.name(),
@@ -1127,8 +1263,8 @@ impl CarKit {
             hf_features: self.ag.supported_hf_features,
             clip_enabled: self.ag.cli_notification_enabled,
             ciev_enabled: self.ag.indicator_report_enabled,
-            credits_out: dlc.map(|d| d.tx_credits).unwrap_or(0),
-            credits_in: dlc.map(|d| d.rx_credits).unwrap_or(0),
+            credits_out: window.map(|w| w.tx_credits).unwrap_or(0),
+            credits_in: window.map(|w| w.rx_credits).unwrap_or(0),
             at: self
                 .transcript
                 .iter()
@@ -1159,12 +1295,13 @@ impl CarKit {
         let phase = self.phase;
         let order = |p: LinkPhase| match p {
             LinkPhase::Down => 0,
-            LinkPhase::Discovering => 1,
-            LinkPhase::StartingMultiplexer => 2,
-            LinkPhase::OpeningDlc => 3,
-            LinkPhase::EstablishingSlc => 4,
-            LinkPhase::ConfiguringHeadUnit => 5,
-            LinkPhase::Ready | LinkPhase::Failed => 6,
+            LinkPhase::Inquiring => 1,
+            LinkPhase::Paging => 2,
+            LinkPhase::Discovering => 3,
+            LinkPhase::OpeningDlc => 4,
+            LinkPhase::EstablishingSlc => 5,
+            LinkPhase::ConfiguringHeadUnit => 6,
+            LinkPhase::Ready | LinkPhase::Failed => 7,
         };
         let reached = order(phase);
         let step = |id, label, at: usize, detail: String| StepJson {
@@ -1181,33 +1318,56 @@ impl CarKit {
             },
             detail,
         };
+        let head_unit = self.scene.classic_device(self.head_unit);
+        let found =
+            head_unit.and_then(|d| d.discovered().iter().find(|f| f.address == PHONE_ADDRESS));
         vec![
             step(
-                "sdp",
-                "SDP — find the phone's Audio Gateway record",
+                "inquiry",
+                "Inquiry — find the phone on the air, then ask it its name",
                 1,
-                self.sdp_detail.clone().unwrap_or_default(),
-            ),
-            step(
-                "mux",
-                "RFCOMM multiplexer — SABM/UA on DLCI 0",
-                2,
-                if self.hf_mux.is_connected() {
-                    "session up; the control channel carries PN and MSC".into()
-                } else {
-                    String::new()
+                match found {
+                    Some(device) => format!(
+                        "{} answered the GIAC with Class of Device 0x{:02X}{:02X}{:02X}; \
+                         a Remote Name Request turned that into {:?} — an inquiry result \
+                         carries no name at all.",
+                        device.address,
+                        device.class_of_device[2],
+                        device.class_of_device[1],
+                        device.class_of_device[0],
+                        device.name.as_deref().unwrap_or("(not yet resolved)")
+                    ),
+                    None => String::new(),
                 },
             ),
             step(
-                "dlc",
-                "Data link connection — PN, SABM/UA, credit grant",
+                "page",
+                "Paging — an ACL connection to the phone",
+                2,
+                match head_unit.and_then(|d| d.host().connection()) {
+                    Some((handle, peer)) => format!(
+                        "connection handle {handle:#06x} to {peer}; every layer above \
+                         this one is a payload inside its ACL packets."
+                    ),
+                    None => String::new(),
+                },
+            ),
+            step(
+                "sdp",
+                "SDP over L2CAP PSM 1 — find the phone's Audio Gateway record",
                 3,
+                self.sdp_detail.clone().unwrap_or_default(),
+            ),
+            step(
+                "dlc",
+                "RFCOMM over L2CAP PSM 3 — multiplexer, then PN / SABM / UA and the credit grant",
+                4,
                 self.dlc_detail.clone().unwrap_or_default(),
             ),
             step(
                 "slc",
                 "Service Level Connection — BRSF, BAC, CIND, CMER, CHLD, BIND",
-                4,
+                5,
                 if self.hf.supported_ag_features != 0 {
                     format!(
                         "AG features {:#06x}, {} indicators discovered, codec {}",
@@ -1226,8 +1386,8 @@ impl CarKit {
             step(
                 "setup",
                 "Head-unit setup — CMEE, CLIP, CCWA, COPS, VGS/VGM",
-                5,
-                if self.command_queue.is_empty() && reached >= 5 {
+                6,
+                if self.command_queue.is_empty() && reached >= 6 {
                     format!(
                         "caller ID {}, indicator reporting {}",
                         if self.ag.cli_notification_enabled {
@@ -1248,7 +1408,7 @@ impl CarKit {
             step(
                 "call",
                 "Call state machine — call / callsetup over +CIEV",
-                6,
+                7,
                 match self.call {
                     CallPhase::Idle => "idle".into(),
                     other => other.name().to_string(),
@@ -1312,6 +1472,89 @@ mod tests {
         kit.transcript().any(|line| line.text == text)
     }
 
+    /// The link the AT bytes ride is a real BR/EDR one, and this is where
+    /// that stops being a claim: the head unit was told an *address*, and
+    /// everything it knows beyond that — the phone's Class of Device, its
+    /// name, its RFCOMM channel — it learned over the air.
+    #[test]
+    fn test_the_head_unit_finds_the_phone_by_inquiry_before_it_can_call_it() {
+        let kit = connected();
+        let head_unit = kit.scene.classic_device(kit.head_unit).expect("head unit");
+
+        let found = head_unit
+            .discovered()
+            .iter()
+            .find(|d| d.address == PHONE_ADDRESS)
+            .expect("the inquiry found the phone");
+        assert_eq!(
+            found.class_of_device, PHONE_CLASS_OF_DEVICE,
+            "the Class of Device is the phone's, read off an Inquiry Result"
+        );
+        assert_eq!(
+            found.name.as_deref(),
+            Some("Simble Phone"),
+            "and its name, which only a Remote Name Request can supply — an \
+             inquiry result carries none"
+        );
+    }
+
+    /// Both ends agree there is an ACL connection, which is the difference
+    /// between a link and a drawing of one.
+    #[test]
+    fn test_the_at_bytes_ride_an_acl_connection_both_ends_can_see() {
+        let kit = connected();
+        let (car_handle, car_peer) = kit
+            .scene
+            .classic_device(kit.head_unit)
+            .and_then(|d| d.host().connection())
+            .expect("the head unit has an ACL connection");
+        let (phone_handle, phone_peer) = kit
+            .scene
+            .classic_device(kit.phone)
+            .and_then(|d| d.host().connection())
+            .expect("the phone has one too");
+        assert_eq!(car_peer, PHONE_ADDRESS);
+        assert_eq!(phone_peer, HEAD_UNIT_ADDRESS);
+        // Handles are allocated per controller, so they need not match — but
+        // neither may be the "no connection" sentinel.
+        assert_ne!(car_handle, 0);
+        assert_ne!(phone_handle, 0);
+    }
+
+    /// The phases are walked in the order the sequence actually happens in,
+    /// and none is skipped. A link that reached `Ready` without ever being
+    /// in `Paging` would be a worse bug than one that never got there.
+    #[test]
+    fn test_the_link_walks_the_bredr_sequence_in_order() {
+        let mut kit = CarKit::new();
+        kit.start();
+        let events = drive(&mut kit, |k| k.phase() == LinkPhase::Ready);
+        let phases: Vec<LinkPhase> = events
+            .into_iter()
+            .filter_map(|e| match e {
+                CarKitEvent::LinkPhase(p) => Some(p),
+                _ => None,
+            })
+            .collect();
+        let expected = [
+            LinkPhase::Inquiring,
+            LinkPhase::Paging,
+            LinkPhase::Discovering,
+            LinkPhase::OpeningDlc,
+            LinkPhase::EstablishingSlc,
+            LinkPhase::ConfiguringHeadUnit,
+            LinkPhase::Ready,
+        ];
+        let mut cursor = 0;
+        for phase in expected {
+            let found = phases[cursor..]
+                .iter()
+                .position(|p| *p == phase)
+                .unwrap_or_else(|| panic!("{phase:?} missing after {cursor}: {phases:?}"));
+            cursor += found + 1;
+        }
+    }
+
     #[test]
     fn test_the_head_unit_discovers_the_channel_rather_than_assuming_it() {
         let kit = connected();
@@ -1324,6 +1567,19 @@ mod tests {
         assert!(
             detail.contains(&format!("server channel {AG_RFCOMM_CHANNEL}")),
             "the SDP answer should name the channel: {detail}"
+        );
+        // The profile version came out of the same record. A
+        // BluetoothProfileDescriptorList encodes it as `major << 8 | minor`
+        // in decimal, so reading the minor as a nibble reports 1.9 as "v1.0"
+        // — a wrong number that still looks like a version, which is the
+        // only reason this is asserted rather than eyeballed.
+        assert!(
+            detail.contains("HFP v1.9"),
+            "the record advertises HFP 1.9: {detail}"
+        );
+        assert!(
+            detail.contains("bytes out"),
+            "and the search was a real transaction with a size: {detail}"
         );
     }
 
@@ -1500,13 +1756,22 @@ mod tests {
     #[test]
     fn test_the_dlc_negotiates_a_credit_window_rather_than_flowing_freely() {
         let kit = connected();
-        let dlci = kit.dlci.expect("dlc open");
-        let dlc = kit.hf_mux.dlcs.get(&dlci).expect("dlc");
+        let window = kit
+            .hf_port
+            .lock()
+            .unwrap()
+            .window()
+            .expect("the data link is open");
         assert!(
-            dlc.tx_credits > 0,
+            window.tx_credits > 0,
             "the head unit may only write while it holds credits"
         );
-        assert_eq!(dlc.rx_initial_credits, DEFAULT_INITIAL_CREDITS);
+        assert!(window.rx_initial_credits > 0, "the phone granted credits");
+        assert_eq!(
+            window.dlci,
+            AG_RFCOMM_CHANNEL << 1,
+            "the DLCI is the server channel SDP advertised, doubled"
+        );
     }
 
     #[test]
