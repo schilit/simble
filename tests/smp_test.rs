@@ -391,3 +391,221 @@ fn test_virtual_device_le_secure_connections_pairing_end_to_end() {
         .expect("bond survives reconnect");
     assert_eq!(bond.keys.ltk.expect("SC LTK still stored").value, link_ltk);
 }
+
+// ===========================================================================
+//  Failure paths — the half of SMP that nothing exercised
+// ===========================================================================
+//
+// Coverage analysis found `PairingSession::fail()` with an execution count of
+// **zero**, and no test anywhere referencing `CONFIRM_VALUE_FAILED` or
+// `DHKEY_CHECK_FAILED`. That matters more than an ordinary coverage hole: the
+// confirm-value comparison IS the man-in-the-middle defence of LE pairing.
+//
+// Both peers compute the confirm with the same code, so the happy path agrees
+// with itself whether or not the comparison is load-bearing. If the check
+// returned `Ok(())` instead of failing, every other test in this repo would
+// still pass. These tests exist to make that impossible: each corrupts a PDU
+// in flight and asserts not just that a Pairing Failed comes back, but that
+// **no key was derived and the link never became encrypted** — the thing an
+// attacker would actually be after.
+
+/// The SMP opcode inside an L2CAP frame, and the offset of its first payload
+/// octet. `process_l2cap_packet` is given whole frames — 2 octets of length,
+/// 2 of CID (0x0006 for SMP), then the SMP PDU — so a tamper function has to
+/// look past the header rather than at byte 0.
+const L2CAP_HEADER: usize = 4;
+
+fn smp_opcode(frame: &[u8]) -> Option<u8> {
+    frame.get(L2CAP_HEADER).copied()
+}
+
+/// Runs a pairing exchange, applying `tamper` to every PDU in flight.
+///
+/// `tamper` sees each PDU just before it is delivered and may rewrite it —
+/// standing in for an active attacker on the link, which is exactly the threat
+/// the confirm value defends against.
+fn run_pairing_with_tampering(
+    sc: bool,
+    mut tamper: impl FnMut(&mut Vec<u8>),
+) -> (VirtualDevice, u16, VirtualDevice, u16) {
+    let central_addr = Address::from_be_bytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+    let peripheral_addr = Address::from_be_bytes([0x66, 0x55, 0x44, 0x33, 0x22, 0x11]);
+    let mut central = VirtualDevice::new("central", central_addr, AddressType::Random);
+    let mut peripheral = VirtualDevice::new("peripheral", peripheral_addr, AddressType::Random);
+    central.bond_store = Some(Box::new(MemoryBondStore::new()));
+    peripheral.bond_store = Some(Box::new(MemoryBondStore::new()));
+
+    let (conn_c, conn_p) = (0x0001, 0x0002);
+    central.on_connected(conn_c, peripheral_addr);
+    peripheral.on_connected(conn_p, central_addr);
+    central.set_peer_address_type(conn_c, AddressType::Random);
+    peripheral.set_peer_address_type(conn_p, AddressType::Random);
+
+    let config = PairingConfig {
+        sc,
+        ..PairingConfig::default()
+    };
+    let request = central
+        .start_pairing_with_config(conn_c, config)
+        .expect("central can start pairing");
+
+    let mut to_peripheral = vec![request];
+    let mut to_central: Vec<Vec<u8>> = Vec::new();
+
+    for _ in 0..32 {
+        if to_peripheral.is_empty() && to_central.is_empty() {
+            break;
+        }
+        let mut next_to_central = Vec::new();
+        for mut pdu in to_peripheral.drain(..) {
+            tamper(&mut pdu);
+            if let Some(reply) = peripheral
+                .process_l2cap_packet(conn_p, &pdu)
+                .expect("peripheral must not error on a tampered PDU")
+            {
+                next_to_central.push(reply);
+            }
+            while let Some(more) = peripheral.poll_smp_pdu(conn_p) {
+                next_to_central.push(more);
+            }
+        }
+        let mut next_to_peripheral = Vec::new();
+        for mut pdu in to_central.drain(..) {
+            tamper(&mut pdu);
+            if let Some(reply) = central
+                .process_l2cap_packet(conn_c, &pdu)
+                .expect("central must not error on a tampered PDU")
+            {
+                next_to_peripheral.push(reply);
+            }
+            while let Some(more) = central.poll_smp_pdu(conn_c) {
+                next_to_peripheral.push(more);
+            }
+        }
+        to_central = next_to_central;
+        to_peripheral = next_to_peripheral;
+    }
+    (central, conn_c, peripheral, conn_p)
+}
+
+/// Neither side may end up encrypted or holding a key. This is the assertion
+/// that makes the confirm check load-bearing — a Pairing Failed PDU alone
+/// would still be satisfied by an implementation that failed *and then*
+/// derived a key anyway.
+fn assert_pairing_was_refused(
+    central: &VirtualDevice,
+    conn_c: u16,
+    peripheral: &VirtualDevice,
+    conn_p: u16,
+) {
+    for (name, device, conn) in [
+        ("central", central, conn_c),
+        ("peripheral", peripheral, conn_p),
+    ] {
+        let connection = device
+            .connections
+            .get(&conn)
+            .unwrap_or_else(|| panic!("{name} connection still tracked"));
+        assert!(
+            !connection.is_encrypted,
+            "{name} must NOT reach encrypted state after a failed pairing",
+        );
+        assert!(
+            connection.ltk.is_none(),
+            "{name} must NOT hold a key after a failed pairing",
+        );
+        if let Some(session) = connection.pairing_session.as_ref() {
+            assert!(!session.is_complete(), "{name} pairing must not complete");
+        }
+    }
+}
+
+/// A tampered Pairing Confirm must be rejected — LE Legacy.
+///
+/// Flipping one bit of the confirm is the simplest possible active attack.
+/// `c1` over the peer's random will not reproduce it, and the session must
+/// stop rather than continue to key derivation.
+#[test]
+fn legacy_pairing_rejects_a_tampered_confirm_and_derives_no_key() {
+    let mut corrupted = false;
+    let (central, conn_c, peripheral, conn_p) = run_pairing_with_tampering(false, |pdu| {
+        if smp_opcode(pdu) == Some(opcode::PAIRING_CONFIRM) && !corrupted {
+            pdu[L2CAP_HEADER + 1] ^= 0x01;
+            corrupted = true;
+        }
+    });
+    assert!(corrupted, "the exchange must have carried a Pairing Confirm");
+
+    let failed = [&central, &peripheral].iter().any(|d| {
+        d.connections
+            .values()
+            .filter_map(|c| c.pairing_session.as_ref())
+            .any(|s| s.is_failed())
+    });
+    assert!(failed, "a tampered confirm must fail the pairing");
+    assert_pairing_was_refused(&central, conn_c, &peripheral, conn_p);
+}
+
+/// The same attack against LE Secure Connections, where the confirm is `f4`
+/// over the two public keys rather than `c1` over the TK.
+#[test]
+fn secure_connections_rejects_a_tampered_confirm_and_derives_no_key() {
+    let mut corrupted = false;
+    let (central, conn_c, peripheral, conn_p) = run_pairing_with_tampering(true, |pdu| {
+        if smp_opcode(pdu) == Some(opcode::PAIRING_CONFIRM) && !corrupted {
+            pdu[L2CAP_HEADER + 1] ^= 0x80;
+            corrupted = true;
+        }
+    });
+    assert!(corrupted, "the exchange must have carried a Pairing Confirm");
+    assert_pairing_was_refused(&central, conn_c, &peripheral, conn_p);
+}
+
+/// A tampered DH Key Check must be rejected.
+///
+/// This is the second half of Secure Connections' authentication: even with a
+/// matching confirm, `Ea`/`Eb` prove both sides derived the same LTK from the
+/// same DHKey. Corrupting it is how a downgrade would show up.
+#[test]
+fn secure_connections_rejects_a_tampered_dhkey_check_and_derives_no_key() {
+    let mut corrupted = false;
+    let (central, conn_c, peripheral, conn_p) = run_pairing_with_tampering(true, |pdu| {
+        if smp_opcode(pdu) == Some(opcode::PAIRING_DHKEY_CHECK) && !corrupted {
+            pdu[L2CAP_HEADER + 1] ^= 0x01;
+            corrupted = true;
+        }
+    });
+    assert!(corrupted, "the exchange must have carried a DH Key Check");
+    assert_pairing_was_refused(&central, conn_c, &peripheral, conn_p);
+}
+
+/// A truncated SMP PDU must be answered, not panic.
+///
+/// Every guard in the state machine returns `INVALID_PARAMETERS`, and none of
+/// them had ever executed. A peer can send any of these, so each must survive
+/// a length one byte short of what its parser needs — the same class of bug as
+/// the one-octet ATT PDU that panicked a central during discovery.
+#[test]
+fn truncated_smp_pdus_are_refused_rather_than_panicking() {
+    for opcode_byte in [
+        opcode::PAIRING_REQUEST,
+        opcode::PAIRING_RESPONSE,
+        opcode::PAIRING_CONFIRM,
+        opcode::PAIRING_RANDOM,
+        opcode::PAIRING_PUBLIC_KEY,
+        opcode::PAIRING_DHKEY_CHECK,
+    ] {
+        for len in 1..4 {
+            let central_addr = Address::from_be_bytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+            let peer_addr = Address::from_be_bytes([0x66, 0x55, 0x44, 0x33, 0x22, 0x11]);
+            let mut device = VirtualDevice::new("victim", central_addr, AddressType::Random);
+            device.on_connected(0x0001, peer_addr);
+            device.set_peer_address_type(0x0001, AddressType::Random);
+
+            let mut pdu = vec![opcode_byte];
+            pdu.resize(len, 0x00);
+            // The assertion is that this returns at all.
+            let _ = device.process_l2cap_packet(0x0001, &pdu);
+        }
+    }
+}

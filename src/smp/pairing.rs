@@ -556,8 +556,33 @@ impl PairingSession {
     fn fail(&mut self, reason: u8) -> Result<(), SimbleError> {
         self.phase = Phase::Failed;
         self.failed = true;
+        self.discard_key_material();
         self.pending.push_back(vec![opcode::PAIRING_FAILED, reason]);
         Ok(())
+    }
+
+    /// Drops every secret derived so far.
+    ///
+    /// Secure Connections computes the LTK with `f5` during the random
+    /// exchange, *before* the DH Key Check proves the peer derived the same
+    /// one — it has to, because Ea/Eb are computed from it. So a session that
+    /// fails after that point was holding an LTK that nothing ever
+    /// authenticated, and was keeping it.
+    ///
+    /// Nothing used it: `is_encrypted` stays false and the link never starts
+    /// encryption, which is the property that actually matters. But retaining
+    /// unauthenticated key material past the failure that rejected it is the
+    /// kind of thing that becomes exploitable the moment some later code path
+    /// reads `ltk` without re-checking `failed`. Discard it at the point of
+    /// failure instead of trusting every future reader to be careful.
+    fn discard_key_material(&mut self) {
+        self.tk = [0; 16];
+        self.stk = None;
+        self.dh_key = None;
+        self.ltk = None;
+        self.ea = None;
+        self.eb = None;
+        self.peer_confirm = None;
     }
 
     fn step(&mut self, pdu: &[u8]) -> Result<(), SimbleError> {
@@ -570,8 +595,11 @@ impl PairingSession {
             opcode::PAIRING_CONFIRM => self.on_pairing_confirm(pdu),
             opcode::PAIRING_RANDOM => self.on_pairing_random(pdu),
             opcode::PAIRING_FAILED => {
+                // The peer rejected us. Same reasoning as `fail()`: whatever
+                // we had derived was never authenticated, so it goes too.
                 self.phase = Phase::Failed;
                 self.failed = true;
+                self.discard_key_material();
                 Ok(())
             }
             opcode::PAIRING_PUBLIC_KEY => self.on_public_key(pdu),
