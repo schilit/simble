@@ -13,11 +13,22 @@
 //! the ASE Control Point, so a real ATT write arriving through `GattDatabase::write` drives
 //! the state machines and pushes each resulting ASE value into the `GattDatabase`.
 //!
-//! CIS establishment/teardown (which Bumble's `AseStateMachine` drives asynchronously off
-//! controller events, e.g. auto-transitioning a Sink ASE to Streaming once its CIS is
-//! established) has no equivalent here since Simble has no CIS/controller simulation yet;
-//! `on_receiver_start_ready` and `on_release` model the client-driven half of those
-//! transitions synchronously instead.
+//! CIS establishment (which Bumble's `AseStateMachine` drives asynchronously off controller
+//! events, e.g. auto-transitioning a Sink ASE to Streaming once its CIS is established) has
+//! no equivalent here since Simble has no CIS/controller simulation yet;
+//! `on_receiver_start_ready` models the client-driven half of that transition synchronously
+//! instead.
+//!
+//! The two *server-initiated* halves of ASCS that do not ride a Control Point write are
+//! explicit entry points on [`AudioStreamControlService`] rather than background tasks,
+//! because Simble has no event loop to run them on:
+//!
+//! * [`released`](AudioStreamControlService::released) - the ASCS 5.9 Released operation,
+//!   which drains an ASE out of the Releasing state once teardown is done.
+//! * [`on_cis_loss`](AudioStreamControlService::on_cis_loss) and
+//!   [`on_acl_loss`](AudioStreamControlService::on_acl_loss) - the two ASCS 3.2 link-loss
+//!   rules. Nothing in Simble currently detects LE Audio link loss and calls them; they are
+//!   the profile-side half of that path, waiting for a caller.
 
 use std::sync::{Arc, Mutex};
 
@@ -380,18 +391,87 @@ impl AudioStreamEndpoint {
         (response_code::SUCCESS, reason_code::NONE)
     }
 
-    /// ASCS 5.8 - Release Operation. Valid from any state but Idle. Real ASCS passes
-    /// through Releasing while the CIS (if any) is torn down; Simble has no CIS to tear
-    /// down, so Release resolves straight to Idle.
+    /// ASCS 5.8 - Release Operation. Valid from Codec Configured, QoS Configured, Enabling,
+    /// Streaming, or Disabling - i.e. every state but Idle (nothing to release) and
+    /// Releasing (a release is already in flight).
+    ///
+    /// Release does **not** reach Idle by itself: it moves the ASE to Releasing, which is
+    /// where it stays while the CIS is torn down. The ASE leaves Releasing only when the
+    /// server performs the Released operation ([`Self::on_released`], ASCS 5.9). Bumble
+    /// splits the same way - `on_release` sets `RELEASING` and an async task later sets
+    /// `IDLE` - so a client sees two ASE notifications, not one.
     pub(crate) fn on_release(&mut self) -> (u8, u8) {
-        if self.state == AseState::Idle {
+        if matches!(self.state, AseState::Idle | AseState::Releasing) {
             return (
                 response_code::INVALID_ASE_STATE_MACHINE_TRANSITION,
                 reason_code::NONE,
             );
         }
-        self.state = AseState::Idle;
+        self.state = AseState::Releasing;
         (response_code::SUCCESS, reason_code::NONE)
+    }
+
+    /// ASCS 5.9 - Released Operation. Server-initiated: it has no Control Point opcode and
+    /// therefore no response code, so this reports only whether it applied.
+    ///
+    /// Valid only from Releasing. The destination is the server's choice: an ASE whose
+    /// codec configuration the server caches lands in Codec Configured, otherwise Idle. QoS
+    /// parameters and metadata are dropped either way - neither is part of an ASE's value
+    /// in Codec Configured or Idle (see [`Self::to_bytes`]), so keeping them would let a
+    /// stale CIG/CIS mapping survive a release.
+    pub(crate) fn on_released(&mut self, cache_codec_configuration: bool) -> bool {
+        if self.state != AseState::Releasing {
+            return false;
+        }
+        self.cig_id = 0;
+        self.cis_id = 0;
+        self.sdu_interval = 0;
+        self.framing = 0;
+        self.phy = 0;
+        self.max_sdu = 0;
+        self.retransmission_number = 0;
+        self.max_transport_latency = 0;
+        self.presentation_delay = 0;
+        self.metadata.clear();
+        if cache_codec_configuration {
+            self.state = AseState::CodecConfigured;
+        } else {
+            self.codec_id = LC3_CODEC_ID;
+            self.codec_specific_configuration.clear();
+            self.state = AseState::Idle;
+        }
+        true
+    }
+
+    /// ASCS 3.2 - loss of the CIS carrying this ASE returns it to QoS Configured. Only the
+    /// three states in which a CIS can exist are affected: Enabling (a Source ASE sits here
+    /// with an established CIS until the client sends Receiver Start Ready), Streaming, and
+    /// Disabling. The QoS parameters survive - the ASE is still QoS-configured, it just has
+    /// no CIS - so the client can Enable again without repeating Config QoS.
+    ///
+    /// Reports whether the state changed.
+    pub(crate) fn on_cis_loss(&mut self) -> bool {
+        if !matches!(
+            self.state,
+            AseState::Enabling | AseState::Streaming | AseState::Disabling
+        ) {
+            return false;
+        }
+        self.state = AseState::QosConfigured;
+        true
+    }
+
+    /// ASCS 3.2 - loss of the ACL moves every ASE that is not already Idle to Releasing.
+    /// The Released operation ([`Self::on_released`]) then takes it the rest of the way, so
+    /// an ACL drop and a client-driven Release converge on the same two-step path.
+    ///
+    /// Reports whether the state changed.
+    pub(crate) fn on_acl_loss(&mut self) -> bool {
+        if matches!(self.state, AseState::Idle | AseState::Releasing) {
+            return false;
+        }
+        self.state = AseState::Releasing;
+        true
     }
 }
 
@@ -574,11 +654,71 @@ impl AudioStreamControlService {
         let _ = db.write(self.control_point_value_handle, data);
         self.control_point_notification()
     }
+
+    /// ASCS 5.9 - performs the Released operation on every ASE currently in Releasing,
+    /// publishing each one's new value into `db`. Returns the IDs of the ASEs that moved.
+    ///
+    /// `cache_codec_configuration` picks between the two destinations ASCS 5.9 allows: a
+    /// server that keeps the codec configuration lands the ASE in Codec Configured (so the
+    /// client can go straight back to Config QoS), one that does not lands it in Idle.
+    ///
+    /// This is server-initiated and carries no Control Point response, so it leaves
+    /// [`control_point_notification`](Self::control_point_notification) alone.
+    pub fn released(&mut self, db: &mut GattDatabase, cache_codec_configuration: bool) -> Vec<u8> {
+        let mut state = self.state.lock().unwrap();
+        let moved: Vec<usize> = (0..state.ases.len())
+            .filter(|&i| state.ases[i].on_released(cache_codec_configuration))
+            .collect();
+        moved.iter().map(|&i| state.publish(db, i)).collect()
+    }
+
+    /// ASCS 3.2 - reports loss of the CIS identified by `cig_id`/`cis_id`. Every ASE mapped
+    /// to that CIS and in Enabling, Streaming, or Disabling drops back to QoS Configured;
+    /// its new value is published into `db`. Returns the IDs of the ASEs that moved.
+    ///
+    /// Nothing in Simble detects CIS loss yet - there is no CIS to lose. This is the
+    /// profile-side half of that path: whatever grows the ability to notice a CIS
+    /// disconnection calls this, and ASCS behaves correctly without knowing how it found
+    /// out.
+    pub fn on_cis_loss(&mut self, db: &mut GattDatabase, cig_id: u8, cis_id: u8) -> Vec<u8> {
+        let mut state = self.state.lock().unwrap();
+        let moved: Vec<usize> = (0..state.ases.len())
+            .filter(|&i| {
+                let ase = &mut state.ases[i];
+                ase.cig_id == cig_id && ase.cis_id == cis_id && ase.on_cis_loss()
+            })
+            .collect();
+        moved.iter().map(|&i| state.publish(db, i)).collect()
+    }
+
+    /// ASCS 3.2 - reports loss of the ACL to the client that owns these ASEs. Every ASE not
+    /// already Idle moves to Releasing and has its new value published into `db`; the
+    /// server then completes the teardown with [`released`](Self::released). Returns the
+    /// IDs of the ASEs that moved.
+    ///
+    /// Same shape as [`on_cis_loss`](Self::on_cis_loss): the detector does not exist yet,
+    /// this is the half that does.
+    pub fn on_acl_loss(&mut self, db: &mut GattDatabase) -> Vec<u8> {
+        let mut state = self.state.lock().unwrap();
+        let moved: Vec<usize> = (0..state.ases.len())
+            .filter(|&i| state.ases[i].on_acl_loss())
+            .collect();
+        moved.iter().map(|&i| state.publish(db, i)).collect()
+    }
 }
 
 impl AscsState {
     fn ase_index(&self, ase_id: u8) -> Option<usize> {
         self.ases.iter().position(|ase| ase.ase_id == ase_id)
+    }
+
+    /// Pushes ASE `index`'s current value into its GATT characteristic - the bytes ASCS
+    /// notifies subscribers with on every state change. Returns the ASE's ID so callers
+    /// can report which ASEs they touched.
+    fn publish(&self, db: &mut GattDatabase, index: usize) -> u8 {
+        let ase = &self.ases[index];
+        let _ = db.set_value(ase.value_handle, &ase.to_bytes());
+        ase.ase_id
     }
 
     /// Applies an ASE Control Point write (ASCS 5): parses the opcode and per-ASE
@@ -618,9 +758,7 @@ impl AscsState {
             if code == response_code::SUCCESS
                 && let Some(index) = index
             {
-                let ase = &self.ases[index];
-                let value = ase.to_bytes();
-                let _ = db.set_value(ase.value_handle, &value);
+                self.publish(db, index);
             }
         }
 
@@ -879,9 +1017,18 @@ mod tests {
         assert_eq!(resp[3], response_code::SUCCESS);
         assert_eq!(ascs.ase(1).unwrap().state, AseState::Streaming);
 
+        // ASCS 5.8: Release parks the ASE in Releasing; ASCS 5.9's Released operation is
+        // what finishes the teardown, and it is the server's to perform.
         let release_pdu = vec![opcode::RELEASE, 1, 1];
         let resp = ascs.write_control_point(&mut db, &release_pdu);
         assert_eq!(resp[3], response_code::SUCCESS);
+        assert_eq!(ascs.ase(1).unwrap().state, AseState::Releasing);
+        assert_eq!(
+            db.read(ascs.ase(1).unwrap().value_handle, 0).unwrap(),
+            &[1, AseState::Releasing as u8]
+        );
+
+        assert_eq!(ascs.released(&mut db, false), vec![1]);
         assert_eq!(ascs.ase(1).unwrap().state, AseState::Idle);
         assert_eq!(
             db.read(ascs.ase(1).unwrap().value_handle, 0).unwrap(),
