@@ -12,6 +12,7 @@ import init, { WebLink, catalog_script } from "../pkg/simble.js";
 import { createDeviceHeader } from "../common/device-header.js";
 import { createGattView, promptForBytes } from "../common/gatt-view.js";
 import { renderGatt, nameFor, propChips, escapeHtml, decodeValue } from "../common/viewer.js";
+import { createAboutBox } from "../common/about-box.js";
 
 const STYLE_ID = "simble-generic-style";
 
@@ -81,14 +82,14 @@ const STYLE = `main { max-width: 78rem; margin: 0 auto; padding: 1rem 1.25rem 2r
   .empty { color: var(--dim); font-size: 0.85rem; }
   footer { color: var(--dim); font-size: 0.78rem; padding: 1.25rem 1.25rem 0; max-width: 78rem; margin: 0 auto; }`;
 
-const MARKUP = `<p class="intro full">This page runs <strong>two real SimBLE devices</strong> in the same tab, sharing one in-process
+const ABOUT = `<p>This page runs <strong>two real SimBLE devices</strong> in the same tab, sharing one in-process
     <a href="../controllers/">in-browser controller</a> — no netsim. On the left, a <strong class="role" style="color:var(--good)">Server</strong>
     (peripheral) defined by an editable Rhai script. On the right, a <strong style="color:var(--accent)">Client</strong>
     (central) defined by another one — <code>android::BluetoothGatt</code>, Android's client API — that connects,
     discovers its GATT, and reacts in callbacks the way nRF Connect shows a connected device. What looks like
-    "a device and a UI" is really a peripheral and a central talking to each other, and both halves are editable.</p>
+    "a device and a UI" is really a peripheral and a central talking to each other, and both halves are editable.</p>`;
 
-  <section class="panel">
+const MARKUP = `  <section class="panel">
     <div id="server-head"></div>
     <div id="server-script"></div>
     <h2 class="sub">Its GATT database (server view)</h2>
@@ -254,6 +255,7 @@ export async function mount(root) {
   container = root;
   root.classList.add("domain", "two-up");
   root.innerHTML = MARKUP;
+  root.prepend(createAboutBox(ABOUT));
 
   serverScript = catalog_script("smart_lock");
   clientScript = catalog_script("gatt_walker");

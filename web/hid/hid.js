@@ -24,6 +24,7 @@
 
 import init, { WebLink } from "../pkg/simble.js";
 import { createDeviceHeader } from "../common/device-header.js";
+import { createAboutBox } from "../common/about-box.js";
 
 // All four devices share one `WebLink`, and `WebLink` has `add_peripheral` and
 // `add_central` and no way at all to remove either: freeing the link is the
@@ -310,6 +311,11 @@ const STYLES = `
     padding: 0.5rem; margin: 0.4rem 0 0; }
   .hid .prose p { font-size: 0.88rem; line-height: 1.6; }
 `;
+
+const ABOUT = `<p>A keyboard and a mouse as HID-over-GATT peripherals, and hosts that connect, subscribe
+   to their input reports and decode them. What each host shows is the report bytes interpreted
+   the way a real computer would — held keys differenced against the previous report, relative
+   motion read as signed — not the page reading the keyboard's variables.</p>`;
 
 const TEMPLATE = `
 <section class="panel wide prose">
@@ -911,6 +917,7 @@ export async function mount(root) {
 
   root.classList.add("hid");
   root.innerHTML = TEMPLATE;
+  root.prepend(createAboutBox(ABOUT));
 
   const link = new WebLink();
   S = {

@@ -19,6 +19,7 @@
 
 import init, { WebRanging } from "../pkg/simble.js";
 import { createDeviceHeader } from "../common/device-header.js";
+import { createAboutBox } from "../common/about-box.js";
 
 const TAG_ADDRESS = "CC:1E:57:00:00:0A";
 const LOCATOR_ADDRESS = "CC:1E:57:00:00:0B";
@@ -65,6 +66,7 @@ export async function mount(root) {
   styleEl.textContent = STYLE;
   document.head.appendChild(styleEl);
   root.innerHTML = MARKUP;
+  root.prepend(createAboutBox(ABOUT));
   cacheElements(root);
   buildHeaders(root);
   wireControls();
@@ -131,10 +133,7 @@ function step() {
 
 // --- markup ----------------------------------------------------------------
 
-const MARKUP = `
-<section class="panel full">
-  <h2>What this page is doing</h2>
-  <p class="rg-prose">
+const ABOUT = `<p class="rg-prose">
     Two simulated devices share one radio: a <b>tag</b> advertising the
     <b>Ranging Service</b> (<code>0x185B</code>), and a <b>locator</b> that
     connects to it. Drag the tag, or use the slider. The locator estimates how
@@ -156,8 +155,9 @@ const MARKUP = `
     own oscillator phase, redrawn on every hop, so <b>one end's measurements
     are noise</b>. The two ends' phases have to be added together, which is
     exactly why the tag ships its half back over the Ranging Service.
-  </p>
-</section>
+  </p>`;
+
+const MARKUP = `
 
 <section class="panel">
   <div id="rg-tag-head"></div>

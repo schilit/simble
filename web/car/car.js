@@ -19,6 +19,7 @@
 
 import init, { WebCarKit } from "../pkg/simble.js";
 import { createDeviceHeader } from "../common/device-header.js";
+import { createAboutBox } from "../common/about-box.js";
 
 // One timer for both endpoints. Chrome throttles a hidden tab hard enough
 // that a device hosted in one misses protocol deadlines, so a two-page design
@@ -127,6 +128,12 @@ const STYLE = `
 .role p { margin: 0; font-size: 0.8rem; color: var(--dim); line-height: 1.45; }
 .role code { color: var(--text); }
 `;
+
+const ABOUT = `<p>A phone and a car head unit over one link. SDP finds the Hands-Free service, RFCOMM
+   opens a channel, and the two ends negotiate a service-level connection before any call can
+   ring. Every AT line in the dialogue is bytes the protocol layers actually produced.</p>
+   <p>Call <em>audio</em> would ride an SCO link, which SimBLE does not implement — the gap is
+   marked where the audio path would be, rather than faked.</p>`;
 
 const MARKUP = `
 <div class="car domain two-up">
@@ -388,6 +395,7 @@ export async function mount(root) {
   styleEl.textContent = STYLE;
   document.head.appendChild(styleEl);
   root.innerHTML = MARKUP;
+  root.prepend(createAboutBox(ABOUT));
 
   wasmReady = wasmReady || init();
   await wasmReady;

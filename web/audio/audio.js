@@ -30,6 +30,7 @@ import { createGattView } from "../common/gatt-view.js";
 import { createDeviceHeader } from "../common/device-header.js";
 import { attachHighlightedEditor } from "../common/highlight.js";
 import { createBackendSelector } from "../common/backend.js";
+import { createAboutBox } from "../common/about-box.js";
 
 // Each device gets its own socket, which is to say its own controller, exactly
 // as three separate machines would have.
@@ -798,10 +799,6 @@ function injectStyles() {
      their neighbour's top edge down. */
   .audio-page .col { display: flex; flex-direction: column; gap: 1.25rem; min-width: 0; }
   .audio-page .full { grid-column: 1 / -1; }
-  .audio-head { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
-    grid-column: 1 / -1; }
-  .audio-head h1 { font-size: 1.15rem; margin: 0; }
-  .audio-head .sub { color: var(--dim); font-size: 0.85rem; }
 
   .audio-page .drop { border: 2px dashed var(--border); border-radius: 10px;
     padding: 1.4rem 1rem; text-align: center; color: var(--dim);
@@ -851,14 +848,14 @@ function injectStyles() {
   document.head.appendChild(style);
 }
 
+const ABOUT = `<p>Both halves of an LE Audio stream, on one page. Pick an audio file: it is decoded,
+   resampled to 16&nbsp;kHz, encoded to LC3 and streamed to the sink over a <strong>real
+   CIS</strong> — <code>LE Set CIG Parameters</code> → <code>LE Create CIS</code> →
+   <code>LE Setup ISO Data Path</code> — and the speaker plays it at whatever volume its
+   Volume Control Service currently holds.</p>`;
+
 const TEMPLATE = `
 <div class="audio-page">
-  <div class="audio-head">
-    <h1>SimBLE Audio</h1>
-    <span class="sub">both halves of an LE Audio stream on one page — pick a file, it crosses a
-      real CIS, and the speaker plays it at whatever volume its GATT says</span>
-  </div>
-
   <div id="backend" class="full"></div>
 
   <div class="col">
@@ -1015,6 +1012,7 @@ export function mount(container) {
   injectStyles();
   root = container;
   root.innerHTML = TEMPLATE;
+  root.prepend(createAboutBox(ABOUT));
   const gen = ++generation;
 
   slider = $("vol");

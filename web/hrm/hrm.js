@@ -20,6 +20,7 @@ import { createBackendSelector } from "../common/backend.js";
 import { createDeviceHeader } from "../common/device-header.js";
 import { createGattView } from "../common/gatt-view.js";
 import { bpmFromHex } from "../common/viewer-format.js";
+import { createAboutBox } from "../common/about-box.js";
 
 const STYLE_ID = "simble-health-style";
 // The catalog's central examples connect to EXAMPLE_PEER_ADDRESS, and a test
@@ -59,6 +60,10 @@ const STYLE = `
   }
   .bpm { font-size: 1.8rem; font-weight: 600; }
   .bpm small { color: var(--dim); font-size: 0.9rem; font-weight: 400; }`;
+
+const ABOUT = `<p>A heart-rate monitor and the client listening to it, both defined by scripts. The heart
+   beats at the rate the <em>client received</em> over a GATT subscription, not at the value the
+   monitor holds — what you see crossed the link.</p>`;
 
 const MARKUP = `<div id="backend" class="full"></div>
 
@@ -258,6 +263,7 @@ export async function mount(container) {
   root = container;
   root.classList.add("domain", "two-up");
   root.innerHTML = MARKUP;
+  root.prepend(createAboutBox(ABOUT));
 
   monitorScript = catalog_script("hrm");
   clientScript = catalog_script("hrm_client");

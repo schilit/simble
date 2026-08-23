@@ -251,3 +251,16 @@ footer code { color: var(--good); }
 /* Anything that spans the row: a backend selector, an intro paragraph. */
 .domain > .full { grid-column: 1 / -1; }
 @media (max-width: 60rem) { .domain { grid-template-columns: 1fr; } }
+
+/* --- the "What this page is doing" box -----------------------------------
+   Every domain opens with one, foldable. See common/about-box.js. */
+.about { border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel); padding: 0.5rem 0.85rem; }
+.about > summary { cursor: pointer; font-size: 0.82rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.05em; color: var(--dim);
+  list-style-position: outside; }
+.about > summary:hover { color: var(--fg); }
+.about[open] > summary { margin-bottom: 0.5rem; }
+.about-body { font-size: 0.88rem; }
+.about-body p { margin: 0 0 0.5rem; }
+.about-body p:last-child { margin-bottom: 0; }

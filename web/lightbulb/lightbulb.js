@@ -23,6 +23,7 @@ import { createGattView } from "../common/gatt-view.js";
 import { createDeviceHeader } from "../common/device-header.js";
 import { attachHighlightedEditor } from "../common/highlight.js";
 import { createBackendSelector } from "../common/backend.js";
+import { createAboutBox } from "../common/about-box.js";
 
 const STYLE_ID = "simble-home-style";
 
@@ -44,6 +45,10 @@ const STYLE = `
     border-radius: 6px; background: var(--panel); cursor: pointer; }
   .rgb-readout { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
     font-size: 0.85rem; }`;
+
+const ABOUT = `<p>A colour bulb and the client that drives it. The picker writes the colour
+   <em>through the client, over GATT</em>, the way a phone app would; the page does not poke the
+   value into the device's own database.</p>`;
 
 const MARKUP = `<div id="backend" class="full"></div>
 
@@ -366,6 +371,7 @@ export async function mount(container) {
   root = container;
   root.classList.add("domain", "two-up");
   root.innerHTML = MARKUP;
+  root.prepend(createAboutBox(ABOUT));
 
   // Both halves come from the shared catalog -- the same definitions MCP's
   // `example` tool and the scene loader read -- rather than a copy living in
