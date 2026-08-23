@@ -18,10 +18,34 @@
 //! `AT+CMER`, optional codec negotiation and HF-indicator exchange), AG
 //! indicator updates, call control (answer/reject/hangup/dial/hold/list),
 //! volume and voice-recognition signaling, and SDP record
-//! construction/lookup. No audio/SCO transport is simulated: codec
-//! negotiation only exercises the AT-command handshake, and eSCO parameter
-//! tables are out of scope (see `tests/hfp_test.rs` for what was ported vs.
-//! skipped from Bumble's `hfp_test.py`).
+//! construction/lookup.
+//!
+//! ## The audio connection
+//!
+//! HFP has two connections, and they are independent: the Service Level
+//! Connection above, and the **audio connection** — a SCO or eSCO link that
+//! exists only while there is something to hear. [`AudioConnectionState`]
+//! tracks the second, and [`AgProtocol::start_audio_connection`] runs the
+//! Codec Connection procedure (`+BCS`/`AT+BCS`) that precedes it. Opening
+//! the synchronous link is the **AG's** job under HFP v1.9 4.11, whether the
+//! trigger was a call or the HF's `AT+BCC`; the HF never opens one.
+//!
+//! This module still owns no transport. It ends at
+//! [`HfpEvent::AudioConnectionRequested`], which says "the codec is settled,
+//! open the link" — and something that owns an HCI channel
+//! ([`crate::device::ClassicHost`], driven by [`crate::device::CarKit`])
+//! answers it with Setup Synchronous Connection and calls
+//! [`AgProtocol::on_audio_connected`] when the controller says it is up.
+//!
+//! What is **not** here: any codec. [`AudioCodec::voice_setting`] and
+//! [`AudioCodec::esco_packet_type`] say what a host must ask the controller
+//! for, and the payload bytes cross the link untouched. Nothing encodes
+//! CVSD, and nothing feeds `crate::audio`'s mSBC or LC3 encoders into the
+//! link yet — the two ends agree on a codec and carry each other's bytes.
+//! eSCO parameter tables (S1-S4) are still out of scope: the link type and
+//! packet-type mask are modelled, the air-interface timings behind them are
+//! not (see `tests/hfp_test.rs` for what was ported vs. skipped from
+//! Bumble's `hfp_test.py`).
 
 use crate::classic::at::{AtCommand, AtParameter, AtParsingError, AtResponse, AtSubCode};
 use crate::classic::sdp::{
@@ -139,6 +163,97 @@ impl AudioCodec {
             0x02 => Some(Self::Msbc),
             0x03 => Some(Self::Lc3Swb),
             _ => None,
+        }
+    }
+
+    /// Printable name, for a transcript or a status document.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Cvsd => "CVSD",
+            Self::Msbc => "mSBC",
+            Self::Lc3Swb => "LC3-SWB",
+        }
+    }
+
+    /// The HCI **Voice Setting** (Vol 4, Part E, Section 6.12) a host asks
+    /// the controller for when it opens the synchronous link for this codec.
+    ///
+    /// This is the codec seam, and it is a *seam*, not a codec. CVSD asks
+    /// for CVSD air coding, so the controller does the waveform coding and
+    /// the host hands it 8 kHz linear PCM. Everything wider than narrowband
+    /// asks for **transparent**: mSBC and LC3-SWB frames are encoded by the
+    /// host and the controller must not touch them.
+    ///
+    /// Simble encodes neither. It carries whatever payload bytes a caller
+    /// puts on the link, byte for byte, and reports which codec the two ends
+    /// agreed on. Nothing here transcodes; `crate::audio` has SBC and LC3
+    /// encoders, and wiring one of them in is a separate job from making the
+    /// link exist.
+    pub fn voice_setting(self) -> u16 {
+        match self {
+            // Air coding CVSD (bits 1:0 = 00), 16-bit two's-complement
+            // linear input — the value Zephyr calls BT_VOICE_CVSD_16BIT.
+            Self::Cvsd => 0x0060,
+            // Air coding transparent (bits 1:0 = 11).
+            Self::Msbc | Self::Lc3Swb => 0x0063,
+        }
+    }
+
+    /// Whether this codec needs an **extended** synchronous (eSCO) link.
+    ///
+    /// Narrowband CVSD fits a plain SCO HV3 link. Wideband speech does not:
+    /// mSBC over an HV3 link has no retransmission and no error detection,
+    /// so HFP requires eSCO for it. That choice reaches the controller as
+    /// the packet-type mask below, and nowhere else.
+    pub fn requires_esco(self) -> bool {
+        !matches!(self, Self::Cvsd)
+    }
+
+    /// The HCI `Packet_Type` mask a Setup Synchronous Connection carries for
+    /// this codec: HV1|HV2|HV3 for narrowband, EV3 for wideband.
+    ///
+    /// It is the mask, not a separate field, that tells a controller which
+    /// kind of link to make — which is why an mSBC call set up with HV-only
+    /// packet types comes back as a plain SCO link and sounds wrong.
+    pub fn esco_packet_type(self) -> u16 {
+        if self.requires_esco() {
+            0x0008 // EV3
+        } else {
+            0x0007 // HV1 | HV2 | HV3
+        }
+    }
+}
+
+/// Where an HFP **audio connection** — the SCO/eSCO link that carries the
+/// call itself — has got to.
+///
+/// HFP separates the two connections deliberately: the Service Level
+/// Connection is AT commands over RFCOMM and exists whenever the phone is
+/// paired, while the audio connection exists only while there is something
+/// to hear. They come up and go down independently, and a profile that
+/// conflated them would put a headset's microphone live for the whole drive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioConnectionState {
+    /// No synchronous link, and none being set up.
+    Disconnected,
+    /// The Codec Connection procedure is running: `+BCS` has gone out and
+    /// the far end's `AT+BCS` has not come back.
+    Negotiating,
+    /// The codec is settled and the synchronous link is being opened. This
+    /// is the state the *transport* is expected to act on.
+    Connecting,
+    /// The synchronous link is up and carrying audio.
+    Connected,
+}
+
+impl AudioConnectionState {
+    /// Stable identifier for a UI or a status document.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Disconnected => "disconnected",
+            Self::Negotiating => "negotiating",
+            Self::Connecting => "connecting",
+            Self::Connected => "connected",
         }
     }
 }
@@ -738,6 +853,18 @@ pub enum HfpEvent {
     SupportedAudioCodecs(Vec<AudioCodec>),
     /// AG-observed: HF requested the codec connection procedure (`AT+BCC`).
     CodecConnectionRequested,
+    /// The codec is settled and the **AG** must now open the synchronous
+    /// link. This is the seam between HFP and the transport: HFP decides
+    /// *whether* there is audio and *which codec*; the SCO/eSCO connection
+    /// itself is HCI, and belongs to whoever owns the controller.
+    ///
+    /// Only the AG side raises it — HFP v1.9 4.11.3 makes establishing the
+    /// audio connection the Audio Gateway's job, however it was triggered.
+    AudioConnectionRequested(AudioCodec),
+    /// The audio connection changed state, at either end. `Connected` is
+    /// reported only once the transport has said the synchronous link is
+    /// really up, never on the strength of the AT handshake alone.
+    AudioConnectionState(AudioConnectionState),
     /// Either side reported a speaker volume change (`AT+VGS`/`+VGS`).
     SpeakerVolume(u8),
     /// Either side reported a microphone volume change (`AT+VGM`/`+VGM`).
@@ -911,6 +1038,9 @@ pub struct HfProtocol {
 
     /// Currently selected audio codec.
     pub active_codec: AudioCodec,
+    /// Where the audio (SCO/eSCO) connection has got to. Independent of the
+    /// Service Level Connection, which is what `slc_initialized` tracks.
+    audio_state: AudioConnectionState,
     /// Whether the Service Level Connection is up.
     pub(crate) slc_initialized: bool,
 
@@ -945,6 +1075,7 @@ impl HfProtocol {
             supported_ag_call_hold_operations: Vec::new(),
             ag_indicators: Vec::new(),
             active_codec: AudioCodec::Cvsd,
+            audio_state: AudioConnectionState::Disconnected,
             slc_initialized: false,
             slc_step: None,
             pending_command: None,
@@ -1055,9 +1186,39 @@ impl HfProtocol {
         self.send_command(format!("AT+BVRA={}", state.to_value()))
     }
 
-    /// Requests the codec connection procedure (AT+BCC).
+    /// Requests the codec connection procedure (AT+BCC) — asking the AG to
+    /// open the audio connection, since the HF may not open one itself.
     pub fn setup_audio_connection(&mut self) -> Vec<u8> {
         self.send_command("AT+BCC")
+    }
+
+    // --- the audio connection ----------------------------------------------
+
+    /// Where the audio (SCO/eSCO) connection has got to, as this end sees it.
+    pub fn audio_state(&self) -> AudioConnectionState {
+        self.audio_state
+    }
+
+    /// The transport says the synchronous link is up.
+    pub fn on_audio_connected(&mut self) -> Vec<HfpEvent> {
+        let mut events = Vec::new();
+        self.set_audio_state(AudioConnectionState::Connected, &mut events);
+        events
+    }
+
+    /// The transport says the synchronous link is gone.
+    pub fn on_audio_disconnected(&mut self) -> Vec<HfpEvent> {
+        let mut events = Vec::new();
+        self.set_audio_state(AudioConnectionState::Disconnected, &mut events);
+        events
+    }
+
+    fn set_audio_state(&mut self, state: AudioConnectionState, events: &mut Vec<HfpEvent>) {
+        if self.audio_state == state {
+            return;
+        }
+        self.audio_state = state;
+        events.push(HfpEvent::AudioConnectionState(state));
     }
 
     /// Sends a call-hold operation (AT+CHLD).
@@ -1281,6 +1442,11 @@ impl HfProtocol {
                     self.active_codec = codec;
                     outgoing.push(command_bytes(&format!("AT+BCS={}", codec.to_value())));
                     events.push(HfpEvent::CodecNegotiated(codec));
+                    // The HF now expects the AG to open the synchronous
+                    // link. It does not open one itself — HFP gives that
+                    // job to the AG alone — so all it does here is stop
+                    // reporting itself as having no audio.
+                    self.set_audio_state(AudioConnectionState::Connecting, events);
                 }
             }
             "+CIEV" => {
@@ -1350,8 +1516,14 @@ pub struct AgProtocol {
     pub supported_hf_features: u32,
     /// Audio codecs the AG supports.
     pub supported_audio_codecs: Vec<AudioCodec>,
+    /// Audio codecs the **HF** reported with `AT+BAC`, empty until it does.
+    /// Kept apart from the AG's own list because choosing a codec means
+    /// intersecting the two.
+    pub hf_audio_codecs: Vec<AudioCodec>,
     /// Currently selected audio codec.
     pub active_codec: AudioCodec,
+    /// Where the audio (SCO/eSCO) connection has got to.
+    audio_state: AudioConnectionState,
     /// Current calls tracked by the AG.
     pub calls: Vec<CallInfo>,
 
@@ -1385,7 +1557,9 @@ impl AgProtocol {
             hf_indicators: Vec::new(),
             supported_hf_features: 0,
             supported_audio_codecs: configuration.supported_audio_codecs,
+            hf_audio_codecs: Vec::new(),
             active_codec: AudioCodec::Cvsd,
+            audio_state: AudioConnectionState::Disconnected,
             calls: Vec::new(),
             indicator_report_enabled: false,
             cme_error_enabled: false,
@@ -1499,20 +1673,27 @@ impl AgProtocol {
         }
     }
 
+    /// `AT+BAC=<codec>,…` — the HF listing the codecs *it* can do.
+    ///
+    /// This used to be stored into `supported_audio_codecs`, which is the
+    /// **AG's own** list from its configuration, destroying it. Nothing
+    /// noticed while codec negotiation stopped at the AT layer: the field
+    /// was only ever read back to build an SDP record, from the
+    /// configuration rather than from here. It matters the moment a codec
+    /// has to be *chosen*, because choosing means intersecting two lists and
+    /// there was only one list left.
     fn on_bac(
         &mut self,
         params: &[AtParameter],
         outgoing: &mut Vec<Vec<u8>>,
         events: &mut Vec<HfpEvent>,
     ) {
-        self.supported_audio_codecs = params
+        self.hf_audio_codecs = params
             .iter()
             .filter_map(AtParameter::as_u32)
             .filter_map(|v| AudioCodec::from_value(v as u8))
             .collect();
-        events.push(HfpEvent::SupportedAudioCodecs(
-            self.supported_audio_codecs.clone(),
-        ));
+        events.push(HfpEvent::SupportedAudioCodecs(self.hf_audio_codecs.clone()));
         outgoing.push(response_bytes("OK"));
     }
 
@@ -1531,6 +1712,15 @@ impl AgProtocol {
                 self.active_codec = codec;
                 outgoing.push(response_bytes("OK"));
                 events.push(HfpEvent::CodecNegotiated(codec));
+                // The Codec Connection procedure is over (HFP v1.9 4.11.3);
+                // opening the synchronous link is the next step and the AG's
+                // to take. Only when a procedure was actually running: an
+                // `AT+BCS` arriving out of the blue settles a codec but does
+                // not authorise audio nobody asked for.
+                if self.audio_state == AudioConnectionState::Negotiating {
+                    self.set_audio_state(AudioConnectionState::Connecting, events);
+                    events.push(HfpEvent::AudioConnectionRequested(codec));
+                }
             }
             None => outgoing.push(response_bytes("ERROR")),
         }
@@ -1763,9 +1953,17 @@ impl AgProtocol {
         outgoing.push(response_bytes("OK"));
     }
 
+    /// `AT+BCC` — the HF asking for audio. The HF cannot open the
+    /// synchronous link itself; this is how it asks the AG to.
     fn on_bcc(&mut self, outgoing: &mut Vec<Vec<u8>>, events: &mut Vec<HfpEvent>) {
         events.push(HfpEvent::CodecConnectionRequested);
         outgoing.push(response_bytes("OK"));
+        // `OK` first, then whatever the audio connection needs: the HF's
+        // command is answered before an unsolicited `+BCS` follows it, which
+        // is the order an AT client's one-outstanding-command slot requires.
+        let (audio_out, audio_events) = self.start_audio_connection();
+        outgoing.extend(audio_out);
+        events.extend(audio_events);
     }
 
     fn on_answer(&mut self, outgoing: &mut Vec<Vec<u8>>, events: &mut Vec<HfpEvent>) {
@@ -1881,6 +2079,102 @@ impl AgProtocol {
     /// `HfpEvent::CodecNegotiated` from a later [`Self::receive`].
     pub fn negotiate_codec(&mut self, codec: AudioCodec) -> Vec<u8> {
         response_bytes(&format!("+BCS: {}", codec.to_value()))
+    }
+
+    // --- the audio connection ----------------------------------------------
+
+    /// Where the audio (SCO/eSCO) connection has got to.
+    pub fn audio_state(&self) -> AudioConnectionState {
+        self.audio_state
+    }
+
+    /// The codec the two ends settled on, once one has been chosen.
+    pub fn negotiated_codec(&self) -> AudioCodec {
+        self.active_codec
+    }
+
+    /// Begin establishing the audio connection (HFP v1.9 4.11).
+    ///
+    /// Establishing it is always the **AG's** job, whatever triggered it —
+    /// an incoming call, the HF answering, or the HF asking with `AT+BCC`.
+    /// The HF never opens the synchronous link itself, which is why this
+    /// method exists only here.
+    ///
+    /// Where both ends advertised Codec Negotiation, this runs the Codec
+    /// Connection procedure first: `+BCS: <codec>` goes out and the link is
+    /// opened only when the HF's `AT+BCS=<codec>` confirms it. Where they
+    /// did not, there is nothing to negotiate — CVSD is the only codec HFP
+    /// guarantees — and the caller is told to open the link at once.
+    ///
+    /// Returns the bytes to write and the events to act on. The
+    /// [`HfpEvent::AudioConnectionRequested`] in there is the seam: HFP has
+    /// decided there is audio and which codec, and something that owns an
+    /// HCI channel must now open the link and call
+    /// [`Self::on_audio_connected`].
+    pub fn start_audio_connection(&mut self) -> (Vec<Vec<u8>>, Vec<HfpEvent>) {
+        let (mut outgoing, mut events) = (Vec::new(), Vec::new());
+        if self.audio_state != AudioConnectionState::Disconnected {
+            // Already negotiating, connecting or up. A second trigger — the
+            // HF pressing answer while the AG is already opening audio for
+            // the ring — must not start a second procedure.
+            return (outgoing, events);
+        }
+        match self.codec_to_negotiate() {
+            Some(codec) => {
+                self.active_codec = codec;
+                self.set_audio_state(AudioConnectionState::Negotiating, &mut events);
+                outgoing.push(self.negotiate_codec(codec));
+            }
+            None => {
+                self.active_codec = AudioCodec::Cvsd;
+                self.set_audio_state(AudioConnectionState::Connecting, &mut events);
+                events.push(HfpEvent::AudioConnectionRequested(AudioCodec::Cvsd));
+            }
+        }
+        (outgoing, events)
+    }
+
+    /// The transport says the synchronous link is up.
+    pub fn on_audio_connected(&mut self) -> Vec<HfpEvent> {
+        let mut events = Vec::new();
+        self.set_audio_state(AudioConnectionState::Connected, &mut events);
+        events
+    }
+
+    /// The transport says the synchronous link is gone — because the audio
+    /// was hung up, or because the ACL under it went away.
+    pub fn on_audio_disconnected(&mut self) -> Vec<HfpEvent> {
+        let mut events = Vec::new();
+        self.set_audio_state(AudioConnectionState::Disconnected, &mut events);
+        events
+    }
+
+    /// The best codec both ends support, or `None` when the Codec
+    /// Connection procedure does not apply — either end lacking the Codec
+    /// Negotiation feature is enough, and then CVSD is used without any
+    /// `+BCS` exchange at all.
+    fn codec_to_negotiate(&self) -> Option<AudioCodec> {
+        if !self.supports_ag_feature(ag_feature::CODEC_NEGOTIATION)
+            || !self.supports_hf_feature(hf_feature::CODEC_NEGOTIATION)
+        {
+            return None;
+        }
+        // Widest first: LC3-SWB, then mSBC, then narrowband CVSD. The AG
+        // picks, but only from what the HF said it can decode — offering a
+        // codec the far end never listed is how a call comes up silent.
+        [AudioCodec::Lc3Swb, AudioCodec::Msbc, AudioCodec::Cvsd]
+            .into_iter()
+            .find(|codec| {
+                self.supported_audio_codecs.contains(codec) && self.hf_audio_codecs.contains(codec)
+            })
+    }
+
+    fn set_audio_state(&mut self, state: AudioConnectionState, events: &mut Vec<HfpEvent>) {
+        if self.audio_state == state {
+            return;
+        }
+        self.audio_state = state;
+        events.push(HfpEvent::AudioConnectionState(state));
     }
 
     /// Emits a RING alert for an incoming call.

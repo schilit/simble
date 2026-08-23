@@ -141,6 +141,18 @@ mod opcode {
     pub const REJECT_CONNECTION_REQUEST: u16 = 0x040A;
     /// Remote Name Request (OGF 0x01, OCF 0x0019).
     pub const REMOTE_NAME_REQUEST: u16 = 0x0419;
+
+    // --- SCO / eSCO (the synchronous, "call audio" links) ----------------
+    /// Setup Synchronous Connection (OGF 0x01, OCF 0x0028).
+    pub const SETUP_SYNCHRONOUS_CONNECTION: u16 = 0x0428;
+    /// Accept Synchronous Connection Request (OGF 0x01, OCF 0x0029).
+    pub const ACCEPT_SYNCHRONOUS_CONNECTION_REQUEST: u16 = 0x0429;
+    /// Reject Synchronous Connection Request (OGF 0x01, OCF 0x002A).
+    pub const REJECT_SYNCHRONOUS_CONNECTION_REQUEST: u16 = 0x042A;
+    /// Enhanced Setup Synchronous Connection (OGF 0x01, OCF 0x003D).
+    pub const ENHANCED_SETUP_SYNCHRONOUS_CONNECTION: u16 = 0x043D;
+    /// Enhanced Accept Synchronous Connection Request (OGF 0x01, OCF 0x003E).
+    pub const ENHANCED_ACCEPT_SYNCHRONOUS_CONNECTION_REQUEST: u16 = 0x043E;
     /// Write Local Name (OGF 0x03, OCF 0x0013).
     pub const WRITE_LOCAL_NAME: u16 = 0x0C13;
     /// Read Local Name (OGF 0x03, OCF 0x0014).
@@ -205,6 +217,12 @@ mod event {
     pub const DISCONNECTION_COMPLETE: u8 = 0x05;
     /// Remote Name Request Complete event (0x07).
     pub const REMOTE_NAME_REQUEST_COMPLETE: u8 = 0x07;
+    /// Synchronous Connection Complete event (0x2C) — the completion event
+    /// every one of the SCO/eSCO setup commands promises. There is no
+    /// Synchronous Connection *Changed* (0x2D) here: nothing in this
+    /// controller renegotiates a synchronous link's parameters once it is
+    /// up, and an event nobody can cause is a fiction.
+    pub const SYNCHRONOUS_CONNECTION_COMPLETE: u8 = 0x2C;
     /// Command Complete event (0x0E).
     pub const COMMAND_COMPLETE: u8 = 0x0E;
     /// Command Status event (0x0F).
@@ -464,9 +482,75 @@ mod scan_enable {
     pub const PAGE: u8 = 0x02;
 }
 
-/// Link type 0x01 = ACL, in Connection Request / Connection Complete. This
-/// controller carries no SCO or eSCO, so every classic link it makes is ACL.
+/// Link type 0x01 = ACL, in Connection Request / Connection Complete.
 const LINK_TYPE_ACL: u8 = 0x01;
+
+// --- SCO / eSCO ------------------------------------------------------------
+//
+// Everything below models the *sequencing* of a synchronous connection:
+// which handles exist, which packets route where, and what events fire in
+// what order. It deliberately models none of the air interface — no reserved
+// slots, no eSCO retransmission window, no 3.75 ms interval, no loss. A tick
+// here is not a unit of time, and a simulator that pretended otherwise would
+// be competing with rootcanal/netsim, which do that job properly. The
+// interval and window fields of the completion event below are reported as
+// "do not care" for exactly that reason.
+
+/// Link type 0x00 = SCO, in Connection Request / Synchronous Connection
+/// Complete.
+const LINK_TYPE_SCO: u8 = 0x00;
+/// Link type 0x02 = eSCO.
+const LINK_TYPE_ESCO: u8 = 0x02;
+
+/// eSCO packet-type bits in Setup Synchronous Connection's `Packet_Type`
+/// (Vol 4, Part E, Section 7.1.26): EV3, EV4, EV5. A host asking for any of
+/// them is asking for an extended synchronous link; a host asking only for
+/// HV1/HV2/HV3 is asking for a plain SCO one.
+const ESCO_PACKET_TYPES: u16 = 0x0008 | 0x0010 | 0x0020;
+
+/// Air Mode, the last field of Synchronous Connection Complete (Vol 4, Part
+/// E, Section 7.7.35). Note that these numbers are *not* the Voice Setting's
+/// air coding format numbers, which is a transcription trap: CVSD is air
+/// coding format 0 but air mode 2.
+mod air_mode {
+    /// μ-law log.
+    pub const U_LAW: u8 = 0x00;
+    /// A-law log.
+    pub const A_LAW: u8 = 0x01;
+    /// CVSD — what a plain SCO narrowband call runs.
+    pub const CVSD: u8 = 0x02;
+    /// Transparent data — the controller does not touch the payload. This is
+    /// what wideband speech (mSBC over eSCO) rides on.
+    pub const TRANSPARENT: u8 = 0x03;
+}
+
+/// The air mode a Voice Setting (Vol 4, Part E, Section 6.12) asks for. Bits
+/// 1:0 are the air coding format: 0 CVSD, 1 μ-law, 2 A-law, 3 transparent.
+fn air_mode_of_voice_setting(voice_setting: u16) -> u8 {
+    match voice_setting & 0x0003 {
+        0 => air_mode::CVSD,
+        1 => air_mode::U_LAW,
+        2 => air_mode::A_LAW,
+        _ => air_mode::TRANSPARENT,
+    }
+}
+
+/// The air mode a coding format asks for, as Enhanced Setup Synchronous
+/// Connection names it: a five-octet Coding_Format whose first octet is an
+/// Assigned Numbers codec ID.
+///
+/// mSBC maps to **transparent**, not to a codec ID of its own: the controller
+/// carries mSBC frames without touching them, which is exactly what
+/// transparent means. Reporting `0x05` here would be reporting a mode the
+/// event's field does not have.
+fn air_mode_of_coding_format(codec_id: u8) -> u8 {
+    match codec_id {
+        0x00 => air_mode::U_LAW,
+        0x01 => air_mode::A_LAW,
+        0x02 => air_mode::CVSD,
+        _ => air_mode::TRANSPARENT,
+    }
+}
 
 /// The page-0 LMP feature mask both ends of a simulated classic link
 /// advertise. Nominal: this controller implements no optional LMP feature, so
@@ -547,6 +631,20 @@ struct AclHeader {
     handle_and_flags: U16,
     /// Payload length in this fragment.
     data_length: U16,
+}
+
+/// HCI synchronous (SCO) data packet header (Vol 4, Part E, Section 5.4.3).
+///
+/// Shaped like [`AclHeader`] except that the length is a single octet — a
+/// synchronous payload never exceeds 255 bytes — and the top nibble carries a
+/// two-bit Packet_Status_Flag rather than PB/BC flags.
+#[repr(C)]
+#[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout)]
+struct ScoHeader {
+    /// Lower 12 bits connection handle; bits 12-13 Packet_Status_Flag.
+    handle_and_flags: U16,
+    /// Payload length, in octets.
+    data_total_length: u8,
 }
 
 /// Command Complete event body: `num_hci_command_packets`, the opcode, then the
@@ -856,6 +954,49 @@ struct Page {
     reached: Option<(usize, LmpLink)>,
 }
 
+/// A synchronous (SCO/eSCO) connection, as one controller sees it.
+///
+/// It has a handle of its own — distinct from the ACL handle it was set up
+/// over — and that is the whole point: SCO data is addressed to *this*
+/// handle, and a host that sends call audio on the ACL handle is heard by
+/// nobody. It cannot outlive its ACL.
+#[derive(Clone, Copy)]
+struct ScoLink {
+    /// The synchronous link's own connection handle, which every HCI SCO
+    /// data packet on it is addressed to.
+    sco_handle: u16,
+    /// The ACL connection it was set up over, and dies with.
+    acl_handle: u16,
+    /// The controller at the far end.
+    peer: usize,
+}
+
+/// A synchronous connection a peer's host has asked for, raised to this
+/// host as a Connection Request whose link type is SCO or eSCO, and whose
+/// Accept/Reject Synchronous Connection Request this controller is waiting
+/// for.
+///
+/// Kept separate from [`InboundPage`] rather than folded into it: the two
+/// arrive as the same event code but are answered with *different commands*,
+/// and a host that answers a synchronous request with plain Accept
+/// Connection Request gets nothing back — which is the bug this separation
+/// exists to make impossible to model away.
+struct InboundSco {
+    /// The controller that asked.
+    initiator: usize,
+    /// Its address, which the host's answer must name.
+    initiator_address: Address,
+    /// The ACL connection the synchronous link hangs off.
+    acl_handle: u16,
+    /// SCO or eSCO, as the initiator's packet types implied.
+    link_type: u8,
+    /// The air mode the initiator proposed. A real pair negotiates this over
+    /// LMP; here the initiator's proposal stands, and both ends are told the
+    /// same value — agreement being the property a host's state machine
+    /// actually depends on.
+    air_mode: u8,
+}
+
 /// A page *from* a peer that this controller has raised to its host, and
 /// whose Accept/Reject it is waiting for.
 struct InboundPage {
@@ -884,6 +1025,9 @@ struct ClassicState {
     page: Option<Page>,
     /// A page from a peer awaiting this host's decision.
     inbound_page: Option<InboundPage>,
+    /// A synchronous connection a peer asked for, awaiting this host's
+    /// Accept/Reject Synchronous Connection Request.
+    inbound_sco: Option<InboundSco>,
     /// Remote Name Requests to answer on the next tick, oldest first.
     remote_name_requests: Vec<Address>,
 }
@@ -897,6 +1041,7 @@ impl Default for ClassicState {
             inquiry: None,
             page: None,
             inbound_page: None,
+            inbound_sco: None,
             remote_name_requests: Vec::new(),
         }
     }
@@ -948,6 +1093,9 @@ struct SimController {
     big_sinks: Vec<BigSink>,
     /// Isochronous streams asked for or carried on this controller's links.
     cis_links: Vec<CisLink>,
+    /// Synchronous (SCO/eSCO) links carried on this controller's ACLs — the
+    /// BR/EDR counterpart of `cis_links`, and where call audio is addressed.
+    sco_links: Vec<ScoLink>,
     /// Everything BR/EDR: scan enable, inquiry, paging, name, Class of Device.
     classic: ClassicState,
     /// H4 packets to deliver to this device's host at the end of the tick.
@@ -975,6 +1123,7 @@ impl SimController {
             big: None,
             big_sinks: Vec::new(),
             cis_links: Vec::new(),
+            sco_links: Vec::new(),
             classic: ClassicState::default(),
             outbox: VecDeque::new(),
         }
@@ -1022,6 +1171,7 @@ impl SimController {
         self.big = None;
         self.big_sinks.clear();
         self.cis_links.clear();
+        self.sco_links.clear();
         // Scan Enable returns to 0x00 on Reset, which is why every BR/EDR
         // bring-up sequence writes it *after* the Reset rather than before.
         self.classic = ClassicState::default();
@@ -1096,6 +1246,40 @@ enum Action {
         /// `Some(reason)` to reject, `None` to accept.
         reject: Option<u8>,
     },
+    // --- SCO / eSCO ------------------------------------------------------
+    /// HCI Setup Synchronous Connection, or its Enhanced form: open a
+    /// synchronous link over an existing ACL. Deferred because it raises a
+    /// Connection Request at the *peer's* host, which is the only way that
+    /// host learns audio is being opened to it.
+    ScoSetup {
+        from: usize,
+        /// The ACL the synchronous link hangs off.
+        acl_handle: u16,
+        /// SCO or eSCO, as the requested packet types implied.
+        link_type: u8,
+        /// The air mode the initiator's Voice Setting or coding format asked
+        /// for.
+        air_mode: u8,
+    },
+    /// The host answered a synchronous Connection Request: Accept (or
+    /// Enhanced Accept) Synchronous Connection Request, or Reject with a
+    /// reason. Establishes — or refuses — the link at both ends at once.
+    ScoAnswer {
+        from: usize,
+        /// The address the host named, which must match the request it was
+        /// told about.
+        peer: Address,
+        /// `Some(reason)` to reject, `None` to accept.
+        reject: Option<u8>,
+    },
+    /// An HCI synchronous data packet, routed to the far end of the SCO/eSCO
+    /// link its handle names. This is the call audio.
+    Sco {
+        from: usize,
+        handle: u16,
+        data: Vec<u8>,
+    },
+    // --- end SCO / eSCO --------------------------------------------------
     /// LE Connection Update. A connection has two ends and one set of
     /// parameters, so both hosts get an LE Connection Update Complete — a
     /// peripheral that only ever heard about the update from its own host
@@ -1384,6 +1568,18 @@ impl Link {
                     cis_handle,
                 } => self.route_cis_request(from, acl_handle, cis_handle),
                 Action::CisAccept { from, cis_handle } => self.route_cis_accept(from, cis_handle),
+                // --- SCO / eSCO ---
+                Action::ScoSetup {
+                    from,
+                    acl_handle,
+                    link_type,
+                    air_mode,
+                } => self.route_sco_setup(from, acl_handle, link_type, air_mode),
+                Action::ScoAnswer { from, peer, reject } => {
+                    self.route_sco_answer(from, peer, reject)
+                }
+                Action::Sco { from, handle, data } => self.route_sco(from, handle, &data),
+                // --- end SCO / eSCO ---
             }
         }
 
@@ -1416,6 +1612,19 @@ impl Link {
                         from: i,
                         handle: hdr.handle_and_flags.get() & 0x0FFF,
                         data: pkt[1..].to_vec(), // handle+flags+len+payload, forwarded verbatim
+                    });
+                }
+            }
+            Some(h4_type::HCI_SCO_DATA) => {
+                // Call audio. Its handle is the *synchronous* link's, not the
+                // ACL's — a packet addressed to the ACL handle finds no SCO
+                // link and is dropped, which is what real hardware does with
+                // it too.
+                if let Ok((hdr, _)) = Ref::<_, ScoHeader>::from_prefix(&pkt[1..]) {
+                    actions.push(Action::Sco {
+                        from: i,
+                        handle: hdr.handle_and_flags.get() & 0x0FFF,
+                        data: pkt[1..].to_vec(), // handle+flags+len+payload, verbatim
                     });
                 }
             }
@@ -2090,7 +2299,11 @@ impl Link {
         });
         self.controllers[target]
             .outbox
-            .push_back(connection_request(initiator_address, initiator_class));
+            .push_back(connection_request(
+                initiator_address,
+                initiator_class,
+                LINK_TYPE_ACL,
+            ));
     }
 
     /// The host answered a Connection Request. On acceptance, finish the LMP
@@ -2186,6 +2399,193 @@ impl Link {
             .outbox
             .push_back(connection_complete(STATUS_SUCCESS, handle, peer));
     }
+
+    // --- SCO / eSCO ---------------------------------------------------------
+
+    /// HCI Setup Synchronous Connection: raise a Connection Request with a
+    /// synchronous link type at the peer's host, and wait for its answer.
+    ///
+    /// Nothing is allocated here. A handle that existed before the far end
+    /// agreed would be a half-open link — the exact state a rejected setup
+    /// must not leave behind — so the handle is allocated in
+    /// [`Self::route_sco_answer`], on acceptance, and nowhere else.
+    fn route_sco_setup(&mut self, from: usize, acl_handle: u16, link_type: u8, air_mode: u8) {
+        let initiator_address = self.controllers[from].address;
+        let Some(peer) = self.peer_of(from, acl_handle) else {
+            // The ACL was there when the command was parsed and is gone now.
+            self.controllers[from]
+                .outbox
+                .push_back(synchronous_connection_complete(
+                    STATUS_UNKNOWN_CONNECTION,
+                    0,
+                    Address::ANY,
+                    link_type,
+                    air_mode,
+                ));
+            return;
+        };
+        let peer_address = self.controllers[peer].address;
+        if self.controllers[peer].classic.inbound_sco.is_some()
+            || self.controllers[peer]
+                .sco_links
+                .iter()
+                .any(|l| l.peer == from)
+        {
+            // The peer's host already owes an answer for a synchronous
+            // request, or already has one up. Refusing is the honest answer;
+            // overwriting the pending request would strand the first one.
+            self.controllers[from]
+                .outbox
+                .push_back(synchronous_connection_complete(
+                    STATUS_CONNECTION_REJECTED_RESOURCES,
+                    0,
+                    peer_address,
+                    link_type,
+                    air_mode,
+                ));
+            return;
+        }
+        let initiator_class = self.controllers[from].classic.class_of_device;
+        self.controllers[peer].classic.inbound_sco = Some(InboundSco {
+            initiator: from,
+            initiator_address,
+            acl_handle,
+            link_type,
+            air_mode,
+        });
+        self.controllers[peer].outbox.push_back(connection_request(
+            initiator_address,
+            initiator_class,
+            link_type,
+        ));
+    }
+
+    /// The host answered a synchronous Connection Request. On acceptance,
+    /// allocate the SCO handle and give **both** hosts a Synchronous
+    /// Connection Complete carrying it; on rejection, give both one carrying
+    /// the reason and no handle.
+    fn route_sco_answer(&mut self, from: usize, peer: Address, reject: Option<u8>) {
+        let Some(request) = self.controllers[from].classic.inbound_sco.take() else {
+            return;
+        };
+        if request.initiator_address != peer {
+            self.controllers[from].classic.inbound_sco = Some(request);
+            return;
+        }
+        let initiator = request.initiator;
+        let acceptor_address = self.controllers[from].address;
+        let (link_type, air_mode) = (request.link_type, request.air_mode);
+
+        // Both hosts are owed a completion: the initiator's Setup and the
+        // acceptor's Accept/Reject were each answered with a Command Status,
+        // and a Command Status is a promise of an event to come.
+        let refuse = |link: &mut Self, status: u8| {
+            link.controllers[initiator]
+                .outbox
+                .push_back(synchronous_connection_complete(
+                    status,
+                    0,
+                    acceptor_address,
+                    link_type,
+                    air_mode,
+                ));
+            link.controllers[from]
+                .outbox
+                .push_back(synchronous_connection_complete(
+                    status, 0, peer, link_type, air_mode,
+                ));
+        };
+
+        if let Some(reason) = reject {
+            refuse(self, reason);
+            return;
+        }
+        if self.peer_of(initiator, request.acl_handle) != Some(from) {
+            // The ACL went away while the host was deciding. Without it there
+            // is nothing to carry the audio.
+            refuse(self, STATUS_UNKNOWN_CONNECTION);
+            return;
+        }
+
+        let sco_handle = self.alloc_handle();
+        for (index, other) in [(initiator, from), (from, initiator)] {
+            self.controllers[index].sco_links.push(ScoLink {
+                sco_handle,
+                acl_handle: request.acl_handle,
+                peer: other,
+            });
+        }
+        self.controllers[initiator]
+            .outbox
+            .push_back(synchronous_connection_complete(
+                STATUS_SUCCESS,
+                sco_handle,
+                acceptor_address,
+                link_type,
+                air_mode,
+            ));
+        self.controllers[from]
+            .outbox
+            .push_back(synchronous_connection_complete(
+                STATUS_SUCCESS,
+                sco_handle,
+                peer,
+                link_type,
+                air_mode,
+            ));
+    }
+
+    /// Deliver a synchronous data packet to the far end of its SCO/eSCO link
+    /// — the call-audio counterpart of [`Self::route_acl`].
+    ///
+    /// The payload crosses **untouched**: this controller transcodes nothing.
+    /// A CVSD or mSBC frame written by one host is the byte-identical frame
+    /// the other host reads. What a real controller does to those bytes on
+    /// the air is not modelled, and pretending otherwise is what the codec
+    /// seam in `crate::classic::hfp` exists to avoid.
+    fn route_sco(&mut self, from: usize, handle: u16, data: &[u8]) {
+        if let Some(peer) = self.sco_peer_of(from, handle) {
+            let mut pkt = vec![h4_type::HCI_SCO_DATA];
+            pkt.extend_from_slice(data);
+            self.controllers[peer].outbox.push_back(pkt);
+        }
+    }
+
+    /// The peer controller index for `from`'s synchronous link on `handle`.
+    ///
+    /// Deliberately *not* folded into [`Self::peer_of`]: an ACL handle and a
+    /// SCO handle come out of the same allocator but name different links,
+    /// and a lookup that accepted either would let call audio ride the
+    /// signalling channel — which works in a simulator and in nothing else.
+    fn sco_peer_of(&self, from: usize, handle: u16) -> Option<usize> {
+        self.controllers[from]
+            .sco_links
+            .iter()
+            .find(|l| l.sco_handle == handle)
+            .map(|l| l.peer)
+    }
+
+    /// Tear down the synchronous link `handle` names, telling both hosts.
+    /// Returns whether `handle` was a SCO handle at all.
+    fn route_sco_disconnect(&mut self, from: usize, handle: u16) -> bool {
+        let Some(peer) = self.sco_peer_of(from, handle) else {
+            return false;
+        };
+        for index in [from, peer] {
+            self.controllers[index]
+                .sco_links
+                .retain(|l| l.sco_handle != handle);
+        }
+        self.controllers[from]
+            .outbox
+            .push_back(disconnection_complete(handle, REASON_LOCAL_HOST));
+        self.controllers[peer]
+            .outbox
+            .push_back(disconnection_complete(handle, REASON_REMOTE_USER));
+        true
+    }
+
+    // --- end SCO / eSCO -----------------------------------------------------
 
     /// Answer each queued Remote Name Request with the peer's Write Local
     /// Name, or with Page Timeout if it names nobody reachable.
@@ -2418,6 +2818,77 @@ impl Link {
                 c.outbox.push_back(command_complete(opcode, &ret));
                 true
             }
+
+            // --- SCO / eSCO ------------------------------------------------
+            //
+            // All five are Command-Status commands (Vol 4, Part E, and
+            // Bumble's `HCI_AsyncCommand` split agrees), so *every* answer
+            // below — including every refusal — is a Command Status. A
+            // Command Complete here would hang a host waiting for the
+            // Synchronous Connection Complete that a Status promises.
+            opcode::SETUP_SYNCHRONOUS_CONNECTION
+            | opcode::ENHANCED_SETUP_SYNCHRONOUS_CONNECTION => {
+                let enhanced = opcode == opcode::ENHANCED_SETUP_SYNCHRONOUS_CONNECTION;
+                let Some((acl_handle, link_type, air_mode)) =
+                    parse_synchronous_setup(params, enhanced)
+                else {
+                    c.outbox
+                        .push_back(command_status(STATUS_INVALID_PARAMETERS, opcode));
+                    return true;
+                };
+                if !c.is_connected(acl_handle) {
+                    // A synchronous link is carried by an ACL. Naming a
+                    // handle there is no ACL on is the commonest way to ask
+                    // for call audio before the call's signalling link is up.
+                    c.outbox
+                        .push_back(command_status(STATUS_UNKNOWN_CONNECTION, opcode));
+                    return true;
+                }
+                if c.sco_links.iter().any(|l| l.acl_handle == acl_handle) {
+                    c.outbox
+                        .push_back(command_status(STATUS_CONNECTION_ALREADY_EXISTS, opcode));
+                    return true;
+                }
+                c.outbox.push_back(command_status(STATUS_SUCCESS, opcode));
+                actions.push(Action::ScoSetup {
+                    from: i,
+                    acl_handle,
+                    link_type,
+                    air_mode,
+                });
+                true
+            }
+            opcode::ACCEPT_SYNCHRONOUS_CONNECTION_REQUEST
+            | opcode::ENHANCED_ACCEPT_SYNCHRONOUS_CONNECTION_REQUEST
+            | opcode::REJECT_SYNCHRONOUS_CONNECTION_REQUEST => {
+                let peer = classic_address(params).unwrap_or(Address::ANY);
+                let matches_pending = c
+                    .classic
+                    .inbound_sco
+                    .as_ref()
+                    .is_some_and(|request| request.initiator_address == peer);
+                if !matches_pending {
+                    c.outbox
+                        .push_back(command_status(STATUS_UNKNOWN_CONNECTION, opcode));
+                    return true;
+                }
+                c.outbox.push_back(command_status(STATUS_SUCCESS, opcode));
+                let reject = (opcode == opcode::REJECT_SYNCHRONOUS_CONNECTION_REQUEST).then(|| {
+                    // Reject Synchronous Connection Request is BD_ADDR then
+                    // one reason octet.
+                    params
+                        .get(6)
+                        .copied()
+                        .unwrap_or(STATUS_CONNECTION_REJECTED_RESOURCES)
+                });
+                actions.push(Action::ScoAnswer {
+                    from: i,
+                    peer,
+                    reject,
+                });
+                true
+            }
+            // --- end SCO / eSCO --------------------------------------------
             _ => false,
         }
     }
@@ -2450,9 +2921,27 @@ impl Link {
     /// Tear down the connection on `handle` for controller `from`, notifying
     /// both ends with a Disconnection Complete.
     fn route_disconnect(&mut self, from: usize, handle: u16) {
+        // A SCO handle is disconnected by the same command as an ACL handle,
+        // and hanging up the audio must not take the signalling link with it.
+        if self.route_sco_disconnect(from, handle) {
+            return;
+        }
         let Some(peer) = self.peer_of(from, handle) else {
             return;
         };
+        // Every synchronous link on this ACL goes first, each with its own
+        // Disconnection Complete on its own handle. A host told only about
+        // the ACL keeps a SCO handle it will never hear from again — and
+        // Zephyr's `bt_sco_cleanup_acl` is waiting for exactly these events.
+        let sco_handles: Vec<u16> = self.controllers[from]
+            .sco_links
+            .iter()
+            .filter(|l| l.acl_handle == handle)
+            .map(|l| l.sco_handle)
+            .collect();
+        for sco_handle in sco_handles {
+            self.route_sco_disconnect(from, sco_handle);
+        }
         self.controllers[from]
             .connections
             .retain(|c| c.handle != handle);
@@ -2475,6 +2964,17 @@ impl Link {
             self.controllers[index]
                 .cis_links
                 .retain(|l| l.acl_handle != handle);
+            // A synchronous request the host never got round to answering
+            // dies with the ACL too — otherwise the next peer's Accept
+            // Synchronous Connection Request answers the *last* peer's.
+            if self.controllers[index]
+                .classic
+                .inbound_sco
+                .as_ref()
+                .is_some_and(|r| r.acl_handle == handle)
+            {
+                self.controllers[index].classic.inbound_sco = None;
+            }
         }
         self.controllers[from]
             .outbox
@@ -3177,11 +3677,85 @@ fn inquiry_complete(status: u8) -> Vec<u8> {
 
 /// Connection Request event (Vol 4, Part E, Section 7.7.4): a peer is paging
 /// us and the host must answer with Accept or Reject Connection Request.
-fn connection_request(from: Address, class_of_device: [u8; 3]) -> Vec<u8> {
+///
+/// `link_type` is load-bearing, not decoration. The same event code announces
+/// an inbound ACL and an inbound SCO/eSCO, and the two are answered with
+/// **different commands** — Accept Connection Request for one, Accept
+/// Synchronous Connection Request for the other. A host that ignores the
+/// field answers the wrong one and gets silence.
+fn connection_request(from: Address, class_of_device: [u8; 3], link_type: u8) -> Vec<u8> {
     let mut body = addr_le(from).to_vec();
     body.extend_from_slice(&class_of_device);
-    body.push(LINK_TYPE_ACL);
+    body.push(link_type);
     event_packet(event::CONNECTION_REQUEST, &body)
+}
+
+/// Synchronous Connection Complete event (Vol 4, Part E, Section 7.7.35) —
+/// the completion event every SCO/eSCO setup command promises.
+///
+/// `Transmission_Interval` and `Retransmission_Window` are reported as zero:
+/// this controller schedules no reserved slots and runs no retransmission
+/// window, so any other number would be an invented air-interface fact. The
+/// packet lengths are the 60-octet payload both CVSD over HV3 and mSBC over
+/// EV3 actually use, which is a number a host sizes its buffers from.
+fn synchronous_connection_complete(
+    status: u8,
+    handle: u16,
+    peer: Address,
+    link_type: u8,
+    air_mode: u8,
+) -> Vec<u8> {
+    let mut body = vec![status];
+    body.extend_from_slice(&handle.to_le_bytes());
+    body.extend_from_slice(&addr_le(peer));
+    body.push(link_type);
+    body.push(0x00); // Transmission_Interval — no slot scheduling is modelled
+    body.push(0x00); // Retransmission_Window — likewise
+    body.extend_from_slice(&SCO_PACKET_LENGTH.to_le_bytes()); // Rx_Packet_Length
+    body.extend_from_slice(&SCO_PACKET_LENGTH.to_le_bytes()); // Tx_Packet_Length
+    body.push(air_mode);
+    event_packet(event::SYNCHRONOUS_CONNECTION_COMPLETE, &body)
+}
+
+/// The synchronous payload size reported at connection setup, in octets. 60
+/// is what both HV3/CVSD and EV3/mSBC carry per packet on real hardware, and
+/// it is what an HFP host sizes its audio frames to.
+const SCO_PACKET_LENGTH: u16 = 60;
+
+/// The ACL handle, link type and air mode a Setup Synchronous Connection —
+/// or, with `enhanced`, an Enhanced Setup Synchronous Connection — asks for.
+///
+/// `None` when the parameters are too short to read, which is a Command
+/// Status carrying Invalid HCI Command Parameters rather than a guess.
+///
+/// Layouts (Vol 4, Part E, Sections 7.1.26 and 7.1.45), both verified
+/// against Zephyr's `bt_hci_cp_setup_sync_conn` and Bumble's command
+/// dataclasses — the plain form's Voice_Setting sits *before*
+/// Retransmission_Effort and Packet_Type, which is the field order a
+/// hand-transcribed table usually gets wrong.
+fn parse_synchronous_setup(params: &[u8], enhanced: bool) -> Option<(u16, u8, u8)> {
+    let acl_handle = le_u16(params.get(0..2)?, 0);
+    let (packet_type, air_mode) = if enhanced {
+        // handle(2) tx_bw(4) rx_bw(4) tx_coding_format(5) … packet_type at 56
+        let transmit_coding_format = *params.get(10)?;
+        let packet_type = le_u16(params.get(56..58)?, 0);
+        (
+            packet_type,
+            air_mode_of_coding_format(transmit_coding_format),
+        )
+    } else {
+        // handle(2) tx_bw(4) rx_bw(4) max_latency(2) voice_setting(2)
+        // retransmission_effort(1) packet_type(2)
+        let voice_setting = le_u16(params.get(12..14)?, 0);
+        let packet_type = le_u16(params.get(15..17)?, 0);
+        (packet_type, air_mode_of_voice_setting(voice_setting))
+    };
+    let link_type = if packet_type & ESCO_PACKET_TYPES != 0 {
+        LINK_TYPE_ESCO
+    } else {
+        LINK_TYPE_SCO
+    };
+    Some((acl_handle, link_type, air_mode))
 }
 
 /// Connection Complete event (Vol 4, Part E, Section 7.7.3), the BR/EDR
@@ -4737,6 +5311,504 @@ mod tests {
                 "the {who} must be told the link is gone: {evts:?}"
             );
         }
+    }
+
+    // --- SCO / eSCO: the call-audio link ---------------------------------
+
+    /// Setup Synchronous Connection as a host sends it (Vol 4, Part E,
+    /// Section 7.1.26): 17 parameter bytes, with the Voice Setting *before*
+    /// the retransmission effort and the packet types.
+    fn setup_sco_params(acl_handle: u16, voice_setting: u16, packet_type: u16) -> Vec<u8> {
+        let mut params = Vec::with_capacity(17);
+        params.extend_from_slice(&acl_handle.to_le_bytes());
+        params.extend_from_slice(&8000u32.to_le_bytes()); // Transmit_Bandwidth
+        params.extend_from_slice(&8000u32.to_le_bytes()); // Receive_Bandwidth
+        params.extend_from_slice(&0xFFFFu16.to_le_bytes()); // Max_Latency: don't care
+        params.extend_from_slice(&voice_setting.to_le_bytes());
+        params.push(0xFF); // Retransmission_Effort: don't care
+        params.extend_from_slice(&packet_type.to_le_bytes());
+        params
+    }
+
+    /// Accept Synchronous Connection Request (Section 7.1.27): the same 15
+    /// bytes with a BD_ADDR in front of them instead of a handle.
+    fn accept_sco_params(peer: [u8; 6], voice_setting: u16, packet_type: u16) -> Vec<u8> {
+        let mut params = peer.to_vec();
+        params.extend_from_slice(&setup_sco_params(0, voice_setting, packet_type)[2..]);
+        params
+    }
+
+    /// HV1|HV2|HV3 — a plain SCO link.
+    const SCO_PACKET_TYPES: u16 = 0x0007;
+    /// EV3 — an extended (eSCO) link, which is what mSBC rides.
+    const ESCO_PACKET_TYPES_EV3: u16 = 0x0008;
+    /// Voice Setting 0x0060: CVSD air coding, 16-bit linear input.
+    const VOICE_SETTING_CVSD: u16 = 0x0060;
+    /// Voice Setting 0x0063: transparent air coding — the controller passes
+    /// the payload through, which is how wideband speech is carried.
+    const VOICE_SETTING_TRANSPARENT: u16 = 0x0063;
+
+    /// The Synchronous Connection Complete events on a channel.
+    fn sync_completes(evts: &[(u8, Vec<u8>)]) -> Vec<Vec<u8>> {
+        evts.iter()
+            .filter(|(code, _)| *code == event::SYNCHRONOUS_CONNECTION_COMPLETE)
+            .map(|(_, p)| p.clone())
+            .collect()
+    }
+
+    /// Bring up an ACL and then a SCO link on it, returning both handles.
+    fn connect_sco(
+        link: &mut Link,
+        a: &HciChannel,
+        b: &HciChannel,
+        voice_setting: u16,
+        packet_type: u16,
+    ) -> (u16, u16) {
+        classic_bring_up(b, "Acceptor", 0x03);
+        link.tick();
+        let acl_handle = connect_classic(link, a, b);
+        let _ = (events(a), events(b));
+
+        a.send_command(&cmd(
+            opcode::SETUP_SYNCHRONOUS_CONNECTION,
+            &setup_sco_params(acl_handle, voice_setting, packet_type),
+        ))
+        .unwrap();
+        link.tick();
+        b.send_command(&cmd(
+            opcode::ACCEPT_SYNCHRONOUS_CONNECTION_REQUEST,
+            &accept_sco_params(WIRE_A, voice_setting, packet_type),
+        ))
+        .unwrap();
+        link.tick();
+
+        let completes = sync_completes(&events(a));
+        let complete = completes.first().expect("the setup must complete");
+        assert_eq!(complete[0], STATUS_SUCCESS, "{complete:?}");
+        let _ = events(b);
+        (acl_handle, u16::from_le_bytes([complete[1], complete[2]]))
+    }
+
+    #[test]
+    fn test_setup_synchronous_connection_is_answered_with_status_then_asks_the_peer() {
+        let mut link = Link::new();
+        let a = link.add_device(addr("AA:BB:CC:00:00:01"));
+        let b = link.add_device(addr("AA:BB:CC:00:00:02"));
+        classic_bring_up(&b, "Acceptor", 0x03);
+        link.tick();
+        let acl_handle = connect_classic(&mut link, &a, &b);
+        let _ = (events(&a), events(&b));
+
+        a.send_command(&cmd(
+            opcode::SETUP_SYNCHRONOUS_CONNECTION,
+            &setup_sco_params(acl_handle, VOICE_SETTING_CVSD, SCO_PACKET_TYPES),
+        ))
+        .unwrap();
+        link.tick();
+
+        let evts = events(&a);
+        assert_eq!(
+            command_status_for(&evts, opcode::SETUP_SYNCHRONOUS_CONNECTION),
+            Some(STATUS_SUCCESS),
+            "{evts:?}"
+        );
+        assert!(
+            command_complete_for(&evts, opcode::SETUP_SYNCHRONOUS_CONNECTION).is_none(),
+            "a Command Complete here hangs the host: {evts:?}"
+        );
+        assert!(
+            sync_completes(&evts).is_empty(),
+            "nothing completes until the far end has answered: {evts:?}"
+        );
+
+        // The peer's host learns about it exactly one way: a Connection
+        // Request whose link type is *not* ACL.
+        let peer = events(&b);
+        let (_, request) = peer
+            .iter()
+            .find(|(code, _)| *code == event::CONNECTION_REQUEST)
+            .expect("the peer's host must be asked");
+        assert_eq!(&request[0..6], &WIRE_A, "BD_ADDR, little-endian");
+        assert_eq!(
+            request[9], LINK_TYPE_SCO,
+            "HV-only packet types mean a plain SCO link"
+        );
+    }
+
+    #[test]
+    fn test_accept_synchronous_connection_request_completes_both_ends_with_one_handle() {
+        let mut link = Link::new();
+        let a = link.add_device(addr("AA:BB:CC:00:00:01"));
+        let b = link.add_device(addr("AA:BB:CC:00:00:02"));
+        classic_bring_up(&b, "Acceptor", 0x03);
+        link.tick();
+        let acl_handle = connect_classic(&mut link, &a, &b);
+        let _ = (events(&a), events(&b));
+
+        a.send_command(&cmd(
+            opcode::SETUP_SYNCHRONOUS_CONNECTION,
+            &setup_sco_params(acl_handle, VOICE_SETTING_CVSD, SCO_PACKET_TYPES),
+        ))
+        .unwrap();
+        link.tick();
+        let _ = (events(&a), events(&b));
+
+        b.send_command(&cmd(
+            opcode::ACCEPT_SYNCHRONOUS_CONNECTION_REQUEST,
+            &accept_sco_params(WIRE_A, VOICE_SETTING_CVSD, SCO_PACKET_TYPES),
+        ))
+        .unwrap();
+        link.tick();
+
+        let acceptor = events(&b);
+        assert_eq!(
+            command_status_for(&acceptor, opcode::ACCEPT_SYNCHRONOUS_CONNECTION_REQUEST),
+            Some(STATUS_SUCCESS),
+            "{acceptor:?}"
+        );
+        let initiator = events(&a);
+        let (mut sco_handle, mut seen) = (0u16, 0);
+        for (who, completes) in [
+            ("initiator", sync_completes(&initiator)),
+            ("acceptor", sync_completes(&acceptor)),
+        ] {
+            let complete = completes
+                .first()
+                .unwrap_or_else(|| panic!("the {who} is owed a completion"));
+            assert_eq!(complete[0], STATUS_SUCCESS, "{who}: {complete:?}");
+            let handle = u16::from_le_bytes([complete[1], complete[2]]);
+            assert_ne!(handle, acl_handle, "{who}: SCO gets a handle of its own");
+            if seen == 0 {
+                sco_handle = handle;
+            } else {
+                assert_eq!(handle, sco_handle, "both ends name the same SCO link");
+            }
+            seen += 1;
+            assert_eq!(complete[9], LINK_TYPE_SCO, "{who}: link type");
+            assert_eq!(complete[16], air_mode::CVSD, "{who}: air mode");
+        }
+        assert_eq!(seen, 2);
+    }
+
+    #[test]
+    fn test_a_transparent_esco_setup_reports_transparent_air_mode() {
+        // Wideband speech: mSBC rides an eSCO link in transparent mode, and
+        // the air mode a host reads out of the completion event is how it
+        // knows the controller will not touch its frames.
+        let mut link = Link::new();
+        let a = link.add_device(addr("AA:BB:CC:00:00:01"));
+        let b = link.add_device(addr("AA:BB:CC:00:00:02"));
+        classic_bring_up(&b, "Acceptor", 0x03);
+        link.tick();
+        let acl_handle = connect_classic(&mut link, &a, &b);
+        let _ = (events(&a), events(&b));
+        a.send_command(&cmd(
+            opcode::SETUP_SYNCHRONOUS_CONNECTION,
+            &setup_sco_params(acl_handle, VOICE_SETTING_TRANSPARENT, ESCO_PACKET_TYPES_EV3),
+        ))
+        .unwrap();
+        link.tick();
+        let request = events(&b)
+            .into_iter()
+            .find(|(code, _)| *code == event::CONNECTION_REQUEST)
+            .expect("the peer's host must be asked")
+            .1;
+        assert_eq!(request[9], LINK_TYPE_ESCO, "EV3 means an extended link");
+
+        b.send_command(&cmd(
+            opcode::ACCEPT_SYNCHRONOUS_CONNECTION_REQUEST,
+            &accept_sco_params(WIRE_A, VOICE_SETTING_TRANSPARENT, ESCO_PACKET_TYPES_EV3),
+        ))
+        .unwrap();
+        link.tick();
+        let complete = sync_completes(&events(&a))
+            .into_iter()
+            .next()
+            .expect("the setup must complete");
+        assert_eq!(complete[9], LINK_TYPE_ESCO);
+        assert_eq!(complete[16], air_mode::TRANSPARENT);
+    }
+
+    #[test]
+    fn test_enhanced_setup_synchronous_connection_takes_its_air_mode_from_the_coding_format() {
+        // The Enhanced form carries no Voice Setting at all: the air mode
+        // comes out of a five-octet Coding_Format 46 bytes earlier in a
+        // 59-byte parameter block. Reading it at the plain form's offset
+        // gives whatever the input bandwidth's low byte happens to be.
+        let mut link = Link::new();
+        let a = link.add_device(addr("AA:BB:CC:00:00:01"));
+        let b = link.add_device(addr("AA:BB:CC:00:00:02"));
+        classic_bring_up(&b, "Acceptor", 0x03);
+        link.tick();
+        let acl_handle = connect_classic(&mut link, &a, &b);
+        let _ = (events(&a), events(&b));
+
+        let mut params = vec![0u8; 59];
+        params[0..2].copy_from_slice(&acl_handle.to_le_bytes());
+        params[10] = 0x03; // Transmit_Coding_Format: transparent
+        params[15] = 0x03; // Receive_Coding_Format
+        params[56..58].copy_from_slice(&ESCO_PACKET_TYPES_EV3.to_le_bytes());
+        params[58] = 0xFF; // Retransmission_Effort: don't care
+        a.send_command(&cmd(opcode::ENHANCED_SETUP_SYNCHRONOUS_CONNECTION, &params))
+            .unwrap();
+        link.tick();
+
+        let evts = events(&a);
+        assert_eq!(
+            command_status_for(&evts, opcode::ENHANCED_SETUP_SYNCHRONOUS_CONNECTION),
+            Some(STATUS_SUCCESS),
+            "{evts:?}"
+        );
+        b.send_command(&cmd(
+            opcode::ENHANCED_ACCEPT_SYNCHRONOUS_CONNECTION_REQUEST,
+            &accept_sco_params(WIRE_A, VOICE_SETTING_TRANSPARENT, ESCO_PACKET_TYPES_EV3),
+        ))
+        .unwrap();
+        link.tick();
+
+        let complete = sync_completes(&events(&a))
+            .into_iter()
+            .next()
+            .expect("the enhanced setup must complete too");
+        assert_eq!(complete[0], STATUS_SUCCESS);
+        assert_eq!(complete[9], LINK_TYPE_ESCO);
+        assert_eq!(complete[16], air_mode::TRANSPARENT);
+    }
+
+    #[test]
+    fn test_reject_synchronous_connection_request_leaves_no_half_open_handle() {
+        let mut link = Link::new();
+        let a = link.add_device(addr("AA:BB:CC:00:00:01"));
+        let b = link.add_device(addr("AA:BB:CC:00:00:02"));
+        classic_bring_up(&b, "Acceptor", 0x03);
+        link.tick();
+        let acl_handle = connect_classic(&mut link, &a, &b);
+        let _ = (events(&a), events(&b));
+
+        a.send_command(&cmd(
+            opcode::SETUP_SYNCHRONOUS_CONNECTION,
+            &setup_sco_params(acl_handle, VOICE_SETTING_CVSD, SCO_PACKET_TYPES),
+        ))
+        .unwrap();
+        link.tick();
+        let _ = (events(&a), events(&b));
+
+        let mut reject = WIRE_A.to_vec();
+        reject.push(STATUS_CONNECTION_REJECTED_RESOURCES);
+        b.send_command(&cmd(opcode::REJECT_SYNCHRONOUS_CONNECTION_REQUEST, &reject))
+            .unwrap();
+        link.tick();
+
+        let acceptor = events(&b);
+        assert_eq!(
+            command_status_for(&acceptor, opcode::REJECT_SYNCHRONOUS_CONNECTION_REQUEST),
+            Some(STATUS_SUCCESS),
+            "the refusal itself succeeded: {acceptor:?}"
+        );
+        for (who, evts) in [("initiator", events(&a)), ("acceptor", acceptor)] {
+            let complete = sync_completes(&evts)
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| panic!("the {who} is owed a completion: {evts:?}"));
+            assert_eq!(
+                complete[0], STATUS_CONNECTION_REJECTED_RESOURCES,
+                "{who} must be told why"
+            );
+            assert_eq!(
+                u16::from_le_bytes([complete[1], complete[2]]),
+                0,
+                "{who}: a refused link gets no handle"
+            );
+        }
+
+        // And nothing is left half-open: the ACL still carries data, and a
+        // second setup on it starts from scratch rather than being refused
+        // as already existing.
+        a.send_command(&cmd(
+            opcode::SETUP_SYNCHRONOUS_CONNECTION,
+            &setup_sco_params(acl_handle, VOICE_SETTING_CVSD, SCO_PACKET_TYPES),
+        ))
+        .unwrap();
+        link.tick();
+        assert_eq!(
+            command_status_for(&events(&a), opcode::SETUP_SYNCHRONOUS_CONNECTION),
+            Some(STATUS_SUCCESS),
+            "a refused setup must not poison the ACL"
+        );
+        assert!(
+            events(&b)
+                .iter()
+                .any(|(code, _)| *code == event::CONNECTION_REQUEST),
+            "and the peer is asked again"
+        );
+    }
+
+    #[test]
+    fn test_setting_up_audio_on_a_handle_with_no_acl_is_refused_with_a_status() {
+        let mut link = Link::new();
+        let a = link.add_device(addr("AA:BB:CC:00:00:01"));
+        link.tick();
+        let _ = events(&a);
+
+        a.send_command(&cmd(
+            opcode::SETUP_SYNCHRONOUS_CONNECTION,
+            &setup_sco_params(0x0BAD, VOICE_SETTING_CVSD, SCO_PACKET_TYPES),
+        ))
+        .unwrap();
+        link.tick();
+
+        let evts = events(&a);
+        assert_eq!(
+            command_status_for(&evts, opcode::SETUP_SYNCHRONOUS_CONNECTION),
+            Some(STATUS_UNKNOWN_CONNECTION),
+            "{evts:?}"
+        );
+        assert!(
+            command_complete_for(&evts, opcode::SETUP_SYNCHRONOUS_CONNECTION).is_none(),
+            "an error answer to a Command-Status command is still a status"
+        );
+    }
+
+    #[test]
+    fn test_answering_a_synchronous_request_nobody_sent_is_refused_with_a_status() {
+        let mut link = Link::new();
+        let a = link.add_device(addr("AA:BB:CC:00:00:01"));
+        let b = link.add_device(addr("AA:BB:CC:00:00:02"));
+        classic_bring_up(&b, "Acceptor", 0x03);
+        link.tick();
+        let _ = connect_classic(&mut link, &a, &b);
+        let _ = (events(&a), events(&b));
+
+        b.send_command(&cmd(
+            opcode::ACCEPT_SYNCHRONOUS_CONNECTION_REQUEST,
+            &accept_sco_params(WIRE_A, VOICE_SETTING_CVSD, SCO_PACKET_TYPES),
+        ))
+        .unwrap();
+        link.tick();
+
+        let evts = events(&b);
+        assert_eq!(
+            command_status_for(&evts, opcode::ACCEPT_SYNCHRONOUS_CONNECTION_REQUEST),
+            Some(STATUS_UNKNOWN_CONNECTION),
+            "{evts:?}"
+        );
+        assert!(
+            sync_completes(&evts).is_empty(),
+            "and no link is invented: {evts:?}"
+        );
+    }
+
+    #[test]
+    fn test_sco_audio_is_routed_between_the_two_ends_of_a_synchronous_link() {
+        let mut link = Link::new();
+        let a = link.add_device(addr("AA:BB:CC:00:00:01"));
+        let b = link.add_device(addr("AA:BB:CC:00:00:02"));
+        let (acl_handle, sco_handle) =
+            connect_sco(&mut link, &a, &b, VOICE_SETTING_CVSD, SCO_PACKET_TYPES);
+
+        let payload = [0x11, 0x22, 0x33, 0x44];
+        let mut sco = vec![sco_handle as u8, (sco_handle >> 8) as u8, 0x04];
+        sco.extend_from_slice(&payload);
+        a.send_sco_data(&sco).unwrap();
+        link.tick();
+
+        let got = b
+            .poll_controller_packet()
+            .expect("audio must reach the far end");
+        assert_eq!(got[0], h4_type::HCI_SCO_DATA);
+        assert_eq!(&got[4..8], &payload, "the payload crosses untouched");
+
+        // And back, on the same handle.
+        b.send_sco_data(&sco).unwrap();
+        link.tick();
+        let got = a.poll_controller_packet().expect("and back again");
+        assert_eq!(&got[4..8], &payload);
+
+        // Audio addressed to the *ACL* handle is not audio. It reaches
+        // nobody rather than being quietly delivered to the signalling link.
+        let mut misaddressed = vec![acl_handle as u8, (acl_handle >> 8) as u8, 0x04];
+        misaddressed.extend_from_slice(&payload);
+        a.send_sco_data(&misaddressed).unwrap();
+        link.tick();
+        assert!(
+            b.poll_controller_packet().is_none(),
+            "a SCO packet on the ACL handle must not be delivered"
+        );
+    }
+
+    #[test]
+    fn test_disconnecting_the_sco_handle_leaves_the_acl_up() {
+        let mut link = Link::new();
+        let a = link.add_device(addr("AA:BB:CC:00:00:01"));
+        let b = link.add_device(addr("AA:BB:CC:00:00:02"));
+        let (acl_handle, sco_handle) =
+            connect_sco(&mut link, &a, &b, VOICE_SETTING_CVSD, SCO_PACKET_TYPES);
+
+        let mut params = sco_handle.to_le_bytes().to_vec();
+        params.push(REASON_REMOTE_USER);
+        a.send_command(&cmd(opcode::DISCONNECT, &params)).unwrap();
+        link.tick();
+
+        for (who, ch) in [("initiator", &a), ("acceptor", &b)] {
+            let evts = events(ch);
+            let (_, body) = evts
+                .iter()
+                .find(|(code, _)| *code == event::DISCONNECTION_COMPLETE)
+                .unwrap_or_else(|| panic!("the {who} must be told the audio is gone: {evts:?}"));
+            assert_eq!(
+                u16::from_le_bytes([body[1], body[2]]),
+                sco_handle,
+                "{who}: the audio handle went, not the ACL's"
+            );
+        }
+
+        // Hanging up the audio does not hang up the call's signalling.
+        let mut acl = vec![acl_handle as u8, (acl_handle >> 8) as u8, 0x01, 0x00, 0x5A];
+        acl.truncate(5);
+        a.send_acl_data(&acl).unwrap();
+        link.tick();
+        assert!(
+            b.poll_controller_packet().is_some(),
+            "the ACL must still carry AT commands after the audio stops"
+        );
+    }
+
+    #[test]
+    fn test_dropping_the_acl_takes_its_sco_link_with_it() {
+        let mut link = Link::new();
+        let a = link.add_device(addr("AA:BB:CC:00:00:01"));
+        let b = link.add_device(addr("AA:BB:CC:00:00:02"));
+        let (acl_handle, sco_handle) =
+            connect_sco(&mut link, &a, &b, VOICE_SETTING_CVSD, SCO_PACKET_TYPES);
+
+        let mut params = acl_handle.to_le_bytes().to_vec();
+        params.push(REASON_REMOTE_USER);
+        a.send_command(&cmd(opcode::DISCONNECT, &params)).unwrap();
+        link.tick();
+
+        for (who, ch) in [("initiator", &a), ("acceptor", &b)] {
+            let evts = events(ch);
+            let handles: Vec<u16> = evts
+                .iter()
+                .filter(|(code, _)| *code == event::DISCONNECTION_COMPLETE)
+                .map(|(_, body)| u16::from_le_bytes([body[1], body[2]]))
+                .collect();
+            assert!(
+                handles.contains(&sco_handle),
+                "{who} keeps a SCO handle it will never hear from again: {handles:?}"
+            );
+            assert!(
+                handles.contains(&acl_handle),
+                "{who} must be told about the ACL too: {handles:?}"
+            );
+        }
+
+        // Nothing is left routing: audio on the dead handle goes nowhere.
+        let mut sco = vec![sco_handle as u8, (sco_handle >> 8) as u8, 0x01, 0x5A];
+        sco.truncate(4);
+        a.send_sco_data(&sco).unwrap();
+        link.tick();
+        assert!(b.poll_controller_packet().is_none());
     }
 
     // --- the Command Status contract -------------------------------------

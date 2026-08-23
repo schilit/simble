@@ -3,20 +3,21 @@
 
 //! Hands-Free Profile (HFP) tests, ported from Bumble's `hfp_test.py`.
 //!
-//! `test_sco_setup` is not ported: it exercises `HCI_Enhanced_Setup_
-//! Synchronous_Connection_Command`/eSCO connection establishment end to
-//! end, which requires a simulated SCO/eSCO audio transport that Simble
-//! does not have (HFP here is signaling-only, matching the scope call in
-//! the module doc comment of `src/classic/hfp.rs`). Every other scenario
-//! from `hfp_test.py` (24 tests total) is ported below.
+//! Bumble's `test_sco_setup` drives `HCI_Enhanced_Setup_Synchronous_
+//! Connection_Command` against a controller. Simble now has one — see
+//! `src/controller/sim.rs` for the HCI side and `src/device/car_kit.rs` for
+//! the same procedure end to end over a simulated link — so what is tested
+//! here instead is the *profile's* half of it: the audio-connection state
+//! machine, which is the part `hfp.rs` owns. Every other scenario from
+//! `hfp_test.py` (24 tests total) is ported below.
 
 use simble::classic::hfp::{
-    AgConfiguration, AgIndicator, AgIndicatorState, AgProtocol, AudioCodec, CallHoldOperation,
-    CallInfo, CallInfoDirection, CallInfoMode, CallInfoMultiParty, CallInfoStatus,
-    CallLineIdentification, HfConfiguration, HfIndicator, HfProtocol, HfpEvent, ProfileVersion,
-    VoiceRecognitionState, ag_feature, ag_sdp_feature, find_ag_sdp_record, find_hf_sdp_record,
-    hf_feature, hf_sdp_feature, make_ag_sdp_records, make_hf_sdp_records, parse_call_infos,
-    parse_network_operator,
+    AgConfiguration, AgIndicator, AgIndicatorState, AgProtocol, AudioCodec, AudioConnectionState,
+    CallHoldOperation, CallInfo, CallInfoDirection, CallInfoMode, CallInfoMultiParty,
+    CallInfoStatus, CallLineIdentification, HfConfiguration, HfIndicator, HfProtocol, HfpEvent,
+    ProfileVersion, VoiceRecognitionState, ag_feature, ag_sdp_feature, find_ag_sdp_record,
+    find_hf_sdp_record, hf_feature, hf_sdp_feature, make_ag_sdp_records, make_hf_sdp_records,
+    parse_call_infos, parse_network_operator,
 };
 use simble::classic::sdp::{SdpClient, SdpServer};
 
@@ -585,4 +586,184 @@ fn test_ag_batched_commands() {
     let (_, events) = ag.receive(b"ATA\rAT+CHUP\r");
     assert!(events.contains(&HfpEvent::Answer));
     assert!(events.contains(&HfpEvent::HangUp));
+}
+
+// ---------------------------------------------------------------------------
+// The audio connection
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_the_codec_connection_procedure_precedes_the_synchronous_link() {
+    // HFP v1.9 4.11.3: `+BCS`, then the HF's `AT+BCS`, and only then does
+    // the AG open a synchronous connection. An AG that opened the link
+    // first would be opening it for a codec the HF has not agreed to.
+    let (mut hf, mut ag) = default_hfp_connections();
+    assert_eq!(ag.audio_state(), AudioConnectionState::Disconnected);
+
+    let (outgoing, events) = ag.start_audio_connection();
+    assert_eq!(ag.audio_state(), AudioConnectionState::Negotiating);
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, HfpEvent::AudioConnectionRequested(_))),
+        "the link must not be asked for before the codec is settled"
+    );
+    assert_eq!(outgoing.len(), 1);
+    assert_eq!(
+        outgoing[0], b"\r\n+BCS: 2\r\n",
+        "mSBC, the wider of the two"
+    );
+
+    // The HF confirms, and only now is the transport asked for a link.
+    let (to_ag, _) = hf.receive(&outgoing[0]);
+    assert_eq!(to_ag[0], b"AT+BCS=2\r");
+    let (_, events) = ag.receive(&to_ag[0]);
+    assert!(
+        events.contains(&HfpEvent::AudioConnectionRequested(AudioCodec::Msbc)),
+        "{events:?}"
+    );
+    assert_eq!(ag.audio_state(), AudioConnectionState::Connecting);
+    assert_eq!(hf.audio_state(), AudioConnectionState::Connecting);
+
+    // "Connecting" is not "connected". Only the transport can say that.
+    ag.on_audio_connected();
+    hf.on_audio_connected();
+    assert_eq!(ag.audio_state(), AudioConnectionState::Connected);
+    assert_eq!(hf.audio_state(), AudioConnectionState::Connected);
+}
+
+#[test]
+fn test_without_codec_negotiation_the_link_is_asked_for_straight_away() {
+    // No `+BCS` exists to send: CVSD is the only codec HFP guarantees, and
+    // an AG that waited for a confirmation nobody will send waits forever.
+    let (_, mut ag) = make_hfp_connections(
+        HfConfiguration {
+            supported_hf_features: 0,
+            supported_hf_indicators: Vec::new(),
+            supported_audio_codecs: Vec::new(),
+        },
+        AgConfiguration {
+            supported_ag_features: 0,
+            supported_ag_indicators: vec![AgIndicatorState::call()],
+            supported_hf_indicators: Vec::new(),
+            supported_ag_call_hold_operations: Vec::new(),
+            supported_audio_codecs: Vec::new(),
+        },
+    );
+
+    let (outgoing, events) = ag.start_audio_connection();
+    assert!(outgoing.is_empty(), "there is nothing to negotiate");
+    assert!(events.contains(&HfpEvent::AudioConnectionRequested(AudioCodec::Cvsd)));
+    assert_eq!(ag.audio_state(), AudioConnectionState::Connecting);
+}
+
+#[test]
+fn test_the_ag_picks_only_from_what_the_hf_said_it_can_decode() {
+    // The bug this catches: `AT+BAC` used to overwrite the AG's *own* codec
+    // list, so there was one list where there should be two and no
+    // intersection to take. Nothing noticed while the choice was never
+    // acted on.
+    let (_, ag) = make_hfp_connections(
+        HfConfiguration {
+            // A narrowband-only HF.
+            supported_audio_codecs: vec![AudioCodec::Cvsd],
+            ..default_hf_configuration()
+        },
+        default_ag_configuration(),
+    );
+    assert_eq!(
+        ag.supported_audio_codecs,
+        vec![AudioCodec::Cvsd, AudioCodec::Msbc],
+        "the AG's own list survives the HF's AT+BAC"
+    );
+    assert_eq!(ag.hf_audio_codecs, vec![AudioCodec::Cvsd]);
+
+    let mut ag = ag;
+    let (outgoing, _) = ag.start_audio_connection();
+    assert_eq!(
+        outgoing[0], b"\r\n+BCS: 1\r\n",
+        "CVSD: offering mSBC to an HF that cannot decode it is how a call \
+         comes up silent"
+    );
+}
+
+#[test]
+fn test_at_bcc_makes_the_ag_open_the_link_the_hf_may_not_open_itself() {
+    // HFP gives establishing the audio connection to the AG alone, so the
+    // HF's only move is to ask. `OK` answers the command; the `+BCS` that
+    // follows is unsolicited and must come after it.
+    let (mut hf, mut ag) = default_hfp_connections();
+    let request = hf.setup_audio_connection();
+    let (outgoing, events) = ag.receive(&request);
+
+    assert!(events.contains(&HfpEvent::CodecConnectionRequested));
+    assert!(events.contains(&HfpEvent::AudioConnectionState(
+        AudioConnectionState::Negotiating
+    )));
+    assert_eq!(outgoing[0], b"\r\nOK\r\n", "the command is answered first");
+    assert_eq!(outgoing[1], b"\r\n+BCS: 2\r\n");
+}
+
+#[test]
+fn test_a_second_trigger_does_not_start_a_second_procedure() {
+    // A call that rings and is then answered triggers audio twice. The
+    // second must be a no-op, not a `+BCS` racing the first exchange.
+    let (_, mut ag) = default_hfp_connections();
+    let (first, _) = ag.start_audio_connection();
+    assert_eq!(first.len(), 1);
+    let (second, events) = ag.start_audio_connection();
+    assert!(second.is_empty(), "{second:?}");
+    assert!(events.is_empty(), "{events:?}");
+}
+
+#[test]
+fn test_the_codec_decides_the_voice_setting_and_packet_types() {
+    // The seam between the profile and HCI: two numbers, and getting either
+    // wrong makes a controller build the wrong kind of link.
+    assert_eq!(AudioCodec::Cvsd.voice_setting(), 0x0060);
+    assert!(!AudioCodec::Cvsd.requires_esco());
+    assert_eq!(AudioCodec::Cvsd.esco_packet_type(), 0x0007, "HV1|HV2|HV3");
+
+    for wideband in [AudioCodec::Msbc, AudioCodec::Lc3Swb] {
+        assert_eq!(
+            wideband.voice_setting(),
+            0x0063,
+            "{wideband:?} is encoded by the host, so the controller must be \
+             told to pass it through untouched"
+        );
+        assert!(wideband.requires_esco());
+        assert_eq!(wideband.esco_packet_type(), 0x0008, "EV3");
+    }
+}
+
+#[test]
+fn test_losing_the_audio_leaves_the_service_level_connection_alone() {
+    let (mut hf, mut ag) = default_hfp_connections();
+    let (outgoing, _) = ag.start_audio_connection();
+    let (to_ag, _) = hf.receive(&outgoing[0]);
+    ag.receive(&to_ag[0]);
+    ag.on_audio_connected();
+    hf.on_audio_connected();
+
+    let events = ag.on_audio_disconnected();
+    assert!(events.contains(&HfpEvent::AudioConnectionState(
+        AudioConnectionState::Disconnected
+    )));
+    hf.on_audio_disconnected();
+    assert_eq!(ag.audio_state(), AudioConnectionState::Disconnected);
+
+    // And the SLC is untouched: a `+CIEV` still crosses, and the audio can
+    // be brought back without redoing any of it.
+    let line = ag
+        .update_ag_indicator(AgIndicator::Call, 1)
+        .expect("the AG still has its indicators");
+    let (_, events) = hf.receive(&line);
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, HfpEvent::AgIndicatorUpdated(_))),
+        "{events:?}"
+    );
+    let (again, _) = ag.start_audio_connection();
+    assert_eq!(again.len(), 1, "a second call costs one codec exchange");
 }

@@ -51,6 +51,7 @@ fn describe(event: &HfpEvent) -> String {
             format!("indicator {:?} {}", state.indicator, state.current_status)
         }
         HfpEvent::CodecNegotiated(codec) => format!("codec {codec:?}"),
+        HfpEvent::AudioConnectionState(state) => format!("audio {}", state.name()),
         HfpEvent::SpeakerVolume(level) => format!("speaker {level}"),
         HfpEvent::MicrophoneVolume(level) => format!("microphone {level}"),
         HfpEvent::Ring => "ring".into(),
@@ -99,6 +100,9 @@ fn act(hf: &mut HfProtocol, command: &str) -> Vec<u8> {
         Some(("raw", text)) => hf.send_command(text),
         _ => match command {
             "answer" => hf.answer_incoming_call(),
+            // AT+BCC: the HF asking the AG for audio. It may not open the
+            // synchronous link itself, so asking is the whole of its move.
+            "setup-audio" => hf.setup_audio_connection(),
             "hangup" => hf.terminate_call(),
             "calls" => hf.query_current_calls(),
             "operator-format" => hf.select_operator_format(),

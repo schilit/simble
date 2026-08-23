@@ -2330,6 +2330,21 @@ pub struct ClassicDevice {
     /// disconnects as soon as one payload comes back, which is right for the
     /// send-one-thing demo it was written for and fatal for a conversation.
     hold_open: bool,
+    /// Set by [`Self::request_sco`]: open the audio connection as soon as
+    /// there is an ACL to hang it off. Held as a *request* rather than acted
+    /// on immediately because a profile decides there is audio long before
+    /// this device's plan reaches a point where it can send HCI.
+    sco_requested: bool,
+    /// Whether *this* device opened the audio connection.
+    ///
+    /// Only the end that opened it may hang it up. Without this, a device
+    /// that merely *accepted* an inbound synchronous request sees a link it
+    /// never asked for and disconnects it — inside the same tick it came up,
+    /// so from the outside the audio never appears at all and no layer
+    /// reports an error.
+    sco_opened_here: bool,
+    /// Call audio queued for the synchronous link, waiting for it to exist.
+    sco_to_send: Vec<Vec<u8>>,
     error: Option<String>,
 }
 
@@ -2399,6 +2414,9 @@ impl ClassicDevice {
             to_send: Vec::new(),
             received: Vec::new(),
             hold_open: false,
+            sco_requested: false,
+            sco_opened_here: false,
+            sco_to_send: Vec::new(),
             error: None,
         }
     }
@@ -2462,6 +2480,9 @@ impl ClassicDevice {
             to_send: Vec::new(),
             received: Vec::new(),
             hold_open: false,
+            sco_requested: false,
+            sco_opened_here: false,
+            sco_to_send: Vec::new(),
             error: None,
         }
     }
@@ -2475,6 +2496,59 @@ impl ClassicDevice {
     /// The serial port this device's RFCOMM handler serves, once there is one.
     pub fn port(&self) -> Option<&SharedRfcommPort> {
         self.port.as_ref()
+    }
+
+    // --- the audio connection (SCO / eSCO) ---------------------------------
+
+    /// Asks for the audio connection to be opened over this device's ACL.
+    ///
+    /// Only one end may do this — HFP gives the job to the Audio Gateway —
+    /// and it is a request, not a command: the setup goes out on the next
+    /// step at which there is an ACL to hang it off.
+    pub fn request_sco(&mut self) {
+        self.sco_requested = true;
+        self.sco_opened_here = true;
+    }
+
+    /// Hangs up the audio, leaving the ACL and everything on it alone.
+    pub fn release_sco(&mut self) {
+        self.sco_requested = false;
+        self.sco_to_send.clear();
+    }
+
+    /// The Voice Setting and packet types the next setup asks for — the
+    /// codec seam (`AudioCodec::voice_setting`/`esco_packet_type`).
+    pub fn set_sco_parameters(&mut self, voice_setting: u16, packet_type: u16) {
+        self.host.set_sco_parameters(voice_setting, packet_type);
+    }
+
+    /// What this device answers an inbound synchronous Connection Request
+    /// with.
+    pub fn set_sco_policy(&mut self, policy: crate::device::ScoPolicy) {
+        self.host.set_sco_policy(policy);
+    }
+
+    /// The audio connection, if one is up.
+    pub fn sco(&self) -> Option<crate::device::ScoConnection> {
+        self.host.sco()
+    }
+
+    /// Why the last audio setup failed, if the far end refused it.
+    pub fn sco_failure(&self) -> Option<u8> {
+        self.host.sco_failure()
+    }
+
+    /// Queues one payload for the synchronous link. It waits if the link is
+    /// not up yet, rather than being dropped: a profile that starts talking
+    /// the instant it decides there is audio is right to, and the frames it
+    /// produced while the setup was in flight are still the call.
+    pub fn send_sco(&mut self, payload: impl Into<Vec<u8>>) {
+        self.sco_to_send.push(payload.into());
+    }
+
+    /// Takes the call audio that has arrived on the synchronous link.
+    pub fn take_sco_received(&mut self) -> Vec<Vec<u8>> {
+        self.host.take_sco_received()
     }
 
     /// Makes this device's Scan Enable `value` — used to build a device that
@@ -2534,6 +2608,12 @@ impl ClassicDevice {
     /// on a tick count: that is what makes a stalled step visible as a phase
     /// that stops moving rather than as a scene that silently drifts on.
     fn produce(&mut self, channel: &HciChannel) {
+        // The audio connection is orthogonal to the plan below: it hangs off
+        // whatever ACL exists, and either role may be the one holding it, so
+        // it runs before the acceptor's early return rather than inside the
+        // initiator's state machine.
+        self.produce_sco(channel);
+
         let Some(target) = self.target else {
             // An acceptor still has to drain what its profiles want to send.
             for packet in self.host.poll() {
@@ -2619,6 +2699,45 @@ impl ClassicDevice {
         // this way, not from the plan above.
         for packet in self.host.poll() {
             let _ = channel.inject_host_packet(packet);
+        }
+    }
+
+    /// The audio connection's step: open it when it has been asked for and
+    /// there is an ACL under it, hang it up when the request is withdrawn,
+    /// and drain whatever audio is queued for it.
+    ///
+    /// Every transition here is gated on what the *controller* said, like
+    /// every other stage: `host.sco()` is `Some` only once a Synchronous
+    /// Connection Complete has arrived, so a setup that is refused leaves
+    /// this loop trying again rather than reporting audio nobody agreed to.
+    fn produce_sco(&mut self, channel: &HciChannel) {
+        let up = self.host.sco().is_some();
+        if self.sco_requested && !up && self.host.sco_failure().is_some() {
+            // The far end refused. Asking again every step would busy the
+            // link and hide the refusal behind a setup that is always "in
+            // flight"; the request is withdrawn and the reason stays
+            // readable on the host.
+            self.sco_requested = false;
+            self.sco_opened_here = false;
+            self.sco_to_send.clear();
+        }
+        let packets = if self.sco_requested && !up {
+            self.host.setup_sco()
+        } else if !self.sco_requested && up && self.sco_opened_here {
+            self.sco_opened_here = false;
+            self.host.disconnect_sco()
+        } else {
+            Vec::new()
+        };
+        for packet in packets {
+            let _ = channel.inject_host_packet(packet);
+        }
+        if self.host.sco().is_some() {
+            for payload in std::mem::take(&mut self.sco_to_send) {
+                for packet in self.host.send_sco(&payload) {
+                    let _ = channel.inject_host_packet(packet);
+                }
+            }
         }
     }
 
@@ -2928,6 +3047,16 @@ impl SceneEngine {
     pub fn classic_device(&self, index: usize) -> Option<&ClassicDevice> {
         match self.devices.get(index)?.role {
             SceneRole::Classic(ref d) => Some(d),
+            _ => None,
+        }
+    }
+
+    /// Mutable access to the BR/EDR device at `index` — what a profile above
+    /// the link needs in order to ask for an audio connection or put audio
+    /// on it.
+    pub fn classic_device_mut(&mut self, index: usize) -> Option<&mut ClassicDevice> {
+        match self.devices.get_mut(index)?.role {
+            SceneRole::Classic(ref mut d) => Some(d),
             _ => None,
         }
     }

@@ -19,7 +19,12 @@
 //! * an [`AgProtocol`] — the phone, in the Audio Gateway role, which owns
 //!   the calls and the indicators;
 //! * an [`HfProtocol`] — the head unit, in the Hands-Free role, which
-//!   drives the call.
+//!   drives the call;
+//! * an **audio connection** — a real SCO/eSCO link, set up by the phone
+//!   over HCI when the call needs it and torn down when the call ends,
+//!   carrying payload both ways on a handle of its own. The Service Level
+//!   Connection above it survives the audio coming and going, which is what
+//!   makes the second call cost one setup rather than a whole bring-up.
 //!
 //! The two protocol objects are attached to the ends of one RFCOMM data link
 //! by a pair of [`SharedRfcommPort`]s: AT bytes written to a port become UIH
@@ -35,12 +40,12 @@
 //!
 //! ## What is not here
 //!
-//! * **SCO/eSCO — the call audio.** Simble has no synchronous connection
-//!   at all: no `Setup Synchronous Connection`, no SCO handle, no audio
-//!   path. Codec negotiation here (`AT+BAC`/`+BCS`) settles *which* codec
-//!   would be used and then stops, because there is nothing to carry it.
-//!   SCO is the BR/EDR counterpart of the CIS work in
-//!   [`CisCentral`](super::CisCentral), and it is not implemented.
+//! * **Any codec.** The call audio has a real path — see below — but
+//!   nothing on it is encoded. Codec negotiation (`AT+BAC`/`+BCS`) settles
+//!   *which* codec, that choice becomes a Voice Setting and a packet-type
+//!   mask on the wire, and then a counter pattern crosses the link in place
+//!   of speech. Nothing transcodes; `crate::audio`'s SBC and LC3 encoders
+//!   are not wired in.
 //! * **Pairing.** The link is unauthenticated and unencrypted: no Secure
 //!   Simple Pairing, no link key. A real head unit pairs once and bonds.
 //! * **A2DP, AVRCP, PBAP.** Not wired here.
@@ -50,10 +55,11 @@ use std::collections::VecDeque;
 use serde::Serialize;
 
 use crate::classic::hfp::{
-    AgConfiguration, AgIndicator, AgIndicatorState, AgProtocol, AudioCodec, CallHoldOperation,
-    CallInfo, CallInfoDirection, CallInfoMode, CallInfoMultiParty, CallInfoStatus,
-    CallLineIdentification, HfConfiguration, HfIndicator, HfProtocol, HfpEvent, ProfileVersion,
-    VoiceRecognitionState, ag_feature, hf_feature, make_ag_sdp_records, parse_network_operator,
+    AgConfiguration, AgIndicator, AgIndicatorState, AgProtocol, AudioCodec, AudioConnectionState,
+    CallHoldOperation, CallInfo, CallInfoDirection, CallInfoMode, CallInfoMultiParty,
+    CallInfoStatus, CallLineIdentification, HfConfiguration, HfIndicator, HfProtocol, HfpEvent,
+    ProfileVersion, VoiceRecognitionState, ag_feature, hf_feature, make_ag_sdp_records,
+    parse_network_operator,
 };
 use crate::classic::sdp::SdpUuid;
 use crate::device::SharedRfcommPort;
@@ -122,6 +128,17 @@ const ALERTING_MS: u64 = 5_000;
 
 /// Longest transcript kept in memory.
 const TRANSCRIPT_LIMIT: usize = 400;
+
+/// Bytes in one synthetic audio frame put on the synchronous link while a
+/// call is up.
+///
+/// 60 is the payload a real HV3 (CVSD) or EV3 (mSBC) packet carries, and it
+/// is what the controller reports at setup. The *contents* are a counter
+/// pattern, not speech: simble transcodes nothing, and a frame of fake PCM
+/// would be a claim about a codec that is not implemented. What this proves
+/// is the path — that bytes written at one end come out of the other, on the
+/// audio handle, byte for byte.
+const AUDIO_FRAME_BYTES: usize = 60;
 
 // ---------------------------------------------------------------------------
 // State
@@ -245,6 +262,10 @@ pub enum CarKitEvent {
     Operator(String),
     /// Voice recognition was switched on or off (`AT+BVRA`).
     VoiceRecognition(bool),
+    /// The audio connection came up: the SCO/eSCO link is carrying the call.
+    AudioConnected(AudioCodec),
+    /// The audio connection went away, leaving the SLC up.
+    AudioDisconnected,
     /// A layer refused; the link is dead.
     Failed(String),
 }
@@ -329,6 +350,25 @@ pub struct CarKit {
     next_seq: u64,
     sdp_detail: Option<String>,
     dlc_detail: Option<String>,
+
+    // --- the audio connection ---
+    /// Whether this type has told the two protocol objects the synchronous
+    /// link is up. Derived from the controller, never assumed: the AT
+    /// handshake settling a codec is not the same event as a link existing.
+    audio_up: bool,
+    /// Frames the phone has put on the link, and the head unit has taken off
+    /// it — counted at both ends so a page can show that audio is moving
+    /// rather than merely that a handle exists.
+    audio_frames_from_phone: u64,
+    audio_frames_from_car: u64,
+    /// Frames each end has *received*, which is the number that proves the
+    /// routing rather than the writing.
+    audio_frames_to_phone: u64,
+    audio_frames_to_car: u64,
+    /// The counter stamped into the next synthetic frame.
+    audio_frame_seq: u64,
+    /// What the audio connection is, once there is one, for the page.
+    audio_detail: Option<String>,
 }
 
 impl Default for CarKit {
@@ -418,6 +458,13 @@ impl CarKit {
             next_seq: 0,
             sdp_detail: None,
             dlc_detail: None,
+            audio_up: false,
+            audio_frames_from_phone: 0,
+            audio_frames_from_car: 0,
+            audio_frames_to_phone: 0,
+            audio_frames_to_car: 0,
+            audio_frame_seq: 0,
+            audio_detail: None,
         }
     }
 
@@ -504,6 +551,154 @@ impl CarKit {
                 self.on_hf_hfp_event(event, events);
             }
         }
+
+        self.follow_audio(events);
+    }
+
+    // -- the audio connection ------------------------------------------------
+
+    /// The SCO/eSCO link's half of a step: notice when the controller has
+    /// brought it up or taken it away, and carry a frame each way while it
+    /// is up.
+    ///
+    /// Both ends are consulted, not one. A handle at the phone alone would
+    /// mean the phone believes there is audio and the head unit does not —
+    /// which is the failure this checks for rather than the one it hides.
+    fn follow_audio(&mut self, events: &mut Vec<CarKitEvent>) {
+        let phone_sco = self
+            .scene
+            .classic_device(self.phone)
+            .and_then(ClassicDevice::sco);
+        let car_sco = self
+            .scene
+            .classic_device(self.head_unit)
+            .and_then(ClassicDevice::sco);
+        let up = phone_sco.is_some() && car_sco.is_some();
+
+        if up && !self.audio_up {
+            self.audio_up = true;
+            for event in self.ag.on_audio_connected() {
+                let _ = event;
+            }
+            for event in self.hf.on_audio_connected() {
+                let _ = event;
+            }
+            if let Some(sco) = phone_sco {
+                self.audio_detail = Some(format!(
+                    "{} link on handle {:#06X}, air mode {}, {} — {} bytes per frame. \
+                     The payload crosses untouched: nothing here encodes or decodes it.",
+                    if sco.link_type == 0x02 { "eSCO" } else { "SCO" },
+                    sco.handle,
+                    match sco.air_mode {
+                        0x02 => "CVSD",
+                        0x03 => "transparent",
+                        other => {
+                            let _ = other;
+                            "log-PCM"
+                        }
+                    },
+                    self.ag.negotiated_codec().name(),
+                    AUDIO_FRAME_BYTES,
+                ));
+            }
+            events.push(CarKitEvent::AudioConnected(self.ag.negotiated_codec()));
+        } else if !up && self.audio_up {
+            self.audio_up = false;
+            let _ = self.ag.on_audio_disconnected();
+            let _ = self.hf.on_audio_disconnected();
+            self.audio_detail = None;
+            events.push(CarKitEvent::AudioDisconnected);
+        }
+
+        if !self.audio_up {
+            return;
+        }
+        // A frame each way per step. There is no sample rate here and no
+        // packet interval: a tick is not a unit of time in this simulator,
+        // and the reserved slots a real SCO link runs on are exactly what
+        // rootcanal/netsim exist to model.
+        let frame = self.next_audio_frame();
+        if let Some(device) = self.scene.classic_device_mut(self.phone) {
+            device.send_sco(frame.clone());
+            self.audio_frames_from_phone += 1;
+        }
+        if let Some(device) = self.scene.classic_device_mut(self.head_unit) {
+            device.send_sco(frame);
+            self.audio_frames_from_car += 1;
+        }
+        let received_at_car = self
+            .scene
+            .classic_device_mut(self.head_unit)
+            .map(ClassicDevice::take_sco_received)
+            .unwrap_or_default();
+        self.audio_frames_to_car += received_at_car.len() as u64;
+        let received_at_phone = self
+            .scene
+            .classic_device_mut(self.phone)
+            .map(ClassicDevice::take_sco_received)
+            .unwrap_or_default();
+        self.audio_frames_to_phone += received_at_phone.len() as u64;
+    }
+
+    /// One synthetic audio frame: a sequence number and a counter pattern.
+    /// Deliberately not speech — see [`AUDIO_FRAME_BYTES`].
+    fn next_audio_frame(&mut self) -> Vec<u8> {
+        let seq = self.audio_frame_seq;
+        self.audio_frame_seq += 1;
+        let mut frame = Vec::with_capacity(AUDIO_FRAME_BYTES);
+        frame.extend_from_slice(&seq.to_le_bytes());
+        while frame.len() < AUDIO_FRAME_BYTES {
+            frame.push(frame.len() as u8);
+        }
+        frame
+    }
+
+    /// Tell both ends what the settled codec asks the controller for, then
+    /// ask the phone — the Audio Gateway — to open the link.
+    ///
+    /// Both ends are given the parameters: the acceptor states its own
+    /// bandwidth, Voice Setting and packet types in Accept Synchronous
+    /// Connection Request rather than inheriting the initiator's, so a head
+    /// unit left on the CVSD defaults would be answering a wideband request
+    /// with narrowband terms.
+    fn open_audio_connection(&mut self, codec: AudioCodec) {
+        let (voice_setting, packet_type) = (codec.voice_setting(), codec.esco_packet_type());
+        for index in [self.phone, self.head_unit] {
+            if let Some(device) = self.scene.classic_device_mut(index) {
+                device.set_sco_parameters(voice_setting, packet_type);
+            }
+        }
+        if let Some(device) = self.scene.classic_device_mut(self.phone) {
+            device.request_sco();
+        }
+    }
+
+    /// The AG decides there is audio: run the Codec Connection procedure if
+    /// the two ends negotiated one, and open the link when it settles.
+    ///
+    /// Idempotent — [`AgProtocol::start_audio_connection`] returns nothing
+    /// when audio is already up or already coming up, so answering a call
+    /// whose in-band ring tone is already playing does not start a second
+    /// procedure.
+    fn start_ag_audio(&mut self) {
+        let (outgoing, hfp_events) = self.ag.start_audio_connection();
+        for line in outgoing {
+            self.ag_send(line);
+        }
+        let mut ignored = Vec::new();
+        for event in hfp_events {
+            self.on_ag_hfp_event(event, &mut ignored);
+        }
+    }
+
+    /// Hang up the audio, leaving the Service Level Connection alone. The
+    /// call ends; the phone stays paired and the AT link stays open, which
+    /// is what makes the next call cost one SCO setup instead of a whole
+    /// bring-up.
+    fn close_audio_connection(&mut self) {
+        if let Some(device) = self.scene.classic_device_mut(self.phone) {
+            device.release_sco();
+        }
     }
 
     /// The BR/EDR half of [`LinkPhase`]: mirror the head unit's
@@ -583,6 +778,14 @@ impl CarKit {
         }];
         self.set_call_phase(CallPhase::Incoming);
         self.push_indicator(AgIndicator::CallSetup, 1);
+        // In-band ring tone (HFP v1.9 4.13.1): the ring the driver hears is
+        // the phone's, carried over the audio connection, so the AG brings
+        // the synchronous link up *before* the first `RING`. Without in-band
+        // ringing the head unit makes its own noise and audio waits for the
+        // answer.
+        if self.ag.inband_ringtone_enabled {
+            self.start_ag_audio();
+        }
         self.alert_once();
         true
     }
@@ -715,6 +918,25 @@ impl CarKit {
         self.error.as_deref()
     }
 
+    /// Where the audio connection has got to, as the Audio Gateway sees it.
+    pub fn audio_state(&self) -> AudioConnectionState {
+        self.ag.audio_state()
+    }
+
+    /// The audio connection itself, once the controller has made one.
+    pub fn audio_connection(&self) -> Option<crate::device::ScoConnection> {
+        self.scene
+            .classic_device(self.phone)
+            .and_then(ClassicDevice::sco)
+    }
+
+    /// Audio frames received at the head unit and at the phone. These count
+    /// what came *off* the link, not what was written to it — which is the
+    /// half that proves the routing.
+    pub fn audio_frames_received(&self) -> (u64, u64) {
+        (self.audio_frames_to_car, self.audio_frames_to_phone)
+    }
+
     /// Every AT line so far, oldest first, capped at the most recent
     /// `TRANSCRIPT_LIMIT`.
     pub fn transcript(&self) -> impl Iterator<Item = &AtLine> {
@@ -843,6 +1065,10 @@ impl CarKit {
                 events.push(CarKitEvent::MicrophoneGain(level));
             }
             HfpEvent::CallHold { .. } => {}
+            // The AG has settled the codec and wants the synchronous link.
+            // This is the whole seam between HFP and HCI: everything above
+            // it is AT commands, everything below it is a SCO handle.
+            HfpEvent::AudioConnectionRequested(codec) => self.open_audio_connection(codec),
             _ => {}
         }
     }
@@ -924,12 +1150,18 @@ impl CarKit {
         }
         self.push_indicator(AgIndicator::Call, 1);
         self.push_indicator(AgIndicator::CallSetup, 0);
+        // A connected call always has audio, whether or not the ring did.
+        self.start_ag_audio();
     }
 
     fn clear_call(&mut self) {
         let was = self.call;
         self.ag.calls.clear();
         self.caller = None;
+        // The audio goes and the Service Level Connection stays. A head unit
+        // that tore down the ACL here would pay for a full inquiry, page,
+        // SDP search and RFCOMM handshake on the next call.
+        self.close_audio_connection();
         self.set_call_phase(CallPhase::Idle);
         match was {
             CallPhase::Active => self.push_indicator(AgIndicator::Call, 0),
@@ -1199,6 +1431,19 @@ struct CarKitStatusJson {
     voice_recognition: bool,
     last_dialed: String,
     codec: &'static str,
+    /// Where the audio connection has got to: disconnected, negotiating,
+    /// connecting, connected.
+    audio: &'static str,
+    /// The SCO/eSCO handle, once the controller has made one. Distinct from
+    /// `acl_handle`, which is the whole point.
+    sco_handle: Option<u16>,
+    /// "SCO" or "eSCO".
+    sco_link_type: Option<&'static str>,
+    /// The agreed air mode, named.
+    sco_air_mode: Option<&'static str>,
+    /// Audio frames taken *off* the link at the head unit and at the phone.
+    audio_frames_to_car: u64,
+    audio_frames_to_phone: u64,
     ag_features: u32,
     hf_features: u32,
     clip_enabled: bool,
@@ -1254,11 +1499,19 @@ impl CarKit {
             microphone_muted: self.microphone_muted,
             voice_recognition: self.voice_recognition,
             last_dialed: self.last_dialed.clone(),
-            codec: match self.hf.active_codec {
-                AudioCodec::Cvsd => "CVSD",
-                AudioCodec::Msbc => "mSBC",
-                AudioCodec::Lc3Swb => "LC3-SWB",
-            },
+            codec: self.hf.active_codec.name(),
+            audio: self.ag.audio_state().name(),
+            sco_handle: self.audio_connection().map(|sco| sco.handle),
+            sco_link_type: self
+                .audio_connection()
+                .map(|sco| if sco.link_type == 0x02 { "eSCO" } else { "SCO" }),
+            sco_air_mode: self.audio_connection().map(|sco| match sco.air_mode {
+                0x02 => "CVSD",
+                0x03 => "transparent",
+                _ => "log-PCM",
+            }),
+            audio_frames_to_car: self.audio_frames_to_car,
+            audio_frames_to_phone: self.audio_frames_to_phone,
             ag_features: self.hf.supported_ag_features,
             hf_features: self.ag.supported_hf_features,
             clip_enabled: self.ag.cli_notification_enabled,
@@ -1414,6 +1667,31 @@ impl CarKit {
                     other => other.name().to_string(),
                 },
             ),
+            // The audio connection is not a *stage* of the bring-up: it
+            // comes and goes while everything above stays put, so it is
+            // shown as itself rather than folded into the ladder.
+            StepJson {
+                id: "sco",
+                label: "SCO / eSCO — the call audio",
+                state: match (self.audio_up, self.ag.audio_state()) {
+                    (true, _) => "done",
+                    (false, AudioConnectionState::Disconnected) => "pending",
+                    (false, _) => "active",
+                },
+                detail: self
+                    .audio_detail
+                    .clone()
+                    .unwrap_or_else(|| match self.ag.audio_state() {
+                        AudioConnectionState::Negotiating => {
+                            "Codec Connection procedure running: +BCS out, waiting for AT+BCS."
+                                .into()
+                        }
+                        AudioConnectionState::Connecting => {
+                            "codec settled; Setup Synchronous Connection in flight.".into()
+                        }
+                        _ => String::new(),
+                    }),
+            },
         ]
     }
 }
@@ -1796,5 +2074,188 @@ mod tests {
                 assert!(bytes.starts_with(b"\r\n") && bytes.ends_with(b"\r\n"));
             }
         }
+    }
+
+    // --- the audio connection ----------------------------------------------
+
+    /// A Service Level Connection with no call has no audio. This is the
+    /// thing HFP separates the two connections *for*: a paired phone does
+    /// not hold a headset's microphone open all day.
+    #[test]
+    fn test_a_ready_link_carries_no_audio_until_there_is_a_call() {
+        let kit = connected();
+        assert_eq!(kit.audio_state(), AudioConnectionState::Disconnected);
+        assert!(kit.audio_connection().is_none());
+        assert_eq!(kit.audio_frames_received(), (0, 0));
+    }
+
+    /// The whole path, end to end: a call arrives, the codec is negotiated
+    /// over AT, the phone opens a synchronous link over HCI, and audio
+    /// crosses it in both directions on a handle that is not the ACL's.
+    #[test]
+    fn test_a_call_brings_up_a_real_sco_link_and_carries_audio_both_ways() {
+        let mut kit = connected();
+        assert!(kit.incoming_call("+15550142"));
+        drive(&mut kit, |k| k.audio_connection().is_some());
+
+        let sco = kit.audio_connection().expect("the audio link exists");
+        let (acl_handle, _) = kit
+            .scene
+            .classic_device(kit.phone)
+            .and_then(|d| d.host().connection())
+            .expect("the ACL is still there");
+        assert_ne!(
+            sco.handle, acl_handle,
+            "call audio has a handle of its own; addressing it to the ACL \
+             handle is delivered to nobody"
+        );
+        assert_eq!(
+            kit.audio_state(),
+            AudioConnectionState::Connected,
+            "and the profile has been told, not just the transport"
+        );
+
+        // Both ends agree, which is what separates a link from one end's
+        // belief in one.
+        let car_sco = kit
+            .scene
+            .classic_device(kit.head_unit)
+            .and_then(ClassicDevice::sco)
+            .expect("the head unit has the audio link too");
+        assert_eq!(car_sco.handle, sco.handle);
+
+        // Frames cross in both directions. `audio_frames_received` counts
+        // what came *off* the link, so a count that moves is proof of
+        // routing rather than of writing.
+        drive(&mut kit, |k| {
+            let (to_car, to_phone) = k.audio_frames_received();
+            to_car > 2 && to_phone > 2
+        });
+    }
+
+    /// mSBC needs an eSCO link and transparent air coding, and the codec
+    /// choice has to reach the *controller* — as a Voice Setting and a
+    /// packet-type mask — or the call comes up narrowband with everyone
+    /// still calling it wideband.
+    #[test]
+    fn test_the_negotiated_codec_decides_the_link_type_the_controller_makes() {
+        let mut kit = connected();
+        assert!(kit.incoming_call("+15550142"));
+        drive(&mut kit, |k| k.audio_connection().is_some());
+
+        let sco = kit.audio_connection().expect("the audio link exists");
+        let codec = kit.ag.negotiated_codec();
+        assert_eq!(
+            codec,
+            AudioCodec::Msbc,
+            "both ends offer mSBC, so the AG must pick it over CVSD"
+        );
+        assert_eq!(sco.link_type, 0x02, "wideband speech rides eSCO, not SCO");
+        assert_eq!(
+            sco.air_mode, 0x03,
+            "and transparent air coding, because the controller must not \
+             touch an mSBC frame"
+        );
+    }
+
+    /// Hanging up takes the audio and nothing else. A head unit that let the
+    /// ACL go here would pay for a whole inquiry-page-SDP-RFCOMM bring-up on
+    /// the next call.
+    #[test]
+    fn test_ending_a_call_drops_the_audio_and_keeps_the_service_level_connection() {
+        let mut kit = connected();
+        assert!(kit.incoming_call("+15550142"));
+        drive(&mut kit, |k| k.audio_connection().is_some());
+        assert!(kit.hang_up());
+        drive(&mut kit, |k| k.audio_connection().is_none());
+
+        assert_eq!(kit.audio_state(), AudioConnectionState::Disconnected);
+        assert_eq!(kit.phase(), LinkPhase::Ready, "the SLC is still up");
+        assert!(
+            kit.scene
+                .classic_device(kit.head_unit)
+                .and_then(|d| d.host().connection())
+                .is_some(),
+            "and so is the ACL under it"
+        );
+        assert!(
+            kit.hf_port.lock().ok().and_then(|p| p.window()).is_some(),
+            "and the RFCOMM data link, which is what makes the next call cheap"
+        );
+
+        // And the link really comes back for a second call, on a fresh
+        // handle — proof that nothing was left half-open.
+        assert!(kit.incoming_call("+15550143"));
+        drive(&mut kit, |k| k.audio_connection().is_some());
+    }
+
+    /// The negative case: a head unit that refuses audio leaves nothing
+    /// half-open at either end, and the call's signalling carries on.
+    #[test]
+    fn test_a_refused_audio_connection_leaves_no_handle_anywhere() {
+        let mut kit = connected();
+        if let Some(device) = kit.scene.classic_device_mut(kit.head_unit) {
+            // 0x0D — Connection Rejected due to Limited Resources.
+            device.set_sco_policy(crate::device::ScoPolicy::Reject(0x0D));
+        }
+        assert!(kit.incoming_call("+15550142"));
+
+        // Give it as long as a successful setup would have taken, twice over.
+        for step in 0..60 {
+            kit.tick(step * 100);
+        }
+        // The setup really was attempted and really was refused — without
+        // this the rest of the test passes just as well on a build where no
+        // audio is ever opened at all.
+        assert_eq!(
+            kit.scene
+                .classic_device(kit.phone)
+                .and_then(ClassicDevice::sco_failure),
+            Some(0x0D),
+            "the phone must be told *why*, in a Synchronous Connection \
+             Complete carrying the head unit's reason"
+        );
+        assert!(
+            kit.audio_connection().is_none(),
+            "the phone must not hold a handle the head unit refused"
+        );
+        assert!(
+            kit.scene
+                .classic_device(kit.head_unit)
+                .and_then(ClassicDevice::sco)
+                .is_none(),
+            "and the head unit must not hold one it rejected"
+        );
+        assert_eq!(kit.audio_frames_received(), (0, 0), "no audio moved");
+        assert_eq!(
+            kit.call_phase(),
+            CallPhase::Incoming,
+            "the call itself is unaffected: AT signalling does not need SCO"
+        );
+        assert_eq!(kit.phase(), LinkPhase::Ready);
+    }
+
+    /// The Car page draws its SCO box solid off `sco_handle` being present,
+    /// so the JSON contract is part of the feature rather than a detail of
+    /// it: a renamed field leaves the page showing a dashed box beside a
+    /// working link and nothing anywhere says why.
+    #[test]
+    fn test_the_pages_status_carries_the_audio_connection() {
+        let mut kit = connected();
+        let idle = kit.status_json(0);
+        assert!(idle.contains("\"audio\":\"disconnected\""), "{idle}");
+        assert!(idle.contains("\"sco_handle\":null"), "{idle}");
+
+        assert!(kit.incoming_call("+15550142"));
+        drive(&mut kit, |k| k.audio_connection().is_some());
+        drive(&mut kit, |k| k.audio_frames_received().0 > 0);
+
+        let json = kit.status_json(0);
+        assert!(json.contains("\"audio\":\"connected\""), "{json}");
+        assert!(json.contains("\"sco_link_type\":\"eSCO\""), "{json}");
+        assert!(json.contains("\"sco_air_mode\":\"transparent\""), "{json}");
+        assert!(json.contains("\"codec\":\"mSBC\""), "{json}");
+        assert!(!json.contains("\"sco_handle\":null"), "{json}");
+        assert!(!json.contains("\"audio_frames_to_car\":0"), "{json}");
     }
 }

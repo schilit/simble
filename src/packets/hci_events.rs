@@ -29,6 +29,10 @@ pub mod event_code {
     /// Command Status — a command the controller accepted but has not yet
     /// finished (LE Create BIG and LE BIG Create Sync both answer this way).
     pub const COMMAND_STATUS: u8 = 0x0F;
+    /// Synchronous Connection Complete (BR/EDR) — a SCO/eSCO link is up, or
+    /// failed. This is the only event that hands a host the *audio* handle;
+    /// a host that watches only Connection Complete never learns it.
+    pub const SYNCHRONOUS_CONNECTION_COMPLETE: u8 = 0x2C;
     /// LE Meta (the subevent code selects the LE event).
     pub const LE_META: u8 = 0x3E;
 }
@@ -163,6 +167,40 @@ pub struct ConnectionComplete {
     pub link_type: u8,
     /// Whether link-level encryption is on.
     pub encryption_enabled: u8,
+}
+
+/// Synchronous Connection Complete parameters (Vol 4, Part E, Section
+/// 7.7.35): the SCO/eSCO link a Setup or Accept Synchronous Connection
+/// asked for is up, or failed with `status`.
+///
+/// The handle here is the **synchronous** link's own, not the ACL handle it
+/// was set up over. HCI SCO data packets are addressed to this one, and a
+/// host that reuses the ACL handle for audio sends it into a channel that
+/// drops it without complaint.
+#[repr(C)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
+)]
+pub struct SynchronousConnectionComplete {
+    /// 0x00 on success; otherwise why the link was not made.
+    pub status: u8,
+    /// The synchronous link's connection handle.
+    pub connection_handle: U16,
+    /// The peer's address, little-endian on the wire.
+    pub bd_addr: [u8; 6],
+    /// 0x00 SCO, 0x02 eSCO.
+    pub link_type: u8,
+    /// Transmission interval, in baseband slots.
+    pub transmission_interval: u8,
+    /// Retransmission window, in baseband slots.
+    pub retransmission_window: u8,
+    /// Receive packet length, in octets.
+    pub rx_packet_length: U16,
+    /// Transmit packet length, in octets.
+    pub tx_packet_length: U16,
+    /// Air mode: 0x00 μ-law, 0x01 A-law, 0x02 CVSD, 0x03 transparent. These
+    /// are *not* the Voice Setting's air coding format numbers.
+    pub air_mode: u8,
 }
 
 /// LE CIS Request parameters (Vol 4, Part E, Section 7.7.65.26): a central
@@ -304,6 +342,8 @@ pub enum HciEvent<'a> {
     ConnectionRequest(&'a ConnectionRequest),
     /// Connection Complete (BR/EDR).
     ConnectionComplete(&'a ConnectionComplete),
+    /// Synchronous Connection Complete (BR/EDR) — the call-audio link.
+    SynchronousConnectionComplete(&'a SynchronousConnectionComplete),
     /// Command Complete, split into its fixed header and the completed
     /// command's own return parameters.
     CommandComplete {
@@ -365,6 +405,11 @@ impl<'a> HciEvent<'a> {
             event_code::CONNECTION_COMPLETE => {
                 Self::ConnectionComplete(ConnectionComplete::ref_from_prefix(parameters).ok()?.0)
             }
+            event_code::SYNCHRONOUS_CONNECTION_COMPLETE => Self::SynchronousConnectionComplete(
+                SynchronousConnectionComplete::ref_from_prefix(parameters)
+                    .ok()?
+                    .0,
+            ),
             _ => Self::Other { code, parameters },
         };
         Some(event)

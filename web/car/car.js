@@ -156,9 +156,14 @@ const ABOUT = `<p>A phone and a car head unit, as two Bluetooth Classic devices 
    <p>Every AT line in the dialogue is bytes <code>HfProtocol</code> and <code>AgProtocol</code>
    actually produced, and every one of them crosses RFCOMM, L2CAP and an ACL connection to reach
    the other end. Nothing is wired straight through.</p>
-   <p>Call <em>audio</em> would ride an SCO link, which SimBLE does not implement — the gap is
-   marked where the audio path would be, rather than faked. So is pairing: this link is
-   unauthenticated and unencrypted, where a real head unit would bond once and remember.</p>`;
+   <p>Call <em>audio</em> rides a real SCO/eSCO link. When a call arrives, the phone runs the
+   codec connection procedure over AT and then opens a synchronous connection over HCI — a
+   handle of its own, separate from the ACL — and payload crosses it in both directions until
+   the call ends, which takes the audio and leaves the service-level connection standing. What
+   is <em>not</em> here is a codec: the two ends agree on mSBC, ask the controller for the
+   transparent air mode it needs, and then carry a counter pattern rather than speech.</p>
+   <p>Pairing is still absent: this link is unauthenticated and unencrypted, where a real head
+   unit would bond once and remember.</p>`;
 
 const MARKUP = `
 <div class="car domain two-up">
@@ -302,15 +307,17 @@ const MARKUP = `
       <span class="real">RFCOMM</span><b>rides</b>
       <span class="real">L2CAP PSM 3</span><b>rides</b>
       <span class="real">ACL / BR/EDR controller</span><b>·</b>
-      <span class="absent">SCO</span>
+      <span class="real" id="car-sco-box">SCO / eSCO</span>
     </div>
     <p class="hint" style="margin-top:0.7rem">
-      Solid boxes are exercised on this page; the dashed one is not. Every AT line above
-      becomes a UIH frame with a credit octet, an L2CAP SDU on PSM 3, and an ACL packet
-      handed to the simulated controller in <code>controller::sim</code>, which routes it to
-      the other device's <code>ClassicHost</code>. Credit accounting is live
+      Every box is exercised on this page. Each AT line above becomes a UIH frame with a
+      credit octet, an L2CAP SDU on PSM 3, and an ACL packet handed to the simulated
+      controller in <code>controller::sim</code>, which routes it to the other device's
+      <code>ClassicHost</code>. Credit accounting is live
       (<span id="car-credits" class="mono">—</span>).
-      Only the call audio has nowhere to go: SCO is the one box with nothing behind it.
+      The call audio takes the other branch: not an L2CAP payload at all, but H4 packet type
+      <code>0x03</code> on a synchronous handle the controller allocates separately
+      (<span id="car-sco" class="mono">—</span>).
     </p>
   </section>
 
@@ -335,6 +342,12 @@ const MARKUP = `
             <td class="n">the connection handle every layer above rides inside</td></tr>
         <tr><td class="n">BR/EDR phase</td><td id="car-classic">—</td>
             <td class="n">where <code>ClassicDevice</code>'s plan has got to</td></tr>
+        <tr><td class="n">audio</td><td id="car-audio">—</td>
+            <td class="n">the SCO/eSCO handle, which is not the ACL's — audio addressed to
+            the ACL handle reaches nobody</td></tr>
+        <tr><td class="n">frames carried</td><td id="car-audio-frames">—</td>
+            <td class="n">payload taken <em>off</em> the link at each end, which is what
+            proves the routing rather than the writing</td></tr>
       </tbody>
     </table>
   </section>
@@ -354,16 +367,23 @@ const MARKUP = `
            L2CAP, the Service Level Connection, and the call state machine, both
            directions.</p>
       </div>
-      <div class="role gap">
-        <span class="tag">not built</span>
+      <div class="role built">
+        <span class="tag">built</span>
         <h4>SCO / eSCO — the call audio</h4>
-        <p>This is where the voice would be, and there is nothing here. SimBLE has no
-           synchronous connection at all — no <code>Setup Synchronous Connection</code>,
-           no SCO handle, no audio path. Codec negotiation on this page
-           (<code>AT+BAC</code>, <code>+BCS</code>) settles <em>which</em> codec would be
-           used and then stops. SCO is the BR/EDR counterpart of the CIS work recently
-           finished for LE Audio; routing this call through that machinery instead would
-           be a different transport and a lie about what the stack does.</p>
+        <p>The synchronous link is real: <code>Setup Synchronous Connection</code> answered
+           with a Command Status, a <code>Connection Request</code> at the head unit whose
+           link type is eSCO rather than ACL, <code>Accept Synchronous Connection
+           Request</code> back, and a <code>Synchronous Connection Complete</code> at both
+           ends carrying one handle. Payload then rides H4 type <code>0x03</code> on that
+           handle. Codec negotiation (<code>AT+BAC</code>, <code>+BCS</code>) now decides
+           something: mSBC turns into a transparent Voice Setting and an EV3 packet-type
+           mask, which is what makes the controller build an eSCO link instead of a plain
+           SCO one.</p>
+        <p><strong>No codec, and no radio.</strong> Nothing encodes: the bytes on the link
+           are a counter pattern, carried untouched, and simble's SBC and LC3 encoders are
+           not wired in. Nothing is scheduled either — no reserved slots, no 3.75 ms eSCO
+           interval, no retransmission window, no loss. Sequencing and state are modelled;
+           the air interface is what rootcanal and netsim are for.</p>
       </div>
       <div class="role gap">
         <span class="tag">not built</span>
@@ -417,6 +437,17 @@ const LINK_TEXT = {
   configuring: "HFP: head-unit setup",
   ready: "linked",
   failed: "failed",
+};
+
+// The audio connection's states, in the words that say what is happening
+// rather than what the enum is called. HFP's codec connection procedure runs
+// *before* any HCI, so "negotiating" is an AT state and "connecting" is the
+// one where a Setup Synchronous Connection is in flight.
+const AUDIO_TEXT = {
+  disconnected: "no audio connection",
+  negotiating: "codec connection: +BCS out, waiting for AT+BCS",
+  connecting: "codec settled — Setup Synchronous Connection in flight",
+  connected: "carrying audio",
 };
 
 function bars(count, max, colour) {
@@ -611,7 +642,9 @@ export async function mount(root) {
     heads.hf.setState(
       ready,
       status.error ? `failed: ${status.error}`
-        : ready ? `${CALL_TEXT[status.call] || status.call} · codec ${status.codec}`
+        : ready
+          ? `${CALL_TEXT[status.call] || status.call} · codec ${status.codec}` +
+            (status.sco_handle != null ? ` · ${status.sco_link_type} audio` : "")
         : LINK_TEXT[status.link] || status.link,
       tone,
     );
@@ -674,6 +707,27 @@ export async function mount(root) {
     $("car-credits").textContent = status.credits_out
       ? `${status.credits_out} credits to send, ${status.credits_in} granted to the phone`
       : "no data link connection yet";
+
+    // -- the audio connection --
+    // Solid only while a link really exists. The AT handshake settling a
+    // codec is not the same event as a synchronous handle being allocated,
+    // and drawing the box solid on the strength of the first would be
+    // exactly the fiction this page replaced.
+    const audioUp = status.sco_handle != null;
+    $("car-sco-box").className = audioUp ? "real" : "absent";
+    $("car-sco").textContent = audioUp
+      ? `${status.sco_link_type} handle 0x${status.sco_handle.toString(16).padStart(4, "0")},` +
+        ` ${status.sco_air_mode} air mode, codec ${status.codec}`
+      : AUDIO_TEXT[status.audio] || "no audio connection";
+    $("car-audio").textContent = audioUp
+      ? `${status.sco_link_type} handle 0x${status.sco_handle.toString(16).padStart(4, "0")}` +
+        ` · air mode ${status.sco_air_mode}`
+      : AUDIO_TEXT[status.audio] || "—";
+    $("car-audio-frames").textContent =
+      status.audio_frames_to_car || status.audio_frames_to_phone
+        ? `${status.audio_frames_to_car} arrived at the head unit,` +
+          ` ${status.audio_frames_to_phone} at the phone`
+        : "—";
 
     // -- how the two found each other --
     // Everything here except the head unit's own address arrived over the

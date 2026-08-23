@@ -70,6 +70,18 @@ impl HciChannel {
         self.send_h4(h4_type::HCI_ACL_DATA, acl)
     }
 
+    /// Sends an HCI Synchronous (SCO) Data packet (prefixed with H4 byte
+    /// 0x03) to the Controller — call audio on a SCO/eSCO link.
+    ///
+    /// `sco` is the packet *without* its H4 type byte: a 12-bit connection
+    /// handle plus a two-bit Packet_Status_Flag, a one-octet length, then the
+    /// payload. The handle is the **synchronous** link's own, which is not
+    /// the ACL handle the link was set up over; audio addressed to the ACL
+    /// handle goes nowhere.
+    pub fn send_sco_data(&self, sco: &[u8]) -> Result<(), SimbleError> {
+        self.send_h4(h4_type::HCI_SCO_DATA, sco)
+    }
+
     /// Injects an already-H4-framed packet from Host to Controller — the
     /// host-side mirror of [`receive_from_controller`](Self::receive_from_controller),
     /// for callers (e.g. the `usb-ble-ws` bridge) that relay complete H4
@@ -130,5 +142,22 @@ mod tests {
 
         let ctrl_pkt = channel.poll_controller_packet().expect("event available");
         assert_eq!(ctrl_pkt, cmd_complete_evt);
+    }
+
+    #[test]
+    fn test_sco_data_is_framed_as_h4_type_three() {
+        // 0x03 was declared here for months and routed by nothing. The
+        // symptom of getting this byte wrong is not an error: an ACL-framed
+        // audio packet is a *valid* ACL packet, so it is delivered to the
+        // signalling channel and silently ignored by the far end.
+        let channel = HciChannel::new();
+
+        // Handle 0x0101, packet status "correctly received", three octets.
+        let sco = [0x01, 0x01, 0x03, 0xAA, 0xBB, 0xCC];
+        channel.send_sco_data(&sco).unwrap();
+
+        let pkt = channel.poll_host_packet().expect("packet available");
+        assert_eq!(pkt[0], h4_type::HCI_SCO_DATA);
+        assert_eq!(&pkt[1..], &sco);
     }
 }

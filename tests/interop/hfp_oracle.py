@@ -12,6 +12,16 @@ message protocol on stdio; Bumble's AG runs here, over a stand-in DLC that
 just moves bytes. Nothing is mocked on either side of the AT boundary — the
 bytes Bumble parses are the bytes simble wrote.
 
+Scope, stated plainly because it is easy to overclaim: this checks the AT
+layer and *only* the AT layer. That includes the Codec Connection procedure
+(`AT+BCC`, `+BCS`, `AT+BCS`) which HFP requires before an audio connection —
+so the exchange that decides whether there will be a SCO/eSCO link, and
+which codec it carries, is verified against a foreign implementation here.
+The synchronous link itself is HCI, below the DLC this test stands in for,
+and is *not* exercised: for that see `src/controller/sim.rs`'s SCO tests and
+the end-to-end scene in `src/device/car_kit.rs`, both of which are simble
+answering simble.
+
 Usage:
     cargo build --example hfp_hf_pipe
     python tests/interop/hfp_oracle.py [path/to/hfp_hf_pipe]
@@ -174,6 +184,10 @@ def main():
     ag.on(ag.EVENT_HANG_UP, lambda: hung_up.append(True))
     dialed = []
     ag.on(ag.EVENT_DIAL, dialed.append)
+    codec_requested = []
+    ag.on(ag.EVENT_CODEC_CONNECTION_REQUEST, lambda: codec_requested.append(True))
+    codec_negotiated = []
+    ag.on(ag.EVENT_CODEC_NEGOTIATION, codec_negotiated.append)
 
     try:
         exchange(head_unit, ag, dlc, head_unit.start())
@@ -248,6 +262,54 @@ def main():
             "indicator AgIndicator.Call 1" in head_unit.events
             or "indicator Call 1" in head_unit.events,
             "simble's HF followed the call indicator up",
+        )
+
+        # --- the codec connection procedure -------------------------------
+        #
+        # HFP v1.9 4.11.3, and the whole of what has to happen over AT before
+        # a SCO/eSCO link can be opened. Both directions are checked: the HF
+        # asking for audio, and the AG choosing the codec.
+        exchange(head_unit, ag, dlc, head_unit.act("setup-audio"))
+        check(
+            codec_requested,
+            "Bumble's AG took simble's AT+BCC as a codec connection request",
+        )
+        check(
+            any(c.startswith("AT+BCC") for c in head_unit.commands),
+            f"and it really was AT+BCC on the wire: {head_unit.commands[-3:]}",
+        )
+
+        # Now the AG's half: an unsolicited `+BCS: <codec>`, which the HF must
+        # answer with a matching `AT+BCS=<codec>` before the AG opens the
+        # link. An HF that answered with a *different* codec, or that treated
+        # the unsolicited response as belonging to its last command, would
+        # leave the AG opening a link for a codec nobody agreed to.
+        ag.send_response(f"+BCS: {AudioCodec.MSBC.value}")
+        exchange(head_unit, ag, dlc, head_unit.feed(dlc.take()))
+        check(
+            codec_negotiated and codec_negotiated[-1] == AudioCodec.MSBC,
+            f"Bumble's AG completed codec negotiation on mSBC: {codec_negotiated}",
+        )
+        check(
+            ag.active_codec == AudioCodec.MSBC,
+            f"and holds mSBC as the active codec: {ag.active_codec}",
+        )
+        check(
+            any(
+                c.rstrip("\r") == f"AT+BCS={AudioCodec.MSBC.value}"
+                for c in head_unit.commands
+            ),
+            f"simble's HF echoed the AG's codec id back, unchanged: "
+            f"{head_unit.commands[-3:]}",
+        )
+        check(
+            "codec Msbc" in head_unit.events,
+            f"and simble's HF holds the same codec: {head_unit.events[-4:]}",
+        )
+        check(
+            "audio connecting" in head_unit.events,
+            f"simble's HF now expects the AG to open the link, and does not "
+            f"open one itself: {head_unit.events[-4:]}",
         )
 
         exchange(head_unit, ag, dlc, head_unit.act("hangup"))
