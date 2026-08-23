@@ -14,5 +14,5 @@ pub use crate::packets::{
 pub use keystore::{KeyStore, PairingKey, PairingKeys};
 pub use pairing::{
     IdentityAddressPreference, PairingConfig, PairingSession, Role, SMP_DEBUG_KEY_PUBLIC_X,
-    SMP_DEBUG_KEY_PUBLIC_Y, resolve_identity_address,
+    SMP_DEBUG_KEY_PUBLIC_Y, SMP_TIMEOUT_SECONDS, resolve_identity_address,
 };

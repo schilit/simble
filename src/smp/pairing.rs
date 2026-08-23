@@ -14,6 +14,29 @@
 //! Works / Numeric Comparison association (auto-confirmed, no user prompt)
 //! is implemented; OOB and Passkey Entry are out of scope for a headless
 //! simulator with no display/keyboard to model.
+//!
+//! # Failure paths
+//!
+//! Three rules from Section 3.4 and Section 3.5.5 govern what a session does
+//! when things go wrong, and all three are load-bearing rather than cosmetic:
+//!
+//! - **The Security Manager Timer** (Section 3.4). "If the Security Manager
+//!   Timer reaches 30 seconds, the procedure shall be considered to have
+//!   failed... No further SMP commands shall be sent over the L2CAP Security
+//!   Manager Channel. A new Pairing process shall only be performed when a new
+//!   physical link has been established." A `PairingSession` has no clock of
+//!   its own — see [`PairingSession::tick`] for how simulated seconds reach it.
+//! - **Nothing is processed after a failure.** A Pairing Failed "reports that
+//!   the pairing procedure has been stopped and no further communication for
+//!   the current pairing procedure is to occur" (Section 3.5.5), and after a
+//!   timeout no SMP command may be *sent* at all (Section 3.4) — so a failed
+//!   session drops later PDUs silently rather than answering each with another
+//!   Pairing Failed.
+//! - **Per-opcode parameter validation.** Reason code 0x0A "indicates that the
+//!   command length is invalid or that a parameter is outside of the specified
+//!   range" (Table 3.7), which is exactly the two checks every opcode arm
+//!   needs: an exact PDU length, and fields inside the ranges Tables 3.4–3.6
+//!   define.
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -49,6 +72,42 @@ pub const SMP_DEBUG_KEY_PRIVATE_BE: [u8; 32] = [
     0x3F, 0x49, 0xF6, 0xD4, 0xA3, 0xC5, 0x5F, 0x38, 0x74, 0xC9, 0xB3, 0xE3, 0xD2, 0x10, 0x3F, 0x50,
     0x4A, 0xFF, 0x60, 0x7B, 0xEB, 0x40, 0xB7, 0x99, 0x58, 0x99, 0xB8, 0xA6, 0xCD, 0x3C, 0x1A, 0xBD,
 ];
+
+/// The Security Manager Timeout, Bluetooth Core Spec Vol 3, Part H, Section
+/// 3.4: "If the Security Manager Timer reaches 30 seconds, the procedure shall
+/// be considered to have failed."
+pub const SMP_TIMEOUT_SECONDS: f64 = 30.0;
+
+/// SMP Pairing Keypress Notification (Core Spec Vol 3, Part H, Table 3.3, code
+/// 0x0E). Not in `packets::smp::opcode` because nothing in this port builds
+/// one — it exists here so the dispatch can tell a *defined* command it does
+/// not implement (answer "Command Not Supported") from a code that is reserved
+/// for future use (Section 3.3: "it shall be ignored").
+const OPCODE_KEYPRESS_NOTIFICATION: u8 = 0x0E;
+
+/// The highest defined OOB data flag value, Table 3.5: 0x00 is "not present",
+/// 0x01 is "present", 0x02 to 0xFF are reserved for future use.
+const OOB_DATA_PRESENT: u8 = 0x01;
+
+/// AuthReq bits that carry no defined meaning (Figure 3.3 and Table 3.6):
+/// bits 6-7 are reserved for future use, and bit 1 is the high bit of the
+/// 2-bit Bonding_Flags field, whose values 0b10 and 0b11 are both reserved.
+/// A peer that sets any of them has put a parameter outside its specified
+/// range, which is what reason code 0x0A is for.
+const AUTH_REQ_RESERVED: u8 = 0b1100_0010;
+
+/// Maximum Encryption Key Size bounds, Section 2.3.4 / Section 3.5.1: "The
+/// maximum key size shall be in the range 7 to 16 octets."
+const MIN_ENCRYPTION_KEY_SIZE: u8 = 7;
+/// Upper bound of the range described on [`MIN_ENCRYPTION_KEY_SIZE`].
+const MAX_ENCRYPTION_KEY_SIZE: u8 = 16;
+
+/// Exact wire lengths, in octets, of the fixed-size SMP PDUs this session
+/// accepts — Code octet included (Section 3.3, Figure 3.1). Reason code 0x0A
+/// covers "the command length is invalid", so each arm checks its own.
+const LEN_PAIRING_PARAMETERS: usize = 7;
+/// Length of a Pairing Failed PDU: Code + Reason (Figure 3.7).
+const LEN_PAIRING_FAILED: usize = 2;
 
 /// `h7` salts for cross-transport key derivation (CTKD), Bluetooth Core Spec
 /// Vol 3, Part H, Section 2.4.2.4.
@@ -228,8 +287,58 @@ fn parse_identity_addr_info(pdu: &[u8]) -> Option<(u8, Address)> {
     if pdu.len() != 8 || pdu[0] != opcode::IDENTITY_ADDR_INFO {
         return None;
     }
+    // Section 3.6.5 defines exactly two AddrType values: 0x00 for a public
+    // device address and 0x01 for a static random one. Anything else is a
+    // parameter outside its specified range, and this is the field a bond
+    // record gets keyed by — accepting a nonsense type would file the peer's
+    // identity under an address type that means nothing.
+    if pdu[1] > 1 {
+        return None;
+    }
     let bytes: [u8; 6] = pdu[2..8].try_into().ok()?;
     Some((pdu[1], Address::new(bytes)))
+}
+
+/// Parses and range-checks a Pairing Request or Pairing Response (Sections
+/// 3.5.1 and 3.5.2).
+///
+/// [`SmpPairingPacket::parse`] is a zero-copy prefix parse: it is happy with a
+/// PDU *longer* than the seven octets the figure defines, and it range-checks
+/// nothing. Both matter here. `Preq`/`Pres` are fed verbatim into the confirm
+/// value, so the seven octets are the ones that have to be there and no more;
+/// and every field in them has a defined range that Tables 3.4, 3.5 and 3.6
+/// close off. A `None` here becomes Pairing Failed 0x0A, whose definition
+/// (Table 3.7) is precisely "the command length is invalid or... a parameter
+/// is outside of the specified range".
+fn parse_pairing_parameters(pdu: &[u8]) -> Option<SmpPairingPacket> {
+    if pdu.len() != LEN_PAIRING_PARAMETERS {
+        return None;
+    }
+    let (packet, _) = SmpPairingPacket::parse(pdu)?;
+    let packet = *packet;
+    // Table 3.4: 0x00-0x04 are the IO capabilities; 0x05 to 0xFF are reserved.
+    if packet.io_capability > io_capability::KEYBOARD_DISPLAY {
+        return None;
+    }
+    // Table 3.5: 0x00 and 0x01 only.
+    if packet.oob_data_flag > OOB_DATA_PRESENT {
+        return None;
+    }
+    // Figure 3.3 / Table 3.6, see [`AUTH_REQ_RESERVED`].
+    if packet.auth_req & AUTH_REQ_RESERVED != 0 {
+        return None;
+    }
+    // Section 2.3.4: "between 7 octets (56 bits) and 16 octets (128 bits)".
+    // Worth its own check rather than folding into the negotiated minimum:
+    // `encryption_key_size()` is `preq[4].min(pres[4])`, so a peer claiming a
+    // 1-octet maximum would negotiate a 1-octet key with no field left to
+    // catch it, and a peer claiming 255 would over-report the bond's strength.
+    if !(MIN_ENCRYPTION_KEY_SIZE..=MAX_ENCRYPTION_KEY_SIZE)
+        .contains(&packet.max_encryption_key_size)
+    {
+        return None;
+    }
+    Some(packet)
 }
 
 /// A single SMP pairing session, one per connection side. Drives Pairing
@@ -282,6 +391,17 @@ pub struct PairingSession {
     own_keys_sent: bool,
     complete: bool,
     failed: bool,
+    timed_out: bool,
+    /// Seconds left on the Security Manager Timer, or `None` while the timer
+    /// is stopped — before pairing starts, and once it completes "whether
+    /// successfully or not" (Section 3.4).
+    timer_remaining: Option<f64>,
+    /// The `t_seconds` of the most recent [`PairingSession::tick`], so the
+    /// next one can subtract a delta. `None` until the first tick, which
+    /// therefore only establishes the baseline and consumes no time: a
+    /// session created at scene second 900 must get its full 30 seconds, not
+    /// be timed out by its own first tick.
+    last_tick: Option<f64>,
     is_encrypted: bool,
     identity_address_preference: Option<IdentityAddressPreference>,
     local_public_address: Address,
@@ -379,6 +499,9 @@ impl PairingSession {
             own_keys_sent: false,
             complete: false,
             failed: false,
+            timed_out: false,
+            timer_remaining: None,
+            last_tick: None,
             is_encrypted: false,
             identity_address_preference: config.identity_address_preference,
             local_public_address,
@@ -401,6 +524,86 @@ impl PairingSession {
         v
     }
 
+    /// Queues one PDU for transmission, restarting the Security Manager Timer.
+    ///
+    /// Every outgoing PDU goes through here rather than touching `pending`
+    /// directly, because Section 3.4 words the timer rule around exactly this
+    /// moment: "The Security Manager Timer shall be reset when an L2CAP SMP
+    /// command is queued for transmission." Sprinkling resets next to a dozen
+    /// `push_back` calls is how one gets missed.
+    fn queue(&mut self, pdu: Vec<u8>) {
+        self.pending.push_back(pdu);
+        self.timer_remaining = Some(SMP_TIMEOUT_SECONDS);
+    }
+
+    /// Stops the Security Manager Timer — Section 3.4: "When a Pairing process
+    /// completes (whether successfully or not), the Security Manager Timer
+    /// shall be stopped."
+    fn stop_timer(&mut self) {
+        self.timer_remaining = None;
+    }
+
+    /// Advances the Security Manager Timer to simulated time `t_seconds`,
+    /// returning `true` on the tick that expires it (Bluetooth Core Spec Vol 3,
+    /// Part H, Section 3.4).
+    ///
+    /// This is the only clock a `PairingSession` has. It takes the same
+    /// monotonic `t_seconds` the rest of the simulator ticks on — the scene's
+    /// `tick(t_seconds)`, a script's `fn tick(server, t)` — rather than reading
+    /// a wall clock, so a test can jump 31 seconds in one call and a session
+    /// that is never ticked simply never times out. Only the *delta* between
+    /// consecutive ticks is consumed, so the session need not have been alive
+    /// since `t_seconds == 0.0`, and a clock that stalls or steps backwards
+    /// costs it nothing.
+    ///
+    /// On expiry the pairing has failed: the key material is discarded, and
+    /// anything already queued for transmission is dropped unsent, because
+    /// "No further SMP commands shall be sent over the L2CAP Security Manager
+    /// Channel" — the caller should treat the link as unkeyed.
+    pub fn tick(&mut self, t_seconds: f64) -> bool {
+        let elapsed = match self.last_tick {
+            Some(previous) if t_seconds > previous => t_seconds - previous,
+            _ => 0.0,
+        };
+        self.last_tick = Some(t_seconds);
+        let Some(remaining) = self.timer_remaining else {
+            return false;
+        };
+        let remaining = remaining - elapsed;
+        if remaining > 0.0 {
+            self.timer_remaining = Some(remaining);
+            return false;
+        }
+        self.stop_timer();
+        self.timed_out = true;
+        self.phase = Phase::Failed;
+        self.failed = true;
+        self.discard_key_material();
+        self.pending.clear();
+        true
+    }
+
+    /// Whether this session ended because the Security Manager Timer reached
+    /// [`SMP_TIMEOUT_SECONDS`], as opposed to an ordinary Pairing Failed.
+    ///
+    /// The two are not interchangeable. After a Pairing Failed, "any
+    /// subsequent pairing procedure shall restart from the Pairing Feature
+    /// Exchange phase" (Section 3.5.5) — re-pairing on the same link is
+    /// allowed. After a timeout it is not: "A new Pairing process shall only
+    /// be performed when a new physical link has been established"
+    /// (Section 3.4).
+    pub fn is_timed_out(&self) -> bool {
+        self.timed_out
+    }
+
+    /// Seconds left before the Security Manager Timer expires, or `None` while
+    /// it is stopped. Exposed so a caller (or a test) can see that queuing a
+    /// PDU restarted it, which is the half of Section 3.4 that has no
+    /// observable effect until 30 seconds later.
+    pub fn seconds_until_timeout(&self) -> Option<f64> {
+        self.timer_remaining
+    }
+
     /// Builds and returns the initial Pairing Request PDU. Initiator-only.
     pub fn start(&mut self) -> Vec<u8> {
         let req = SmpPairingPacket {
@@ -408,12 +611,16 @@ impl PairingSession {
             io_capability: self.io_capability,
             oob_data_flag: 0,
             auth_req: self.auth_req_byte(),
-            max_encryption_key_size: 16,
+            max_encryption_key_size: MAX_ENCRYPTION_KEY_SIZE,
             initiator_key_distribution: self.initiator_key_distribution,
             responder_key_distribution: self.responder_key_distribution,
         };
         self.preq = req.as_bytes().try_into().unwrap();
         self.phase = Phase::WaitPairingResponse;
+        // Section 3.4: "Upon transmission of the Pairing Request command...
+        // the Security Manager Timer shall be reset and started." The request
+        // is returned rather than queued, so start the timer by hand.
+        self.timer_remaining = Some(SMP_TIMEOUT_SECONDS);
         req.as_bytes().to_vec()
     }
 
@@ -556,7 +763,12 @@ impl PairingSession {
         self.phase = Phase::Failed;
         self.failed = true;
         self.discard_key_material();
-        self.pending.push_back(vec![opcode::PAIRING_FAILED, reason]);
+        self.queue(vec![opcode::PAIRING_FAILED, reason]);
+        // `queue` restarted the timer, as Section 3.4 says queuing a command
+        // must. But this particular command ends the procedure, and the same
+        // section stops the timer "when a Pairing process completes (whether
+        // successfully or not)" — so it stops here, after the PDU is queued.
+        self.stop_timer();
         Ok(())
     }
 
@@ -585,6 +797,19 @@ impl PairingSession {
     }
 
     fn step(&mut self, pdu: &[u8]) -> Result<(), SimbleError> {
+        // Once the procedure has failed, nothing more on this channel is
+        // processed and nothing more is sent. Two sentences say so, and the
+        // second is the one that decides the *shape* of this guard: Section
+        // 3.5.5 says a Pairing Failed "reports that the pairing procedure has
+        // been stopped and no further communication for the current pairing
+        // procedure is to occur", and Section 3.4 says that after the timer
+        // expires "No further SMP commands shall be sent over the L2CAP
+        // Security Manager Channel". A later PDU is therefore *dropped* — not
+        // answered with a second Pairing Failed, which would itself be a
+        // further SMP command, and which two failed peers would trade forever.
+        if self.failed {
+            return Ok(());
+        }
         if pdu.is_empty() {
             return self.fail(error_code::INVALID_PARAMETERS);
         }
@@ -593,14 +818,7 @@ impl PairingSession {
             opcode::PAIRING_RESPONSE => self.on_pairing_response(pdu),
             opcode::PAIRING_CONFIRM => self.on_pairing_confirm(pdu),
             opcode::PAIRING_RANDOM => self.on_pairing_random(pdu),
-            opcode::PAIRING_FAILED => {
-                // The peer rejected us. Same reasoning as `fail()`: whatever
-                // we had derived was never authenticated, so it goes too.
-                self.phase = Phase::Failed;
-                self.failed = true;
-                self.discard_key_material();
-                Ok(())
-            }
+            opcode::PAIRING_FAILED => self.on_pairing_failed(pdu),
             opcode::PAIRING_PUBLIC_KEY => self.on_public_key(pdu),
             opcode::PAIRING_DHKEY_CHECK => self.on_dhkey_check(pdu),
             opcode::ENCRYPTION_INFO => self.on_encryption_info(pdu),
@@ -608,17 +826,47 @@ impl PairingSession {
             opcode::IDENTITY_INFO => self.on_identity_info(pdu),
             opcode::IDENTITY_ADDR_INFO => self.on_identity_addr_info(pdu),
             opcode::SIGNING_INFO => self.on_signing_info(pdu),
-            _ => self.fail(error_code::COMMAND_NOT_SUPPORTED),
+            // Defined commands this port does not implement. Section 3.3: "If
+            // pairing is supported then all commands shall be supported" — we
+            // do not support these two, so the honest answer is reason 0x07,
+            // "The SMP command received is not supported on this device".
+            opcode::SECURITY_REQUEST | OPCODE_KEYPRESS_NOTIFICATION => {
+                self.fail(error_code::COMMAND_NOT_SUPPORTED)
+            }
+            // Everything above 0x0E is reserved for future use, and Section
+            // 3.3 is explicit about those: "If a packet is received with a
+            // Code that is reserved for future use it shall be ignored."
+            // Failing the pairing instead would let any future spec revision
+            // break this stack by defining one more command.
+            _ => Ok(()),
         }
+    }
+
+    fn on_pairing_failed(&mut self, pdu: &[u8]) -> Result<(), SimbleError> {
+        // Figure 3.7: Code octet then Reason octet, and nothing else.
+        if pdu.len() != LEN_PAIRING_FAILED {
+            return self.fail(error_code::INVALID_PARAMETERS);
+        }
+        // The peer rejected us. Same reasoning as `fail()`: whatever we had
+        // derived was never authenticated, so it goes too.
+        self.phase = Phase::Failed;
+        self.failed = true;
+        self.discard_key_material();
+        self.stop_timer();
+        Ok(())
     }
 
     fn on_pairing_request(&mut self, pdu: &[u8]) -> Result<(), SimbleError> {
         if self.role != Role::Responder {
             return self.fail(error_code::COMMAND_NOT_SUPPORTED);
         }
-        let Some((req, _)) = SmpPairingPacket::parse(pdu) else {
+        let Some(req) = parse_pairing_parameters(pdu) else {
             return self.fail(error_code::INVALID_PARAMETERS);
         };
+        // Section 3.4: "Upon... reception of the Pairing Request command, the
+        // Security Manager Timer shall be reset and started." The responder's
+        // clock starts here, not when it gets around to answering.
+        self.timer_remaining = Some(SMP_TIMEOUT_SECONDS);
         self.preq = req.as_bytes().try_into().unwrap();
         self.peer_io_capability = req.io_capability;
         self.sc = self.sc && (req.auth_req & auth_req::SC != 0);
@@ -634,7 +882,7 @@ impl PairingSession {
             self.responder_key_distribution,
         );
         self.pres = resp.as_bytes().try_into().unwrap();
-        self.pending.push_back(resp.as_bytes().to_vec());
+        self.queue(resp.as_bytes().to_vec());
         self.phase = if self.sc {
             Phase::WaitPeerPublicKey
         } else {
@@ -647,7 +895,7 @@ impl PairingSession {
         if self.role != Role::Initiator {
             return self.fail(error_code::COMMAND_NOT_SUPPORTED);
         }
-        let Some((resp, _)) = SmpPairingPacket::parse(pdu) else {
+        let Some(resp) = parse_pairing_parameters(pdu) else {
             return self.fail(error_code::INVALID_PARAMETERS);
         };
         self.pres = resp.as_bytes().try_into().unwrap();
@@ -665,8 +913,7 @@ impl PairingSession {
         self.compute_peer_expected(self.responder_key_distribution);
 
         if self.sc {
-            self.pending
-                .push_back(build_public_key(&self.local_pub_x, &self.local_pub_y));
+            self.queue(build_public_key(&self.local_pub_x, &self.local_pub_y));
             self.phase = Phase::WaitPeerPublicKey;
         } else {
             self.send_confirm_legacy();
@@ -687,8 +934,7 @@ impl PairingSession {
             &self.ia,
             &self.ra,
         );
-        self.pending
-            .push_back(build_16(opcode::PAIRING_CONFIRM, &confirm));
+        self.queue(build_16(opcode::PAIRING_CONFIRM, &confirm));
     }
 
     fn on_pairing_confirm(&mut self, pdu: &[u8]) -> Result<(), SimbleError> {
@@ -701,12 +947,10 @@ impl PairingSession {
                 return self.fail(error_code::COMMAND_NOT_SUPPORTED);
             }
             self.r_local = random_bytes::<16>();
-            self.pending
-                .push_back(build_16(opcode::PAIRING_RANDOM, &self.r_local));
+            self.queue(build_16(opcode::PAIRING_RANDOM, &self.r_local));
             self.phase = Phase::WaitPeerRandom;
         } else if self.role == Role::Initiator {
-            self.pending
-                .push_back(build_16(opcode::PAIRING_RANDOM, &self.r_local));
+            self.queue(build_16(opcode::PAIRING_RANDOM, &self.r_local));
             self.phase = Phase::WaitPeerRandom;
         } else {
             self.send_confirm_legacy();
@@ -756,22 +1000,30 @@ impl PairingSession {
         self.local_bonded_rand = random_bytes::<8>();
 
         if self.role == Role::Responder {
-            self.pending
-                .push_back(build_16(opcode::PAIRING_RANDOM, &self.r_local));
+            self.queue(build_16(opcode::PAIRING_RANDOM, &self.r_local));
         }
         self.on_encrypted();
         Ok(())
     }
 
     fn on_random_sc(&mut self, peer_random: [u8; 16]) -> Result<(), SimbleError> {
+        // `finish_sc_random_exchange` needs the DHKey, and the DHKey only
+        // exists once the public keys have been exchanged (Section 2.3.5.6.1:
+        // "After the public keys have been exchanged, the device can then
+        // start computing the Diffie-Hellman Key"). A peer that skips straight
+        // to Pairing Random has sent a well-formed PDU in the wrong order —
+        // which used to reach an `expect` on the responder path and panic the
+        // whole process from one remote packet.
+        if self.dh_key.is_none() {
+            return self.fail(error_code::UNSPECIFIED_REASON);
+        }
         match self.role {
             Role::Responder => {
                 // `r_local` was already committed to (as Nb) when the
                 // confirm value was computed in `on_public_key` — it must
                 // not be regenerated here, or the random value sent
                 // wouldn't match what the confirm committed to.
-                self.pending
-                    .push_back(build_16(opcode::PAIRING_RANDOM, &self.r_local));
+                self.queue(build_16(opcode::PAIRING_RANDOM, &self.r_local));
                 self.finish_sc_random_exchange();
                 self.phase = Phase::WaitPeerDhKeyCheck;
             }
@@ -785,8 +1037,7 @@ impl PairingSession {
                 }
                 self.finish_sc_random_exchange();
                 let ea = self.ea.expect("computed by finish_sc_random_exchange");
-                self.pending
-                    .push_back(build_16(opcode::PAIRING_DHKEY_CHECK, &ea));
+                self.queue(build_16(opcode::PAIRING_DHKEY_CHECK, &ea));
                 self.phase = Phase::WaitPeerDhKeyCheck;
             }
         }
@@ -827,9 +1078,14 @@ impl PairingSession {
         self.peer_pub_y = y;
         // Real ECDH — and real point validation: a peer key that is not on
         // the P-256 curve fails the pairing (mandatory since CVE-2018-5383;
-        // Android enforces the same on our key).
+        // Android enforces the same on our key). The reason code is the one
+        // Section 3.5.5 names for it — "During LE Secure Connections pairing,
+        // this command should be sent if the remote device's public key is
+        // invalid... The Reason field should be set to 'DHKey Check Failed'" —
+        // not Invalid Parameters, which is for a malformed PDU. The PDU here
+        // is well-formed; it is the point that is not on the curve.
         let Some(dh_key) = self.ecdh.shared_x_le(&x, &y) else {
-            return self.fail(error_code::INVALID_PARAMETERS);
+            return self.fail(error_code::DHKEY_CHECK_FAILED);
         };
         self.dh_key = Some(dh_key);
         match self.role {
@@ -837,12 +1093,10 @@ impl PairingSession {
                 self.phase = Phase::WaitPeerConfirm;
             }
             Role::Responder => {
-                self.pending
-                    .push_back(build_public_key(&self.local_pub_x, &self.local_pub_y));
+                self.queue(build_public_key(&self.local_pub_x, &self.local_pub_y));
                 self.r_local = random_bytes::<16>();
                 let confirm = f4(&self.local_pub_x, &x, &self.r_local, 0);
-                self.pending
-                    .push_back(build_16(opcode::PAIRING_CONFIRM, &confirm));
+                self.queue(build_16(opcode::PAIRING_CONFIRM, &confirm));
                 self.phase = Phase::WaitPeerRandom;
             }
         }
@@ -866,8 +1120,7 @@ impl PairingSession {
         }
         if self.role == Role::Responder {
             let eb = self.eb.expect("computed by finish_sc_random_exchange");
-            self.pending
-                .push_back(build_16(opcode::PAIRING_DHKEY_CHECK, &eb));
+            self.queue(build_16(opcode::PAIRING_DHKEY_CHECK, &eb));
         }
         self.on_encrypted();
         Ok(())
@@ -902,6 +1155,13 @@ impl PairingSession {
             self.distribute_keys();
         }
         self.complete = true;
+        // Section 3.4: "When a Pairing process completes (whether successfully
+        // or not), the Security Manager Timer shall be stopped." Key
+        // distribution is part of the pairing process, so this — not
+        // `on_encrypted` — is where it finishes. Stopping it here is what
+        // keeps a long-lived bonded connection from timing out its own
+        // completed session 30 seconds later and discarding the live LTK.
+        self.stop_timer();
     }
 
     fn distribute_keys(&mut self) {
@@ -915,27 +1175,23 @@ impl PairingSession {
             self.responder_key_distribution
         };
         if !self.sc && (my_flags & key_distribution::ENC_KEY != 0) {
-            self.pending
-                .push_back(build_16(opcode::ENCRYPTION_INFO, &self.local_bonded_ltk));
-            self.pending.push_back(build_master_id(
+            self.queue(build_16(opcode::ENCRYPTION_INFO, &self.local_bonded_ltk));
+            self.queue(build_master_id(
                 self.local_bonded_ediv,
                 &self.local_bonded_rand,
             ));
         }
         if my_flags & key_distribution::ID_KEY != 0 {
-            self.pending
-                .push_back(build_16(opcode::IDENTITY_INFO, &self.local_irk));
+            self.queue(build_16(opcode::IDENTITY_INFO, &self.local_irk));
             let (addr_type, addr) = resolve_identity_address(
                 self.identity_address_preference,
                 self.local_public_address,
                 self.local_static_address,
             );
-            self.pending
-                .push_back(build_identity_addr_info(addr_type, &addr));
+            self.queue(build_identity_addr_info(addr_type, &addr));
         }
         if my_flags & key_distribution::SIGN_KEY != 0 {
-            self.pending
-                .push_back(build_16(opcode::SIGNING_INFO, &[0u8; 16]));
+            self.queue(build_16(opcode::SIGNING_INFO, &[0u8; 16]));
         }
     }
 

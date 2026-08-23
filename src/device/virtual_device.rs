@@ -494,6 +494,20 @@ impl VirtualDevice {
             .ok_or_else(|| {
                 SimbleError::DeviceError(format!("Connection {connection_handle} not found"))
             })?;
+        // Core Spec Vol 3, Part H, Section 3.4, on the Security Manager
+        // Timeout: "A new Pairing process shall only be performed when a new
+        // physical link has been established." An ordinary Pairing Failed is
+        // *not* this case — Section 3.5.5 lets a later attempt "restart from
+        // the Pairing Feature Exchange phase" — so only a timed-out session
+        // locks the link, and only until the peer disconnects and reconnects.
+        if let Some(session) = conn.pairing_session.as_ref()
+            && session.is_timed_out()
+        {
+            return Err(SimbleError::DeviceError(format!(
+                "Connection {connection_handle}: the Security Manager timed out; \
+                 a new pairing needs a new physical link"
+            )));
+        }
         let mut session = PairingSession::new(
             SmpRole::Initiator,
             config,
@@ -505,6 +519,30 @@ impl VirtualDevice {
         let request = session.start();
         conn.pairing_session = Some(session);
         Ok(L2capHeader::serialize(cid::SMP, &request))
+    }
+
+    /// Advances every connection's Security Manager Timer to simulated time
+    /// `t_seconds` (Bluetooth Core Spec Vol 3, Part H, Section 3.4).
+    ///
+    /// This is how a clock reaches SMP. A [`PairingSession`] has none of its
+    /// own, by design — it takes the same monotonic `t_seconds` the rest of
+    /// the simulator ticks on, so a runtime that never ticks (every bare
+    /// in-process test here) simply never times a pairing out, and one that
+    /// does can jump the full 30 seconds in a single call.
+    ///
+    /// A session whose timer expires has failed: it discards its key material
+    /// and ignores every later SMP PDU, so the link goes with it — unkeyed and
+    /// unencrypted, exactly as if the pairing had never happened.
+    pub fn tick_smp(&mut self, t_seconds: f64) {
+        for conn in self.connections.values_mut() {
+            let Some(session) = conn.pairing_session.as_mut() else {
+                continue;
+            };
+            if session.tick(t_seconds) {
+                conn.is_encrypted = false;
+                conn.ltk = None;
+            }
+        }
     }
 
     /// Drains one more queued outgoing SMP PDU from the connection's
