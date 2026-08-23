@@ -34,19 +34,36 @@ use crate::cs::tones::{SubeventResult, Tone, decode_pct};
 use crate::gatt::{AttributePermissions, CharacteristicProperties, GattDatabase};
 
 /// Bluetooth SIG Ranging Service UUIDs.
+///
+/// Values are from the SIG's own registry —
+/// `assigned_numbers/uuids/characteristic_uuids.yaml` in
+/// <https://bitbucket.org/bluetooth-SIG/public>, which is the authoritative
+/// list and is served without authentication.
+///
+/// These were previously 0x2B6E/0x2B70/0x2B71/0x2B72, which are **not assigned
+/// to anything** in that registry — they were invented, and a real client
+/// looking for RAS would never have found this service. Nothing in-tree could
+/// have caught it: both ends of every test here are this codebase, and neither
+/// Bumble nor Zephyr mainline implements RAS to disagree with us. Only the
+/// registry itself could, which is the argument for checking against it.
 pub mod ras_uuid {
     use crate::types::Uuid;
 
     /// Ranging Service UUID.
     pub const RANGING_SERVICE: Uuid = Uuid::Uuid16(0x185B);
-    /// Ranging Features characteristic UUID.
-    pub const RANGING_FEATURES: Uuid = Uuid::Uuid16(0x2B6E);
-    /// Ranging Realtime Data characteristic UUID.
-    pub const RANGING_REALTIME_DATA: Uuid = Uuid::Uuid16(0x2B70);
-    /// Ranging On Demand Data characteristic UUID.
-    pub const RANGING_ON_DEMAND_DATA: Uuid = Uuid::Uuid16(0x2B71);
-    /// Ranging Control Point characteristic UUID.
-    pub const RANGING_CONTROL_POINT: Uuid = Uuid::Uuid16(0x2B72);
+    /// RAS Features characteristic UUID.
+    pub const RANGING_FEATURES: Uuid = Uuid::Uuid16(0x2C14);
+    /// Real-time Ranging Data characteristic UUID.
+    pub const RANGING_REALTIME_DATA: Uuid = Uuid::Uuid16(0x2C15);
+    /// On-demand Ranging Data characteristic UUID.
+    pub const RANGING_ON_DEMAND_DATA: Uuid = Uuid::Uuid16(0x2C16);
+    /// RAS Control Point characteristic UUID.
+    pub const RANGING_CONTROL_POINT: Uuid = Uuid::Uuid16(0x2C17);
+    /// Ranging Data Ready characteristic UUID. Not served yet; defined so the
+    /// value is not invented a second time when it is.
+    pub const RANGING_DATA_READY: Uuid = Uuid::Uuid16(0x2C18);
+    /// Ranging Data Overwritten characteristic UUID. Not served yet, as above.
+    pub const RANGING_DATA_OVERWRITTEN: Uuid = Uuid::Uuid16(0x2C19);
 }
 
 /// Ranging Service container holding GATT attribute handles.
@@ -73,7 +90,7 @@ impl RangingService {
     pub fn register(db: &mut GattDatabase) -> Self {
         let service_handle = db.add_service(ras_uuid::RANGING_SERVICE, true);
 
-        // 1. Ranging Features (0x2B6E) - Read only
+        // 1. RAS Features (0x2C14) - Read only
         // Feature bits: bit 0: Real-Time Ranging Data, bit 1: On-Demand Ranging Data
         let (features_handle, features_value_handle) = db.add_characteristic(
             ras_uuid::RANGING_FEATURES,
@@ -82,7 +99,7 @@ impl RangingService {
             AttributePermissions::default(),
         );
 
-        // 2. Real-Time Ranging Data (0x2B70) - Notify
+        // 2. Real-time Ranging Data (0x2C15) - Notify
         let (realtime_data_handle, realtime_data_value_handle) = db
             .add_characteristic_with_cccd(
                 ras_uuid::RANGING_REALTIME_DATA,
@@ -91,7 +108,7 @@ impl RangingService {
                 AttributePermissions::default(),
             );
 
-        // 3. Ranging Control Point (0x2B72) - Write | Indicate
+        // 3. RAS Control Point (0x2C17) - Write | Indicate
         let (control_point_handle, control_point_value_handle) = db.add_characteristic_with_cccd(
             ras_uuid::RANGING_CONTROL_POINT,
             CharacteristicProperties(

@@ -1917,11 +1917,11 @@ mod tests {
 
             // Real-Time Ranging Data is [f32 metres, f32 confidence] LE.
             call(&mut s, "tick", json!({"seconds": 1.0}));
-            let read = call(&mut s, "read", json!({"uuid": "2B70"}));
+            let read = call(&mut s, "read", json!({"uuid": "2C15"}));
             assert_eq!(read["result"]["isError"], false, "{name}: {read}");
             let text = read["result"]["content"][0]["text"].as_str().unwrap();
             let value = text
-                .split("\"2B70\"")
+                .split("\"2C15\"")
                 .nth(1)
                 .and_then(|t| t.split("\"value\":\"").nth(1))
                 .and_then(|t| t.split('"').next())
