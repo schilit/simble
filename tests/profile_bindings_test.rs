@@ -20,7 +20,7 @@ use simble::att::opcode as att_opcode;
 use simble::l2cap::{L2capHeader, cid};
 use simble::profiles::csip;
 use simble::profiles::vcp;
-use simble::transport::wasm_ws::ScriptedPeripheral;
+use simble::transport::wasm_ws::{ScriptedPeripheral, build_adv_payload_with_extras};
 use simble::types::{Address, Uuid};
 
 /// Builds the device a script describes and hands back its GATT server.
@@ -223,7 +223,7 @@ fn the_advertised_set_identity_resolves_against_the_sirk() {
         })
         .expect("the script staged an RSI");
 
-    assert_eq!(rsi.len(), 6, "prand(3) || hash(3)");
+    assert_eq!(rsi.len(), 6, "hash(3) || prand(3), CSIS Section 4.9");
     let sirk: [u8; 16] = [
         0x83, 0x8E, 0x68, 0x05, 0x53, 0xF1, 0x41, 0x5A, 0xA2, 0x65, 0xBB, 0xAF, 0xC6, 0xEA, 0x03,
         0xB8,
@@ -235,6 +235,87 @@ fn the_advertised_set_identity_resolves_against_the_sirk() {
 
     let other = [0xFFu8; 16];
     assert!(!csip::rsi_matches(&other, &rsi), "and not with a wrong one");
+}
+
+/// The set identity has to survive the whole build, not just the binding call:
+/// this reads the payload the host would hand the controller and looks for AD
+/// type 0x2E in it.
+#[test]
+fn the_set_identity_reaches_the_advertising_payload() {
+    let p = peripheral(EARBUD_SCRIPT);
+    let payload = p.primary_server().expect("server").with_server(|s| {
+        build_adv_payload_with_extras(&s.device.name, &[], s.device.advertising_data.as_ref())
+            .expect("the payload fits in 31 bytes")
+    });
+    let sirk: [u8; 16] = [
+        0x83, 0x8E, 0x68, 0x05, 0x53, 0xF1, 0x41, 0x5A, 0xA2, 0x65, 0xBB, 0xAF, 0xC6, 0xEA, 0x03,
+        0xB8,
+    ];
+    let advertised =
+        simble::gap::resolvable_set_identifier(&payload).expect("0x2E is in the payload");
+    assert!(csip::rsi_matches(&sirk, advertised));
+}
+
+/// The flagship scenario: two catalog devices, one set.
+///
+/// `earbud` alone proved the crypto could reach the air. A set of one is not a
+/// set — this is the test that says a coordinator can pick *both* halves of a
+/// pair out of the air and tell them apart by rank, which is what CSIP exists
+/// to do.
+#[test]
+fn the_two_earbud_catalog_devices_are_one_coordinated_set() {
+    let script_for = |name: &str| {
+        simble::devices::catalog::EXAMPLES
+            .iter()
+            .find(|e| e.name == name)
+            .unwrap_or_else(|| panic!("catalog has no {name}"))
+            .script
+    };
+    let left = peripheral(script_for("earbud"));
+    let right = peripheral(script_for("earbud_right"));
+
+    let sirk: [u8; 16] = [
+        0x83, 0x8E, 0x68, 0x05, 0x53, 0xF1, 0x41, 0x5A, 0xA2, 0x65, 0xBB, 0xAF, 0xC6, 0xEA, 0x03,
+        0xB8,
+    ];
+
+    // Same set size, distinct ranks — a coordinator locks members in rank
+    // order, so two members claiming rank 1 would deadlock a real client.
+    assert_eq!(read(&left, 0x2B85), vec![2], "left says the set has 2");
+    assert_eq!(read(&right, 0x2B85), vec![2], "right agrees");
+    assert_eq!(read(&left, 0x2B87), vec![1]);
+    assert_eq!(read(&right, 0x2B87), vec![2]);
+
+    // Same SIRK, published plaintext by both.
+    assert_eq!(&read(&left, 0x2B84)[1..], &sirk);
+    assert_eq!(&read(&right, 0x2B84)[1..], &sirk);
+
+    let rsi_of = |p: &ScriptedPeripheral| {
+        p.primary_server()
+            .expect("server")
+            .with_server(|s| {
+                s.device
+                    .advertising_data
+                    .as_ref()
+                    .and_then(|ad| ad.resolvable_set_identifier.clone())
+            })
+            .expect("staged an RSI")
+    };
+    let left_rsi = rsi_of(&left);
+    let right_rsi = rsi_of(&right);
+
+    // Both resolve against the one SIRK: that is "these two are a pair".
+    assert!(csip::rsi_matches(&sirk, &left_rsi));
+    assert!(csip::rsi_matches(&sirk, &right_rsi));
+    // And they look nothing alike to anyone without it — a per-member prand is
+    // the reason an RSI is not a stable tracker.
+    assert_ne!(left_rsi, right_rsi, "different prand, different identifier");
+    assert_ne!(
+        &left_rsi[3..],
+        &right_rsi[3..],
+        "the random halves really do differ"
+    );
+    assert!(!csip::rsi_matches(&[0x00; 16], &left_rsi));
 }
 
 #[test]

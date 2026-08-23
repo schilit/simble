@@ -68,12 +68,23 @@ pub fn sih(sirk: &[u8; 16], prand: &[u8; 3]) -> [u8; 3] {
     [cipher[0], cipher[1], cipher[2]]
 }
 
-/// Builds the six-byte Resolvable Set Identifier a set member advertises (CSIP Section 5.3):
-/// `prand || sih(sirk, prand)`, both little-endian on the wire.
+/// Builds the six-byte Resolvable Set Identifier a set member advertises, as the value of
+/// AD type 0x2E (CSIS Section 4.9).
 ///
-/// `prand`'s top two bits are forced to `0b01`, the same way a Resolvable Private Address's
-/// are (Core Vol 6, Part B, Section 1.3.2.2) — CSIP reuses that constraint so an RSI can
-/// never be mistaken for another address type.
+/// **The hash comes first.** CSIS defines `resolvableSetIdentifier = hash || prand` with the
+/// least significant octet of the RSI being the least significant octet of *hash*, and
+/// advertising data goes out least-significant-octet first — so the six octets on the air are
+/// `hash[0..3]` then `prand[0..3]`, each little-endian. Writing it the other way round
+/// (`prand || hash`, which reads more naturally and is what this function did first) produces
+/// an RSI that resolves perfectly against our own resolver and against nothing else:
+/// Zephyr's `bt_csip_set_member_generate_rsi` copies the hash to `rsi[0..3]` and the prand to
+/// `rsi[3..6]`, and a phone does the same. A builder/scanner round trip cannot catch it —
+/// only the byte order in the spec can.
+///
+/// `prand`'s two most significant bits are forced to `0b01` (CSIS Section 4.8; the same
+/// masking Zephyr applies as `prand[2] &= 0x3F; prand[2] |= BIT(6)`), so an RSI can never be
+/// mistaken for another address type. Because `prand` is little-endian here, its most
+/// significant octet is index 2.
 ///
 /// A coordinator resolves this by recomputing `sih` with each SIRK it holds and comparing
 /// against the hash half. Until this existed, `sih` had exactly one caller and it was a test:
@@ -83,18 +94,21 @@ pub fn rsi(sirk: &[u8; 16], prand: &[u8; 3]) -> [u8; 6] {
     prand[2] = (prand[2] & 0b0011_1111) | 0b0100_0000;
     let hash = sih(sirk, &prand);
     let mut out = [0u8; 6];
-    out[..3].copy_from_slice(&prand);
-    out[3..].copy_from_slice(&hash);
+    out[..3].copy_from_slice(&hash);
+    out[3..].copy_from_slice(&prand);
     out
 }
 
 /// Checks whether an advertised Resolvable Set Identifier belongs to the set identified by
 /// `sirk` — the coordinator half of [`rsi`].
+///
+/// The slice pattern spells out the CSIS Section 4.9 layout — hash first, then prand — so the
+/// one thing that can silently be backwards is stated in the code rather than in a comment.
 pub fn rsi_matches(sirk: &[u8; 16], rsi: &[u8]) -> bool {
-    let Ok(prand) = <[u8; 3]>::try_from(&rsi[..3.min(rsi.len())]) else {
-        return false;
-    };
-    rsi.len() == 6 && sih(sirk, &prand) == rsi[3..]
+    match rsi {
+        [h0, h1, h2, p0, p1, p2] => sih(sirk, &[*p0, *p1, *p2]) == [*h0, *h1, *h2],
+        _ => false,
+    }
 }
 
 /// Coordinated Set Identification Service GATT container.

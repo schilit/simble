@@ -154,6 +154,11 @@ pub const EXAMPLES: &[DeviceExample] = &[
         script: include_str!("../../catalog/devices/earbud.rhai"),
     },
     DeviceExample {
+        name: "earbud_right",
+        summary: "The rank-2 member of the same set: run it beside `earbud` and a set of one becomes a pair",
+        script: include_str!("../../catalog/devices/earbud_right.rhai"),
+    },
+    DeviceExample {
         name: "hearing_aid",
         summary: "Hearing Access presets (1854): a control point that indicates its preset records",
         script: include_str!("../../catalog/devices/hearing_aid.rhai"),

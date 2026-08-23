@@ -1,13 +1,15 @@
-// One earbud of a stereo pair — a CSIP coordinated set member.
+// One earbud of a stereo pair — a CSIP coordinated set member. The other
+// half is `earbud_right`; run both to see a real set.
 // Android reaches this through `BluetoothCsipSetCoordinator`.
 //
 // The point of CSIP is that a phone can tell "this is the other half of the
 // pair I already have" from "this is somebody else's earbud", without the
 // two earbuds talking to each other. Both members are provisioned with the
 // same Set Identity Resolving Key. Each advertises a Resolvable Set
-// Identifier: three random bytes plus three bytes of AES-CMAC over them,
-// keyed by the SIRK. A coordinator recomputes the hash with each SIRK it
-// holds; a match means "member of that set".
+// Identifier (AD type 0x2E): three bytes of hash followed by the three
+// random bytes it was taken over, where the hash is AES-128 keyed by the
+// SIRK. A coordinator recomputes the hash from the advertised random half
+// with each SIRK it holds; a match means "member of that set".
 //
 // That is the part a script cannot build. Rhai has no AES, so before this
 // binding the crypto in `profiles::csip` had exactly one caller and it was a

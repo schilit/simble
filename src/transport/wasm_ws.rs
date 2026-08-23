@@ -35,6 +35,7 @@ use crate::packets::hci_events::{
 };
 // Advertising payload builders live with `AdvertisingData` in `gap`; kept in
 // this module's public surface for the browser bindings and existing callers.
+use crate::gap::advertising::fit_within_legacy_limit;
 pub use crate::gap::advertising::{build_adv_payload, build_adv_payload_with_extras};
 use crate::l2cap::{AclReassembler, HciAclHeader, L2capHeader};
 use crate::packets::att::{AttExchangeMtuRsp, AttHandleValueHeader, opcode as att_op};
@@ -121,6 +122,11 @@ pub struct ScanReport {
     pub service_data: Vec<TaggedBytes>,
     /// Manufacturer-specific data keyed by company id, if present.
     pub manufacturer_data: Option<TaggedBytes>,
+    /// The CSIP Resolvable Set Identifier (AD type 0x2E) as hex, if present:
+    /// six octets, `hash || prand` (CSIS Section 4.9). A coordinator turns this
+    /// into "member of the set I already have" by recomputing the hash with
+    /// each SIRK it holds — see [`crate::profiles::csip::rsi_matches`].
+    pub resolvable_set_identifier: Option<String>,
     /// Hex dump of the raw advertising payload.
     pub raw: String,
 }
@@ -178,6 +184,12 @@ fn decode_ad_structures(data: &[u8], report: &mut ScanReport) {
                     data: hex(&payload[2..]),
                 });
             }
+            // Exactly six octets or it is not an RSI. A shorter or longer
+            // structure is dropped rather than resolved against, because `sih`
+            // over the wrong octets still returns a confident three bytes.
+            ad_type::RESOLVABLE_SET_IDENTIFIER if payload.len() == 6 => {
+                report.resolvable_set_identifier = Some(hex(payload));
+            }
             ad_type::MANUFACTURER_SPECIFIC_DATA if payload.len() >= 2 => {
                 report.manufacturer_data = Some(TaggedBytes {
                     tag: format!("{:04X}", u16::from_le_bytes([payload[0], payload[1]])),
@@ -218,6 +230,7 @@ pub fn parse_scan_reports(packet: &[u8]) -> Vec<ScanReport> {
                 service_uuids: Vec::new(),
                 service_data: Vec::new(),
                 manufacturer_data: None,
+                resolvable_set_identifier: None,
                 raw: hex(report.data),
             };
             decode_ad_structures(report.data, &mut scan);
@@ -235,18 +248,19 @@ use crate::device::host::adv_data_param;
 /// the scanner page to populate an otherwise-empty scene): flags, an optional
 /// 16-bit service UUID, optional manufacturer data, then the name. Extras are
 /// dropped and the name trimmed if the 31-byte legacy limit is exceeded — the
-/// name is the demo's identity, so it survives longest.
+/// name is the demo's identity, so it survives longest. Shares the single
+/// [`fit_within_legacy_limit`] loop with the other two builders, so an
+/// overflow is an error here too rather than a payload that never transmits.
 pub fn build_demo_adv_payload(
     name: &str,
     service_uuid: u16,
     mfg_company: u16,
     mfg_data: &[u8],
-) -> Vec<u8> {
-    const MAX_ADV_LEN: usize = 31;
-    let build = |name: &str, with_extras: bool| {
+) -> Result<Vec<u8>, SimbleError> {
+    fit_within_legacy_limit(name, |name, keep_extras| {
         let mut ad = AdvertisingData::new()
             .with_flags(flags::LE_GENERAL_DISCOVERABLE | flags::BR_EDR_NOT_SUPPORTED);
-        if with_extras {
+        if keep_extras {
             if service_uuid != 0 {
                 ad = ad.with_service_uuid_16(service_uuid);
             }
@@ -255,16 +269,7 @@ pub fn build_demo_adv_payload(
             }
         }
         ad.with_name(name).to_bytes()
-    };
-    let mut bytes = build(name, true);
-    if bytes.len() > MAX_ADV_LEN {
-        bytes = build(name, false);
-    }
-    let mut trimmed = name.to_string();
-    while bytes.len() > MAX_ADV_LEN && trimmed.pop().is_some() {
-        bytes = build(&trimmed, false);
-    }
-    bytes
+    })
 }
 
 /// Queues a demo advertiser's full HCI bring-up: reset, event masks,
@@ -298,7 +303,7 @@ pub fn queue_advertiser_start(
             service_uuid,
             mfg_company,
             mfg_data,
-        )),
+        )?),
     )?;
     let scan_rsp = AdvertisingData::new().with_name(name).to_bytes();
     queue_command(channel, [0x09, 0x20], &adv_data_param(&scan_rsp))?;
@@ -5608,6 +5613,98 @@ mod tests {
         assert_eq!(manufacturer.data, "ABCD");
     }
 
+    /// A scanner must surface AD type 0x2E, or a set member is discoverable
+    /// and still not identifiable as a member — the crypto reaches the air and
+    /// stops at the antenna.
+    ///
+    /// The payload here is written out as literal octets from CSIS (Section
+    /// 4.9 for the layout, Appendix A for the values: SIRK
+    /// `457d7d0921a1fd22cecd8c86dd72cccd`, prand `0x69f563`, hash `0x1948da`)
+    /// rather than built with `csip::rsi`, so a decoder keyed to the wrong AD
+    /// type or reading the halves backwards cannot agree with a builder that
+    /// makes the same mistake.
+    #[test]
+    fn test_a_scan_report_decodes_a_resolvable_set_identifier() {
+        let mut data = vec![0x02, ad_type::FLAGS, 0x06];
+        // Length 7, AD type 0x2E, then hash 1948DA and prand 69F563, each
+        // written least significant octet first.
+        data.extend_from_slice(&[0x07, 0x2E, 0xDA, 0x48, 0x19, 0x63, 0xF5, 0x69]);
+        let reports = parse_scan_reports(&adv_report_event(0x00, &data, -50));
+        let report = &reports[0];
+        assert_eq!(
+            report.resolvable_set_identifier.as_deref(),
+            Some("DA481963F569"),
+            "six octets: hash 1948DA then prand 69F563, each reversed for the wire"
+        );
+        // And it resolves against the SIRK those octets were generated from.
+        let sirk = crate::crypto::smp_crypto::rev(&[
+            0x45, 0x7d, 0x7d, 0x09, 0x21, 0xa1, 0xfd, 0x22, 0xce, 0xcd, 0x8c, 0x86, 0xdd, 0x72,
+            0xcc, 0xcd,
+        ]);
+        assert!(crate::profiles::csip::rsi_matches(
+            &sirk,
+            &[0xDA, 0x48, 0x19, 0x63, 0xF5, 0x69]
+        ));
+    }
+
+    #[test]
+    fn test_a_set_member_advertisement_reaches_the_scanner_intact() {
+        // The end-to-end path the earbud catalog device takes: script stages
+        // an RSI, the host builds the payload, the scanner reads it back.
+        let sirk = [
+            0x83, 0x8E, 0x68, 0x05, 0x53, 0xF1, 0x41, 0x5A, 0xA2, 0x65, 0xBB, 0xAF, 0xC6, 0xEA,
+            0x03, 0xB8,
+        ];
+        let identifier = crate::profiles::csip::rsi(&sirk, &[0x69, 0xF5, 0x63]);
+        let mut extras = AdvertisingData::new();
+        extras.service_uuids_16.push(0x1846);
+        extras.resolvable_set_identifier = Some(identifier.to_vec());
+
+        let payload =
+            build_adv_payload_with_extras("Earbud L", &[], Some(&extras)).expect("fits in 31");
+        let reports = parse_scan_reports(&adv_report_event(0x00, &payload, -60));
+        let report = &reports[0];
+
+        assert_eq!(report.name.as_deref(), Some("Earbud L"));
+        assert!(report.service_uuids.iter().any(|u| u == "1846"));
+        let seen = report
+            .resolvable_set_identifier
+            .as_deref()
+            .expect("the scanner saw the set identity");
+        assert_eq!(seen, hex(&identifier));
+        let decoded: Vec<u8> = (0..6)
+            .map(|i| u8::from_str_radix(&seen[i * 2..i * 2 + 2], 16).unwrap())
+            .collect();
+        assert!(
+            crate::profiles::csip::rsi_matches(&sirk, &decoded),
+            "a coordinator holding the SIRK recognises the member"
+        );
+    }
+
+    #[test]
+    fn test_a_128_bit_service_uuid_survives_the_builder_and_the_scanner() {
+        // The builder half only landed after the scanner could already read
+        // 0x06/0x07, so this is the first time both ends are exercised
+        // together. `Uuid`'s Display reverses the octets, so a report that
+        // shows the textual UUID proves the payload carried the little-endian
+        // form.
+        let uuid = [
+            0xFB, 0x34, 0x9B, 0x5F, 0x80, 0x00, 0x00, 0x80, 0x00, 0x10, 0x00, 0x00, 0x2C, 0xFE,
+            0x00, 0x00,
+        ];
+        let extras = AdvertisingData::new().with_service_uuid_128(uuid);
+        let payload = build_adv_payload_with_extras("Custom", &[], Some(&extras)).expect("fits");
+        assert!(
+            payload.windows(17).any(|w| w[0] == 0x07 && w[1..] == uuid),
+            "AD type 0x07 followed by the UUID least significant octet first"
+        );
+        let reports = parse_scan_reports(&adv_report_event(0x00, &payload, -60));
+        assert_eq!(
+            reports[0].service_uuids,
+            vec!["0000fe2c-0000-1000-8000-00805f9b34fb".to_string()]
+        );
+    }
+
     #[test]
     fn test_parse_scan_reports_ignores_other_packets() {
         assert!(
@@ -5632,14 +5729,14 @@ mod tests {
 
     #[test]
     fn test_build_adv_payload_fits_31_bytes_and_keeps_name() {
-        let payload = build_adv_payload("web-hrm", &[0x180D]);
+        let payload = build_adv_payload("web-hrm", &[0x180D]).expect("fits");
         assert!(payload.len() <= 31);
         assert!(payload.windows(7).any(|w| w == b"web-hrm"));
         assert!(payload.windows(2).any(|w| w == [0x0D, 0x18]));
 
         // An oversized name drops the UUID list and trims, never overflows.
         let long = "a-device-name-well-past-the-thirty-one-byte-advertising-limit";
-        let payload = build_adv_payload(long, &[0x180D, 0x180F, 0x1812]);
+        let payload = build_adv_payload(long, &[0x180D, 0x180F, 0x1812]).expect("trims to fit");
         assert!(payload.len() <= 31);
         assert!(!payload.windows(2).any(|w| w == [0x0D, 0x18]));
         assert!(payload.windows(9).any(|w| w == b"a-device-"));
@@ -5976,7 +6073,7 @@ mod tests {
     fn test_demo_adv_payload_trims_to_limit() {
         // A very long name still yields a legal (<= 31-byte) payload.
         let long = "a-demo-advertiser-name-well-past-the-legacy-advertising-limit";
-        let payload = build_demo_adv_payload(long, 0x181A, 0, &[]);
+        let payload = build_demo_adv_payload(long, 0x181A, 0, &[]).expect("trims to fit");
         assert!(payload.len() <= 31, "payload {} bytes", payload.len());
     }
 }

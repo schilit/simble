@@ -65,9 +65,7 @@ string is a lie and should go.
 
 | Where | Gap |
 |---|---|
-| `profiles/csip.rs` | `sih()` — the RSI hash — is implemented, tested, and has **exactly one caller: a test**. AD type **0x2E (Resolvable Set Identifier) is absent from both AD-type tables**, so a coordinated set can never advertise its RSI and no real Set Coordinator can recognise it. Half a day. |
-| `gap/advertising.rs` | `AdvertisingData` cannot emit **128-bit service UUIDs** — the scanner decodes them, the builder cannot produce them. A device with a custom service is invisible to a phone filtering on it. |
-| `gap/advertising.rs` | Three divergent copies of the 31-byte trim loop (`build_adv_payload`, `..._with_extras`, `build_demo_adv_payload`); only one returns an error on overflow, the other two silently return an oversized payload that never transmits. |
+| `types/hci_types.rs` | `GapDataType` — a **third** AD-type table, with its own `Display` impl naming fifteen types — has **zero references anywhere in the tree**. It duplicates `gap::advertising::ad_type`, and being unused it was already missing 0x2E and 0x30 while the live table had them. Delete it, or make it the one table. |
 | Scripting | Rhai has **no way to load a catalog device**. Only `mcp.rs`, `scene/mod.rs` and the wasm export resolve a name; a script cannot say `catalog::device("hrm")`. |
 | Rhai test surface | `assert_over` (temporal assertion) is **MCP-only** — a script author can say "this happened" but not "this stayed true". `wait_for` exists and appears in **zero** of the three shipped examples. |
 
@@ -132,9 +130,14 @@ been all along: the foreign peer that proves each of these once built.
 2. **The 17 Command-Status commands** in `sim.rs` — same bug that hit four
    times this week, and `docs/sig-as-oracle.md` describes the ~150-line lint
    that finds them all permanently.
-3. **CSIP RSI (0x2E)** — working crypto with no path to the air, blocking the
-   flagship earbud-pair scenario.
-4. **Broadcast in-page** — likely already possible; verify and delete the
+3. **Broadcast in-page** — likely already possible; verify and delete the
    reason string.
-5. **RAS `CONFIG_ID_SHIFT`** — a one-hour correctness fix with a real
+4. **RAS `CONFIG_ID_SHIFT`** — a one-hour correctness fix with a real
    truncation bug behind it.
+
+*CSIP RSI (0x2E) was third on this list and is done: the identifier reaches the
+air, the scanner decodes it, and `earbud` + `earbud_right` are a real
+coordinated set. Reaching the air is what found the bug — the six octets were
+being emitted `prand || hash` where CSIS Section 4.9 says `hash || prand`, which
+no round trip against our own decoder could have caught. That is the second
+time the second consumer found the first one's bug; it is worth expecting.*
