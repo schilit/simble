@@ -104,6 +104,25 @@ nobody "fixes" them by making the labels disappear.
   remaining split is the ~2 200 lines of bindings and finding `SceneEngine` a
   home outside `transport/`.
 
+## 7. Structural gaps against Bumble
+
+*Added 2026-08-23, after BR/EDR landed in the simulated controller
+(`9557778`). These are not correctness bugs in code we have — they are whole
+capabilities Bumble has and simble does not. Each was confirmed absent on that
+date, not inherited from an older list. Recommended order: security first,
+because a real peer refuses unauthenticated profile connections, so the other
+two cannot be honestly demonstrated without it.*
+
+| Gap | What exists today | What Bumble has | What closing it needs |
+|---|---|---|---|
+| **Security, both transports** | LE SMP does the pairing math (`smp/pairing.rs`), but the controller does not model encryption start. Classic has *nothing*: no SSP, no link keys, no authentication, no encryption — `Write Simple Pairing Mode` falls through `sim.rs`'s catch-all. | Classic SSP, link keys, authentication + encryption, LE encryption start, CTKD (`bumble/pairing.py`, `smp.py`, `controller.py`). | SSP in `sim.rs` (IO-capability exchange, numeric comparison at minimum), link-key store on `ClassicHost`, Authentication Requested / Set Connection Encryption + their event chains, LE Enable Encryption actually enabling. Bumble as the foreign peer to prove it. |
+| **SCO/eSCO** | Nothing: no H4 packet type 0x03 anywhere, no Setup Synchronous Connection, no routing in `Link`. HFP is signalling-only — the Car page can place a call but no audio path exists. | SCO/eSCO with HFP audio end-to-end. | A third H4 packet type through `HciChannel`, `Link` routing, Setup Synchronous Connection (+ its Command-Status chain) in `sim.rs`, and a CVSD/mSBC seam to the existing codec code. |
+| **Classic profiles as connectable devices** | ~10 000 lines of protocol code (`classic/{a2dp,avrcp,avdtp,hfp,hid}.rs`) with tests, but none is a `ProtocolHandler` on `ClassicHost` — no scene can host a classic headset, keyboard, or speaker. | Runnable A2DP speakers, HID keyboards/hosts, OPP servers, HFP AG/HF as applications. | One `ProtocolHandler` + SDP record per profile. **Known design item first:** `handle_channel_data` maps one PSM to one handler, but Classic HID needs two channels (0x0011 control, 0x0013 interrupt) distinguished. A2DP first — it unlocks the speaker scenario and can reuse the SBC oracle. |
+
+Parity with Bumble is *not* the goal — Bumble has no scripting, MCP, or web
+surface, which is where simble's value lives. Bumble's role stays what it has
+been all along: the foreign peer that proves each of these once built.
+
 ---
 
 ## Ranked, if picking up one thing
