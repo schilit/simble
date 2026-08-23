@@ -11,6 +11,25 @@
 //! LE Advertising Report, and the phase of a Channel Sounding tone, are
 //! *derived from where the two devices actually are*.
 //!
+//! **This model belongs to the built-in controller alone.** It generates
+//! RSSI and carrier phase from device positions, which is only simble's job
+//! when simble *is* the radio. On netsim the radio is netsim: positions are
+//! set with `netsim move <name> <x> <y>` and reported back in
+//! `netsim devices --json`, and the RSSI in an advertising report has already
+//! been attenuated by netsim's own propagation. Applying this model to those
+//! reports would attenuate them twice. The same holds for a USB dongle, where
+//! the numbers come off real hardware.
+//!
+//! Estimating the other way — turning a received RSSI back into a distance,
+//! as [`crate::cs::path_loss`] does — is fine against any source, netsim's
+//! included: it inverts a model rather than imposing one, and deliberately
+//! does not share constants with this one so it cannot mark its own homework.
+//!
+//! The rule is true by construction today: the only non-test consumer is
+//! [`crate::controller::sim`], and the Ranging page runs in-process only.
+//! It is written down here because the moment that page grows a backend
+//! selector, nothing else would say so.
+//!
 //! Two models live here, because Bluetooth ranges two very different ways:
 //!
 //! * **Path loss** — the log-distance model, `PL(d) = PL(d₀) + 10·n·log₁₀(d)`,

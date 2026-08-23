@@ -114,7 +114,7 @@ mod event {
 /// mode-2 (Phase-Based Ranging) step per tone. The tone plan is fixed rather
 /// than driven by the host's channel map, because the *spacing* is what
 /// bounds the measurement and a demo that let a page choose it could quietly
-/// produce nonsense — see [`TONE_SPACING_CHANNELS`].
+/// produce nonsense — see `TONE_SPACING_CHANNELS`.
 pub mod cs_plan {
     /// The first channel index a tone is placed on.
     pub const FIRST_TONE_CHANNEL: u8 = 0;

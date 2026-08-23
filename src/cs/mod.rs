@@ -20,7 +20,7 @@
 //! measurements themselves are produced by a radio — the simulated one lives
 //! in [`crate::controller::sim`] — and carried to the initiator's host over
 //! HCI and, for the reflector's half, over the Ranging Service
-//! ([`crate::profiles::ras`]).
+//! (`profiles::ras`).
 
 pub mod path_loss;
 pub mod procedures;

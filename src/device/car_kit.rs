@@ -520,7 +520,7 @@ impl CarKit {
     }
 
     /// Every AT line so far, oldest first, capped at the most recent
-    /// [`TRANSCRIPT_LIMIT`].
+    /// `TRANSCRIPT_LIMIT`.
     pub fn transcript(&self) -> impl Iterator<Item = &AtLine> {
         self.transcript.iter()
     }

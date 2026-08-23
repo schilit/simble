@@ -869,7 +869,7 @@ impl ScriptedPeripheral {
     /// Host-writes a characteristic and notifies it even if the bytes did not
     /// change.
     ///
-    /// The value-diff in [`Self::flush_value_notifications`] is right for a
+    /// The value-diff in `flush_value_notifications` is right for a
     /// characteristic that holds *state* — a battery level that has not moved
     /// is not news. It is wrong for one that reports *change*: two identical
     /// HID mouse reports mean the pointer moved twice by the same amount, and
@@ -2021,7 +2021,7 @@ impl SceneEngine {
     }
 
     /// The HID input central `index` has decoded since the last call (see
-    /// [`CentralDevice::hid_events_json`]).
+    /// `CentralDevice::hid_events_json`).
     pub fn central_hid_events_json(&mut self, index: usize) -> String {
         match self.devices.get_mut(index).map(|d| &mut d.role) {
             Some(SceneRole::Central(c)) => c.hid_events_json(),
