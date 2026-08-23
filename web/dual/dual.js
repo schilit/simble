@@ -96,15 +96,15 @@ const STYLE = `main { max-width: 78rem; margin: 0 auto; padding: 1rem 1.25rem 2r
   .empty { color: var(--dim); font-size: var(--fs-body); }
   footer { color: var(--dim); font-size: var(--fs-meta); padding: 1.25rem 1.25rem 0; max-width: 78rem; margin: 0 auto; }`;
 
-const ABOUT = `<p>This page runs <strong>a peripheral and a central</strong>, each defined
-    by its own Rhai script. On the
-    <a href="../controllers/">in-browser controller</a> they share one in-process link; on
-    <strong>netsim</strong> each gets its own socket, so the pair meets over rootcanal the way two
-    separate machines would. On the left, a <strong class="role" style="color:var(--good)">Server</strong>
-    (peripheral) defined by an editable Rhai script. On the right, a <strong style="color:var(--accent)">Client</strong>
-    (central) using <code>android::BluetoothGatt</code>, Android's client API — it connects, discovers
-    the server's GATT, and reacts in callbacks the way nRF Connect shows a connected device. What looks
-    like "a device and its UI" is two devices talking, and both halves are editable.</p>`;
+const ABOUT = `<p>Edit and run both sides of a GATT conversation. The
+    <strong class="role" style="color:var(--good)">Server</strong> (left) advertises a GATT database.
+    The <strong style="color:var(--accent)">Client</strong> (right) uses a Rhai
+    <code>android::BluetoothGatt</code> script to connect and discover it. Use the client view to read,
+    write, and subscribe to the server's characteristics.</p>
+    <p>With the <a href="../controllers/">in-browser controller</a>, both devices share this tab's
+    simulated radio. With <strong>netsim</strong>, they connect to netsim separately, so their traffic
+    uses the same controller as the Android emulator. Edit either script and apply it to rebuild and
+    reconnect the pair.</p>`;
 
 const MARKUP = `  <section id="setup" class="panel setup full">
     <h2>netsim is not reachable</h2>
