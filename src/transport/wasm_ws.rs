@@ -27,7 +27,7 @@ use crate::gap::{AdvertisingData, ad_type, flags};
 /// unit tests below, so what ships is what's tested. (The file keeps its
 /// legacy `heart_rate.rhai` name but now builds a thermometer; the export name
 /// is likewise kept for the page's stable wasm import.)
-pub const DEFAULT_HEART_RATE_SCRIPT: &str = include_str!("../../web/hrm/heart_rate.rhai");
+pub const DEFAULT_HEART_RATE_SCRIPT: &str = include_str!("../../catalog/devices/heart_rate.rhai");
 
 use crate::device::LeHost;
 use crate::packets::hci_events::{

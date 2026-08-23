@@ -159,9 +159,9 @@ fn a_minimal_scene_round_trips_without_gaining_noise() {
 
 #[test]
 fn every_committed_example_scene_parses_resolves_and_round_trips() {
-    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/scenes");
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/catalog/scenes");
     let mut count = 0;
-    for entry in std::fs::read_dir(dir).expect("examples/scenes should exist") {
+    for entry in std::fs::read_dir(dir).expect("catalog/scenes should exist") {
         let path = entry.unwrap().path();
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;

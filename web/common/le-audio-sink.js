@@ -13,14 +13,14 @@
 // As a file it is three things at once: served to this page, `include_str!`d
 // into `src/devices/catalog.rs` so the MCP `example` tool and the Rust tests
 // run the same bytes, and checked by CI through the `simble` CLI. That is the
-// same arrangement `web/hrm/heart_rate.rhai` has always had.
+// same arrangement heart_rate.rhai has always had, now also in catalog/.
 //
 // Fetched with top-level await so the export stays a plain string and callers
 // are unchanged — `buildHeaders()` needs the text before `init()` has run, so
 // going through the wasm `catalog_script` binding was not an option here.
 
 export const LE_AUDIO_SINK_SCRIPT = await fetch(
-  new URL("../../catalog/le-audio-sink.rhai", import.meta.url),
+  new URL("../../catalog/devices/le-audio-sink.rhai", import.meta.url),
 ).then((response) => {
   if (!response.ok) {
     throw new Error(`le-audio-sink.rhai: ${response.status} ${response.statusText}`);

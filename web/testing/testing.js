@@ -7,14 +7,17 @@ import { attachHighlightedEditor } from "../common/highlight.js";
 
 const $ = (id) => document.getElementById(id);
 
-// The examples are real .rhai files under examples/ — the same files CI runs
+// The examples are real .rhai files in the repository-root catalog/ — the
+// same files CI runs, shared with the other surfaces rather than living
+// under this page. The dev server maps /catalog/; the Pages workflow
+// stages a copy.
 // through the `simble` CLI, so the page and CI can never drift. The map
 // is select-option value -> file (the *.pass/*.fail suffix tells CI what to
 // expect; see .github/workflows/ci.yml).
 const EXAMPLE_FILES = {
-  structure: "examples/structure.pass.rhai",
-  values: "examples/two-service.pass.rhai",
-  failing: "examples/notify-required.fail.rhai",
+  structure: "/catalog/tests/structure.pass.rhai",
+  values: "/catalog/tests/two-service.pass.rhai",
+  failing: "/catalog/tests/notify-required.fail.rhai",
 };
 const EXAMPLES = {};
 

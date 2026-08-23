@@ -42,8 +42,8 @@ jobs:
           rc=0
           # All the passing examples at once — the CLI accepts many files and
           # exits nonzero if any fail.
-          "$bin" web/testing/examples/*.pass.rhai || { echo "  UNEXPECTED FAIL"; rc=1; }
-          for f in web/testing/examples/*.fail.rhai; do
+          "$bin" catalog/tests/*.pass.rhai || { echo "  UNEXPECTED FAIL"; rc=1; }
+          for f in catalog/tests/*.fail.rhai; do
             echo "== $f (expect FAIL) =="
             if "$bin" "$f"; then echo "  UNEXPECTED PASS: $f"; rc=1; fi
           done

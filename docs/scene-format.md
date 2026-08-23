@@ -5,8 +5,8 @@ is placed, and how they are wired to each other. One file, committable and
 diffable, that `simble scene.json` turns into a running scene.
 
 ```bash
-simble examples/scenes/heart-rate-monitor.json
-simble --no-run examples/scenes/le-audio-unicast.json      # validate only
+simble catalog/scenes/heart-rate-monitor.json
+simble --no-run catalog/scenes/le-audio-unicast.json      # validate only
 simble --controller netsim --seconds 30 my-scene.json      # override placement
 ```
 
@@ -388,7 +388,7 @@ Deliberately out of scope, but the format is shaped for them:
 
 ## 13. Example scenes
 
-In `examples/scenes/`:
+In `catalog/scenes/`:
 
 | File | What it shows |
 |---|---|
