@@ -287,8 +287,8 @@ const MARKUP = `
       multiplexers hand frames straight to each other here — the L2CAP channel and the
       ACL connection those frames would ride on a real link are
       <code>ClassicHost</code>'s job, not this page's. Everything above that line is
-      genuine: real SDP PDUs answered by a real <code>SdpServer</code>, a real
-      PN/SABM/UA handshake, and real credit accounting
+      genuine protocol: SDP PDUs answered by <code>SdpServer</code>, the
+      PN/SABM/UA handshake, and credit accounting
       (<span id="car-credits" class="mono">—</span>).
     </p>
   </section>

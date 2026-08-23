@@ -88,8 +88,12 @@ export function createControllerBar({ supports, onChange }) {
       ? blocked
           .map((c) => `${c.label} is not available here — ${map[c.id]}.`)
           .join(" ")
+      // "the same radio" was wrong: each device has its own radio, and what
+      // joining netsim shares is the medium they all transmit into. "Network"
+      // would be worse -- nothing here is an IP network. netsim's own word for
+      // it, and the one the rest of this site already uses, is a scene.
       : "In browser needs nothing installed; netsim needs netsimd running, "
-        + "and puts the devices on the same radio as the Android emulator.";
+        + "and puts the devices in the same scene as the Android emulator.";
     for (const c of CONTROLLERS) {
       const reason = map[c.id];
       const usable = reason === true;
