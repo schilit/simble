@@ -934,7 +934,15 @@ fn initialize_result() -> Value {
     json!({
         "protocolVersion": PROTOCOL_VERSION,
         "capabilities": { "tools": {} },
-        "serverInfo": { "name": "simble", "version": env!("CARGO_PKG_VERSION") },
+        // The version is the crate version plus a git description, because the
+        // registration recipe pins a client to target/release/simble and
+        // nothing rebuilds it. A stale binary previously served invented RAS
+        // UUIDs while its source was already fixed, and reported "0.1.0"
+        // either way. Now the handshake says exactly which build answered.
+        "serverInfo": {
+            "name": "simble",
+            "version": concat!(env!("CARGO_PKG_VERSION"), "+", env!("SIMBLE_BUILD")),
+        },
     })
 }
 

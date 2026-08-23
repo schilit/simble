@@ -54,6 +54,49 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
 
+      # Half the product is the browser. Until now the wasm build ran only in
+      # pages.yml, which triggers on a push to main -- i.e. AFTER merge -- so a
+      # wasm-only regression landed before anything noticed. Two have already
+      # cost real time: p256 broke the wasm build outright, and
+      # SystemTime::now() panics on wasm32-unknown-unknown. Neither is visible
+      # to a native-only matrix.
+      #
+      # `lc3` is not optional here: without it the bindings carry no WebLc3 and
+      # the Media domain fails to start on the deployed site while working
+      # locally for anyone who built with the feature. Kept identical to
+      # pages.yml on purpose -- if these drift, this gate stops meaning
+      # anything.
+      - name: Install the wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Build for wasm32 (the browser surface)
+        run: >
+          cargo build --release --target wasm32-unknown-unknown --lib
+          --features lc3
+        env:
+          RUSTFLAGS: --cfg getrandom_backend="wasm_js"
+
+  sig-assigned-numbers:
+    name: SIG assigned-number drift (non-blocking)
+    runs-on: ubuntu-latest
+    # Non-blocking because it depends on a third-party host being reachable,
+    # and a network blip must not fail an unrelated PR. The script exits 2 for
+    # "could not reach the registry", distinct from 1 for real drift, so the
+    # log says which happened.
+    continue-on-error: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # src/gatt/sig_names.rs is generated from the Bluetooth SIG's registry.
+      # Every test in this repo has simble on both ends, so a wrong constant is
+      # invisible to all of them -- the Ranging Service shipped four INVENTED
+      # characteristic UUIDs and no in-tree test could have caught it. The SIG
+      # registry is the only reference capable of disagreeing with us, and it
+      # only helps if something asks. This starts green, so any output is real.
+      - name: Diff sig_names.rs against the SIG registry
+        run: python3 scripts/check_sig_assigned_numbers.py
+
   duplication-report:
     name: Duplication Report (non-blocking)
     runs-on: ubuntu-latest
