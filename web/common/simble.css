@@ -259,7 +259,7 @@ footer code { color: var(--good); }
    folds. The stripe picks up the accent when open, so the chevron reads as a
    control rather than a stray glyph at the margin. */
 .about { background: var(--panel); border: 1px solid var(--border);
-  border-left: 3px solid var(--border); border-radius: 8px; padding: 1rem; }
+  border-left: 3px solid var(--dim); border-radius: 8px; padding: 1rem; }
 .about[open] { border-left-color: var(--accent); }
 .about > summary::marker { color: var(--dim); }
 .about > summary { cursor: pointer; font-size: 0.82rem; font-weight: 600;
