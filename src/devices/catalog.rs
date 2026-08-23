@@ -323,6 +323,54 @@ fn on_receive_state_changed(assistant, sink, source_id, state) {
 "#,
     },
     ClientExample {
+        name: "hid_host",
+        summary: "HID host (android::BluetoothHidHost): identify a keyboard from its Report Map, then read what it types",
+        peer: "hid_keyboard",
+        script: r#"// The computer's end of a Bluetooth keyboard, as Android's own HID
+// host proxy. `BluetoothProfile.HID_HOST` covers both transports —
+// Classic HID and HID-over-GATT go through the same proxy, and the
+// split happens down in the stack's bta/hh module — so this is the
+// right name for a HOGP host, not a Classic-only one.
+//
+// There is no read() or subscribe() below, and Android has none either:
+// a HID host reads the Report Map and subscribes to every input Report
+// the moment it discovers the service, because that is what a HID host
+// is. What reaches the script is decoded input.
+let host = android::BluetoothHidHost("Computer");
+host.connect("AA:BB:CC:00:00:01");
+
+// The Report Map is a USB HID report descriptor. Its first Application
+// Collection is what says "keyboard" — the same eight bytes mean
+// something else under a different descriptor.
+fn on_identified(host, kind, report_map) {
+    assert(kind == "keyboard", "the Report Map identifies the peer");
+    host.emit("kind", kind);
+    host.emit("report_map_bytes", report_map.len());
+}
+
+// An input report is a *level* — the keys held right now — so presses
+// are the set difference against the previous report. That differencing
+// is done in Rust; a script sees edges.
+fn on_key_down(host, key) {
+    if key.character != () {
+        host.emit("typed", key.character);
+    } else if key.label != () {
+        host.emit("pressed", key.label);
+    }
+}
+
+fn on_key_up(host, usage) {
+    host.emit("released", usage);
+}
+
+// Android's own surface is the raw report and nothing more
+// (ACTION_REPORT / EXTRA_REPORT); everything above is simble decoding it.
+fn on_report(host, report) {
+    assert(report.len() == 8, "boot-shape keyboard report");
+}
+"#,
+    },
+    ClientExample {
         name: "gatt_walker",
         summary: "Discovery only: prints every service and characteristic the peer exposes",
         peer: "smart_lock",

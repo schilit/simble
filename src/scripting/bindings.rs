@@ -725,6 +725,9 @@ fn register_android_module(engine: &mut Engine, events: SessionEvents) {
     // and is registered here rather than in the browser transport so every
     // surface that builds an engine sees it.
     super::broadcast::register(engine, &mut android);
+    // The HID host — `android::BluetoothHidHost`, the central-role profile
+    // proxy over `crate::device::HidHost`.
+    super::hid::register(engine, &mut android);
 
     engine.register_static_module("android", android.into());
 }

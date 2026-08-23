@@ -8,10 +8,16 @@
 // keys are physically down, where the pointer has moved since the last frame —
 // builds the input report that state implies, and writes it into the
 // peripheral's GATT database. Everything after that is simble: the report is
-// notified across the simulated radio, the central's `HidHost` reads the peer's
-// Report Map, decides it is looking at a keyboard, subscribes, and decodes the
+// notified across the simulated radio, the host reads the peer's Report Map,
+// decides it is looking at a keyboard, subscribes, and decodes the
 // notifications into events. The host side of the UI renders only those decoded
 // events. It never reads the device state.
+//
+// All four devices are Rhai scripts. The peripherals build their GATT database
+// with `android::BluetoothGattServer`; the hosts drive their peer with
+// `android::BluetoothHidHost`, which composes the Rust `HidHost` underneath —
+// so the decoding still happens in Rust, and the script only says what the page
+// should be told about it. Nothing in this file interprets a report byte.
 //
 // Exported as a mountable domain module: `mount(root)` builds the whole UI into
 // `root` and starts the one timer everything runs on; `unmount()` stops that
@@ -21,6 +27,7 @@
 // The two device scripts below are the `hid_keyboard` and `hid_mouse` examples
 // the MCP `example` tool serves, minus their demo `tick` functions — those type
 // "hello" and walk the pointer in a square, which would fight with the user.
+// The host scripts are the `hid_host` example, pointed at this page's peers.
 
 import init, { WebLink } from "../pkg/simble.js";
 import { createDeviceHeader } from "../common/device-header.js";
@@ -170,6 +177,54 @@ mode.set_value([0x01]);
 hid.add_characteristic(mode);
 server.add_service(hid);
 `;
+
+// --- host scripts -----------------------------------------------------------
+// The other half of the page, and the reason nothing here decodes a report in
+// JavaScript. `android::BluetoothHidHost` is the HID host as a script reaches
+// it: it composes `crate::device::HidHost` in Rust, so what crosses into the
+// page is already "a key went down", never eight bytes to interpret.
+//
+// The name is Android's, and it is exact: `BluetoothProfile.HID_HOST` covers
+// both transports — Classic HID and HID-over-GATT reach the same proxy, and
+// the split happens far below it, in the stack's `bta/hh` module. What is
+// *not* Android is the decoded callbacks: Android's proxy hands an app raw
+// reports (`ACTION_REPORT`) and leaves decoding to the input stack.
+const hostScript = (name, peer, address) => `// The computer's end of the ${peer} link.
+//
+// Nothing below asks for the Report Map or subscribes to anything: a HID
+// host does both the instant it discovers the HID service, because that is
+// what a HID host *is*, and Android's proxy behaves the same way. A script
+// that had to spell it out would just be re-implementing HidHost::plan.
+let host = android::BluetoothHidHost("${name}");
+host.connect("${address}");
+
+// The Report Map is a USB HID report descriptor. Its first Application
+// Collection is what says "${peer === "SimKeyboard" ? "keyboard" : "mouse"}" —
+// the same bytes mean something else under a different descriptor, which is
+// why no report is decoded until this has been read.
+fn on_identified(host, kind, report_map) {
+    host.emit("report_map", #{ kind: kind, bytes: report_map });
+}
+
+// Every decoded event, stamped with the exact report it came from, so the
+// table on the right can show the wire beside its meaning. \`host.report\` is
+// the raw bytes; \`event\` is what Rust made of them.
+fn on_input(host, event) {
+    host.emit("input", #{ event: event, report: host.report });
+}
+
+// Until the host has subscribed, a keystroke goes nowhere — so tell the page
+// the moment it is actually listening.
+fn tick(host, t) {
+    if host.ready && this.announced != true {
+        this.announced = true;
+        host.emit("ready", host.kind);
+    }
+}
+`;
+
+const KBD_HOST_SCRIPT = hostScript("Keyboard Host", "SimKeyboard", ADDR.keyboard);
+const MOUSE_HOST_SCRIPT = hostScript("Mouse Host", "SimMouse", ADDR.mouse);
 
 // --- the keyboard's key matrix ----------------------------------------------
 // Each key carries the HID usage ID its position sends (Usage Tables 1.12,
@@ -374,7 +429,9 @@ const TEMPLATE = `
     holding.
   </p>
   <div id="hid-kbdhost-head"></div>
+  <div id="hid-kbdhost-script"></div>
   <div id="hid-mousehost-head"></div>
+  <div id="hid-mousehost-script"></div>
 
   <div class="computer">
     <div class="monitor">
@@ -558,22 +615,38 @@ function applyEvent(event) {
   }
 }
 
+// Bytes as the page shows them: "00 00 0B 00 …".
+const hexBytes = (bytes) =>
+  Array.from(bytes ?? [], (b) => b.toString(16).padStart(2, "0").toUpperCase()).join(" ");
+
+// Drain what a host script emitted since the last frame.
+//
+// This is the whole host side now: the script decides what the page learns,
+// and every message is plain data that crossed from Rust already decoded.
+// Note that each input event carries *its own* report bytes, captured when it
+// was decoded — the previous version stamped a whole drained batch with one
+// `last_report`, so when two reports landed in the same frame the earlier rows
+// displayed the later report's bytes.
 function pollHost(role, source) {
-  const idx = S.index[role];
-  if (!S.hidStarted[role]) {
-    S.hidStarted[role] = S.link.central_start_hid(idx);
-    if (S.hidStarted[role]) { S.host.steps.connected = true; S.host.steps.subscribed = true; }
-  }
-  const view = JSON.parse(S.link.central_hid_events_json(idx));
-  if (view.report_map) {
-    S.host.steps.map = true;
-    const pre = $(role === "kbdHost" ? "map-kbd" : "map-mouse");
-    pre.textContent = `${source} (${view.kind}, ${view.report_map.length / 2} bytes)\n` +
-      view.report_map.match(/../g).join(" ");
-  }
-  for (const event of view.events || []) {
-    // Every event is stamped with the exact bytes it was decoded from.
-    S.host.rows.unshift({ source, raw: view.report || "", decoded: applyEvent(event), fresh: true });
+  for (const line of S.link.scripted_central_emitted(S.index[role])) {
+    const { event, payload } = JSON.parse(line);
+    if (event === "ready") {
+      S.hostReady[role] = true;
+      S.host.steps.connected = true;
+      S.host.steps.subscribed = true;
+    } else if (event === "report_map") {
+      S.host.steps.map = true;
+      const pre = $(role === "kbdHost" ? "map-kbd" : "map-mouse");
+      pre.textContent = `${source} (${payload.kind}, ${payload.bytes.length} bytes)\n` +
+        hexBytes(payload.bytes);
+    } else if (event === "input") {
+      S.host.rows.unshift({
+        source,
+        raw: hexBytes(payload.report),
+        decoded: applyEvent(payload.event),
+        fresh: true,
+      });
+    }
   }
   if (S.host.rows.length > 8) S.host.rows.length = 8;
 }
@@ -815,8 +888,8 @@ function loop() {
   // Report characteristic: until then it is advertising into an empty room and
   // every keystroke goes nowhere, which is the failure this page most often
   // has to explain.
-  const kbdReady = S.hidStarted.kbdHost;
-  const mouseReady = S.hidStarted.mouseHost;
+  const kbdReady = S.hostReady.kbdHost;
+  const mouseReady = S.hostReady.mouseHost;
   S.heads.keyboard.setState(kbdReady, kbdReady ? "a host is subscribed" : "advertising…",
     kbdReady ? "ok" : "");
   S.heads.mouse.setState(mouseReady, mouseReady ? "a host is subscribed" : "advertising…",
@@ -841,12 +914,18 @@ function loop() {
 //  Mount / unmount
 // ===========================================================================
 
-/// The four device headers. The two peripherals show their scripts read-only:
-/// the Report Map this page spends its prose on is *in* those scripts, and it
-/// is worth being able to look at. They are not editable here because editing
-/// one would mean rebuilding the link and every device on it, which is the
-/// Playground's job. The two hosts have no script at all -- a `HidHost` is
-/// Rust, and SimBLE has no central-role scripting -- so they get no pen.
+/// The four device headers, and all four now show a script.
+///
+/// The peripherals' scripts hold the Report Map this page spends its prose on;
+/// the hosts' scripts hold the other half of the same story — what a computer
+/// does with that descriptor once it has read it. Both are read-only here,
+/// for the same reason: editing one would mean rebuilding the link and every
+/// device on it, which is the Playground's job.
+///
+/// The hosts used to have no script at all, on the grounds that "a `HidHost`
+/// is Rust, and SimBLE has no central-role scripting". Both halves of that are
+/// now false — `android::BluetoothGatt` brought central-role scripting, and
+/// `android::BluetoothHidHost` binds the HID host itself.
 function buildHeaders() {
   const peripheral = (key, name, source, target) => {
     const head = createDeviceHeader({
@@ -874,21 +953,31 @@ function buildHeaders() {
   peripheral("keyboard", "SimKeyboard", KEYBOARD_SCRIPT, "kbd");
   peripheral("mouse", "SimMouse", MOUSE_SCRIPT, "mouse");
 
-  const host = (key, name, peer, target) => {
+  const host = (key, name, peer, source, target) => {
     const head = createDeviceHeader({
       name,
-      kind: `central · HidHost (Rust) → ${peer}`,
+      kind: `central · android::BluetoothHidHost → ${peer}`,
       accent: "accent",
       address: ADDR[key],
       dotMeans: "it has read the peer's Report Map and subscribed to its reports",
+      script: {
+        text: source,
+        editable: false,
+        note: "<strong>Read-only here.</strong> This is the <code>hid_host</code> " +
+          "example MCP's <code>example</code> tool serves, pointed at this page's " +
+          "peer. It decodes nothing itself: <code>android::BluetoothHidHost</code> " +
+          "composes the Rust <code>HidHost</code>, so what the script receives is " +
+          "already a keystroke.",
+      },
       run: { running: true, disabled: true, reason: SHARED_LINK },
     });
-    $(target).append(head.el);
+    $(target + "-head").append(head.el);
+    $(target + "-script").append(head.panel);
     head.setState(false, "starting…");
     S.heads[key] = head;
   };
-  host("kbdHost", "Keyboard Host", "SimKeyboard", "kbdhost-head");
-  host("mouseHost", "Mouse Host", "SimMouse", "mousehost-head");
+  host("kbdHost", "Keyboard Host", "SimKeyboard", KBD_HOST_SCRIPT, "kbdhost");
+  host("mouseHost", "Mouse Host", "SimMouse", MOUSE_HOST_SCRIPT, "mousehost");
 }
 
 function injectStyles() {
@@ -922,10 +1011,10 @@ export async function mount(root) {
     index: {
       keyboard: link.add_peripheral(ADDR.keyboard, KEYBOARD_SCRIPT),
       mouse: link.add_peripheral(ADDR.mouse, MOUSE_SCRIPT),
-      kbdHost: link.add_central(ADDR.kbdHost, ADDR.keyboard),
-      mouseHost: link.add_central(ADDR.mouseHost, ADDR.mouse),
+      kbdHost: link.add_scripted_central(ADDR.kbdHost, KBD_HOST_SCRIPT),
+      mouseHost: link.add_scripted_central(ADDR.mouseHost, MOUSE_HOST_SCRIPT),
     },
-    hidStarted: { kbdHost: false, mouseHost: false },
+    hostReady: { kbdHost: false, mouseHost: false },
     kbd: { held: new Set(), eventMods: 0, latched: new Set() },
     mouse: { buttons: 0, dx: 0, dy: 0, wheel: 0, dirty: false },
     queue: { keyboard: [], mouse: [] },
@@ -957,9 +1046,10 @@ export async function mount(root) {
     if (document.hidden) releaseEverything();
   }, { signal });
 
-  // A handle for the console: `simbleHid.link.central_status_json(…)` shows
-  // what the host has discovered, the first thing to look at if the page sits
-  // in "connecting".
+  // A handle for the console: `simbleHid.link.central_status_json(
+  // simbleHid.index.kbdHost)` shows what the host has discovered — the first
+  // thing to look at if the page sits in "connecting" — and
+  // `scripted_central_failure(…)` reports a failed assert in a host script.
   window.simbleHid = S;
 
   S.raf = requestAnimationFrame(loop);

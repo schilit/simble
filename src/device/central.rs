@@ -37,7 +37,9 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use zerocopy::IntoBytes;
 
-use crate::client::gatt_client::{DiscoveredDescriptor, DiscoveredService, GattClient};
+use crate::client::gatt_client::{
+    DiscoveredCharacteristic, DiscoveredDescriptor, DiscoveredService, GattClient,
+};
 use crate::device::host::{acl_packets, command, init_commands};
 use crate::l2cap::{AclReassembler, HciAclHeader, L2capHeader};
 use crate::packets::HciEvent;
@@ -181,25 +183,44 @@ pub enum CentralEvent {
     },
 }
 
-/// A queued client operation. Targets are UUIDs, not handles: a script names
-/// a characteristic before discovery has found it, and the handle is only
-/// known afterwards.
+/// What a queued operation names.
+///
+/// A **script** names a UUID: it says `client.read(uuid::BATTERY_LEVEL)`
+/// before discovery has run, and the handle is only known afterwards. That is
+/// the common case and the reason the queue is not handle-addressed.
+///
+/// A **profile proxy** that has already read a discovered GATT view names a
+/// value handle instead, because a UUID does not always identify one
+/// characteristic. HOGP is the case that forces this: a HID device may publish
+/// several Report characteristics (0x2A4D) in one HID service — an input
+/// report, an output report for keyboard LEDs, a feature report — and
+/// [`HidPlan`](crate::device::HidPlan) reports handles for exactly that
+/// reason. Resolving by UUID would collapse them onto whichever came first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Target {
+    /// Whatever characteristic carries this UUID, first match wins.
+    Uuid(Uuid),
+    /// The characteristic whose *value* sits at this attribute handle.
+    Handle(u16),
+}
+
+/// A queued client operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Op {
     /// Read Request.
-    Read(Uuid),
+    Read(Target),
     /// Write Request (`with_response`) or Write Command.
     Write {
-        uuid: Uuid,
+        target: Target,
         value: Vec<u8>,
         with_response: bool,
     },
     /// Write the characteristic's CCCD.
-    Subscribe { uuid: Uuid, enable: bool },
+    Subscribe { target: Target, enable: bool },
     /// Find Information over a characteristic's descriptor range, so the
     /// Subscribe that follows writes the CCCD the peer actually has rather
     /// than guessing at `value_handle + 1`.
-    DiscoverDescriptors { uuid: Uuid, enable: bool },
+    DiscoverDescriptors { target: Target, enable: bool },
 }
 
 /// The central half of a GATT link. Transport-free: feed it controller
@@ -374,16 +395,27 @@ impl LeCentral {
             .is_some_and(|h| self.subscribed.contains(&h))
     }
 
+    /// Whether the characteristic whose value sits at `handle` has
+    /// notifications or indications enabled.
+    ///
+    /// The handle-addressed twin of [`Self::is_subscribed`], and the one a
+    /// *listing* must use: asking by UUID resolves to the first characteristic
+    /// carrying it, so a peer with two Report characteristics (0x2A4D) would
+    /// have both rows report whatever the first one's state was.
+    pub fn is_subscribed_at(&self, handle: u16) -> bool {
+        self.subscribed.contains(&handle)
+    }
+
     /// Queues a read of `uuid`.
     pub fn queue_read(&mut self, uuid: Uuid) {
-        self.pending.push_back(Op::Read(uuid));
+        self.pending.push_back(Op::Read(Target::Uuid(uuid)));
     }
 
     /// Queues a write of `value` to `uuid`. `with_response` picks Write
     /// Request (acknowledged) over Write Command (fire-and-forget).
     pub fn queue_write(&mut self, uuid: Uuid, value: Vec<u8>, with_response: bool) {
         self.pending.push_back(Op::Write {
-            uuid,
+            target: Target::Uuid(uuid),
             value,
             with_response,
         });
@@ -393,8 +425,30 @@ impl LeCentral {
     /// descriptors are discovered first if they are not known yet, so the
     /// CCCD write lands on the handle the peer actually published.
     pub fn queue_subscribe(&mut self, uuid: Uuid, enable: bool) {
-        self.pending
-            .push_back(Op::DiscoverDescriptors { uuid, enable });
+        self.pending.push_back(Op::DiscoverDescriptors {
+            target: Target::Uuid(uuid),
+            enable,
+        });
+    }
+
+    /// Queues a read of the characteristic whose value sits at `handle`.
+    ///
+    /// The handle-addressed twin of [`Self::queue_read`], for a profile proxy
+    /// working from a plan it derived from the discovered GATT. HOGP needs it:
+    /// a HID service may carry several Report characteristics that share
+    /// UUID 0x2A4D, and only the handle says which one.
+    pub fn queue_read_at(&mut self, handle: u16) {
+        self.pending.push_back(Op::Read(Target::Handle(handle)));
+    }
+
+    /// Queues enabling (or disabling) notifications on the characteristic
+    /// whose value sits at `handle` — the handle-addressed twin of
+    /// [`Self::queue_subscribe`], for the reason given on [`Self::queue_read_at`].
+    pub fn queue_subscribe_at(&mut self, handle: u16, enable: bool) {
+        self.pending.push_back(Op::DiscoverDescriptors {
+            target: Target::Handle(handle),
+            enable,
+        });
     }
 
     /// Drains the events raised since the last call.
@@ -428,9 +482,9 @@ impl LeCentral {
     fn start(&mut self, op: Op, out: &mut Vec<Vec<u8>>) -> Started {
         let handle = self.client.connection_handle;
         match &op {
-            Op::Read(uuid) => {
-                let Some(characteristic) = self.client.find_characteristic(*uuid) else {
-                    self.fail(*uuid, "read", "no such characteristic on this peer");
+            Op::Read(target) => {
+                let Some(characteristic) = self.resolve(*target) else {
+                    self.fail(*target, "read", "no such characteristic on this peer");
                     return Started::Complete;
                 };
                 let value_handle = characteristic.value_handle;
@@ -440,14 +494,15 @@ impl LeCentral {
                 Started::InFlight
             }
             Op::Write {
-                uuid,
+                target,
                 value,
                 with_response,
             } => {
-                let Some(characteristic) = self.client.find_characteristic(*uuid) else {
-                    self.fail(*uuid, "write", "no such characteristic on this peer");
+                let Some(characteristic) = self.resolve(*target) else {
+                    self.fail(*target, "write", "no such characteristic on this peer");
                     return Started::Complete;
                 };
+                let uuid = characteristic.uuid;
                 let value_handle = characteristic.value_handle;
                 if *with_response {
                     let pdu = self.client.create_write_request(value_handle, value);
@@ -460,29 +515,28 @@ impl LeCentral {
                     // Nothing will ever answer a Write Command, so the
                     // result is reported now rather than never.
                     self.events.push(CentralEvent::CharacteristicWrite {
-                        uuid: *uuid,
+                        uuid,
                         handle: value_handle,
                         status: 0,
                     });
                     Started::Complete
                 }
             }
-            Op::DiscoverDescriptors { uuid, enable } => {
-                let Some(range) = self.descriptor_range(*uuid) else {
+            Op::DiscoverDescriptors { target, enable } => {
+                let Some(range) = self.descriptor_range(*target) else {
                     let operation = if *enable { "subscribe" } else { "unsubscribe" };
-                    self.fail(*uuid, operation, "no such characteristic on this peer");
+                    self.fail(*target, operation, "no such characteristic on this peer");
                     return Started::Complete;
                 };
                 // Descriptors already known (a second subscribe on the same
                 // characteristic): go straight to the CCCD write.
                 if self
-                    .client
-                    .find_characteristic(*uuid)
+                    .resolve(*target)
                     .is_some_and(|c| !c.descriptors.is_empty())
                 {
                     return self.start(
                         Op::Subscribe {
-                            uuid: *uuid,
+                            target: *target,
                             enable: *enable,
                         },
                         out,
@@ -494,7 +548,7 @@ impl LeCentral {
                     // have a CCCD; say so instead of writing over whatever
                     // attribute follows it.
                     let operation = if *enable { "subscribe" } else { "unsubscribe" };
-                    self.fail(*uuid, operation, "characteristic has no descriptors");
+                    self.fail(*target, operation, "characteristic has no descriptors");
                     return Started::Complete;
                 }
                 let pdu = find_information_request(start, end);
@@ -502,10 +556,10 @@ impl LeCentral {
                 self.in_flight = Some((op, start));
                 Started::InFlight
             }
-            Op::Subscribe { uuid, enable } => {
-                let Some(characteristic) = self.client.find_characteristic(*uuid) else {
+            Op::Subscribe { target, enable } => {
+                let Some(characteristic) = self.resolve(*target) else {
                     let operation = if *enable { "subscribe" } else { "unsubscribe" };
-                    self.fail(*uuid, operation, "no such characteristic on this peer");
+                    self.fail(*target, operation, "no such characteristic on this peer");
                     return Started::Complete;
                 };
                 let value_handle = characteristic.value_handle;
@@ -518,7 +572,7 @@ impl LeCentral {
                 else {
                     let operation = if *enable { "subscribe" } else { "unsubscribe" };
                     self.fail(
-                        *uuid,
+                        *target,
                         operation,
                         "characteristic has no Client Characteristic Configuration descriptor",
                     );
@@ -542,21 +596,50 @@ impl LeCentral {
         }
     }
 
-    fn fail(&mut self, uuid: Uuid, operation: &'static str, reason: &str) {
+    /// The discovered characteristic an operation names.
+    fn resolve(&self, target: Target) -> Option<&DiscoveredCharacteristic> {
+        match target {
+            Target::Uuid(uuid) => self.client.find_characteristic(uuid),
+            Target::Handle(handle) => self
+                .client
+                .services
+                .iter()
+                .flat_map(|s| s.characteristics.iter())
+                .find(|c| c.value_handle == handle),
+        }
+    }
+
+    fn fail(&mut self, target: Target, operation: &'static str, reason: &str) {
+        // A handle-addressed operation still reports a UUID, because that is
+        // what [`CentralEvent::OperationFailed`] carries. When the handle
+        // resolves to nothing there is no UUID to report, so the handle goes
+        // into the reason instead of a zero UUID pretending to be one.
+        let (uuid, reason) = match (self.resolve(target), target) {
+            (Some(characteristic), _) => (characteristic.uuid, reason.to_string()),
+            (None, Target::Uuid(uuid)) => (uuid, reason.to_string()),
+            (None, Target::Handle(handle)) => (
+                Uuid::from_u16(0),
+                format!("{reason} (handle {handle:#06X})"),
+            ),
+        };
         self.events.push(CentralEvent::OperationFailed {
             uuid,
             operation,
-            reason: reason.to_string(),
+            reason,
         });
     }
 
     /// The handle range a characteristic's descriptors live in: everything
     /// after its value up to the next characteristic declaration, or the end
     /// of the service (Vol 3, Part G, Section 3.3).
-    fn descriptor_range(&self, uuid: Uuid) -> Option<(u16, u16)> {
+    fn descriptor_range(&self, target: Target) -> Option<(u16, u16)> {
+        let matches = |c: &DiscoveredCharacteristic| match target {
+            Target::Uuid(uuid) => c.uuid == uuid,
+            Target::Handle(handle) => c.value_handle == handle,
+        };
         for service in &self.client.services {
             for (i, characteristic) in service.characteristics.iter().enumerate() {
-                if characteristic.uuid != uuid {
+                if !matches(characteristic) {
                     continue;
                 }
                 let end = service
@@ -813,8 +896,18 @@ impl LeCentral {
         } else {
             0
         };
+        // The events below name a UUID. Resolving it from the attribute handle
+        // the response actually came back on — rather than from the target —
+        // keeps a handle-addressed operation reporting the right one.
+        let uuid_of = |central: &Self, target: Target| match target {
+            Target::Uuid(uuid) => uuid,
+            Target::Handle(handle) => central
+                .uuid_for_handle(handle)
+                .unwrap_or_else(|| Uuid::from_u16(0)),
+        };
         match pending {
-            Op::Read(uuid) => {
+            Op::Read(target) => {
+                let uuid = uuid_of(self, target);
                 let value = if !is_error && op == att_op::READ_RSP {
                     att[1..].to_vec()
                 } else {
@@ -830,14 +923,16 @@ impl LeCentral {
                     status,
                 });
             }
-            Op::Write { uuid, .. } => {
+            Op::Write { target, .. } => {
+                let uuid = uuid_of(self, target);
                 self.events.push(CentralEvent::CharacteristicWrite {
                     uuid,
                     handle: attribute_handle,
                     status,
                 });
             }
-            Op::Subscribe { uuid, enable } => {
+            Op::Subscribe { target, enable } => {
+                let uuid = uuid_of(self, target);
                 if !is_error {
                     if enable {
                         self.subscribed.insert(attribute_handle);
@@ -852,14 +947,14 @@ impl LeCentral {
                     status,
                 });
             }
-            Op::DiscoverDescriptors { uuid, enable } => {
+            Op::DiscoverDescriptors { target, enable } => {
                 if !is_error && op == att_op::FIND_INFORMATION_RSP {
-                    self.record_descriptors(uuid, att);
+                    self.record_descriptors(target, att);
                 }
                 // Either way, try the CCCD write next: if the sweep found
                 // nothing the Subscribe arm reports it as a failure with the
                 // reason, which is more useful than a silent stall.
-                let next = Op::Subscribe { uuid, enable };
+                let next = Op::Subscribe { target, enable };
                 if let Started::Complete = self.start(next, out) {
                     // Nothing outstanding; the queue keeps moving in `pump`.
                 }
@@ -870,7 +965,7 @@ impl LeCentral {
     /// Stores the descriptors a Find Information Response reported against
     /// the characteristic they belong to (Vol 3, Part F, Section 3.4.3.2:
     /// format 0x01 is 16-bit UUIDs, 0x02 is 128-bit).
-    fn record_descriptors(&mut self, uuid: Uuid, att: &[u8]) {
+    fn record_descriptors(&mut self, target: Target, att: &[u8]) {
         let Some((header, information_data)) = AttFindInformationRspHeader::parse(att) else {
             return;
         };
@@ -887,9 +982,17 @@ impl LeCentral {
                 uuid: descriptor_uuid,
             });
         }
+        // Attached to the characteristic the sweep was *for*. Matching by UUID
+        // alone would hang a second Report characteristic's descriptors on the
+        // first one, which is how a HID device with more than one input report
+        // ends up subscribing twice to the same CCCD.
         for service in &mut self.client.services {
             for characteristic in &mut service.characteristics {
-                if characteristic.uuid == uuid {
+                let hit = match target {
+                    Target::Uuid(uuid) => characteristic.uuid == uuid,
+                    Target::Handle(handle) => characteristic.value_handle == handle,
+                };
+                if hit {
                     characteristic.descriptors = found;
                     return;
                 }

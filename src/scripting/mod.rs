@@ -30,10 +30,12 @@ pub mod bindings;
 pub mod broadcast;
 pub mod client;
 pub mod constants;
+pub mod hid;
 
 pub use bindings::{ScriptEvent, ScriptGattServer, SessionEvents};
 pub use broadcast::{ScriptBroadcastAssistant, ScriptBroadcastSource};
 pub use client::{ScriptGattClient, ScriptedCentral};
+pub use hid::ScriptHidHost;
 
 use rhai::Engine;
 

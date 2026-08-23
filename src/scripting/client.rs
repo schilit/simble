@@ -104,6 +104,15 @@ impl ScriptGattClient {
         inner.outbox.extend(packets);
     }
 
+    /// Tears the connection down, queueing the Disconnect — the same path
+    /// `client.disconnect()` takes from a script. Public so a profile proxy
+    /// built on this client offers the same call without reaching into it.
+    pub fn disconnect(&self) {
+        let mut inner = self.inner.borrow_mut();
+        let packets = inner.central.disconnect();
+        inner.outbox.extend(packets);
+    }
+
     /// Drains the packets script calls have queued for the controller.
     pub fn take_outbox(&self) -> Vec<Vec<u8>> {
         std::mem::take(&mut self.inner.borrow_mut().outbox)
@@ -112,6 +121,7 @@ impl ScriptGattClient {
     /// The return path to the host, as `client.emit(kind, payload)` uses it.
     /// Public so a proxy built on this client offers the same `emit`.
     pub fn emit(&self, kind: &str, payload: Dynamic) -> Result<(), Box<EvalAltResult>> {
+        let payload = bytes_as_numbers(payload);
         let value: serde_json::Value = rhai::serde::from_dynamic(&payload)
             .map_err(|e| runtime_error(format!("emit payload is not serializable: {e}")))?;
         let message = serde_json::json!({ "event": kind, "payload": value });
@@ -173,11 +183,7 @@ pub fn register(engine: &mut Engine, android: &mut Module) {
                 Ok(())
             },
         )
-        .register_fn("disconnect", |client: &mut ScriptGattClient| {
-            let mut inner = client.inner.borrow_mut();
-            let packets = inner.central.disconnect();
-            inner.outbox.extend(packets);
-        })
+        .register_fn("disconnect", ScriptGattClient::disconnect)
         .register_fn("read", |client: &mut ScriptGattClient, uuid: Uuid| {
             client.with_central(|c| c.queue_read(uuid));
         })
@@ -329,6 +335,11 @@ pub struct ScriptedCentral {
     /// it is hosted here; the BASS-shaped callbacks it owes the script are
     /// derived from the same [`CentralEvent`] stream, by the proxy itself.
     assistant: Option<crate::scripting::broadcast::ScriptBroadcastAssistant>,
+    /// The HID host this script built, if it built one. Hosted here for the
+    /// same reason the Assistant is: a HID host *is* a central, and the
+    /// HOGP-shaped callbacks it owes the script are derived from the same
+    /// [`CentralEvent`] stream by the proxy itself.
+    hid: Option<crate::scripting::hid::ScriptHidHost>,
     /// Per-client state bound as `this` for every handler — script functions
     /// are pure and cannot see the calling scope, so this map is the only
     /// thing a client can remember between calls.
@@ -354,19 +365,27 @@ impl ScriptedCentral {
             .map_err(|e| e.to_string())?;
 
         // A profile proxy that is a central underneath counts as a client: the
-        // Broadcast Assistant is hosted exactly like a `BluetoothGatt`, and
-        // only its extra callbacks differ.
+        // Broadcast Assistant and the HID host are hosted exactly like a
+        // `BluetoothGatt`, and only their extra callbacks differ.
         let assistant = scope.iter().find_map(|(_, _, value)| {
             value.try_cast::<crate::scripting::broadcast::ScriptBroadcastAssistant>()
         });
-        let client = assistant.as_ref().map(|a| a.client()).or_else(|| {
-            scope
-                .iter()
-                .find_map(|(_, _, value)| value.try_cast::<ScriptGattClient>())
-        });
+        let hid = scope
+            .iter()
+            .find_map(|(_, _, value)| value.try_cast::<crate::scripting::hid::ScriptHidHost>());
+        let client = assistant
+            .as_ref()
+            .map(|a| a.client())
+            .or_else(|| hid.as_ref().map(|h| h.client()))
+            .or_else(|| {
+                scope
+                    .iter()
+                    .find_map(|(_, _, value)| value.try_cast::<ScriptGattClient>())
+            });
         let client = client.ok_or_else(|| {
             "script must create an android::BluetoothGatt (or an \
-             android::BluetoothLeBroadcastAssistant) and keep it in a top-level variable"
+             android::BluetoothLeBroadcastAssistant or android::BluetoothHidHost) \
+             and keep it in a top-level variable"
                 .to_string()
         })?;
 
@@ -377,6 +396,7 @@ impl ScriptedCentral {
             scope,
             client,
             assistant,
+            hid,
             state: Dynamic::from_map(Map::new()),
             handlers,
             last_error: None,
@@ -413,6 +433,13 @@ impl ScriptedCentral {
     /// handle a host needs to drive or inspect the profile proxy directly.
     pub fn assistant(&self) -> Option<&crate::scripting::broadcast::ScriptBroadcastAssistant> {
         self.assistant.as_ref()
+    }
+
+    /// The HID host this script built, if it built one — the handle a host
+    /// needs to show what the peer was identified as, or the raw bytes of the
+    /// last report beside what they decoded to.
+    pub fn hid(&self) -> Option<&crate::scripting::hid::ScriptHidHost> {
+        self.hid.as_ref()
     }
 
     /// The first handler error, if any — a failed `assert` in a callback.
@@ -472,7 +499,7 @@ impl ScriptedCentral {
     pub fn tick(&mut self, t_seconds: f64) -> Vec<Vec<u8>> {
         self.dispatch_events();
         if self.handlers.tick {
-            let args = (Dynamic::from(self.client.clone()), t_seconds);
+            let args = (self.receiver(), t_seconds);
             // eval_ast(false): the script body already ran in `run_script`;
             // re-evaluating it would rebuild the client every tick.
             let options = CallFnOptions::new()
@@ -511,6 +538,17 @@ impl ScriptedCentral {
         if let Some(assistant) = self.assistant.clone() {
             let receiver = Dynamic::from(assistant.clone());
             for (name, args) in assistant.observe(&event) {
+                if !crate::scripting::broadcast::defines(&self.ast, name, args.len() + 1) {
+                    continue;
+                }
+                let mut all = vec![receiver.clone()];
+                all.extend(args);
+                self.invoke(name, all);
+            }
+        }
+        if let Some(hid) = self.hid.clone() {
+            let receiver = Dynamic::from(hid.clone());
+            for (name, args) in hid.observe(&event) {
                 if !crate::scripting::broadcast::defines(&self.ast, name, args.len() + 1) {
                     continue;
                 }
@@ -612,12 +650,31 @@ impl ScriptedCentral {
         }
     }
 
+    /// The object a callback's first argument is bound to.
+    ///
+    /// When the script built a profile proxy, that proxy is what the script
+    /// holds and what its handlers name — so the *central's own* callbacks
+    /// (`tick`, `on_services_discovered`, `on_error`) must receive it too.
+    /// Passing the bare client there instead is a trap: `fn tick(host, t)`
+    /// would be handed a `BluetoothGatt`, and the first property access on it
+    /// fails with "a getter is not registered", naming a type the script never
+    /// mentioned.
+    fn receiver(&self) -> Dynamic {
+        if let Some(hid) = &self.hid {
+            return Dynamic::from(hid.clone());
+        }
+        if let Some(assistant) = &self.assistant {
+            return Dynamic::from(assistant.clone());
+        }
+        Dynamic::from(self.client.clone())
+    }
+
     fn call_0(&mut self, name: &str) {
-        self.invoke(name, vec![Dynamic::from(self.client.clone())]);
+        self.invoke(name, vec![self.receiver()]);
     }
 
     fn call<A: IntoArgs>(&mut self, name: &str, args: A) {
-        let mut all = vec![Dynamic::from(self.client.clone())];
+        let mut all = vec![self.receiver()];
         args.push_into(&mut all);
         self.invoke(name, all);
     }
@@ -692,7 +749,7 @@ impl ScriptedCentral {
                             value: c
                                 .value_at(ch.value_handle)
                                 .map(|v| v.iter().map(|b| format!("{b:02X}")).collect()),
-                            subscribed: c.is_subscribed(ch.uuid),
+                            subscribed: c.is_subscribed_at(ch.value_handle),
                         })
                         .collect(),
                 })
@@ -706,6 +763,38 @@ impl ScriptedCentral {
         };
         serde_json::to_string(&view).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"))
     }
+}
+
+/// Rewrites Rhai blobs into arrays of byte values, recursively.
+///
+/// `rhai::serde::from_dynamic` refuses a blob outright — "invalid type: byte
+/// array, expected any valid JSON value" — so without this, `emit`ting the
+/// bytes a script just received fails at runtime. That is the most natural
+/// thing a *protocol* simulator can report, and every value that crosses the
+/// wire here is bytes: a notified characteristic, a Report Map, an input
+/// report. The error also named serialization rather than the offending
+/// value, which made it read like a bug in `emit` itself.
+///
+/// Arrays and maps are walked because a blob is usually nested inside one:
+/// `emit("input", #{ event: event, report: host.report })`.
+fn bytes_as_numbers(value: Dynamic) -> Dynamic {
+    if value.is_blob() {
+        let bytes = value.cast::<Blob>();
+        return Dynamic::from_array(bytes.into_iter().map(|b| Dynamic::from(b as i64)).collect());
+    }
+    if value.is_array() {
+        let array = value.cast::<Array>();
+        return Dynamic::from_array(array.into_iter().map(bytes_as_numbers).collect());
+    }
+    if value.is_map() {
+        let map = value.cast::<Map>();
+        return Dynamic::from_map(
+            map.into_iter()
+                .map(|(key, value)| (key, bytes_as_numbers(value)))
+                .collect(),
+        );
+    }
+    value
 }
 
 /// Keeps the newest error for display and the first one forever: a failed
