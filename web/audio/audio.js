@@ -1117,7 +1117,7 @@ function buildHeaders() {
 
   sinkHead = createDeviceHeader({
     name: "Audio Sink",
-    kind: "peripheral · Rhai script",
+    kind: "peripheral",
     accent: "good",
     address: SINK_ADDR,
     dotMeans: "the sink is on the air",

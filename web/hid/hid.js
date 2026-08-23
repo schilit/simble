@@ -852,7 +852,7 @@ function buildHeaders() {
   const peripheral = (key, name, source, target) => {
     const head = createDeviceHeader({
       name,
-      kind: "peripheral · HOGP · Rhai script",
+      kind: "peripheral · HOGP",
       accent: "good",
       address: ADDR[key],
       dotMeans: "a host has subscribed to its Report characteristic",

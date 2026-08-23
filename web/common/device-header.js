@@ -10,7 +10,7 @@
 //
 // So the header is fixed, left to right:
 //
-//   [dot] Name · kind · what it is doing now   [✎] [▶/■] (why not)   address
+//   [dot] Name · role · what it is doing now   [✎] [▶/■] (why not)   address
 //
 // and every part of it is answerable from the stack:
 //
@@ -112,6 +112,7 @@ export function createDeviceHeader(options) {
   let panel = null;
   let textarea = null;
   let pen = null;
+  let penTitle = null;
   let applyState = null;
 
   if (script) {
@@ -154,9 +155,13 @@ export function createDeviceHeader(options) {
     pen = document.createElement("button");
     pen.className = "dev-icon";
     pen.textContent = "✎";
-    pen.title = script.editable
-      ? "Show or hide this device's script"
-      : "Show or hide this device's script (read-only)";
+    // The tooltip says which way the click goes, and follows the state. The
+    // kind line used to spell out "Rhai script" beside the name, which the
+    // pen already tells you -- so the words moved here, where they answer a
+    // question rather than repeating one.
+    penTitle = (shown) =>
+      `${shown ? "Hide" : "Show"} Rhai script${script.editable ? "" : " (read-only)"}`;
+    pen.title = penTitle(Boolean(script.open));
     pen.setAttribute("aria-pressed", String(Boolean(script.open)));
     pen.addEventListener("click", () => showScript(panel.hidden));
     el.append(pen);
@@ -254,6 +259,7 @@ export function createDeviceHeader(options) {
     if (!panel) return;
     panel.hidden = !show;
     pen.setAttribute("aria-pressed", String(show));
+    if (penTitle) pen.title = penTitle(show);
     // Syntax highlighting is attached the first time the panel is actually
     // revealed: the overlay copies the textarea's computed box metrics, and a
     // hidden element has none to copy. The caller supplies the attacher so the

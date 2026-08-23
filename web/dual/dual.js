@@ -262,7 +262,7 @@ export async function mount(root) {
   // an address, a pen for the script and one run/stop. Generic was the last
   // page still drawing its own, from before the component existed.
   serverHead = createDeviceHeader({
-    name: "Server", kind: "peripheral · Rhai script", accent: "good",
+    name: "Server", kind: "peripheral", accent: "good",
     address: SERVER_ADDR,
     dotMeans: "the server is on the air",
     script: { text: serverScript, editable: true, open: true,
@@ -278,7 +278,7 @@ export async function mount(root) {
   $("server-script").append(serverHead.panel);
 
   clientHead = createDeviceHeader({
-    name: "Client", kind: "central · Rhai script", accent: "accent",
+    name: "Client", kind: "central", accent: "accent",
     address: CLIENT_ADDR,
     dotMeans: "the client is connected to the server",
     script: { text: clientScript, editable: true,

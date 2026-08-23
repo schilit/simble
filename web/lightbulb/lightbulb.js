@@ -378,7 +378,7 @@ export async function mount(container) {
 
   head = createDeviceHeader({
     name: "Color Bulb",
-    kind: "peripheral · Rhai script",
+    kind: "peripheral",
     accent: "good",
     address: IN_PAGE_ADDR,
     dotMeans: "the bulb is on the air and advertising",
@@ -411,7 +411,7 @@ export async function mount(container) {
   $("bulb-gatt").append(gatt.el);
 
   clientHead = createDeviceHeader({
-    name: "Bulb Client", kind: "central · Rhai script", accent: "accent",
+    name: "Bulb Client", kind: "central", accent: "accent",
     address: mode === "in-page" ? CLIENT_ADDR : CLIENT_NETSIM,
     dotMeans: "the client is connected to the bulb",
     script: { text: clientScript, editable: false,

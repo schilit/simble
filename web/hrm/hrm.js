@@ -263,7 +263,7 @@ export async function mount(container) {
   clientScript = catalog_script("hrm_client");
 
   monitorHead = createDeviceHeader({
-    name: "starting…", kind: "peripheral · Rhai script", accent: "good",
+    name: "starting…", kind: "peripheral", accent: "good",
     address: MONITOR_ADDR,
     dotMeans: "the monitor is on the air",
     script: { text: monitorScript, editable: false, note: MONITOR_NOTE },
@@ -273,7 +273,7 @@ export async function mount(container) {
   $("monitor-script").append(monitorHead.panel);
 
   clientHead = createDeviceHeader({
-    name: "HR Client", kind: "central · Rhai script", accent: "accent",
+    name: "HR Client", kind: "central", accent: "accent",
     address: CLIENT_ADDR,
     dotMeans: "the client is connected to the monitor",
     script: { text: clientScript, editable: false, note: CLIENT_NOTE },
