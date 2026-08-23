@@ -8,3 +8,6 @@ Cargo.lock
 .DS_Store
 *.swp
 *~
+
+# Staged by the Pages workflow from the top-level catalog/ (see pages.yml).
+/web/catalog/

@@ -19,10 +19,31 @@
 import functools
 import http.server
 import os
+import posixpath
 import sys
+import urllib.parse
 
 
 class NoCacheHandler(http.server.SimpleHTTPRequestHandler):
+    # `/catalog/` is served from the repository root, not from web/. The device
+    # scripts are shared by three surfaces -- this page, the MCP `example` tool
+    # (via include_str! into src/devices/catalog.rs), and the Rust tests -- so
+    # they do not belong inside any one surface's directory. Mapping the route
+    # rather than copying the files means local development always reads the
+    # real file; a copy is one more thing that can go stale, which is exactly
+    # the bug a stale target/release/simble already caused today.
+    def translate_path(self, path):
+        clean = path.split("?", 1)[0].split("#", 1)[0]
+        if clean.startswith("/catalog/"):
+            repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            relative = posixpath.normpath(urllib.parse.unquote(clean)).lstrip("/")
+            resolved = os.path.join(repo_root, relative)
+            # normpath above already removed any ".." segments, but re-check
+            # against the root so a crafted path cannot escape it.
+            if os.path.commonpath([os.path.abspath(resolved), repo_root]) == repo_root:
+                return resolved
+        return super().translate_path(path)
+
     def end_headers(self):
         self.send_header("Cache-Control", "no-store, must-revalidate")
         self.send_header("Pragma", "no-cache")

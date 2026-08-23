@@ -65,6 +65,14 @@ jobs:
           # hardcode the crate name.
           printf '<!doctype html><meta http-equiv="refresh" content="0; url=./simble/">\n' > web/doc/index.html
 
+      # The device scripts live at the repository root because three surfaces
+      # share them — the browser, the MCP `example` tool (via include_str! into
+      # src/devices/catalog.rs) and the Rust tests. Only `web/` is uploaded, so
+      # the deployed site needs a copy. Locally web/serve.py maps the route
+      # instead, which keeps development reading the real file.
+      - name: Stage the shared device catalog for the site
+        run: cp -r catalog web/catalog
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: web

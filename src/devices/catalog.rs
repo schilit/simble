@@ -35,6 +35,15 @@ pub struct DeviceExample {
 /// family). The order is stable: listings and the docs quote it.
 pub const EXAMPLES: &[DeviceExample] = &[
     DeviceExample {
+        name: "le-audio-sink",
+        summary: "LE Audio sink (PACS/ASCS/VCS): the control-point idiom, driven by the Audio page",
+        // From the repository-root catalog/, not from web/: this script is
+        // shared by the browser, the MCP `example` tool and the Rust tests, so
+        // it does not live inside any one surface. The web server maps
+        // /catalog/ to that directory rather than copying the file.
+        script: include_str!("../../catalog/le-audio-sink.rhai"),
+    },
+    DeviceExample {
         name: "hrm",
         summary: "Heart-rate monitor (180D): named uuid consts, live values via fn tick",
         script: r#"// Heart Rate service with a measurement that changes over time.
