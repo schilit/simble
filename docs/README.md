@@ -22,7 +22,7 @@ the code moves, and it is expensive to reconstruct. Read them as history.
 | `sbc-evaluation.md` | SBC options, licensing, and what was built for the A2DP media path. |
 | `lc3-evaluation.md` | LC3 options for the wasm demo devices. |
 | `rfcomm-comparison.md` | simble vs Bumble vs Zephyr. Carries its own status header: the five gaps it identifies are fixed. |
-| `android-peripherals.md` | What it would take to emulate each peripheral type Android supports. |
+| `peripheral-support.md` | What it would take to emulate each peripheral type Android supports. |
 
 ## Stale — annotated, kept for the parts that hold
 

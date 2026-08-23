@@ -12,19 +12,26 @@
 //! The Control Point is wired through `AttributeHandler`, so an ordinary
 //! `GattDatabase::write` to it runs the operation and republishes the affected
 //! Broadcast Receive State value — there is no bespoke `write_control_point` method to
-//! call. A requested sync here is treated as immediately achieved: the simulated
-//! Delegator reports `SynchronizedToPa` / the requested BIS bits as soon as an
-//! Add/Modify Source operation asks for them, whether or not any such broadcast exists.
+//! call.
 //!
-//! That fake is now avoidable in-process, not only against netsim.
-//! [`crate::device::BigReceiver`] does the real thing — periodic advertising sync, BASE
+//! **Add Source requests a sync; it does not achieve one.** This service used to
+//! report `SynchronizedToPa` and the requested BIS bits the moment an Assistant asked,
+//! whether or not any such broadcast existed — a claim made to a foreign peer that
+//! nothing here could back up. It now reports what BASS Section 3.2 specifies and what
+//! is actually true: `SyncInfoRequest` when the Assistant offers PAST, otherwise
+//! `NotSynchronizedToPa`, with no BIS synchronised either way.
+//!
+//! Whatever owns a radio carries the sync out and reports the result through
+//! [`BroadcastAudioScanService::report_sync_outcome`].
+//! [`crate::device::BigReceiver`] is that something — periodic advertising sync, BASE
 //! and BIGInfo, LE BIG Create Sync, ISO data path — checked against Bumble in both
-//! directions (`tests/interop/auracast_*.py`) and now against a real broadcaster over
-//! [`crate::controller::sim::Link`], which models enough of periodic advertising and
-//! BIGs to establish, stream and tear one down (`tests/broadcast_e2e_test.rs`). Nothing
-//! here calls it yet; wiring the Delegator's Add Source operation to an actual sync, and
-//! reporting the state it really reaches — including the states where it *fails* —
-//! is the work this comment is still standing in for.
+//! directions (`tests/interop/auracast_*.py`) and against a real broadcaster over
+//! [`crate::controller::sim::Link`] (`tests/broadcast_e2e_test.rs`).
+//!
+//! What remains is the wiring itself: a Delegator that owns a `BigReceiver`, starts one
+//! on Add Source and pumps its state into `report_sync_outcome`. That needs the service
+//! to hold a transport, which it deliberately does not — so it is a composition step for
+//! whoever assembles the two, not a gap inside this file.
 
 use crate::att::error_code as att_error_code;
 use crate::gatt::database::AttributeHandler;
@@ -443,35 +450,52 @@ impl ScanControlPointHandler {
         let _ = db.set_value(self.receive_state_value_handles[index], &value);
     }
 
-    /// Maps a requested BIS_Sync onto the reported BIS_Sync_State: the simulator treats
-    /// any requested sync as immediately achieved, and maps [`ANY_BIS`] ("no
-    /// preference") to a concrete result of "no BIS synchronized" because 0xFFFFFFFF
-    /// means "failed to synchronize" in a Broadcast Receive State (BASS Section 3.2).
-    fn bis_sync_state(requested: u32) -> u32 {
-        if requested == ANY_BIS { 0 } else { requested }
-    }
-
+    /// The state an Add/Modify Source operation leaves the source in.
+    ///
+    /// Note what is *not* here: no BIS_Sync mapping. A requested BIS_Sync is a
+    /// request, and the reported BIS_Sync_State stays 0 until a real sync says
+    /// otherwise through [`BroadcastAudioScanService::report_sync_outcome`].
+    /// [`ANY_BIS`] therefore needs no special case at this point — it is the
+    /// Assistant saying "no preference", which constrains nothing here.
     fn sync_states(
         pa_sync: PeriodicAdvertisingSyncParams,
         subgroups: Vec<SubgroupInfo>,
     ) -> (PeriodicAdvertisingSyncState, Vec<SubgroupInfo>) {
+        // A requested sync is REQUESTED, not achieved. Reporting
+        // `SynchronizedToPa` here is what this service used to do, and it was a
+        // lie told to a foreign peer: a phone acting as Broadcast Assistant was
+        // told the earbud had synchronised to a broadcast that might not exist.
+        //
+        // These two states are also what BASS Section 3.2 actually specifies,
+        // so being honest costs nothing:
+        //
+        //   * PAST available   -> SyncInfoRequest. The Delegator is asking the
+        //     Assistant for the sync info; that transition really has happened.
+        //   * PAST unavailable -> NotSynchronizedToPa. The Delegator must find
+        //     the train itself, and has not yet.
+        //
+        // Whatever owns a radio reports the outcome afterwards through
+        // [`BroadcastAudioScanService::report_sync_outcome`]. Until something
+        // does, the state stays where it honestly is.
         let pa_sync_state = match pa_sync {
             PeriodicAdvertisingSyncParams::DoNotSynchronizeToPa => {
                 PeriodicAdvertisingSyncState::NotSynchronizedToPa
             }
-            // No real PA sync procedure exists in the simulator, so a sync request
-            // succeeds immediately regardless of PAST availability.
-            _ => PeriodicAdvertisingSyncState::SynchronizedToPa,
+            PeriodicAdvertisingSyncParams::SynchronizeToPaPastAvailable => {
+                PeriodicAdvertisingSyncState::SyncInfoRequest
+            }
+            PeriodicAdvertisingSyncParams::SynchronizeToPaPastNotAvailable => {
+                PeriodicAdvertisingSyncState::NotSynchronizedToPa
+            }
         };
         let subgroups = subgroups
             .into_iter()
             .map(|subgroup| SubgroupInfo {
-                bis_sync: if pa_sync_state == PeriodicAdvertisingSyncState::SynchronizedToPa {
-                    Self::bis_sync_state(subgroup.bis_sync)
-                } else {
-                    // Not synchronized to the PA means no BIS can be synchronized.
-                    0
-                },
+                // No BIS can be synchronised before the PA is, and the PA is
+                // never synchronised at this point -- only a real sync can put
+                // it there. The requested bits are remembered by the Assistant,
+                // not asserted by us.
+                bis_sync: 0,
                 metadata: subgroup.metadata,
             })
             .collect();
@@ -650,6 +674,45 @@ impl BroadcastAudioScanService {
             .sources
             .get(index)?
             .clone()
+    }
+
+    /// Host-side: reports what a synchronisation attempt actually achieved.
+    ///
+    /// Add Source only *requests* a sync. Something with a radio has to carry
+    /// it out and say what happened, and this is where it says so — the same
+    /// arrangement as [`Self::require_broadcast_code`], which reports a
+    /// controller event the service itself cannot observe.
+    ///
+    /// [`crate::device::BigReceiver`] is that something: it scans, syncs to the
+    /// periodic train, reads the BASE and BIGInfo, and joins the BIG, checked
+    /// against Bumble in both directions. Drive this from its state and the
+    /// Delegator stops guessing:
+    ///
+    /// * `ReceiverState::Receiving` -> `SynchronizedToPa`, with the BIS bits it
+    ///   actually joined.
+    /// * `ReceiverState::Failed(_)` -> `FailedToSynchronizeToPa`, `bis_sync` 0.
+    /// * still trying -> leave it alone.
+    ///
+    /// `bis_sync` is ignored unless `pa_sync_state` is `SynchronizedToPa`,
+    /// because no BIS can be synchronised while the PA is not.
+    pub fn report_sync_outcome(
+        &self,
+        db: &mut GattDatabase,
+        source_id: u8,
+        pa_sync_state: PeriodicAdvertisingSyncState,
+        bis_sync: u32,
+    ) -> Result<(), u8> {
+        let mut state = self.state.lock().expect("BASS state lock poisoned");
+        let index = ScanControlPointHandler::slot_of(&state, source_id)?;
+        let source = state.sources[index].as_mut().expect("slot checked");
+        source.pa_sync_state = pa_sync_state;
+        let synced = pa_sync_state == PeriodicAdvertisingSyncState::SynchronizedToPa;
+        for subgroup in &mut source.subgroups {
+            subgroup.bis_sync = if synced { bis_sync } else { 0 };
+        }
+        let value = source.to_bytes();
+        let _ = db.set_value(self.receive_state_value_handles[index], &value);
+        Ok(())
     }
 
     /// Host-side: marks `source_id`'s BIG as encrypted and awaiting a Broadcast_Code —

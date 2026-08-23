@@ -213,13 +213,107 @@ fn test_add_source_publishes_receive_state() {
     assert_eq!(state, bass.receive_state(0).unwrap());
     assert_eq!(state.broadcast_id, 0x123456);
     assert_eq!(state.source_address, advertiser());
-    // The simulator reports a requested sync as immediately achieved.
+    // Add Source REQUESTS a sync; it does not achieve one. The Assistant
+    // offered PAST, so BASS 3.2 says the Delegator asks it for the sync info --
+    // a transition that really has happened -- and nothing is synchronised yet.
+    assert_eq!(
+        state.pa_sync_state,
+        PeriodicAdvertisingSyncState::SyncInfoRequest
+    );
+    assert_eq!(state.big_encryption, BigEncryption::NotEncrypted);
+    assert_eq!(
+        state.subgroups[0].bis_sync, 0,
+        "no BIS can be synchronised while the PA is not",
+    );
+}
+
+/// Only something with a radio can turn a request into a synchronisation.
+///
+/// This is the seam `BigReceiver` is meant to drive. Reporting success moves
+/// the state and publishes the BIS bits actually joined; the value a real
+/// Broadcast Assistant reads back is the one a real Delegator would have.
+#[test]
+fn test_a_reported_sync_outcome_moves_the_published_state() {
+    let mut db = GattDatabase::new();
+    let bass = BroadcastAudioScanService::register(&mut db, 1);
+    db.write(
+        bass.control_point_value_handle,
+        &add_source_pdu(
+            PeriodicAdvertisingSyncParams::SynchronizeToPaPastAvailable,
+            0x03,
+        ),
+    )
+    .unwrap();
+    let source_id = bass.receive_state(0).unwrap().source_id;
+
+    bass.report_sync_outcome(
+        &mut db,
+        source_id,
+        PeriodicAdvertisingSyncState::SynchronizedToPa,
+        0x03,
+    )
+    .expect("the source exists");
+
+    let published = db.read(bass.receive_state_value_handles[0], 0).unwrap();
+    let state = BroadcastReceiveState::parse(published).expect("published state parses");
     assert_eq!(
         state.pa_sync_state,
         PeriodicAdvertisingSyncState::SynchronizedToPa
     );
-    assert_eq!(state.big_encryption, BigEncryption::NotEncrypted);
-    assert_eq!(state.subgroups[0].bis_sync, 0x01);
+    assert_eq!(state.subgroups[0].bis_sync, 0x03);
+}
+
+/// A failed sync must be reported as failed, not left looking hopeful.
+///
+/// This is the case the old behaviour could not express at all: it had no way
+/// to say a broadcast could not be joined, so it always said it had been.
+#[test]
+fn test_a_failed_sync_is_published_as_failed_with_no_bis() {
+    let mut db = GattDatabase::new();
+    let bass = BroadcastAudioScanService::register(&mut db, 1);
+    db.write(
+        bass.control_point_value_handle,
+        &add_source_pdu(
+            PeriodicAdvertisingSyncParams::SynchronizeToPaPastAvailable,
+            0x01,
+        ),
+    )
+    .unwrap();
+    let source_id = bass.receive_state(0).unwrap().source_id;
+
+    bass.report_sync_outcome(
+        &mut db,
+        source_id,
+        PeriodicAdvertisingSyncState::FailedToSynchronizeToPa,
+        0x01,
+    )
+    .expect("the source exists");
+
+    let state = bass.receive_state(0).unwrap();
+    assert_eq!(
+        state.pa_sync_state,
+        PeriodicAdvertisingSyncState::FailedToSynchronizeToPa
+    );
+    assert_eq!(
+        state.subgroups[0].bis_sync, 0,
+        "a failed PA sync cannot carry synchronised BIS bits",
+    );
+}
+
+/// Reporting against a source that was never added is an error, not a panic.
+#[test]
+fn test_reporting_an_outcome_for_an_unknown_source_is_rejected() {
+    let mut db = GattDatabase::new();
+    let bass = BroadcastAudioScanService::register(&mut db, 1);
+    assert!(
+        bass.report_sync_outcome(
+            &mut db,
+            0x7F,
+            PeriodicAdvertisingSyncState::SynchronizedToPa,
+            0x01,
+        )
+        .is_err()
+    );
 }
 
 #[test]

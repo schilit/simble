@@ -22,8 +22,14 @@
 //!
 //! [`RangingData`] encodes and decodes the profile's Ranging Data body —
 //! ranging header, subevent header, and mode-2 steps — and
-//! [`segment`]/[`Reassembler`] wrap it in the segmentation header that lets a
-//! body larger than the ATT MTU cross the link.
+//! [`segment`](crate::profiles::ras::segment)/[`Reassembler`](crate::profiles::ras::Reassembler)
+//! wrap it in the segmentation header that lets a body larger than the ATT MTU
+//! cross the link.
+//!
+//! (Those two are spelled out in full because this module carries an outer
+//! `///` doc on its `pub mod ras;` declaration as well as this `//!` header.
+//! Mixing the two makes rustdoc resolve every link here in the *parent*
+//! module's scope, where only the re-exported names are visible.)
 //!
 //! Not implemented: On-Demand Ranging Data with its Get/Ack/Retrieve control
 //! point flow (only the real-time path exists), Ranging Data Ready and

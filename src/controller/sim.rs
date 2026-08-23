@@ -20,8 +20,10 @@
 //! *sequencing only*:
 //!
 //! * **Channel Sounding** produces real tone phases from the devices'
-//!   positions — see [`Link::tick_channel_sounding`], the one place the
-//!   simulated radio computes physics rather than shuffling bytes.
+//!   positions — `Link::tick_channel_sounding` is the one place the simulated
+//!   radio computes physics rather than shuffling bytes. (Named, not linked:
+//!   it is private, and rustdoc denies a public doc linking to a private item
+//!   under `-D warnings`, which is how this reached CI.)
 //! * **Periodic advertising and BIGs** carry an Auracast broadcast end to end,
 //!   with the BIGInfo a receiver reads derived from the source's own
 //!   `LE Create BIG`. Nothing about the air interface is simulated; what is

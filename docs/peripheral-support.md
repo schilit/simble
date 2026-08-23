@@ -1,5 +1,9 @@
 # Android-supported Bluetooth peripherals in SimBLE
 
+> **Checked 2026-08-23.** The two Auracast rows were stale and are corrected
+> below. The rest of the table was re-verified against the tree. Read the
+> Tier 2/3 estimates as of that date — `docs/gaps.md` is the live list.
+
 What it would take for SimBLE to emulate each peripheral type Android's
 AOSP Bluetooth stack supports natively — assessed by reading the code, not
 by counting files.
@@ -38,7 +42,7 @@ host, but no scriptable surface.
 | OBEX / Object Push | **Library-only** | Tested OBEX client/server plus an OPP server and SDP record; not yet wired to RFCOMM or a scene |
 | LC3 codec | **Available in the web audio demo** | Optional `lc3` feature encodes and decodes mono LC3; it decodes frames from Google's liblc3, but is not a conformance claim |
 | CIS establishment | **Available in the web audio demo** | The WebSocket controller establishes a CIS and carries ISO SDUs; verified with a Bumble source |
-| BIS / Auracast transport | **Missing** | No BIG/BIS creation or synchronization |
+| BIS / Auracast transport | **Scriptable** | `packets/big.rs`, `device/big_broadcaster.rs`, `device/big_receiver.rs`, and a Broadcast domain page. Verified against Bumble's `auracast` app both directions: Bumble decoded our BASE as 440 Hz left / 554 Hz right (one tone per BIS), and we decoded 23 005 of its SDUs with 0 errors. netsim only — the in-page radio's BIG modelling is sequencing-only. |
 
 Classic is not scriptable, but it is no longer just disconnected protocol
 code: `ClassicHost` is a native H4-facing BR/EDR host. It still needs a
@@ -76,7 +80,7 @@ scripted today and used with an Android phone through netsim or USB.
 | Peripheral | Remaining work |
 |---|---|---|
 | LE Audio headphones / hearing aids | Test a real Android source. The web sink already negotiates ASCS, establishes a CIS, and decodes LC3 from Bumble/liblc3; Android-as-source is untested. |
-| Auracast broadcast | Implement BIS/BIG (`LeCreateBig`, `LeBigCreateSync`) on the ISO plumbing. |
+| Auracast broadcast | **Done** (`23ad736`, `8c61ae0`). Remaining: `bass.rs` Add Source must drive a real `BigReceiver` instead of reporting success unconditionally, and encrypted broadcast is unproven — rootcanal does not encrypt BIS payloads, so it may be unprovable on this controller. |
 
 netsim's rootcanal implements the ISO/CIS/BIS command set. SimBLE currently
 uses the CIS portion for the web audio demo; broadcast support remains open.
@@ -120,7 +124,9 @@ Note that most Android game controllers (Xbox, DualSense) pair over
    from a phone, and each one exercises the existing path. *(This pass.)*
 2. **Android LE Audio source interop** — validate the existing CIS and LC3
    path with a phone, beyond the Bumble/liblc3 source test.
-3. **BIS / Auracast** — add broadcast transport on the existing ISO work.
+3. ~~**BIS / Auracast** — add broadcast transport on the existing ISO work.~~
+   **Done 2026-08-23**, verified against Bumble both directions. What remains
+   is `bass.rs` (see `docs/gaps.md`), not the transport.
 4. **BR/EDR scene/transport adapter** — make the existing `ClassicHost`
    available to scenes, then to MCP, web, and Rhai.
 5. **SPP first** on that foundation, then profile handlers for A2DP/AVRCP
