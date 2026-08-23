@@ -68,8 +68,8 @@ string is a lie and should go.
 | Where | Gap |
 |---|---|
 | `types/hci_types.rs` | `GapDataType` — a **third** AD-type table, with its own `Display` impl naming fifteen types — has **zero references anywhere in the tree**. It duplicates `gap::advertising::ad_type`, and being unused it was already missing 0x2E and 0x30 while the live table had them. Delete it, or make it the one table. |
-| Scripting | Rhai has **no way to load a catalog device**. Only `mcp.rs`, `scene/mod.rs` and the wasm export resolve a name; a script cannot say `catalog::device("hrm")`. |
-| Rhai test surface | `assert_over` (temporal assertion) is **MCP-only** — a script author can say "this happened" but not "this stayed true". `wait_for` exists and appears in **zero** of the three shipped examples. |
+| ~~Scripting~~ | ~~Rhai has **no way to load a catalog device**.~~ **Closed.** `catalog::device("hrm")` runs the entry in the caller's own engine (`src/scripting/catalog.rs`), so what comes back is the `ScriptGattServer` a scene already collects — the load *is* the peripheral being added. `catalog::names()`/`catalog::source()` alongside it. |
+| ~~Rhai test surface~~ | ~~`assert_over` is **MCP-only**; `wait_for` appears in zero shipped examples.~~ **Closed.** `src/scripting/monitor.rs` puts the MCP monitor's semantics (0.1 s samples, `< > <= >= == !=`, byte index, the extreme) on the script surface; `catalog/tests/monitor.{pass,fail}.rhai` and the `checked_thermostat` catalog entry use both primitives. **Still open:** `mcp.rs` keeps private copies of `compare`/`extreme_for` — `scripting::monitor` is the declared owner, but the delegation needs an edit to `src/mcp.rs`. |
 
 ## 4. Declared to users as unavailable
 

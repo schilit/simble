@@ -277,6 +277,40 @@ pub struct ScriptGattServer {
     /// synchronisation outcome without that handle, so the server holds on to
     /// it. Separate from `inner` because both are borrowed at once.
     bass: Rc<RefCell<Option<crate::profiles::BroadcastAudioScanService>>>,
+    /// The script this server was built from, when it came from
+    /// [`crate::scripting::catalog`] rather than from the running script's own
+    /// statements — see [`CarriedScript`].
+    carried: Rc<RefCell<Option<CarriedScript>>>,
+}
+
+/// The compiled script a [`ScriptGattServer`] was loaded from, kept alive
+/// beside the server itself.
+///
+/// A device built inline by the running script leaves its `fn tick` in *that*
+/// script's AST, where the host (`ScriptedPeripheral`) already knows to find
+/// it. A device loaded by name with `catalog::device("hrm")` does not: the
+/// catalog entry's body ran in a throwaway scope and its `fn tick` — the part
+/// that makes the device *move* — would be dropped on the floor. Without it a
+/// temporal assertion has nothing to assert over, because nothing changes.
+///
+/// So the server carries its origin: the AST, the top-level scope its `let`s
+/// and `const`s live in, and the persistent `this` map the host binds for
+/// `tick`. `assert_over` and `server.advance(t)` run the device's own physics
+/// through exactly this.
+#[derive(Clone)]
+pub struct CarriedScript {
+    /// The catalog name it was loaded under, for messages that name the device.
+    pub name: String,
+    /// The compiled entry. `Rc` because every clone of the handle shares it.
+    pub ast: Rc<rhai::AST>,
+    /// Top-level scope left by the entry's body (its `let`s and `const`s).
+    pub scope: Rc<RefCell<rhai::Scope<'static>>>,
+    /// Per-device state bound as `this` for `tick`, exactly as the host binds
+    /// it — so a catalog device that remembers something still remembers it.
+    pub state: Rc<RefCell<Dynamic>>,
+    /// Whether the entry defines `fn tick(server, t)`. A device with no tick
+    /// is still monitorable: its value is simply steady.
+    pub has_tick: bool,
 }
 
 impl ScriptGattServer {
@@ -294,7 +328,21 @@ impl ScriptGattServer {
             events,
             emitted: Rc::new(RefCell::new(Vec::new())),
             bass: Rc::new(RefCell::new(None)),
+            carried: Rc::new(RefCell::new(None)),
         }
+    }
+
+    /// Records the catalog entry this server was loaded from
+    /// (see [`crate::scripting::catalog`]).
+    pub fn attach_script(&self, script: CarriedScript) {
+        *self.carried.borrow_mut() = Some(script);
+    }
+
+    /// The catalog entry this server was loaded from, if any. Cloning is
+    /// shallow — every field is an `Rc` — so the caller can drop the borrow
+    /// before running the script, which is what keeps `advance` re-entrant.
+    pub fn carried_script(&self) -> Option<CarriedScript> {
+        self.carried.borrow().clone()
     }
 
     /// Records the Scan Delegator this server registered (`add_bass`).
@@ -321,8 +369,21 @@ impl ScriptGattServer {
         f(&mut self.inner.borrow_mut())
     }
 
-    fn name(&self) -> String {
+    /// The `VirtualDevice`'s name — what `server.name` reads, and what an
+    /// assertion message uses to say *which* device broke.
+    pub fn name(&self) -> String {
         self.inner.borrow().device.name.clone()
+    }
+
+    /// How a message should refer to this server: the catalog name it was
+    /// loaded under when there is one (`hrm`), else the device's own name
+    /// (`HRM`). A script author who typed `catalog::device("hrm")` should
+    /// read back the string they typed.
+    pub fn label(&self) -> String {
+        match self.carried.borrow().as_ref() {
+            Some(script) => script.name.clone(),
+            None => self.name(),
+        }
     }
 
     /// Queues an event for this server's script, as if the stack had raised

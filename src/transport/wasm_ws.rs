@@ -810,6 +810,9 @@ fn register_web_extensions(engine: &mut Engine) {
                 .ok_or_else(|| runtime_error(format!("no value for characteristic {uuid}")))
         },
     );
+    // `catalog::*` and `assert_over`, which build on the bindings above; see
+    // `crate::scripting::register_host_extensions`.
+    crate::scripting::register_host_extensions(engine);
 }
 
 /// What a client subscribed to on a characteristic's CCCD.

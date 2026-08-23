@@ -20,7 +20,7 @@
 //! evidence about the wire — `tests/interop/` is.
 
 use simble::devices::catalog::{CENTRAL_EXAMPLES, EXAMPLES};
-use simble::transport::wasm_ws::SceneEngine;
+use simble::transport::wasm_ws::{SceneEngine, run_test_script};
 use simble::types::Address;
 
 fn address(last: u8) -> Address {
@@ -72,6 +72,50 @@ fn every_catalog_peripheral_builds_and_ticks() {
             "{} exposes no services: {status}",
             example.name,
         );
+    }
+}
+
+/// Every script in `catalog/tests/` gets the verdict its filename promises.
+///
+/// These are the shipped *tests* rather than the shipped devices: the browser
+/// Testing page loads three of them, and `.github/workflows/ci.yml` runs the
+/// whole directory through the `simble` CLI, keying on the `.pass`/`.fail`
+/// suffix. That was the only thing running them — so `cargo test` was green
+/// while a `catalog/tests/` entry was broken, and a contributor with no CI run
+/// in front of them had no way to find out. The walk above covers
+/// `catalog/devices/` because those are `include_str!`'d into `EXAMPLES`;
+/// nothing covered this directory, which is a directory of files whose whole
+/// job is to be run.
+///
+/// A `.fail.rhai` that stops failing is the more interesting break of the two:
+/// it means the assertion it was written to demonstrate no longer catches
+/// anything.
+#[test]
+fn every_catalog_test_script_gets_the_verdict_its_name_promises() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("catalog/tests");
+    let mut scripts: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
+        .map(|entry| entry.expect("readable directory entry").path())
+        .filter(|path| path.extension().is_some_and(|e| e == "rhai"))
+        .collect();
+    scripts.sort();
+    assert!(
+        !scripts.is_empty(),
+        "{}: no scripts — the walk is passing vacuously",
+        dir.display()
+    );
+
+    for path in scripts {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let source = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let outcome = run_test_script(&source);
+        if name.contains(".fail.") {
+            outcome.err().unwrap_or_else(|| {
+                panic!("{name} is named .fail but passed — it demonstrates nothing")
+            });
+        } else if let Err(e) = outcome {
+            panic!("{name} is named .pass but failed: {e}");
+        }
     }
 }
 

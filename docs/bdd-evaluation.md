@@ -221,11 +221,36 @@ in the browser Testing page, and there is already a behavioural primitive:
 
 That is a When/Then pair in real Rhai syntax. Three concrete thinnesses:
 
-- `wait_for` appears in **zero** of the three shipped example tests — a
-  primitive nobody has seen demonstrated may as well not exist.
-- `assert_over`, the temporal assertion, is **MCP-only**. A script author can
-  say "this happened" but not "this stayed true".
+- ~~`wait_for` appears in **zero** of the three shipped example tests~~ — a
+  primitive nobody has seen demonstrated may as well not exist. *Closed:
+  `catalog/tests/monitor.pass.rhai` and the `checked_thermostat` catalog entry
+  both use it.*
+- ~~`assert_over`, the temporal assertion, is **MCP-only**.~~ A script author
+  can say "this happened" but not "this stayed true". *Closed:
+  `crate::scripting::monitor` puts the same window-and-operator semantics on
+  the script surface.*
 - There is no Given. Setup is imperative, though `catalog/scenes/*.json` is
-  already the declarative half and could serve as one.
+  already the declarative half and could serve as one. *Half-closed:
+  `catalog::device("hrm")` is a one-line Given for a single device — the
+  declarative topology is still only in the scene files.*
 
 Filling out that vocabulary is likely better value than any layer above it.
+
+### What the filled-out vocabulary means for step registration
+
+The design discussion above wanted Gherkin-style step registration —
+`when('a %d happens', { ... })` — and the two primitives now on the script
+surface are the reason to keep not building it. A BDD layer earns its keep by
+supplying a *vocabulary* of reusable temporal steps on top of a framework that
+only knows about single moments; that is what "Then the heart rate should stay
+below 200 for 5 seconds" is buying, and it is why the step-registration
+machinery normally has to exist. Here `assert_over(hrm, uuid, "<", 200, 5.0)`
+already *is* that sentence, machine-checked, with the offending sample and its
+timestamp in the failure message — and `wait_for "..." { ... }` is already a
+When/Then pair in real syntax rather than a regex over English. Step
+registration on top would add a parser, a registry and an indirection between
+the failure and the line that caused it, in exchange for prose. The honest
+gap that remains is the Given: `catalog::device(name)` covers one device by
+name, `catalog/scenes/*.json` covers topology, and nothing yet connects the
+two from inside a script. That is a *composition* problem, not a syntax one,
+and a step registry would not touch it.

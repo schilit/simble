@@ -168,6 +168,11 @@ pub const EXAMPLES: &[DeviceExample] = &[
         summary: "Media Control (1848/1849): a phone's player, so a headset's buttons reach the music",
         script: include_str!("../../catalog/devices/media_player.rhai"),
     },
+    DeviceExample {
+        name: "checked_thermostat",
+        summary: "A device that ships its own test: catalog::device + wait_for + assert_over",
+        script: include_str!("../../catalog/devices/checked_thermostat.rhai"),
+    },
 ];
 
 /// One **client** catalog entry: a script that *drives* a device instead of

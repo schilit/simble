@@ -16,6 +16,16 @@
 //! - `assert(condition, message)` — the test primitive (spec §06).
 //! - `wait_for "event" { ... }` — custom syntax over the event queue.
 //!
+//! And, once a host has called [`register_host_extensions`] (the scene
+//! surface does):
+//!
+//! - `catalog::device("hrm")` — a shipped device loaded by name, resolved
+//!   against the same registry a scene file's `"device": "..."` uses (see
+//!   [`catalog`]).
+//! - `assert_over(device, uuid, op, value, seconds, byte)` — the temporal
+//!   assertion: not "this happened" but "this stayed true", checked on every
+//!   sample of a window (see [`monitor`]).
+//!
 //! Callback model: the spec sketches assigning Rhai closures to
 //! `server.callback.on_*`. That design is structurally blocked here:
 //! `BluetoothGattServerCallback` requires `Send`, and this build of `rhai`
@@ -28,11 +38,13 @@
 
 pub mod bindings;
 pub mod broadcast;
+pub mod catalog;
 pub mod client;
 pub mod constants;
 pub mod hid;
+pub mod monitor;
 
-pub use bindings::{ScriptEvent, ScriptGattServer, SessionEvents};
+pub use bindings::{CarriedScript, ScriptEvent, ScriptGattServer, SessionEvents};
 pub use broadcast::{ScriptBroadcastAssistant, ScriptBroadcastSource};
 pub use client::{ScriptGattClient, ScriptedCentral};
 pub use hid::ScriptHidHost;
@@ -57,6 +69,24 @@ pub fn new_engine() -> Engine {
     constants::register(&mut engine);
 
     engine
+}
+
+/// The bindings that only make sense once a script can be *hosted* — the
+/// scene surface's extensions, and these two on top of them.
+///
+/// They are not in [`new_engine`] because both depend on what the host
+/// registers, not on the language core:
+///
+/// - `catalog::device(name)` runs a shipped entry in this very engine, and
+///   those entries call `server.update_value`, `add_pacs`, `add_ras` — host
+///   bindings. In a bare engine the load would fail on the entry's first line.
+/// - `assert_over` samples through `server.value(uuid)`, also a host binding.
+///
+/// So the host calls this once, after its own registrations, and the whole
+/// seam stays here rather than spreading into the transport module.
+pub fn register_host_extensions(engine: &mut Engine) {
+    catalog::register(engine);
+    monitor::register(engine);
 }
 
 #[cfg(test)]
