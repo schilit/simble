@@ -2,8 +2,8 @@
  *
  * Shared design tokens and components for the Simble browser tool. The colours,
  * pills, panels, buttons, connection-setup panel, and the generic GATT viewer
- * are the same on every page (scanner/hrm keep their own inline copies; the
- * playground, explorer, and lightbulb pages import this). */
+ * are the same on every page. Every page imports this; `hrm` is the last one
+ * still carrying inline copies of some rules. */
 
 :root {
   color-scheme: light; /* opt out of browser auto-dark / forced-dark inversion */

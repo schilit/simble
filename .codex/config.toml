@@ -1,0 +1,3 @@
+[mcp_servers.simble]
+command = "/Users/schilit/Documents/GitHub/simble/target/release/simble"
+args = ["mcp"]

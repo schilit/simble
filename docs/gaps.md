@@ -40,21 +40,22 @@ reason. Four remain.
 
 | Domain | Off on | Stated reason | Real? |
 |---|---|---|---|
-| Broadcast | in-page | "broadcast needs periodic advertising and a BIG; the in-page radio models neither" | **Now false.** `sim.rs` gained PA and BIG modelling for the e2e tests (`d78b0fb`). This can probably be turned on. |
+| Broadcast | in-page | "the in-page controller models periodic advertising and a BIG, but nothing is bound to it" | True, and the reason was **rewritten** — the old string blamed the radio, which had modelled PA and a BIG since `d78b0fb`. The real blocker is one layer up: `WebLink` has no broadcast device kind and `WebBigBroadcaster`/`WebBigReceiver` demand a netsim URL. Needs a wasm export. |
 | HID | netsim | "the HID host is not wired for it yet" | True. Needs a `WebHidHost` wasm export — `HidHost` is only reachable inside `WebLink` (`wasm_ws.rs:1312`). |
-| Car | netsim | "the phone and head unit hand frames straight to each other — nothing sits between them" | True and by design: the two RFCOMM multiplexers have no ACL between them. |
+| Car | netsim | "both hosts run on this page's own simulated BR/EDR controller — no transport carries a `ClassicHost` to netsim" | True, and **newly true for a different reason**. The old string said the multiplexers were wired directly together with no ACL; they now run over a real simulated BR/EDR link. What is missing is a transport that carries a `ClassicHost` out to netsim. |
 | Ranging | netsim | "the tag and locator need a radio that models distance; here the radio is netsim's own, and positions come from `netsim move`" | True and correct — see `controller/propagation.rs` on who owns RSSI. |
 
-**Action:** re-test Broadcast on the in-page controller. If it works, the
-string is a lie and should go.
+All four reasons are now accurate. Two were rewritten on 2026-08-23 after
+the thing they blamed stopped being the blocker — the recurring failure mode
+here is a reason that was true when written and quietly stopped being true.
 
 ## 2. Protocol behaviour the code admits it does not do
 
 | Where | Gap |
 |---|---|
 | `profiles/bass.rs` | **Biggest one.** Add Source reports "synchronized" unconditionally — for a source that does not exist, or an encrypted one with no code. `BigReceiver` does the real thing next door and is Bumble-verified. This is the largest remaining "our code lies to a foreign peer" surface. ~a day; needs `bass.rs` to hold a transport handle, which is a design decision. |
-| `profiles/ascs.rs` | `AseState::Releasing` is declared and **never assigned** — the spec's terminal state is unreachable. The `Released` operation is unimplemented, and neither ASCS §3.2 link-loss rule exists (CIS loss → QoS Configured; ACL loss → Releasing). |
-| `smp/pairing.rs` | No SMP timer at all, against Vol 3 Part H §3.4's mandatory 30 seconds. `step()` has no `self.failed` guard, so PDUs are still processed after Pairing Failed. |
+| ~~`profiles/ascs.rs`~~ | ~~`Releasing` never assigned; `Released` unimplemented; neither §3.2 link-loss rule.~~ **Closed.** A 104-cell {role,state}×{opcode} matrix found 9 cells with the right response code and the wrong resulting state, plus 16 unconstructible. **Still open:** the link-loss entry points have no caller — every `add_ascs` site drops the service handle, so nothing can deliver the event. |
+| ~~`smp/pairing.rs`~~ | ~~No SMP timer; no `self.failed` guard.~~ **Closed.** §3.4's 30 seconds, the post-failure drop, and per-opcode `INVALID_PARAMETERS` — 16 guards, each mutation-proven, none previously covered by any test. Found on the way: a remote panic from one well-formed Pairing Random. **Still open:** `tick_smp` has no caller in the scene loop, and an inbound re-pair after a plain Pairing Failed is still dropped responder-side. |
 | `profiles/ras.rs` | On-Demand Ranging Data and its Get/Ack/Retrieve flow; Ranging Data Ready / Overwritten notifications; mode-0 and mode-1 steps; multiple antenna paths. `antenna_paths_mask` is hardcoded `0x01` and carries no information. `CONFIG_ID_SHIFT` masks `& 0x07` where the spec field is **4 bits** — config IDs 8–15 truncate on write and mis-read on parse. |
 | `controller/sim.rs` | ~~Its catch-all answers every unhandled opcode with Command Complete~~ **Closed.** The real count is **61 Command-Status-only commands of 339** in Core 6.3, not 57 of 319 — the earlier estimate missed the `[v1]`/`[v2]` opcode pairs. `COMMAND_STATUS_OPCODES` now carries the derived table, the catch-all answers anything in it with a Command Status (`UNKNOWN_HCI_COMMAND`) instead of a Command Complete, and `scripts/check_hci_command_answers.py` fails CI if the table drifts from the specification. 19 have real arms; the other 42 are answered with the right *shape* and no modelled behaviour. |
 | `controller/sim.rs` | Of the 42 Command-Status commands answered `UNKNOWN_HCI_COMMAND`, the ones worth modelling next, in order: **LE Extended Create Connection** \[v1] 0x2043 / \[v2] 0x2085 (any modern host uses it in place of LE Create Connection, and its completion event is LE *Enhanced* Connection Complete, which nothing here emits yet), **LE Read Remote Features Page 0** 0x2016, **LE Enable Encryption** 0x2019 (no link encryption is modelled at all), and **LE Request Peer SCA** 0x206D. |

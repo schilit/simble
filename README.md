@@ -48,9 +48,10 @@ Whichever surface you choose, you can also:
   sends a stale pairing value, or advertises malformed data — real accessories won't
   misbehave on cue; simulated ones will, identically, every run.
 - **Exercise LE protocol layers.** SimBLE implements HCI, L2CAP, ATT/GATT, and SMP pairing
-  (Legacy and Secure Connections). The Classic (BR/EDR) protocols —
-  SDP, RFCOMM, HFP, A2DP/AVDTP, AVRCP, HID — are implemented and tested as libraries, but
-  are not yet scriptable; see [what each peripheral type needs](docs/peripheral-support.md) for
+  (Legacy and Secure Connections). Classic (BR/EDR) has a simulated controller too — inquiry,
+  paging and ACL — so two hosts meet over SDP and RFCOMM in a scene; the profiles above that
+  (HFP, A2DP/AVDTP, AVRCP, HID) are still library-only, and there is no pairing or SCO audio
+  yet. See [what each peripheral type needs](docs/peripheral-support.md) for
   what is *scriptable* versus *library-only*.
 - **Reach real hardware when you want it.** With a USB Bluetooth dongle, a SimBLE device
   advertises over real RF and your actual phone can scan, connect, and pair with it.
@@ -109,8 +110,14 @@ setup trade-offs in more detail.
 SimBLE ships an MCP server for stateful device construction and testing in an agent
 conversation. Once configured, the client works in a live scene: a session-scoped set of peripherals, plus a
 central and scanner to exercise them. The scene persists across calls, so an agent can build it,
-drive interactions, and inspect the result. `run_on` chooses its controller; currently, changing
-controllers starts a fresh live scene.
+drive interactions, and inspect the result. `run_on` chooses its controller — the in-process
+simulator, `netsim`, or `usb` with a `vid:pid` dongle selector; changing controllers starts a
+fresh live scene.
+
+It speaks stdio by default, or `simble mcp --ws-server [PORT]` (default 7682) to serve the same
+protocol over WebSocket, one client at a time with a fresh scene per connection. A `subscribe`
+carrying `op` and `value` arms a watch that pushes an unsolicited `notifications/message` the
+first time the condition breaks, rather than waiting to be asked.
 
 | Tools | What they do |
 |---|---|
@@ -120,7 +127,7 @@ controllers starts a fresh live scene.
 | `connect`, `read`, `write`, `assert` | Drive a central against a peripheral, one call at a time |
 | `subscribe`, `assert_over` | Monitor a value across a time window |
 
-`example` serves 18 ready-to-run device scripts, `lookup` resolves SIG assigned numbers, and
+`example` serves 26 ready-to-run device scripts, `lookup` resolves SIG assigned numbers, and
 `assert_over` subscribes, advances the clock, and fails on the first violating sample. Tool
 output annotates 16-bit UUIDs with their SIG names; failures use `isError` for clients to detect.
 
@@ -191,11 +198,13 @@ or over netsim against a real stack.
 
 ## What devices come built in?
 
-**Eighteen ready-to-run device scripts** are served by the MCP `example` tool and can also be
+**Twenty-six ready-to-run device scripts** are served by the MCP `example` tool and can also be
 used from the web pages or CLI. They include heart-rate, thermometer, thermostat,
 environmental, battery, HID, cycling, pulse-oximeter, weight-scale, smart-lock, fitness,
-volume-control, beacon, Fast Pair, and Channel Sounding examples. Call `example` with no name
-to list them.
+volume-control, beacon, Fast Pair, Auracast, coordinated-set earbuds, and Channel Sounding
+examples. Call `example` with no name to list them. A script can also load one by name with
+`catalog::device("hrm")` — what comes back is the peripheral itself, so a test can build on a
+shipped device instead of restating it.
 
 Underneath sits the profile catalog to build your own: Battery, Device Information,
 LE Audio (BAP, ASCS, PACS, volume/input control, broadcast scan, media control, hearing
@@ -205,9 +214,14 @@ Sounding** distance ranging with **AoA/AoD** direction finding.
 Two honest caveats. **LE Audio streaming works but has only been driven from simble and
 Bumble** — the control plane (PACS, ASCS, volume control), CIS establishment and LC3 are all
 implemented, and the [Audio page](https://schilit.github.io/simble/audio/) streams a file
-over a real CIS end to end; a phone as the source is untested. **Classic (BR/EDR) profiles** — A2DP, AVRCP, HFP,
-HID, SDP, RFCOMM — are implemented and well tested as libraries, but are not yet on the
-scriptable. [`docs/peripheral-support.md`](docs/peripheral-support.md) tracks exactly what is
+over a real CIS end to end; a phone as the source is untested. **Classic (BR/EDR)** now runs in
+a scene: the simulated controller does inquiry, paging and ACL routing, two hosts find each
+other and exchange SDP and RFCOMM, and the [Car page](https://schilit.github.io/simble/car/)
+carries HFP over a real simulated link. The initiator is checked against Bumble over netsim.
+Still missing: **pairing and encryption** (no SSP, no link keys), **SCO/eSCO** — so HFP has
+signalling but no audio — and A2DP/AVRCP/HFP/HID are not yet `ClassicHost` handlers, so no
+scene can host a classic speaker or keyboard.
+[`docs/peripheral-support.md`](docs/peripheral-support.md) tracks exactly what is
 scriptable versus library-only.
 
 ---
