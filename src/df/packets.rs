@@ -43,14 +43,14 @@ pub mod df_opcode {
 
 /// Direction Finding LE Meta Subevent Codes (Event Code 0x3E).
 ///
-/// Per Bluetooth Core Spec Vol 4, Part E, Section 7.7.65.20-22, numbered
-/// immediately after LE Channel Selection Algorithm (0x14).
+/// Per Bluetooth Core Spec Vol 4, Part E, Section 7.7.65.21-23, numbered
+/// immediately after LE Channel Selection Algorithm (subevent 0x14, §7.7.65.20).
 pub mod df_subevent_code {
-    /// 7.7.65.20 LE Connectionless IQ Report.
+    /// 7.7.65.21 LE Connectionless IQ Report.
     pub const LE_CONNECTIONLESS_IQ_REPORT: u8 = 0x15;
-    /// 7.7.65.21 LE Connection IQ Report.
+    /// 7.7.65.22 LE Connection IQ Report.
     pub const LE_CONNECTION_IQ_REPORT: u8 = 0x16;
-    /// 7.7.65.22 LE CTE Request Failed.
+    /// 7.7.65.23 LE CTE Request Failed.
     pub const LE_CTE_REQUEST_FAILED: u8 = 0x17;
 }
 
@@ -102,10 +102,21 @@ impl HciCommand for LeSetConnectionlessCteTransmitEnable {
     const OP_CODE: OpCode = df_opcode::LE_SET_CONNECTIONLESS_CTE_TRANSMIT_ENABLE;
 }
 
-/// LE Set Connectionless IQ Sampling Enable Command (7.8.82).
+/// LE Set Connectionless IQ Sampling Enable Command Header (7.8.82).
+///
+/// Followed by `switching_pattern_length` Antenna_ID octets — the antenna
+/// switching pattern used while sampling an AoA CTE.
+///
+/// This struct previously stopped at `max_sampled_ctes`, omitting
+/// Switching_Pattern_Length and the Antenna_IDs behind it, so it described a
+/// 5-octet command where the spec defines a variable-length one of at least 6.
+/// Serialized, a controller would have rejected it with Invalid HCI Command
+/// Parameters; parsed, it would have read a peer's switching-pattern length as
+/// trailing garbage. Cross-checked against Zephyr's
+/// `bt_hci_cp_le_set_cl_cte_sampling_enable`, which carries both fields.
 #[repr(C)]
 #[derive(FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout, Debug, Clone, Copy)]
-pub struct LeSetConnectionlessIqSamplingEnable {
+pub struct LeSetConnectionlessIqSamplingEnableHeader {
     /// Periodic advertising sync handle to sample.
     pub sync_handle: U16<LittleEndian>,
     /// 0 to disable, 1 to enable IQ sampling.
@@ -114,10 +125,45 @@ pub struct LeSetConnectionlessIqSamplingEnable {
     pub slot_durations: u8,
     /// Maximum number of CTEs to sample per periodic event (0 = all).
     pub max_sampled_ctes: u8,
+    /// Number of Antenna_ID octets that follow this header.
+    pub switching_pattern_length: u8,
 }
 
-impl HciCommand for LeSetConnectionlessIqSamplingEnable {
+impl HciCommand for LeSetConnectionlessIqSamplingEnableHeader {
     const OP_CODE: OpCode = df_opcode::LE_SET_CONNECTIONLESS_IQ_SAMPLING_ENABLE;
+}
+
+impl LeSetConnectionlessIqSamplingEnableHeader {
+    /// Parses the fixed header and returns the trailing antenna-ID octets.
+    pub fn parse(bytes: &[u8]) -> Option<(Ref<&[u8], Self>, &[u8])> {
+        let (header, rest) = Ref::<&[u8], Self>::from_prefix(bytes).ok()?;
+        let expected = header.switching_pattern_length as usize;
+        if rest.len() < expected {
+            return None;
+        }
+        Some((header, &rest[..expected]))
+    }
+
+    /// Serializes the command: fixed header followed by the antenna switching pattern.
+    pub fn serialize(
+        sync_handle: u16,
+        iq_sampling_enable: u8,
+        slot_durations: u8,
+        max_sampled_ctes: u8,
+        antenna_ids: &[u8],
+    ) -> Vec<u8> {
+        let header = Self {
+            sync_handle: U16::from_bytes(sync_handle.to_le_bytes()),
+            iq_sampling_enable,
+            slot_durations,
+            max_sampled_ctes,
+            switching_pattern_length: antenna_ids.len() as u8,
+        };
+        let mut buf = Vec::with_capacity(size_of::<Self>() + antenna_ids.len());
+        buf.extend_from_slice(header.as_bytes());
+        buf.extend_from_slice(antenna_ids);
+        buf
+    }
 }
 
 /// LE Set Connection CTE Receive Parameters Command Header (7.8.83).

@@ -21,9 +21,22 @@
 // field comes out of `WebBigBroadcaster.status_json()` or one receiver's
 // `WebBigReceiver.status_json()`, which are serialized by the same Rust code.
 //
-// netsim only. rootcanal implements periodic advertising and a BIG; the in-page
-// `WebLink` models neither, so there is no honest in-browser path and the
-// controller bar says so rather than offering a fake one.
+// netsim only — but no longer because the in-page radio cannot carry a
+// broadcast. It can: `controller/sim.rs` models periodic advertising and a BIG
+// end to end, with the BIGInfo a receiver acts on derived from the source's own
+// `LE Create BIG`, and `tests/broadcast_e2e_test.rs` drives a source and its
+// sinks through it in one process with no netsim anywhere.
+//
+// What is missing is the *host binding*, one layer up. `BigBroadcaster` and
+// `BigReceiver` are transport-free, but the only wasm wrappers around them —
+// `WebBigBroadcaster` and `WebBigReceiver` — take a netsim WebSocket URL as
+// their first argument and hold a `WasmWsTransport`, and `WebLink`, which hosts
+// the in-page scene, adds only peripherals, scanners and centrals. There is no
+// device kind on it that broadcasts and none that receives one.
+//
+// So the honest in-browser path is a wasm export away, not a controller feature
+// away. Until that export exists the controller bar says which of the two it is
+// waiting on, rather than blaming a radio that would carry this today.
 //
 // Two receivers by default because one receiver is a point-to-point demo with
 // extra steps. Adding a third or a fourth changes nothing at the source, which
@@ -39,7 +52,10 @@ import { escapeHtml } from "../common/viewer-format.js";
 /// reads this: an option mapped to a string is offered disabled, with that
 /// string as the reason, rather than hidden.
 export const SUPPORTS = {
-  "in-page": "broadcast needs periodic advertising and a BIG; the in-page radio models neither",
+  "in-page":
+    "the in-page controller models periodic advertising and a BIG, but nothing is bound to it " +
+    "that broadcasts: WebLink hosts only peripherals, scanners and centrals, and " +
+    "WebBigBroadcaster/WebBigReceiver take a netsim URL. It needs a wasm export, not a radio",
   websocket: true,
 };
 
@@ -1096,8 +1112,11 @@ const TEMPLATE = `
     <p>Could not reach netsim at <code>localhost:7681</code> — is <code>netsimd</code> running with
        its WebSocket frontend enabled? Start it with:</p>
     <pre><code>netsimd --logtostderr --no-shutdown --ws-port 7681</code></pre>
-    <p class="hint">There is no in-browser fallback for this domain: the in-page radio has no
-       periodic advertising and no BIG, and a broadcast without either would be a picture of one.</p>
+    <p class="hint">There is no in-browser fallback for this domain yet — though not because the
+       in-page controller is short of a radio. It models periodic advertising and a BIG already.
+       What is missing is a wasm export that hosts a broadcast source and its receivers on it:
+       <code>WebLink</code> adds only peripherals, scanners and centrals, and
+       <code>WebBigBroadcaster</code>/<code>WebBigReceiver</code> can only be pointed at netsim.</p>
   </section>
 </div>
 `;

@@ -200,8 +200,15 @@ mod layout {
     pub const SUBEVENT_HEADER_LEN: usize = 8;
     /// The ranging counter occupies the low 12 bits of the first two octets.
     pub const RANGING_COUNTER_MASK: u16 = 0x0FFF;
-    /// The configuration identifier sits in bits 12–14.
+    /// The configuration identifier sits in bits 12–15 — a **4-bit** field,
+    /// per RAS v1.0 §3.2.1.2 Table 3.7 (Ranging Counter 12 bits, then
+    /// Configuration ID 4 bits, filling the two octets exactly). The spec
+    /// restricts the *value* to 0–3 today, but the field is four bits wide and
+    /// is decoded as such: masking narrower would silently rewrite a peer's
+    /// header rather than report what it sent.
     pub const CONFIG_ID_SHIFT: u32 = 12;
+    /// Mask for the configuration identifier once shifted down.
+    pub const CONFIG_ID_MASK: u8 = 0x0F;
     /// Step mode lives in the low two bits of the step mode octet; bit 7 is
     /// the "step aborted" flag.
     pub const STEP_MODE_MASK: u8 = 0x03;
@@ -234,7 +241,7 @@ impl RangingData {
                 + self.tones.len() * (3 + layout::MODE_2_STEP_DATA_LEN),
         );
         let header = (self.ranging_counter & layout::RANGING_COUNTER_MASK)
-            | (u16::from(self.config_id & 0x07) << layout::CONFIG_ID_SHIFT);
+            | (u16::from(self.config_id & layout::CONFIG_ID_MASK) << layout::CONFIG_ID_SHIFT);
         out.extend_from_slice(&header.to_le_bytes());
         out.push(self.selected_tx_power as u8);
         out.push(self.antenna_paths_mask);
@@ -270,7 +277,7 @@ impl RangingData {
         let step_count = subevent[7];
         let mut data = Self {
             ranging_counter: header & layout::RANGING_COUNTER_MASK,
-            config_id: ((header >> layout::CONFIG_ID_SHIFT) & 0x07) as u8,
+            config_id: ((header >> layout::CONFIG_ID_SHIFT) as u8) & layout::CONFIG_ID_MASK,
             selected_tx_power: body[2] as i8,
             antenna_paths_mask: body[3],
             reference_power_level: subevent[6] as i8,
@@ -432,8 +439,11 @@ mod tests {
 
     #[test]
     fn test_the_ranging_counter_and_config_id_share_two_octets() {
-        // The counter is 12 bits and the configuration id 3; packing them
+        // The counter is 12 bits and the configuration id 4; packing them
         // wrongly would make a receiver reject every procedure as a mismatch.
+        // Note config_id 7 fits in three bits, so this case alone cannot tell
+        // a correct 4-bit field from a truncating 3-bit one — see
+        // `test_config_id_uses_the_full_four_bit_field` for that.
         let data = RangingData {
             ranging_counter: 0x0FFF,
             config_id: 7,
@@ -444,6 +454,63 @@ mod tests {
         let parsed = RangingData::parse(&bytes).unwrap();
         assert_eq!(parsed.ranging_counter, 0x0FFF);
         assert_eq!(parsed.config_id, 7);
+    }
+
+    /// RAS v1.0 §3.2.1.2 Table 3.7 gives the Ranging Header as a 12-bit
+    /// Ranging Counter followed by a **4-bit** Configuration ID, filling the
+    /// first two octets exactly. This code masked both write and parse with
+    /// `& 0x07`, so ids 8–15 were truncated on the way out and mis-read on the
+    /// way in.
+    ///
+    /// The asserts are deliberately on the *wire bits* as well as the
+    /// round trip: with a symmetrically wrong mask on both sides, a
+    /// write→parse round trip of id 8 still yields 0, and of id 15 still
+    /// yields 7 — the round trip alone proves nothing. Only the raw header
+    /// word pins the field width down.
+    #[test]
+    fn test_config_id_uses_the_full_four_bit_field() {
+        for (config_id, expected_nibble) in [(8u8, 0x8u16), (15, 0xF)] {
+            let data = RangingData {
+                ranging_counter: 0x0ABC,
+                config_id,
+                ..sample_data(3)
+            };
+            let bytes = data.to_bytes();
+
+            // Wire check: counter in bits 0–11, config id in bits 12–15.
+            let header = u16::from_le_bytes([bytes[0], bytes[1]]);
+            assert_eq!(
+                header,
+                0x0ABC | (expected_nibble << 12),
+                "config id {config_id} must occupy bits 12-15 of the ranging header"
+            );
+
+            // Parse check: the same nibble comes back, not a 3-bit remnant.
+            let parsed = RangingData::parse(&bytes).expect("parsed");
+            assert_eq!(parsed.ranging_counter, 0x0ABC);
+            assert_eq!(
+                parsed.config_id, config_id,
+                "config id {config_id} must survive the round trip"
+            );
+        }
+    }
+
+    /// A header word that arrives from a peer with bit 15 set must be read as
+    /// a config id of 8–15, not have that bit dropped on the floor. Built as
+    /// raw bytes rather than via `to_bytes`, so a symmetrical mask bug on both
+    /// sides cannot hide it.
+    #[test]
+    fn test_config_id_bit_15_is_read_from_foreign_bytes() {
+        let mut bytes = sample_data(2).to_bytes();
+        bytes[0] = 0x34;
+        bytes[1] = 0xF2; // header 0xF234: counter 0x234, config id 0xF.
+        let parsed = RangingData::parse(&bytes).expect("parsed");
+        assert_eq!(parsed.ranging_counter, 0x234);
+        assert_eq!(parsed.config_id, 0x0F);
+
+        bytes[1] = 0x82; // header 0x8234: counter 0x234, config id 0x8.
+        let parsed = RangingData::parse(&bytes).expect("parsed");
+        assert_eq!(parsed.config_id, 0x08);
     }
 
     #[test]
