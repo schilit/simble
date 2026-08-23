@@ -439,6 +439,109 @@ impl UsbTransport {
     }
 }
 
+// --- Scene over a physical dongle -------------------------------------------
+
+/// A live scene whose backend is a
+/// real USB dongle: the scripted peripheral's host logic runs in this process
+/// and the dongle is its controller, so a phone in the room sees a real
+/// advertiser on real RF.
+///
+/// The netsim counterpart (`NetsimScene`)
+/// gives every peripheral its own transport, because netsimd's ether can hold
+/// any number of them. **A dongle is exactly one controller**, so this scene
+/// holds exactly one device — which is why the tool that selects it also lets
+/// you say *which* dongle. Peripheral-only, like every live backend: the
+/// central is a real phone or laptop, not something this process hosts.
+///
+/// No USB access happens until the first peripheral is added, so selecting
+/// this backend works (and is testable) on a machine with no dongle plugged
+/// in; the "is one plugged in" failure surfaces where it means something.
+pub struct UsbScene {
+    /// The `vid:pid` to open, or `None` to take the first Bluetooth-class
+    /// device found.
+    device: Option<(u16, u16)>,
+    scene: crate::transport::live_scene::LiveScene<UsbTransport>,
+}
+
+impl UsbScene {
+    /// Creates an empty dongle-backed scene. `device` is the `vid:pid` pair
+    /// from [`parse_vid_pid`], or `None` to auto-detect.
+    pub fn new(device: Option<(u16, u16)>) -> Self {
+        Self {
+            device,
+            scene: crate::transport::live_scene::LiveScene::new(),
+        }
+    }
+
+    /// How the dongle will be chosen, for reporting back to whoever selected
+    /// this backend before anything has been opened.
+    pub fn selector(&self) -> String {
+        match self.device {
+            Some((vid, pid)) => format!("{vid:04x}:{pid:04x}"),
+            None => "the first Bluetooth-class dongle found".to_string(),
+        }
+    }
+
+    /// Runs `script` and puts the resulting peripheral on the dongle, opening
+    /// it on this first call. Rejects a second device: one controller, one
+    /// device.
+    pub fn add_peripheral(
+        &mut self,
+        address: crate::types::Address,
+        script: &str,
+    ) -> Result<usize, String> {
+        if self.scene.device_count() > 0 {
+            return Err(
+                "a USB dongle is one controller and already hosts a device — \
+                        run_on(\"usb\") again to start over, or run_on(\"self\") for a \
+                        scene with several devices"
+                    .to_string(),
+            );
+        }
+        let device = self.device;
+        self.scene.add_peripheral(address, script, |_peripheral| {
+            match device {
+                Some((vid, pid)) => UsbTransport::open(vid, pid),
+                None => UsbTransport::open_first(),
+            }
+            .map_err(|e| {
+                format!(
+                    "{e} — is a Bluetooth dongle plugged in and free? \
+                     (the OS Bluetooth stack usually claims the built-in adapter)"
+                )
+            })
+        })
+    }
+
+    /// Moves packets for the device without advancing the script clock (the
+    /// shared `LiveScene::pump`).
+    pub fn pump(&mut self) {
+        self.scene.pump();
+    }
+
+    /// Advances the script clock by `seconds`, then pumps (the shared
+    /// `LiveScene::tick`).
+    pub fn tick(&mut self, seconds: f64) {
+        self.scene.tick(seconds);
+    }
+
+    /// The current script-clock time in seconds.
+    pub fn now(&self) -> f64 {
+        self.scene.now()
+    }
+
+    /// The number of peripherals in the scene (0 or 1).
+    pub fn device_count(&self) -> usize {
+        self.scene.device_count()
+    }
+
+    /// The GATT status JSON of peripheral `index`, or `None` for an unknown
+    /// index.
+    pub fn peripheral_status_json(&self, index: usize) -> Option<String> {
+        self.scene.peripheral_status_json(index)
+    }
+}
+
 fn list_usb_devices() -> Result<Vec<nusb::DeviceInfo>, SimbleError> {
     Ok(nusb::list_devices()
         .wait()
@@ -716,6 +819,31 @@ mod tests {
         assert!(parse_vid_pid("0a120001").is_err());
         assert!(parse_vid_pid("zzzz:0001").is_err());
         assert!(parse_vid_pid("0a12:").is_err());
+    }
+
+    #[test]
+    fn test_usb_scene_reports_its_selector_without_touching_hardware() {
+        // Selecting the backend must not open anything: the agent picks a
+        // dongle before it is plugged in as often as after.
+        assert_eq!(
+            UsbScene::new(Some((0x0A12, 0x0001))).selector(),
+            "0a12:0001"
+        );
+        assert!(UsbScene::new(None).selector().contains("first"));
+        assert_eq!(UsbScene::new(None).device_count(), 0);
+    }
+
+    #[test]
+    fn test_usb_scene_rejects_a_bad_script_before_opening_the_dongle() {
+        // Script validation runs first, so a script error is reported as a
+        // script error even with no hardware present — the same ordering
+        // NetsimScene has.
+        let mut scene = UsbScene::new(Some((0xFFFF, 0xFFFF)));
+        let err = scene
+            .add_peripheral("F0:DE:C0:00:00:01".parse().unwrap(), "let a = 1;")
+            .unwrap_err();
+        assert!(err.contains("BluetoothGattServer"), "{err}");
+        assert_eq!(scene.device_count(), 0);
     }
 
     #[test]

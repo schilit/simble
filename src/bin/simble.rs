@@ -23,6 +23,8 @@
 //! simble --usb [VID:PID] [--ws-port N]
 //!                                    # instead, bridge a USB dongle onto a
 //!                                    # WebSocket so a browser can drive real HW
+//! simble mcp [--ws-server [PORT]]    # the MCP server for agents, on stdio or
+//!                                    # on a WebSocket
 //! ```
 //!
 //! `--usb` is the `usb-ble-ws` bridge: it owns a physical Bluetooth dongle and
@@ -49,6 +51,7 @@ usage:
   simble --no-run FILE ...             check only: compile scripts / validate scenes
   simble --usb [VID:PID] [--ws-port N] bridge a USB dongle onto ws://127.0.0.1:N/
   simble mcp                           run the MCP server (stdio) for agents
+  simble mcp --ws-server [PORT]        …serve MCP over WebSocket instead (7682)
 
 scene options:
   --controller self|netsim|usb         override the scene file's controller
@@ -67,7 +70,22 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     if args.first().map(String::as_str) == Some("mcp") {
-        return match simble::mcp::serve_stdio() {
+        // `--ws-server [PORT]` swaps the transport under the same server:
+        // JSON-RPC over RFC 6455 text messages instead of stdio lines, so a
+        // browser page (or any WebSocket client) can drive the same scene an
+        // agent would. The port is optional and defaults to MCP_WS_PORT.
+        let ws_port = match ws_server_port(&args[1..]) {
+            Ok(port) => port,
+            Err(message) => {
+                eprintln!("simble mcp: {message}\n\n{USAGE}");
+                return ExitCode::from(2);
+            }
+        };
+        let served = match ws_port {
+            Some(port) => simble::mcp::serve_ws(port),
+            None => simble::mcp::serve_stdio(),
+        };
+        return match served {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("simble mcp: {e}");
@@ -79,6 +97,35 @@ fn main() -> ExitCode {
         return run_bridge(&args);
     }
     run_tests(&args)
+}
+
+/// The MCP server's default WebSocket port, one above the netsim/bridge port
+/// so `--ws-server` and `--usb` can run side by side with no flags.
+const MCP_WS_PORT: u16 = 7682;
+
+/// Reads `--ws-server [PORT]` out of the `mcp` subcommand's arguments.
+/// `Ok(None)` means stdio (the flag is absent); `Ok(Some(port))` means serve
+/// WebSocket there. The port is optional, so the token after the flag is only
+/// consumed when it parses as one — the same shape `--usb [VID:PID]` uses.
+fn ws_server_port(args: &[String]) -> Result<Option<u16>, String> {
+    let Some(at) = args.iter().position(|a| a == "--ws-server") else {
+        // Catch a stray flag rather than silently serving stdio: "simble mcp
+        // --wsserver 9000" would otherwise look like it worked.
+        return match args.iter().find(|a| a.starts_with('-')) {
+            Some(unknown) => Err(format!("unknown option {unknown:?}")),
+            None => Ok(None),
+        };
+    };
+    match args.get(at + 1) {
+        None => Ok(Some(MCP_WS_PORT)),
+        Some(next) => match next.parse::<u16>() {
+            Ok(0) => Err("--ws-server needs a port between 1 and 65535, got 0".to_string()),
+            Ok(port) => Ok(Some(port)),
+            // Not a port: either another flag, or a typo worth reporting.
+            Err(_) if next.starts_with('-') => Err(format!("unknown option {next:?}")),
+            Err(_) => Err(format!("--ws-server needs a port number, got {next:?}")),
+        },
+    }
 }
 
 // --- default: run .rhai device scripts as tests ----------------------------
@@ -413,5 +460,47 @@ fn serve(stream: TcpStream, device: Option<(u16, u16)>) -> Result<(), String> {
         ws.pump(&channel).map_err(|e| e.to_string())?; // WebSocket host <-> channel
         dongle.pump(&channel).map_err(|e| e.to_string())?; // channel <-> dongle (controller)
         std::thread::sleep(POLL_INTERVAL);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn test_ws_server_port_defaults_and_overrides() {
+        // No flag: stdio, as `simble mcp` has always meant.
+        assert_eq!(ws_server_port(&args(&[])), Ok(None));
+        // Flag with no port: the default.
+        assert_eq!(
+            ws_server_port(&args(&["--ws-server"])),
+            Ok(Some(MCP_WS_PORT))
+        );
+        assert_eq!(
+            ws_server_port(&args(&["--ws-server", "9001"])),
+            Ok(Some(9001))
+        );
+    }
+
+    #[test]
+    fn test_ws_server_port_rejects_what_cannot_be_a_port() {
+        // A typo must be reported, not silently ignored into serving stdio —
+        // "it printed nothing and hung" is the failure mode that costs an
+        // afternoon.
+        for bad in [
+            args(&["--ws-server", "0"]),
+            args(&["--ws-server", "70000"]),
+            args(&["--ws-server", "http://localhost:9001"]),
+            args(&["--wsserver", "9001"]),
+            args(&["--ws-port", "9001"]),
+        ] {
+            assert!(ws_server_port(&bad).is_err(), "{bad:?} should be rejected");
+        }
+        // A flag after the bare form is not mistaken for its port.
+        assert!(ws_server_port(&args(&["--ws-server", "--verbose"])).is_err());
     }
 }

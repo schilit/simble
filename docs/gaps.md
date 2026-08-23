@@ -84,9 +84,9 @@ nobody "fixes" them by making the labels disappear.
 
 | Promised | Status |
 |---|---|
-| `run_on("usb", vid:pid)` | `mcp.rs:332` returns "not wired yet". `UsbTransport` exists and the CLI bridge works, so this is reuse, not new transport. ~a day. |
-| `--ws-server [PORT]` | No such flag. Its stated prerequisite (the non-blocking actor loop) landed. |
-| Async server→client notifications | `write_message` exists and is used only for responses. No `notifications/message` anywhere. |
+| `run_on("usb", vid:pid)` | **Landed.** `UsbScene` (`transport/usb.rs`) is `LiveScene<UsbTransport>`, one device per dongle; `run_on("usb", device: "vid:pid")` selects it and defers opening to `add_peripheral`, as netsim defers its connection. **The live path is untested** — CI exercises argument parsing, dispatch, the peripheral-only guard, and the no-dongle error, never a real dongle advertising to a real phone. |
+| `--ws-server [PORT]` | **Landed**, but not as roadmap item 3 described it. `simble mcp --ws-server [PORT]` (default 7682) serves *the MCP protocol* over RFC 6455 text frames — the actor loop with `WsServerConn` in place of stdin/stdout, one client at a time, a fresh scene per connection. Hosting the `self` `Link` scene so browsers join it **as devices** is still absent, and is the harder half. |
+| Async server→client notifications | **Landed.** `subscribe` with `op` + `value` arms a watch; when the condition breaks, the server queues an MCP `notifications/message` (level/logger/data, no `id`) that both loops flush between requests. `initialize` now advertises the `logging` capability. Only the temporal monitor produces them; a live backend's own events (a connection, a disconnect) still do not. |
 | Skills (`author-ble-device`, `write-ble-test`, …) | None exist; no skills directory. |
 | A symbol lint in `--no-run` | Needs Rhai's `metadata` feature; `Cargo.toml` still has `features = ["serde"]` only. |
 

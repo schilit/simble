@@ -1,15 +1,17 @@
 // Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
-//! Shared, hand-rolled RFC 6455 WebSocket pieces used by both the netsim
-//! *client* ([`super::netsim`]) and the `usb-ble-ws` *server* ([`WsServerConn`]).
+//! Shared, hand-rolled RFC 6455 WebSocket pieces used by the netsim *client*
+//! ([`super::netsim`]), the `usb-ble-ws` *server* ([`WsServerConn::pump`]), and
+//! the MCP server's `--ws-server` transport ([`WsServerConn::poll_messages`]).
 //!
-//! Both carry the same payload as the raw-TCP `rootcanal` transport — one
-//! complete H4-framed HCI packet per WebSocket message — so WebSocket's own
-//! message framing (Section 5) gives packet boundaries for free. Only the
-//! minimum is implemented: the opening handshake (with a small SHA-1 and
-//! base64 for `Sec-WebSocket-Accept`), binary data frames, and Ping/Pong.
-//! No `wss://` (TLS) — these are always local connections.
+//! The HCI users carry the same payload as the raw-TCP `rootcanal` transport —
+//! one complete H4-framed HCI packet per WebSocket message — so WebSocket's own
+//! message framing (Section 5) gives packet boundaries for free. MCP puts
+//! JSON-RPC in text frames instead; the framing is the same either way. Only
+//! the minimum is implemented: the opening handshake (with a small SHA-1 and
+//! base64 for `Sec-WebSocket-Accept`), binary and text data frames, and
+//! Ping/Pong. No `wss://` (TLS) — these are always local connections.
 //!
 //! The one asymmetry RFC 6455 imposes is masking: client-to-server frames
 //! MUST be masked, server-to-client frames MUST NOT be (Section 5.1). The
@@ -175,6 +177,10 @@ fn header_value<'a>(headers: &'a str, name: &str) -> Option<&'a str> {
 // --- RFC 6455 Section 5: WebSocket data framing. ---
 
 pub(crate) const OPCODE_CONTINUATION: u8 = 0x0;
+/// UTF-8 text messages (Section 5.6). The HCI transports never use it — an H4
+/// packet is binary — but the MCP-over-WebSocket server does: JSON-RPC is
+/// text, and browser `WebSocket` clients send strings as text frames.
+pub(crate) const OPCODE_TEXT: u8 = 0x1;
 pub(crate) const OPCODE_BINARY: u8 = 0x2;
 pub(crate) const OPCODE_CLOSE: u8 = 0x8;
 pub(crate) const OPCODE_PING: u8 = 0x9;
@@ -460,16 +466,19 @@ pub(crate) fn server_handshake<S: Read + Write>(stream: &mut S) -> Result<String
     Ok(query.to_string())
 }
 
-/// The server end of the WebSocket HCI link: bridges one accepted WebSocket
-/// connection to an [`HciChannel`](super::HciChannel), where the *WebSocket
-/// peer is the host*.
+/// The server end of one accepted WebSocket connection.
 ///
-/// It is the mirror of [`super::netsim::NetsimTransport`]: incoming binary
-/// messages are complete host→controller H4 packets, injected into the
-/// channel's host side; controller→host packets drained from the channel are
-/// sent back as **unmasked** binary frames (Section 5.1). Pair it with a
-/// [`UsbTransport`](super::UsbTransport) pumping the *same* channel and the
-/// two together carry HCI between a browser and a physical dongle.
+/// Two layers sit here. The **message** layer — `poll_messages` /
+/// `send_text` — is protocol-agnostic: complete application messages in and out, with Ping
+/// answered and fragmentation reassembled. The **HCI** layer,
+/// [`pump`](Self::pump), is that message layer bound to an
+/// [`HciChannel`](super::HciChannel), where the *WebSocket peer is the host*:
+/// incoming binary messages are complete host→controller H4 packets, and
+/// controller→host packets go back as **unmasked** binary frames (Section
+/// 5.1). Pair `pump` with a [`UsbTransport`](super::UsbTransport) on the
+/// *same* channel and the two carry HCI between a browser and a physical
+/// dongle; `poll_messages`/`send_text` instead carry newline-free JSON-RPC
+/// for `simble mcp --ws-server`.
 pub struct WsServerConn<S: Read + Write> {
     stream: S,
     reader: WsFrameReader,
@@ -478,6 +487,11 @@ pub struct WsServerConn<S: Read + Write> {
     /// but handled for spec fidelity.
     fragment: Vec<u8>,
     fragment_opcode: Option<u8>,
+    /// Why the connection is finished (peer Close, EOF, or a read error),
+    /// recorded rather than returned immediately so messages decoded in the
+    /// same batch are still delivered first. Once set, every later
+    /// `poll_messages` returns it.
+    closed: Option<String>,
 }
 
 impl WsServerConn<TcpStream> {
@@ -501,14 +515,15 @@ impl<S: Read + Write> WsServerConn<S> {
             reader: WsFrameReader::default(),
             fragment: Vec::new(),
             fragment_opcode: None,
+            closed: None,
         }
     }
 
     fn handle_frame(&mut self, frame: DecodedFrame) -> Result<Option<Vec<u8>>, SimbleError> {
         match frame.opcode {
-            OPCODE_BINARY | OPCODE_CONTINUATION => {
-                if frame.opcode == OPCODE_BINARY {
-                    self.fragment_opcode = Some(OPCODE_BINARY);
+            OPCODE_BINARY | OPCODE_TEXT | OPCODE_CONTINUATION => {
+                if frame.opcode != OPCODE_CONTINUATION {
+                    self.fragment_opcode = Some(frame.opcode);
                     self.fragment.clear();
                 }
                 self.fragment.extend_from_slice(&frame.payload);
@@ -536,38 +551,79 @@ impl<S: Read + Write> WsServerConn<S> {
         }
     }
 
-    /// Moves packets in both directions between the WebSocket peer and
-    /// `channel`: drains every controller→host packet the channel has queued
-    /// and sends it as one unmasked binary frame, then reads whatever bytes
-    /// are available, decodes complete frames (auto-replying to Pings), and
-    /// injects each complete binary message into the channel's host side as a
-    /// ready-made H4 packet.
-    pub fn pump(&mut self, channel: &super::HciChannel) -> Result<(), SimbleError> {
-        while let Some(packet) = channel.poll_controller_packet() {
-            let frame = encode_frame(OPCODE_BINARY, &packet, None);
-            self.stream
-                .write_all(&frame)
-                .map_err(|e| SimbleError::Transport(e.to_string()))?;
+    /// Sends one complete application message as a single unmasked frame
+    /// (server-to-client frames MUST NOT be masked, Section 5.1).
+    pub(crate) fn send_message(&mut self, opcode: u8, payload: &[u8]) -> Result<(), SimbleError> {
+        let frame = encode_frame(opcode, payload, None);
+        self.stream
+            .write_all(&frame)
+            .map_err(|e| SimbleError::Transport(e.to_string()))
+    }
+
+    /// Sends one complete text message (Section 5.6) — what a JSON-RPC
+    /// response or notification travels in.
+    pub(crate) fn send_text(&mut self, text: &str) -> Result<(), SimbleError> {
+        self.send_message(OPCODE_TEXT, text.as_bytes())
+    }
+
+    /// Reads whatever bytes have arrived (never blocking on a non-blocking
+    /// stream) and returns every complete application message they finished,
+    /// auto-replying to Pings.
+    ///
+    /// A peer Close, an EOF, or a read error does **not** discard messages
+    /// already decoded: the reason is recorded and returned from the *next*
+    /// call, so a client that sends a request and immediately closes still
+    /// gets that request handled. (Returning the error straight away is how
+    /// the previous version silently dropped a final batch of packets.)
+    pub(crate) fn poll_messages(&mut self) -> Result<Vec<Vec<u8>>, SimbleError> {
+        if let Some(closed) = &self.closed {
+            return Err(SimbleError::Transport(closed.clone()));
         }
 
         let mut chunk = [0u8; 4096];
         loop {
             match self.stream.read(&mut chunk) {
                 Ok(0) => {
-                    return Err(SimbleError::Transport(
-                        "WebSocket connection closed".to_string(),
-                    ));
+                    self.closed = Some("WebSocket connection closed".to_string());
+                    break;
                 }
                 Ok(n) => self.reader.feed(&chunk[..n]),
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                Err(e) => return Err(SimbleError::Transport(e.to_string())),
+                Err(e) => {
+                    self.closed = Some(e.to_string());
+                    break;
+                }
             }
         }
 
+        let mut messages = Vec::new();
         while let Some(frame) = self.reader.next_frame() {
-            if let Some(packet) = self.handle_frame(frame)? {
-                channel.inject_host_packet(packet)?;
+            match self.handle_frame(frame) {
+                Ok(Some(message)) => messages.push(message),
+                Ok(None) => {}
+                Err(e) => {
+                    self.closed.get_or_insert_with(|| e.to_string());
+                    break;
+                }
             }
+        }
+
+        match (&self.closed, messages.is_empty()) {
+            (Some(closed), true) => Err(SimbleError::Transport(closed.clone())),
+            _ => Ok(messages),
+        }
+    }
+
+    /// Moves packets in both directions between the WebSocket peer and
+    /// `channel`: drains every controller→host packet the channel has queued
+    /// and sends it as one unmasked binary frame, then injects each complete
+    /// inbound message into the channel's host side as a ready-made H4 packet.
+    pub fn pump(&mut self, channel: &super::HciChannel) -> Result<(), SimbleError> {
+        while let Some(packet) = channel.poll_controller_packet() {
+            self.send_message(OPCODE_BINARY, &packet)?;
+        }
+        for packet in self.poll_messages()? {
+            channel.inject_host_packet(packet)?;
         }
         Ok(())
     }
@@ -765,6 +821,56 @@ mod tests {
         let sent = reader.next_frame().unwrap();
         assert_eq!(sent.opcode, OPCODE_BINARY);
         assert_eq!(sent.payload, evt);
+        assert_eq!(
+            conn.stream.outbound[1] & 0x80,
+            0,
+            "server frame must be unmasked"
+        );
+    }
+
+    #[test]
+    fn test_close_does_not_discard_messages_decoded_in_the_same_batch() {
+        // A client that sends a request and immediately closes. The request
+        // must still be delivered; the close is reported on the next call.
+        // Returning the error straight from the read loop (as this did before
+        // the message layer existed) dropped the whole final batch.
+        let cmd = [h4_type::HCI_COMMAND, 0x03, 0x0C, 0x00];
+        let mut inbound = encode_masked_binary_frame(&cmd);
+        inbound.extend_from_slice(&encode_frame(OPCODE_CLOSE, &[], Some([1, 2, 3, 4])));
+        let mut conn = WsServerConn::new(ServerMock {
+            inbound: Cursor::new(inbound),
+            outbound: Vec::new(),
+        });
+        let channel = HciChannel::new();
+
+        conn.pump(&channel)
+            .expect("the batch before the Close is still delivered");
+        assert_eq!(channel.poll_host_packet().unwrap(), cmd);
+        assert!(
+            conn.pump(&channel).is_err(),
+            "the close is reported on the following pump"
+        );
+    }
+
+    #[test]
+    fn test_text_messages_round_trip_through_the_message_layer() {
+        // The MCP-over-WebSocket path: JSON-RPC in a masked client text frame
+        // out, an unmasked server text frame back.
+        let request = br#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#;
+        let mut conn = WsServerConn::new(ServerMock {
+            inbound: Cursor::new(encode_frame(OPCODE_TEXT, request, Some([9, 8, 7, 6]))),
+            outbound: Vec::new(),
+        });
+
+        assert_eq!(conn.poll_messages().unwrap(), vec![request.to_vec()]);
+
+        conn.send_text(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#)
+            .unwrap();
+        let mut reader = WsFrameReader::default();
+        reader.feed(&conn.stream.outbound);
+        let sent = reader.next_frame().unwrap();
+        assert_eq!(sent.opcode, OPCODE_TEXT);
+        assert_eq!(sent.payload, br#"{"jsonrpc":"2.0","id":1,"result":{}}"#);
         assert_eq!(
             conn.stream.outbound[1] & 0x80,
             0,

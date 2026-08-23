@@ -26,11 +26,12 @@ Python stack that inspired the positioning) is credited once, in the README.
 The *same* stack drives all three; only the frontend differs.
 
 1. **SimBLE MCP — agent-first** — `src/mcp.rs`. `simble mcp` speaks JSON-RPC over
-   stdio so an **agent** builds and tests BLE devices as tool calls in a
-   conversation: the interactive, stateful version of the AI-first loop, and the
-   surface this project is increasingly organized around. An agent needs no
-   checkout and no build step — `example` hands it a working device script and
-   `lookup` answers the assigned-number questions.
+   stdio (or over WebSocket with `--ws-server [PORT]`) so an **agent** builds
+   and tests BLE devices as tool calls in a conversation: the interactive,
+   stateful version of the AI-first loop, and the surface this project is
+   increasingly organized around. An agent needs no checkout and no build step —
+   `example` hands it a working device script and `lookup` answers the
+   assigned-number questions.
 2. **Web (wasm)** — `web/`, compiled to WebAssembly. Interactive demos: Playground,
    Testing, Scanner, Scripted device, Color Bulb, Speaker, Server+Client, Scene,
    Shared, Controllers. For authoring and exploration. Light theme,
@@ -72,16 +73,26 @@ verified end-to-end by `tests/ws_bridge_loopback.rs` (our client ↔ our server)
   scripts — the "no repo needed" path), `lookup` (SIG assigned numbers by name
   fragment or UUID, from the vendored registry in `gatt/sig_names.rs`)
 - **Author/check** (stateless): `lint`, `run_test`
-- **Scene**: `run_on` (controller select — `self` and `netsim` wired, `usb` not),
-  `add_peripheral`, `tick`, `status` (god-view of hosted devices), `scan`
-  (radio-view — what a scanner hears, deduplicated per advertiser)
+- **Scene**: `run_on` (controller select — `self`, `netsim`, and `usb` all
+  wired; `usb` takes an optional `device: "vid:pid"`), `add_peripheral`, `tick`,
+  `status` (god-view of hosted devices), `scan` (radio-view — what a scanner
+  hears, deduplicated per advertiser)
 - **Behavioural**: `connect`, `read`, `write`, `assert` (a central against a
   peripheral; characteristics named by **UUID**, resolved to handles internally)
 - **Temporal**: `subscribe`, `assert_over` (a real monitor — a condition that
-  must hold across a window; FAILs on first violation)
+  must hold across a window; FAILs on first violation). `subscribe` with `op` +
+  `value` arms the *asynchronous* form: the server pushes an unsolicited
+  `notifications/message` the moment the condition breaks.
 
 Agent-facing output conventions: UUIDs are annotated with their SIG names, and
 failures return `isError` so a failing test is machine-detectable.
+
+**Two transports, one server.** `simble mcp` speaks JSON-RPC over stdio;
+`simble mcp --ws-server [PORT]` (default 7682) speaks it over RFC 6455 text
+frames instead, reusing `WsServerConn` from the `--usb` bridge. One client at a
+time, each getting a fresh scene. `netsim` and `usb` are both **peripheral-only**
+— the far side (emulator, phone) plays the central — and the central-side tools
+say so rather than failing obscurely.
 
 Model: **a scene is the set of device scripts the agent adds; the controller is
 where they run.** `run_on(target)` re-targets the controller. The agent's
@@ -94,12 +105,20 @@ changes).
 
 ### The actor loop (why it's built the way it is)
 
-`serve_stdio` is a **single-threaded, non-blocking actor loop**. A tiny reader
-thread ferries stdin *lines* over a channel (it never touches the scene); the
-main loop polls without blocking. This is the seam where live backends will
-pump sockets and push server→client notifications between requests.
-`write_message` centralizes newline-delimited output for both responses and
-future notifications.
+`serve_lines` is a **single-threaded, non-blocking actor loop**, and
+`serve_stdio` is it over stdin/stdout. A tiny reader thread ferries *lines* over
+a channel (it never touches the scene, which is non-`Send`); the main loop polls
+without blocking. Between requests it calls `pump_live()` — so netsim/usb
+peripherals answer their centrals while no tool call is active — and flushes
+`take_notifications()`. `serve_ws` is the same loop with `WsServerConn`'s
+non-blocking `poll_messages`/`send_text` in place of lines.
+
+A regression that reinstates a blocking read is silent: every request is still
+answered, so the suite stays green while the server can no longer pump or speak
+unprompted. `test_actor_loop_pushes_notifications_while_input_is_idle` pins it —
+it asserts a queued notification reaches the sink *before anything is ever
+sent*, over a reader whose `read` blocks. Before it, `serve_stdio` had coverage
+count 0 (`docs/test-strategy.md` gap 7).
 
 ## Constraints that shape everything
 
@@ -129,16 +148,27 @@ Ordered by leverage; each independently landable.
    its own `NetsimTransport` (`LiveScene<T>` over the `HciTransport` trait); the
    actor loop pumps them between requests, so devices answer the emulator even
    while no tool call is active. Verified against a real Android emulator.
-2. **`run_on("usb", vid:pid)`.** Single device on a real dongle (a dongle *is* one
-   controller — pick which device). Reuses `UsbTransport` in-process (no bridge —
-   the bridge exists only because a *browser* can't open USB).
-3. **`--ws-server [PORT]`.** Host the `self` `Link` scene so browsers connect as
-   devices on it (agent + browser share one scene). The multi-client
-   generalization of `--usb`. Must live in the single-threaded event loop (can't
-   thread the scene) — the actor loop is the foundation.
-4. **Async server→client notifications.** Push "HR exceeded 200" the moment it
-   happens (`notifications/message`) instead of polling `assert_over`. Pairs with
-   live ticking; `write_message` is ready.
+2. ~~**`run_on("usb", vid:pid)`.**~~ **Done.** `UsbScene` = `LiveScene<UsbTransport>`
+   in-process (no bridge — the bridge exists only because a *browser* can't open
+   USB); one device per dongle, opened at the first `add_peripheral`, selectable
+   by `device: "vid:pid"`. **Never run against real hardware** — CI covers the
+   argument parsing, dispatch, and error paths only. First job for whoever has a
+   dongle: `run_on("usb")`, `add_peripheral(hrm)`, and find it from a phone.
+3. **`--ws-server [PORT]`** — half done. The *protocol* now travels over
+   WebSocket (`simble mcp --ws-server`, default 7682): the same actor loop with
+   `WsServerConn` in place of stdio, one client at a time, fresh scene per
+   connection. What remains is the harder half the original entry meant —
+   hosting the `self` `Link` scene so browsers connect **as devices on it**
+   (agent + browser share one scene), the multi-client generalization of
+   `--usb`. Still must live in the single-threaded event loop (can't thread the
+   scene).
+4. ~~**Async server→client notifications.**~~ **Done for the monitor.**
+   `subscribe(uuid, op, value)` arms a watch and the server pushes
+   `notifications/message` — "HR exceeded 200" — the moment the condition breaks,
+   on either transport. Sustained violations announce once; a value that swings
+   back and out again re-announces. Not yet produced by anything else: a live
+   backend's own events (connection, disconnect, `last_error`) are still only
+   visible by polling `status`.
 5. **Skills** to pair with the MCP: `author-ble-device` (the `android::*`/`uuid::*`
    API + "lint then run_test" loop), `write-ble-test`, `reproduce-ble-bug`,
    `test-app-against-emulator`.
@@ -158,11 +188,15 @@ work above is the "make it usable by agents" track — they're complementary.
 
 ## File map (where to look)
 
-- `src/mcp.rs` — MCP server: `Server`, tools, actor loop, `request()` entry point.
-- `src/bin/simble.rs` — the `simble` CLI (tests, `--no-run`, `--usb`, `mcp`).
-- `src/transport/ws.rs` — shared RFC 6455 codec + `WsServerConn` (bridge server).
+- `src/mcp.rs` — MCP server: `Server`, tools, `serve_lines`/`serve_stdio`/
+  `serve_ws`, the `LiveBackend` select, monitors + notifications, `request()`.
+- `src/bin/simble.rs` — the `simble` CLI (tests, `--no-run`, `--usb`, `mcp`,
+  `mcp --ws-server`).
+- `src/transport/ws.rs` — shared RFC 6455 codec + `WsServerConn`: a message
+  layer (`poll_messages`/`send_text`, used by MCP) and `pump` (HCI, the bridge).
 - `src/transport/netsim.rs` — `NetsimTransport` (WebSocket client to netsim).
-- `src/transport/usb.rs` — `UsbTransport` (physical dongle).
+- `src/transport/usb.rs` — `UsbTransport` (physical dongle) + `UsbScene`
+  (`LiveScene<UsbTransport>`, one device per dongle).
 - `src/transport/wasm_ws.rs` — `SceneEngine`, `ScriptedPeripheral`, `CentralDevice`,
   `run_test_script`, `lint_script`, and the wasm exports.
 - `src/controller/sim.rs` — `Link` + `SimController` (the `self` controller).

@@ -1,8 +1,8 @@
 // Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
-//! A minimal Model Context Protocol server over stdio (`simble mcp`), exposing
-//! SimBLE to agents as tools.
+//! A minimal Model Context Protocol server (`simble mcp`), exposing SimBLE to
+//! agents as tools — over stdio, or over WebSocket with `--ws-server [PORT]`.
 //!
 //! MCP is **JSON-RPC 2.0**, newline-delimited over stdio — not gRPC — so this
 //! needs only `serde_json` (already a dependency) and `std::io`; no tonic, no
@@ -21,13 +21,17 @@
 //! - `lint` / `run_test` — stateless; compile or run a script (same functions
 //!   the CLI and browser Testing page use, so the surfaces can't diverge).
 //! - `run_on` — choose which controller the scene runs on: `self` (in-process,
-//!   deterministic) or `netsim` (the emulator's ether). `usb` is not wired.
+//!   deterministic), `netsim` (the emulator's ether), or `usb` (a real dongle,
+//!   optionally chosen by `vid:pid`).
 //! - `add_peripheral` / `tick` / `status` / `scan` — build and drive the live
 //!   scene; `status` is the god-view, `scan` is what a scanner actually hears.
 //! - `connect` / `read` / `write` / `assert` — drive a central against a
 //!   peripheral, naming characteristics by UUID.
 //! - `subscribe` / `assert_over` — a real monitor: a condition that must hold
-//!   across a window, failing on the first violating sample.
+//!   across a window, failing on the first violating sample. `subscribe` with
+//!   a condition arms a *watch* that pushes an unsolicited
+//!   `notifications/message` the moment the condition breaks, instead of
+//!   waiting to be polled.
 //!
 //! A *scene* is the set of devices the agent has added; the controller is where
 //! they run. `run_on` re-targets the controller; the devices are the agent's,
@@ -36,6 +40,7 @@
 use crate::devices::catalog::{self, EXAMPLES};
 use crate::gatt::sig_names;
 use crate::transport::netsim::{self, NetsimScene};
+use crate::transport::usb::{UsbScene, parse_vid_pid};
 use crate::transport::wasm_ws::{SceneEngine, lint_script, run_test_script};
 use crate::types::Address;
 use serde_json::{Value, json};
@@ -46,13 +51,92 @@ use std::time::Duration;
 /// The MCP revision this server implements (returned from `initialize`).
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
+/// How long an otherwise-quiet actor loop idles between passes — small enough
+/// to stay responsive to a request, large enough not to spin a core. There is
+/// no async runtime (see `HANDOFF.md`), so both transports poll.
+const IDLE_INTERVAL: Duration = Duration::from_millis(5);
+
+/// A scene whose controller is on the far side of a real transport. Every one
+/// of these is **peripheral-only** — the central is the Android emulator, a
+/// phone, a laptop — and they are mutually exclusive with each other and with
+/// the in-process `self` scene, because `run_on` resets the server.
+enum LiveBackend {
+    Netsim(NetsimScene),
+    Usb(UsbScene),
+}
+
+impl LiveBackend {
+    /// What `status` calls this controller.
+    fn name(&self) -> &'static str {
+        match self {
+            LiveBackend::Netsim(_) => "netsim",
+            LiveBackend::Usb(_) => "usb",
+        }
+    }
+
+    fn add_peripheral(&mut self, address: Address, script: &str) -> Result<usize, String> {
+        match self {
+            LiveBackend::Netsim(scene) => scene.add_peripheral(address, script),
+            LiveBackend::Usb(scene) => scene.add_peripheral(address, script),
+        }
+    }
+
+    fn pump(&mut self) {
+        match self {
+            LiveBackend::Netsim(scene) => scene.pump(),
+            LiveBackend::Usb(scene) => scene.pump(),
+        }
+    }
+
+    fn tick(&mut self, seconds: f64) {
+        match self {
+            LiveBackend::Netsim(scene) => scene.tick(seconds),
+            LiveBackend::Usb(scene) => scene.tick(seconds),
+        }
+    }
+
+    fn now(&self) -> f64 {
+        match self {
+            LiveBackend::Netsim(scene) => scene.now(),
+            LiveBackend::Usb(scene) => scene.now(),
+        }
+    }
+
+    fn device_count(&self) -> usize {
+        match self {
+            LiveBackend::Netsim(scene) => scene.device_count(),
+            LiveBackend::Usb(scene) => scene.device_count(),
+        }
+    }
+
+    fn peripheral_status_json(&self, index: usize) -> Option<String> {
+        match self {
+            LiveBackend::Netsim(scene) => scene.peripheral_status_json(index),
+            LiveBackend::Usb(scene) => scene.peripheral_status_json(index),
+        }
+    }
+}
+
+/// An armed watch: the condition a `subscribe` call asked to be told about.
+/// It is the *safety* condition, so the interesting event is it **breaking** —
+/// "HR exceeded 200" is `op: "<", threshold: 200` no longer holding.
+struct Monitor {
+    uuid: String,
+    handle: u16,
+    op: String,
+    threshold: i64,
+    byte: usize,
+    /// Set once the condition has broken, so a sustained violation announces
+    /// itself once rather than every tick.
+    fired: bool,
+}
+
 /// The live server: a scene on the `self` controller, plus the deterministic
 /// address allocator and simulated clock it advances.
 pub struct Server {
     scene: Option<SceneEngine>,
-    /// The netsim-backed scene when `run_on("netsim")` selected it; the two
-    /// scenes are mutually exclusive (`run_on` resets the server).
-    netsim: Option<NetsimScene>,
+    /// The scene when `run_on` chose a real backend instead of `self`.
+    live: Option<LiveBackend>,
     next_addr: u16,
     elapsed: f64,
     /// Lazily-added scanner device index, reused across `scan` calls.
@@ -61,41 +145,65 @@ pub struct Server {
     peripherals: Vec<(usize, Address)>,
     /// The most recently connected central device index, driven by `read`.
     central: Option<usize>,
+    /// Conditions armed by `subscribe`, checked after every clock advance.
+    monitors: Vec<Monitor>,
+    /// Server→client messages waiting to go out, drained by whichever loop is
+    /// serving this server (see [`take_notifications`](Self::take_notifications)).
+    notifications: Vec<Value>,
 }
 
 impl Default for Server {
     fn default() -> Self {
         Self {
             scene: None,
-            netsim: None,
+            live: None,
             next_addr: 1,
             elapsed: 0.0,
             scanner: None,
             peripherals: Vec::new(),
             central: None,
+            monitors: Vec::new(),
+            notifications: Vec::new(),
         }
     }
 }
 
-/// Runs the server: one JSON-RPC message per line in, one response line per
-/// request out, until stdin reaches EOF. Notifications (no `id`) get no reply.
+/// Runs the server on stdio: one JSON-RPC message per line in, one response
+/// line per request out, until stdin reaches EOF. Notifications (no `id`) get
+/// no reply, and the server pushes its own between responses.
 pub fn serve_stdio() -> std::io::Result<()> {
-    let mut server = Server::default();
+    let stdout = std::io::stdout();
+    // `BufReader<Stdin>` rather than `StdinLock`: the reader half is moved to
+    // its own thread and `StdinLock` is not `Send`.
+    serve_lines(
+        Server::default(),
+        std::io::BufReader::new(std::io::stdin()),
+        stdout.lock(),
+    )
+}
 
-    // A tiny reader thread ferries stdin *lines* over a channel — it never
-    // touches the scene, so the (non-`Send`) scripting engine stays on this
-    // thread. The main loop then polls the channel without ever blocking on
-    // stdin, which is what leaves room to pump live backends and push
-    // notifications between requests (self-only for now).
+/// The actor loop, over any line source and message sink.
+///
+/// A tiny reader thread ferries *lines* over a channel — it never touches the
+/// scene, so the (non-`Send`) scripting engine stays on this thread. The main
+/// loop then polls the channel **without ever blocking on input**, which is
+/// what leaves room to pump live backends and push notifications between
+/// requests. A regression that reinstates a blocking read presents as "the MCP
+/// server hangs" with every request still answered eventually, so
+/// `test_actor_loop_pushes_notifications_while_input_is_idle` pins it.
+fn serve_lines<R, W>(mut server: Server, reader: R, mut out: W) -> std::io::Result<()>
+where
+    R: BufRead + Send + 'static,
+    W: Write,
+{
     let (tx, rx) = mpsc::channel::<String>();
     std::thread::spawn(move || {
-        let stdin = std::io::stdin();
-        let mut reader = stdin.lock();
+        let mut reader = reader;
         let mut line = String::new();
         loop {
             line.clear();
             match reader.read_line(&mut line) {
-                Ok(0) => break, // EOF: stdin closed
+                Ok(0) => break, // EOF: input closed
                 Ok(_) => {
                     if tx.send(std::mem::take(&mut line)).is_err() {
                         break; // main loop gone
@@ -106,44 +214,106 @@ pub fn serve_stdio() -> std::io::Result<()> {
         }
     });
 
-    let stdout = std::io::stdout();
-    let mut out = stdout.lock();
     loop {
         // Drain every request that has arrived, without blocking.
         let mut idle = true;
+        let mut done = false;
         loop {
             match rx.try_recv() {
                 Ok(line) => {
                     idle = false;
-                    let trimmed = line.trim();
-                    if trimmed.is_empty() {
-                        continue;
-                    }
-                    let response = match serde_json::from_str::<Value>(trimmed) {
-                        Ok(request) => server.handle(&request),
-                        Err(e) => Some(error_response(None, -32700, &format!("parse error: {e}"))),
-                    };
-                    if let Some(response) = response {
+                    if let Some(response) = server.handle_line(&line) {
                         write_message(&mut out, &response)?;
                     }
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => return Ok(()), // stdin closed
+                // Input closed (the queue is already drained — `try_recv`
+                // reports Disconnected only once it is empty). Finish this
+                // pass so the last responses' notifications still go out,
+                // rather than returning mid-pass and swallowing them.
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    done = true;
+                    break;
+                }
             }
         }
 
-        // Pump live backends between requests, so netsim peripherals answer
-        // the emulator's connections and reads while no tool call is active.
+        // Pump live backends between requests, so netsim/usb peripherals
+        // answer their centrals' connections and reads while no tool call is
+        // active, then flush anything the server wants to say unprompted.
         server.pump_live();
-        // Idle briefly so an otherwise-quiet loop doesn't spin a core.
+        for notification in server.take_notifications() {
+            write_message(&mut out, &notification)?;
+        }
+        if done {
+            return Ok(());
+        }
         if idle {
-            std::thread::sleep(Duration::from_millis(5));
+            std::thread::sleep(IDLE_INTERVAL);
         }
     }
 }
 
-/// Writes one JSON-RPC message as a single newline-delimited line — used for
-/// responses now, and for server-initiated notifications once live.
+/// Serves MCP over WebSocket instead of stdio (`simble mcp --ws-server PORT`),
+/// one client at a time — the same actor loop, with RFC 6455 text messages in
+/// place of newline-delimited lines.
+///
+/// The WebSocket half is [`WsServerConn`](crate::transport::WsServerConn), the
+/// same hand-rolled codec the `--usb` bridge serves from; only the payload
+/// differs (JSON-RPC text, not H4 packets). Each client gets a **fresh
+/// scene**: a scene is the set of devices *that* agent added, and handing the
+/// next connection the previous one's devices would be a surprise, not a
+/// feature.
+pub fn serve_ws(port: u16) -> std::io::Result<()> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", port))?;
+    eprintln!(
+        "simble mcp: serving MCP over ws://127.0.0.1:{port}/ (one client at a time; \
+         stdio is not served in this mode)"
+    );
+    for incoming in listener.incoming() {
+        match incoming {
+            Ok(stream) => {
+                if let Err(e) = serve_ws_client(stream) {
+                    // A client disconnect surfaces as an error too; it is the
+                    // clean end of a session, so log it and await the next.
+                    eprintln!("simble mcp: session ended: {e}");
+                }
+            }
+            Err(e) => eprintln!("simble mcp: accept failed: {e}"),
+        }
+    }
+    Ok(())
+}
+
+/// Serves one accepted WebSocket client end-to-end: handshake, then the actor
+/// loop until the peer closes.
+fn serve_ws_client(stream: std::net::TcpStream) -> Result<(), crate::types::SimbleError> {
+    let (mut conn, _query) = crate::transport::WsServerConn::accept(stream)?;
+    let mut server = Server::default();
+    loop {
+        // `poll_messages` never blocks (the socket is non-blocking), so the
+        // same "pump between requests" property holds here as on stdio.
+        let messages = conn.poll_messages()?;
+        let idle = messages.is_empty();
+        for message in messages {
+            let text = String::from_utf8_lossy(&message).into_owned();
+            if let Some(response) = server.handle_line(&text) {
+                conn.send_text(&response.to_string())?;
+            }
+        }
+
+        server.pump_live();
+        for notification in server.take_notifications() {
+            conn.send_text(&notification.to_string())?;
+        }
+        if idle {
+            std::thread::sleep(IDLE_INTERVAL);
+        }
+    }
+}
+
+/// Writes one JSON-RPC message as a single newline-delimited line — responses
+/// and server-initiated notifications alike.
 fn write_message<W: Write>(out: &mut W, message: &Value) -> std::io::Result<()> {
     serde_json::to_writer(&mut *out, message)?;
     out.write_all(b"\n")?;
@@ -151,23 +321,53 @@ fn write_message<W: Write>(out: &mut W, message: &Value) -> std::io::Result<()> 
 }
 
 impl Server {
-    /// Drives the server programmatically (the non-stdio entry point): pass a
-    /// JSON-RPC request `Value`, get its response, or `None` for a notification.
-    /// Same dispatch [`serve_stdio`] runs per line — useful for embedding and
-    /// for scenario tests that exercise the tools without a pipe.
-    /// Moves packets for any live backend (netsim today) without handling a
+    /// Moves packets for any live backend (netsim, usb) without handling a
     /// request — the actor loop calls this between requests so peripherals
     /// stay responsive to their centrals.
     pub fn pump_live(&mut self) {
-        if let Some(netsim) = self.netsim.as_mut() {
-            netsim.pump();
+        if let Some(live) = self.live.as_mut() {
+            live.pump();
         }
     }
 
     /// Drives the server programmatically (the non-stdio entry point): pass a
     /// JSON-RPC request `Value`, get its response, or `None` for a notification.
+    /// Same dispatch the actor loop runs per message — useful for embedding and
+    /// for scenario tests that exercise the tools without a pipe.
     pub fn request(&mut self, request: &Value) -> Option<Value> {
         self.handle(request)
+    }
+
+    /// Handles one raw inbound message (a stdio line, or one WebSocket text
+    /// message): parse, dispatch, and return the response to send back, or
+    /// `None` for a blank line or a JSON-RPC notification.
+    fn handle_line(&mut self, line: &str) -> Option<Value> {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        match serde_json::from_str::<Value>(trimmed) {
+            Ok(request) => self.handle(&request),
+            Err(e) => Some(error_response(None, -32700, &format!("parse error: {e}"))),
+        }
+    }
+
+    /// Takes the server→client messages queued since the last call. These are
+    /// **unsolicited**: the transport writes them out whenever it next gets
+    /// the chance, without any request having asked for them.
+    pub fn take_notifications(&mut self) -> Vec<Value> {
+        std::mem::take(&mut self.notifications)
+    }
+
+    /// Queues one MCP `notifications/message` (the spec's logging
+    /// notification). The wire-visible difference from a response is that a
+    /// notification carries **no `id`** — nothing is replying to it.
+    fn push_notification(&mut self, level: &str, logger: &str, data: Value) {
+        self.notifications.push(json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/message",
+            "params": { "level": level, "logger": logger, "data": data },
+        }));
     }
 
     /// Dispatches one JSON-RPC request. `Some(response)` for requests, `None`
@@ -193,10 +393,10 @@ impl Server {
         let name = params.get("name").and_then(Value::as_str).unwrap_or("");
         let args = params.get("arguments");
 
-        // On netsim the scene is peripheral-only: the emulator (or another
-        // netsim client) plays the central, so simble's central-side tools
-        // have nothing in-scene to run on.
-        if self.netsim.is_some()
+        // Every live backend is peripheral-only: something on the far side —
+        // the Android emulator, a phone in the room — plays the central, so
+        // simble's central-side tools have nothing in-scene to run on.
+        if let Some(live) = self.live.as_ref()
             && matches!(
                 name,
                 "scan"
@@ -209,12 +409,17 @@ impl Server {
                     | "add_central"
             )
         {
+            let far_side = match live {
+                LiveBackend::Netsim(_) => "the Android emulator (or another netsim client)",
+                LiveBackend::Usb(_) => "a real phone or laptop over real RF",
+            };
             return tool_text(
                 id,
                 &format!(
-                    "{name} is self-mode only: on netsim the Android emulator (or another \
-                     netsim client) plays the central — scan/connect from there, and use \
-                     status here to watch the peripheral side"
+                    "{name} is self-mode only: on {} {far_side} plays the central — \
+                     scan/connect from there, and use status here to watch the \
+                     peripheral side",
+                    live.name()
                 ),
                 true,
             );
@@ -240,7 +445,8 @@ impl Server {
                     .and_then(|a| a.get("target"))
                     .and_then(Value::as_str)
                     .unwrap_or("");
-                self.tool_run_on(id, target)
+                let device = args.and_then(|a| a.get("device")).and_then(Value::as_str);
+                self.tool_run_on(id, target, device)
             }
             "add_peripheral" => match require_script(args) {
                 Ok(s) => self.tool_add_peripheral(id, s),
@@ -279,7 +485,7 @@ impl Server {
             "write" => self.tool_write(id, args),
             "assert" => self.tool_assert(id, args),
             "subscribe" => match args.and_then(|a| a.get("uuid")).and_then(Value::as_str) {
-                Some(uuid) => self.tool_subscribe(id, uuid),
+                Some(uuid) => self.tool_subscribe(id, uuid, args),
                 None => tool_text(id, "subscribe needs a uuid argument", true),
             },
             "assert_over" => self.tool_assert_over(id, args),
@@ -302,7 +508,7 @@ impl Server {
         }
     }
 
-    fn tool_run_on(&mut self, id: Option<Value>, target: &str) -> Value {
+    fn tool_run_on(&mut self, id: Option<Value>, target: &str, device: Option<&str>) -> Value {
         match target {
             "self" => {
                 *self = Server {
@@ -317,7 +523,9 @@ impl Server {
             }
             "netsim" => {
                 *self = Server {
-                    netsim: Some(NetsimScene::new(netsim::DEFAULT_WS_URL)),
+                    live: Some(LiveBackend::Netsim(NetsimScene::new(
+                        netsim::DEFAULT_WS_URL,
+                    ))),
                     ..Server::default()
                 };
                 tool_text(
@@ -333,11 +541,50 @@ impl Server {
                     false,
                 )
             }
-            "usb" => tool_text(
-                id,
-                "run_on \"usb\" is not wired yet — \"self\" and \"netsim\" for now",
-                true,
-            ),
+            // A `vid:pid` typo must be caught here, where the agent can see
+            // which argument it got wrong — not several calls later as a
+            // "dongle not found". Opening is still deferred to the first
+            // add_peripheral, exactly as netsim defers its connection.
+            "usb" => {
+                let selected = match device {
+                    Some(spec) => match parse_vid_pid(spec) {
+                        Ok(pair) => Some(pair),
+                        // Reworded rather than passed through: the transport's
+                        // "Transport Error:" prefix is noise to an agent that
+                        // asked about an argument.
+                        Err(_) => {
+                            return tool_text(
+                                id,
+                                &format!(
+                                    "invalid device selector {spec:?} — expected hex \
+                                     vid:pid, e.g. \"0a12:0001\" (lsusb / system_profiler \
+                                     SPUSBDataType lists them)"
+                                ),
+                                true,
+                            );
+                        }
+                    },
+                    None => None,
+                };
+                let scene = UsbScene::new(selected);
+                let selector = scene.selector();
+                *self = Server {
+                    live: Some(LiveBackend::Usb(scene)),
+                    ..Server::default()
+                };
+                tool_text(
+                    id,
+                    &format!(
+                        "scene now runs on: usb ({selector}). The dongle is opened when you \
+                         add a peripheral, and a dongle is one controller — so this scene \
+                         holds ONE device, advertising on real RF for real phones to find. \
+                         Scan and connect from the phone (simble-side scan/connect/read/\
+                         write/assert are self-mode only); use status here to watch the \
+                         peripheral side. Pass device:\"vid:pid\" to pick a specific dongle."
+                    ),
+                    false,
+                )
+            }
             "" => tool_text(
                 id,
                 "missing required argument: target (self|netsim|usb)",
@@ -353,20 +600,21 @@ impl Server {
 
     fn tool_add_peripheral(&mut self, id: Option<Value>, script: &str) -> Value {
         let address = self.alloc_address();
-        if let Some(netsim) = self.netsim.as_mut() {
-            return match netsim.add_peripheral(address, script) {
+        if let Some(live) = self.live.as_mut() {
+            let backend = live.name();
+            return match live.add_peripheral(address, script) {
                 Ok(index) => {
-                    let status = netsim
+                    let status = live
                         .peripheral_status_json(index)
                         .unwrap_or_else(|| "{}".to_string());
-                    // First pump queues HCI bring-up so the device goes on
-                    // netsim's air immediately, not at the next tool call.
-                    netsim.pump();
+                    // First pump queues HCI bring-up so the device goes on the
+                    // air immediately, not at the next tool call.
+                    live.pump();
                     tool_text(
                         id,
                         &format!(
-                            "added peripheral #{index} to netsim as {address} — scan for it \
-                             from the emulator\n{status}"
+                            "added peripheral #{index} to {backend} as {address} — scan for \
+                             it from the other side\n{status}"
                         ),
                         false,
                     )
@@ -650,7 +898,14 @@ impl Server {
 
     /// Subscribe the connected central to a characteristic's notifications, so
     /// the peripheral's value changes (from its `fn tick`) push to the central.
-    fn tool_subscribe(&mut self, id: Option<Value>, uuid: &str) -> Value {
+    ///
+    /// With `op` and `value`, it also arms a **watch**: from then on every
+    /// clock advance checks the notified value, and the first time the
+    /// condition breaks the server pushes an unsolicited
+    /// `notifications/message` — "HR exceeded 200" the moment it happens,
+    /// rather than at the next poll. `assert_over` is the same predicate asked
+    /// synchronously over a fixed window; this is the asynchronous form.
+    fn tool_subscribe(&mut self, id: Option<Value>, uuid: &str, args: Option<&Value>) -> Value {
         let Some(central) = self.central else {
             return tool_text(id, "not connected — call connect first", true);
         };
@@ -662,11 +917,61 @@ impl Server {
         let Some(handle) = handle_for_uuid(&status, uuid) else {
             return tool_text(id, &format!("no characteristic matching {uuid:?}"), true);
         };
+
+        let op = args.and_then(|a| a.get("op")).and_then(Value::as_str);
+        let threshold = args.and_then(|a| a.get("value")).and_then(Value::as_i64);
+        let byte = args
+            .and_then(|a| a.get("byte"))
+            .and_then(Value::as_u64)
+            .unwrap_or(1) as usize;
+        let watch = match (op, threshold) {
+            (Some(op), Some(threshold)) => {
+                if compare(0, op, threshold).is_none() {
+                    return tool_text(id, &format!("unknown op {op:?}"), true);
+                }
+                Some((op.to_string(), threshold))
+            }
+            // Half a condition is a mistake, not a plain subscribe: silently
+            // ignoring it is how an agent concludes watches do not work.
+            (Some(_), None) | (None, Some(_)) => {
+                return tool_text(
+                    id,
+                    "subscribe takes op AND value together to arm a watch (or neither, to \
+                     just enable notifications)",
+                    true,
+                );
+            }
+            (None, None) => None,
+        };
+
         self.scene
             .as_mut()
             .unwrap()
             .central_subscribe(central, handle);
         self.advance(8, 0.02); // CCCD write + first notifications
+        let armed = match watch {
+            Some((op, threshold)) => {
+                // Re-arming the same characteristic replaces its watch rather
+                // than stacking a second one on it.
+                self.monitors.retain(|m| m.handle != handle);
+                self.monitors.push(Monitor {
+                    uuid: uuid.to_string(),
+                    handle,
+                    op: op.clone(),
+                    threshold,
+                    byte,
+                    fired: false,
+                });
+                // Check immediately: a value already out of range is news now,
+                // not at the next tick.
+                self.poll_monitors();
+                format!(
+                    "\nwatching: a notifications/message goes out the first time byte \
+                     {byte} stops holding {op} {threshold}"
+                )
+            }
+            None => String::new(),
+        };
         let after = self
             .scene
             .as_ref()
@@ -675,9 +980,68 @@ impl Server {
             .unwrap_or_default();
         tool_text(
             id,
-            &format!("subscribed to {uuid} (handle {handle})\n{after}"),
+            &format!("subscribed to {uuid} (handle {handle}){armed}\n{after}"),
             false,
         )
+    }
+
+    /// Checks every armed watch against the central's latest notified values
+    /// and queues a `notifications/message` for each condition that has just
+    /// broken. Called after each clock advance — the only place values move.
+    fn poll_monitors(&mut self) {
+        if self.monitors.is_empty() {
+            return;
+        }
+        let Some(central) = self.central else { return };
+        let Some(status) = self
+            .scene
+            .as_ref()
+            .and_then(|s| s.central_status_json(central))
+        else {
+            return;
+        };
+
+        // Decide first, then queue: `push_notification` needs `&mut self`,
+        // which the monitors are borrowed out of.
+        let mut broke = Vec::new();
+        for monitor in &mut self.monitors {
+            let Some(actual) = value_byte(&status, monitor.handle, monitor.byte) else {
+                continue;
+            };
+            match compare(actual, &monitor.op, monitor.threshold) {
+                // Holding again re-arms the watch, so a value that swings back
+                // out of range is reported a second time.
+                Some(true) => monitor.fired = false,
+                Some(false) if !monitor.fired => {
+                    monitor.fired = true;
+                    broke.push((
+                        monitor.uuid.clone(),
+                        monitor.op.clone(),
+                        monitor.threshold,
+                        monitor.byte,
+                        actual,
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        let t = self.elapsed;
+        for (uuid, op, threshold, byte, actual) in broke {
+            self.push_notification(
+                "warning",
+                "simble.monitor",
+                json!({
+                    "event": "condition_violated",
+                    "uuid": uuid,
+                    "byte": byte,
+                    "value": actual,
+                    "expected": format!("{op} {threshold}"),
+                    "t": t,
+                    "message": format!("{uuid} byte {byte} = {actual}, no longer {op} {threshold}"),
+                }),
+            );
+        }
     }
 
     /// A *temporal* assertion — the honest "monitor": subscribe, run the clock
@@ -771,7 +1135,8 @@ impl Server {
     }
 
     /// Advance the scene `steps` times by `dt` seconds each (the polling loop
-    /// connect/read need, since discovery and reads span several ticks).
+    /// connect/read need, since discovery and reads span several ticks), then
+    /// check the armed watches against what those ticks notified.
     fn advance(&mut self, steps: usize, dt: f64) {
         for _ in 0..steps {
             self.elapsed += dt;
@@ -779,18 +1144,20 @@ impl Server {
             if let Some(scene) = self.scene.as_mut() {
                 scene.tick(t);
             }
+            self.poll_monitors();
         }
     }
 
     fn tool_tick(&mut self, id: Option<Value>, seconds: f64) -> Value {
-        if let Some(netsim) = self.netsim.as_mut() {
-            netsim.tick(seconds);
+        if let Some(live) = self.live.as_mut() {
+            live.tick(seconds);
             return tool_text(
                 id,
                 &format!(
-                    "advanced to t={:.3}s ({} device(s) on netsim)",
-                    netsim.now(),
-                    netsim.device_count()
+                    "advanced to t={:.3}s ({} device(s) on {})",
+                    live.now(),
+                    live.device_count(),
+                    live.name()
                 ),
                 false,
             );
@@ -805,22 +1172,26 @@ impl Server {
             );
         };
         scene.tick(t);
+        let count = scene.device_count();
+        // A tick is where a watched value moves, so it is where a broken
+        // condition becomes news.
+        self.poll_monitors();
         tool_text(
             id,
-            &format!("advanced to t={t:.3}s ({} device(s))", scene.device_count()),
+            &format!("advanced to t={t:.3}s ({count} device(s))"),
             false,
         )
     }
 
     fn tool_status(&self, id: Option<Value>) -> Value {
-        if let Some(netsim) = self.netsim.as_ref() {
-            let devices: Vec<Value> = (0..netsim.device_count())
-                .map(|i| match netsim.peripheral_status_json(i) {
+        if let Some(live) = self.live.as_ref() {
+            let devices: Vec<Value> = (0..live.device_count())
+                .map(|i| match live.peripheral_status_json(i) {
                     Some(j) => serde_json::from_str(&j).unwrap_or(Value::String(j)),
                     None => json!({ "index": i, "role": "non-peripheral" }),
                 })
                 .collect();
-            let mut body = json!({ "controller": "netsim", "devices": devices });
+            let mut body = json!({ "controller": live.name(), "devices": devices });
             annotate_uuid_names(&mut body);
             return tool_text(id, &serde_json::to_string_pretty(&body).unwrap(), false);
         }
@@ -933,7 +1304,10 @@ fn dedupe_scan_reports(raw: &str) -> String {
 fn initialize_result() -> Value {
     json!({
         "protocolVersion": PROTOCOL_VERSION,
-        "capabilities": { "tools": {} },
+        // `logging` is what declares that this server sends unsolicited
+        // `notifications/message` — an armed `subscribe` watch pushes one the
+        // moment its condition breaks.
+        "capabilities": { "tools": {}, "logging": {} },
         // The version is the crate version plus a git description, because the
         // registration recipe pins a client to target/release/simble and
         // nothing rebuilds it. A stale binary previously served invented RAS
@@ -974,10 +1348,17 @@ fn tools_list() -> Value {
                 deterministic, no setup), \"netsim\" (peripherals join the Android emulator's \
                 Bluetooth ether via a running netsimd — scan/connect from the emulator; needs \
                 netsimd's WebSocket frontend, e.g. netsimd --ws-port 7681), or \"usb\" (a real \
-                dongle; not wired yet). Resets the scene.",
+                Bluetooth dongle, so a real phone in the room can find the device over real RF; \
+                optionally pass device:\"vid:pid\" to pick one, else the first Bluetooth-class \
+                dongle is used — a dongle is ONE controller, so a usb scene holds one device, \
+                and it is opened when you add it). netsim and usb are peripheral-only: the far \
+                side plays the central. Resets the scene.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "target": { "type": "string", "enum": ["self", "netsim", "usb"] } },
+                "properties": {
+                    "target": { "type": "string", "enum": ["self", "netsim", "usb"] },
+                    "device": { "type": "string", "description": "usb only: dongle selector as hex \"vid:pid\", e.g. \"0a12:0001\"." },
+                },
                 "required": ["target"],
             },
         },
@@ -1121,11 +1502,20 @@ fn tools_list() -> Value {
         {
             "name": "subscribe",
             "description": "Enable notifications on a characteristic (matched by UUID) for the \
-                connected central, so the peripheral's fn tick value changes push to it. Call \
-                connect first.",
+                connected central, so the peripheral's fn tick value changes push to it. Pass \
+                op + value as well to arm a WATCH: the server then pushes an unsolicited \
+                notifications/message the first time the condition stops holding, without you \
+                asking again — \"tell me if HR ever exceeds 200\" is uuid 2A37, op \"<\", value \
+                200. That is the asynchronous form of assert_over (which blocks for a fixed \
+                window instead). Call connect first.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "uuid": { "type": "string" } },
+                "properties": {
+                    "uuid": { "type": "string" },
+                    "op": { "type": "string", "enum": ["<", ">", "<=", ">=", "==", "!="], "description": "With value: the condition to watch. Omit both for a plain subscribe." },
+                    "value": { "type": "integer", "description": "With op: the threshold to watch against." },
+                    "byte": { "type": "integer", "description": "Byte index (default 1)." },
+                },
                 "required": ["uuid"],
             },
         },
@@ -2208,8 +2598,99 @@ mod tests {
                 .contains("self-mode only")
         );
 
-        let usb = call(&mut s, "run_on", json!({"target": "usb"}));
-        assert_eq!(usb["result"]["isError"], true);
+        let unknown = call(&mut s, "run_on", json!({"target": "rootcanal"}));
+        assert_eq!(unknown["result"]["isError"], true);
+    }
+
+    // --- run_on("usb") ------------------------------------------------------
+    //
+    // No test here touches a dongle: `run_on` only *selects* the backend, and
+    // `UsbScene` defers opening to the first `add_peripheral` exactly as the
+    // netsim scene defers its connection. What is covered is argument
+    // parsing, the dispatch, and the error paths; the live path — a real
+    // dongle advertising to a real phone — is not exercised by CI.
+
+    #[test]
+    fn test_run_on_usb_selects_the_dongle_backend() {
+        let mut s = Server::default();
+        let auto = call(&mut s, "run_on", json!({"target": "usb"}));
+        assert_eq!(auto["result"]["isError"], false, "{auto}");
+        let text = auto["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("runs on: usb"), "{text}");
+        assert!(text.contains("first Bluetooth-class dongle"), "{text}");
+
+        // An explicit dongle is echoed back normalized, so an agent can see
+        // which one it actually asked for.
+        let chosen = call(
+            &mut s,
+            "run_on",
+            json!({"target": "usb", "device": "0A12:0001"}),
+        );
+        assert_eq!(chosen["result"]["isError"], false, "{chosen}");
+        assert!(
+            chosen["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("0a12:0001"),
+            "{chosen}"
+        );
+
+        // Like every live backend, it is peripheral-only.
+        let connect = call(&mut s, "connect", json!({}));
+        assert_eq!(connect["result"]["isError"], true);
+        let text = connect["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("self-mode only"), "{text}");
+        assert!(text.contains("on usb"), "{text}");
+
+        // …and status reports which controller is selected, with no device
+        // on it and no hardware consulted.
+        let status = call(&mut s, "status", json!({}));
+        assert_eq!(status["result"]["isError"], false, "{status}");
+        let text = status["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("\"controller\": \"usb\""), "{text}");
+    }
+
+    #[test]
+    fn test_run_on_usb_rejects_a_malformed_device_selector() {
+        // A vid:pid typo must fail at the call that contains it, naming the
+        // expected form — not several calls later as "dongle not found".
+        let mut s = Server::default();
+        let bad = call(
+            &mut s,
+            "run_on",
+            json!({"target": "usb", "device": "0a120001"}),
+        );
+        assert_eq!(bad["result"]["isError"], true, "{bad}");
+        let text = bad["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("0a12:0001"),
+            "names the expected form: {text}"
+        );
+
+        // A rejected selector leaves the previous scene alone rather than
+        // half-switching to a backend that was never built.
+        assert!(s.live.is_none(), "no backend selected on a bad selector");
+    }
+
+    #[test]
+    fn test_usb_add_peripheral_without_a_dongle_reports_it_as_a_device_error() {
+        // A vid:pid that cannot exist, so the outcome is the same whether or
+        // not the machine running the tests has a dongle plugged in. This is
+        // the only place the USB path really tries to open hardware.
+        let mut s = Server::default();
+        call(
+            &mut s,
+            "run_on",
+            json!({"target": "usb", "device": "ffff:ffff"}),
+        );
+        let added = call(&mut s, "add_peripheral", json!({"script": HRM}));
+        assert_eq!(added["result"]["isError"], true, "{added}");
+        let text = added["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.starts_with("device rejected:"), "{text}");
+        assert!(
+            text.contains("dongle") || text.contains("USB"),
+            "should say what could not be opened: {text}"
+        );
     }
 
     #[test]
@@ -2247,5 +2728,389 @@ mod tests {
             .handle(&json!({"jsonrpc":"2.0","id":9,"method":"nope"}))
             .unwrap();
         assert_eq!(err["error"]["code"], -32601);
+    }
+
+    // --- server→client notifications ----------------------------------------
+
+    /// A peripheral whose heart rate is fine until t = 1s and alarming after.
+    /// The CCCD is what makes the watch a *pushed* one: without it the central
+    /// has nothing to write and the peripheral never notifies.
+    const HRM_SPIKES: &str = r#"
+        let server = android::BluetoothGattServer("HRM");
+        let hrs = android::BluetoothGattService(uuid::HEART_RATE_SERVICE, android::SERVICE_TYPE_PRIMARY);
+        let hr = android::BluetoothGattCharacteristic(uuid::HEART_RATE_MEASUREMENT,
+            android::PROPERTY_READ | android::PROPERTY_NOTIFY, android::PERMISSION_READ);
+        hr.set_value([0x00, 70]);
+        hr.add_descriptor(android::BluetoothGattDescriptor(
+            uuid::CLIENT_CHARACTERISTIC_CONFIGURATION,
+            android::PERMISSION_READ | android::PERMISSION_WRITE));
+        hrs.add_characteristic(hr);
+        server.add_service(hrs);
+        fn tick(server, t) {
+            if t > 1.0 {
+                server.update_value(uuid::HEART_RATE_MEASUREMENT, [0x00, 220]);
+            } else {
+                server.update_value(uuid::HEART_RATE_MEASUREMENT, [0x00, 70]);
+            }
+        }
+    "#;
+
+    #[test]
+    fn test_a_subscribe_watch_pushes_an_id_less_notification_when_it_breaks() {
+        // The asynchronous half of the monitor: arm a condition, run the
+        // clock, and the server speaks first. The wire-visible difference
+        // from a response is that there is no `id` — nothing is replying.
+        let mut s = Server::default();
+        call(&mut s, "add_peripheral", json!({"script": HRM_SPIKES}));
+        call(&mut s, "connect", json!({}));
+
+        let armed = call(
+            &mut s,
+            "subscribe",
+            json!({"uuid": "2A37", "op": "<", "value": 200}),
+        );
+        assert_eq!(armed["result"]["isError"], false, "{armed}");
+        assert!(
+            armed["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("watching"),
+            "{armed}"
+        );
+        assert!(
+            s.take_notifications().is_empty(),
+            "a condition that holds says nothing"
+        );
+
+        let mut pushed = Vec::new();
+        for _ in 0..20 {
+            call(&mut s, "tick", json!({"seconds": 0.2}));
+            pushed = s.take_notifications();
+            if !pushed.is_empty() {
+                break;
+            }
+        }
+        assert_eq!(pushed.len(), 1, "one message for one violation: {pushed:?}");
+
+        let note = &pushed[0];
+        assert_eq!(note["jsonrpc"], "2.0");
+        assert_eq!(note["method"], "notifications/message");
+        assert!(
+            note.get("id").is_none(),
+            "a notification carries no id: {note}"
+        );
+        assert_eq!(note["params"]["level"], "warning");
+        assert_eq!(note["params"]["logger"], "simble.monitor");
+        assert_eq!(note["params"]["data"]["value"], 220);
+        assert_eq!(note["params"]["data"]["expected"], "< 200");
+        assert!(
+            note["params"]["data"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("no longer < 200"),
+            "{note}"
+        );
+
+        // A condition that stays broken announces itself once, not per tick.
+        for _ in 0..5 {
+            call(&mut s, "tick", json!({"seconds": 0.2}));
+        }
+        assert!(
+            s.take_notifications().is_empty(),
+            "a sustained violation must not spam the client"
+        );
+    }
+
+    #[test]
+    fn test_subscribe_without_a_condition_stays_a_plain_subscribe() {
+        // The watch is opt-in: the pre-existing tool call must behave exactly
+        // as it did, pushing nothing however long the clock runs.
+        let mut s = Server::default();
+        call(&mut s, "add_peripheral", json!({"script": HRM_SPIKES}));
+        call(&mut s, "connect", json!({}));
+        let plain = call(&mut s, "subscribe", json!({"uuid": "2A37"}));
+        assert_eq!(plain["result"]["isError"], false, "{plain}");
+        assert!(
+            !plain["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("watching")
+        );
+        for _ in 0..10 {
+            call(&mut s, "tick", json!({"seconds": 0.2}));
+        }
+        assert!(s.take_notifications().is_empty());
+    }
+
+    #[test]
+    fn test_subscribe_rejects_half_a_condition() {
+        let mut s = Server::default();
+        call(&mut s, "add_peripheral", json!({"script": HRM_SPIKES}));
+        call(&mut s, "connect", json!({}));
+        for half in [
+            json!({"uuid": "2A37", "op": "<"}),
+            json!({"uuid": "2A37", "value": 200}),
+        ] {
+            let resp = call(&mut s, "subscribe", half.clone());
+            assert_eq!(resp["result"]["isError"], true, "{half}: {resp}");
+            assert!(
+                resp["result"]["content"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("op AND value"),
+                "{resp}"
+            );
+        }
+        let bad_op = call(
+            &mut s,
+            "subscribe",
+            json!({"uuid": "2A37", "op": "=~", "value": 200}),
+        );
+        assert_eq!(bad_op["result"]["isError"], true, "{bad_op}");
+    }
+
+    // --- the actor loop -----------------------------------------------------
+
+    /// A sink that only publishes on `flush`, so a reader never observes half
+    /// a JSON object. `write_message` flushes once per complete message.
+    #[derive(Default)]
+    struct SharedOut {
+        pending: Vec<u8>,
+        sink: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    }
+
+    impl Write for SharedOut {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.pending.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            let mut sink = self.sink.lock().unwrap();
+            sink.extend_from_slice(&std::mem::take(&mut self.pending));
+            Ok(())
+        }
+    }
+
+    /// A reader whose `read` **blocks** until the test hands it a line — a
+    /// stand-in for a real stdin that is simply quiet. The loop under test
+    /// must make progress anyway.
+    struct BlockingLines {
+        rx: mpsc::Receiver<String>,
+        pending: Vec<u8>,
+        pos: usize,
+    }
+
+    impl std::io::Read for BlockingLines {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            while self.pos == self.pending.len() {
+                match self.rx.recv() {
+                    Ok(line) => {
+                        self.pending = line.into_bytes();
+                        self.pos = 0;
+                    }
+                    Err(_) => return Ok(0), // sender dropped: EOF
+                }
+            }
+            let n = (self.pending.len() - self.pos).min(out.len());
+            out[..n].copy_from_slice(&self.pending[self.pos..self.pos + n]);
+            self.pos += n;
+            Ok(n)
+        }
+    }
+
+    /// Waits until the sink holds at least `n` complete messages.
+    fn wait_for_messages(
+        sink: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+        n: usize,
+        what: &str,
+    ) -> Vec<Value> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let text = String::from_utf8(sink.lock().unwrap().clone()).unwrap();
+            let messages: Vec<Value> = text
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(|line| serde_json::from_str(line).expect("each line is one JSON message"))
+                .collect();
+            if messages.len() >= n {
+                return messages;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for {what} (have {messages:?})"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn test_actor_loop_pushes_notifications_while_input_is_idle() {
+        // `serve_stdio` had no coverage at all (docs/test-strategy.md gap 7),
+        // and the regression it hides is silent: reinstate a blocking read on
+        // the input and every request is still answered, so the suite stays
+        // green while the server can no longer pump a live backend or say
+        // anything unprompted. Here nothing is ever sent until after the
+        // server has spoken — a loop that blocks on input never gets there.
+        let mut server = Server::default();
+        server.push_notification("warning", "simble.test", json!({"event": "unprompted"}));
+
+        let sink = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let out = SharedOut {
+            pending: Vec::new(),
+            sink: sink.clone(),
+        };
+        let (tx, rx) = mpsc::channel::<String>();
+        let input = BlockingLines {
+            rx,
+            pending: Vec::new(),
+            pos: 0,
+        };
+
+        // The scene is non-`Send` (Rhai), so the loop stays on this thread and
+        // the *test* is what runs beside it. A failed assertion or a timeout
+        // in the driver drops `tx`, which is the loop's EOF, so a wedged loop
+        // fails the test instead of hanging it.
+        let driver = std::thread::spawn({
+            let sink = sink.clone();
+            move || {
+                let messages = wait_for_messages(&sink, 1, "the unprompted notification");
+                assert_eq!(messages[0]["method"], "notifications/message");
+                assert!(
+                    messages[0].get("id").is_none(),
+                    "a notification carries no id: {}",
+                    messages[0]
+                );
+
+                // The same loop still answers a request that turns up later.
+                tx.send("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\"}\n".to_string())
+                    .unwrap();
+                let messages = wait_for_messages(&sink, 2, "the ping response");
+                assert_eq!(messages[1]["id"], 7);
+                assert_eq!(messages[1]["result"], json!({}));
+                drop(tx); // EOF
+            }
+        });
+
+        serve_lines(server, std::io::BufReader::new(input), out).expect("the loop exits at EOF");
+        driver.join().expect("the driver's assertions hold");
+    }
+
+    // --- MCP over WebSocket (`--ws-server`) ---------------------------------
+
+    /// A minimal RFC 6455 *client* for the scenario test, built from the same
+    /// codec the server uses (`transport::ws`) — the netsim client is
+    /// HCI-shaped, and MCP travels as text.
+    struct WsTestClient {
+        stream: std::net::TcpStream,
+        reader: crate::transport::ws::WsFrameReader,
+    }
+
+    impl WsTestClient {
+        fn connect(addr: std::net::SocketAddr) -> Self {
+            use std::io::Read;
+            let mut stream = std::net::TcpStream::connect(addr).expect("connect");
+            let key = "dGhlIHNhbXBsZSBub25jZQ==";
+            let request = format!(
+                "GET /mcp HTTP/1.1\r\n\
+                 Host: 127.0.0.1\r\n\
+                 Upgrade: websocket\r\n\
+                 Connection: Upgrade\r\n\
+                 Sec-WebSocket-Key: {key}\r\n\
+                 Sec-WebSocket-Version: 13\r\n\r\n"
+            );
+            stream.write_all(request.as_bytes()).unwrap();
+            let response = crate::transport::ws::read_http_headers(&mut stream).unwrap();
+            assert!(response.starts_with("HTTP/1.1 101 "), "{response}");
+            assert!(
+                response.contains(&crate::transport::ws::expected_accept(key)),
+                "{response}"
+            );
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            let _ = &mut stream as &mut dyn Read; // reads happen in `recv`
+            Self {
+                stream,
+                reader: crate::transport::ws::WsFrameReader::default(),
+            }
+        }
+
+        fn send(&mut self, request: &str) {
+            let frame = crate::transport::ws::encode_frame(
+                crate::transport::ws::OPCODE_TEXT,
+                request.as_bytes(),
+                Some(crate::transport::ws::mask_key()),
+            );
+            self.stream.write_all(&frame).unwrap();
+        }
+
+        fn recv(&mut self) -> Value {
+            use std::io::Read;
+            loop {
+                if let Some(frame) = self.reader.next_frame() {
+                    assert_eq!(
+                        frame.opcode,
+                        crate::transport::ws::OPCODE_TEXT,
+                        "JSON-RPC travels as text"
+                    );
+                    return serde_json::from_slice(&frame.payload).expect("a JSON message");
+                }
+                let mut chunk = [0u8; 4096];
+                let n = self.stream.read(&mut chunk).expect("a server reply");
+                assert!(n > 0, "server closed before replying");
+                self.reader.feed(&chunk[..n]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_ws_server_serves_initialize_and_a_tool_call() {
+        // The same server, a different transport: one client connects,
+        // handshakes, and drives it with real RFC 6455 text frames.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().unwrap();
+        let session = std::thread::spawn(move || {
+            let (stream, _peer) = listener.accept().expect("accept");
+            serve_ws_client(stream)
+        });
+
+        let mut client = WsTestClient::connect(addr);
+
+        client.send(r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#);
+        let init = client.recv();
+        assert_eq!(init["id"], 1);
+        assert_eq!(init["result"]["serverInfo"]["name"], "simble");
+        assert_eq!(init["result"]["protocolVersion"], PROTOCOL_VERSION);
+
+        // A tool call, over the socket, against a scene this connection owns.
+        client.send(
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/call",
+                "params":{"name":"lookup","arguments":{"query":"0x180D"}}}"#,
+        );
+        let looked_up = client.recv();
+        assert_eq!(looked_up["id"], 2);
+        assert_eq!(looked_up["result"]["isError"], false, "{looked_up}");
+        assert!(
+            looked_up["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Heart Rate"),
+            "{looked_up}"
+        );
+
+        // A JSON-RPC notification gets no reply, so the next thing read is
+        // the response to the request after it — not a stray empty frame.
+        client.send(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#);
+        client.send(r#"{"jsonrpc":"2.0","id":3,"method":"ping"}"#);
+        let pong = client.recv();
+        assert_eq!(pong["id"], 3);
+        assert_eq!(pong["result"], json!({}));
+
+        // Closing the socket ends the session rather than wedging the loop.
+        drop(client);
+        assert!(
+            session.join().expect("session thread").is_err(),
+            "a client disconnect is reported as the end of the session"
+        );
     }
 }
