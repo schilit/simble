@@ -259,6 +259,17 @@ pub enum LmpLinkState {
     Connected,
     /// The connection attempt was rejected.
     Rejected,
+    /// A `host_connection_req` arrived and this end is waiting for its own
+    /// *host* to accept or reject it.
+    ///
+    /// A controller cannot answer a page by itself: the spec says it raises
+    /// an HCI Connection Request event and does nothing further until the
+    /// host sends Accept Connection Request or Reject Connection Request
+    /// (Vol 4, Part E, Sections 7.7.4, 7.1.8, 7.1.9). Without this state an
+    /// `LmpLink` answers on the host's behalf, which is fine for a
+    /// peer-to-peer test but wrong for anything with an HCI boundary above
+    /// it — the host would be told about a connection it never agreed to.
+    ConnectionPending,
 }
 
 /// One end of a simulated Classic ACL link, driving LMP connection
@@ -280,9 +291,21 @@ pub struct LmpLink {
     /// Error code recorded when the link was rejected, if any.
     pub rejected_reason: Option<u8>,
     /// Whether the peripheral should accept an incoming `host_connection_req`;
-    /// flip to `false` to exercise the rejection path.
+    /// flip to `false` to exercise the rejection path. Ignored when
+    /// `defer_to_host` is set — a deferred link has no opinion of its own.
     pub accept_connections: bool,
+    /// When set, an incoming `host_connection_req` parks the link in
+    /// [`LmpLinkState::ConnectionPending`] and answers nothing; the owner
+    /// must then call [`Self::accept_pending_connection`] or
+    /// [`Self::reject_pending_connection`].
+    ///
+    /// This is what a *controller* needs: the decision belongs to the host
+    /// above the HCI boundary, not to the link manager. Left `false` the link
+    /// behaves exactly as before, so the peer-to-peer tests are unaffected.
+    pub defer_to_host: bool,
     requested_peer_features: bool,
+    /// Transaction ID of the `host_connection_req` awaiting a host decision.
+    pending_tid: u8,
 }
 
 impl LmpLink {
@@ -295,8 +318,60 @@ impl LmpLink {
             state: LmpLinkState::Idle,
             rejected_reason: None,
             accept_connections: true,
+            defer_to_host: false,
             requested_peer_features: false,
+            pending_tid: 0,
         }
+    }
+
+    /// A peripheral link end that defers every inbound `host_connection_req`
+    /// to its host — the shape a simulated controller wants, since answering
+    /// a page is the host's decision (HCI Accept/Reject Connection Request).
+    pub fn deferring(local_features: [u8; 8]) -> Self {
+        Self {
+            defer_to_host: true,
+            ..Self::new(LmpRole::Peripheral, local_features)
+        }
+    }
+
+    /// Whether a `host_connection_req` is parked waiting for a host decision.
+    pub fn has_pending_connection(&self) -> bool {
+        self.state == LmpLinkState::ConnectionPending
+    }
+
+    /// The host said yes: emit the `LMP_accepted` (and this end's own
+    /// `LMP_features_req`) that [`Self::receive`] would have emitted
+    /// immediately had the link not been deferring.
+    pub fn accept_pending_connection(&mut self) -> Result<Vec<Vec<u8>>, SimbleError> {
+        if self.state != LmpLinkState::ConnectionPending {
+            return Err(SimbleError::DeviceError(
+                "LMP: no connection request is awaiting a host decision".into(),
+            ));
+        }
+        self.state = LmpLinkState::ConnectionAccepted;
+        self.requested_peer_features = true;
+        Ok(vec![
+            LmpAccepted::new(self.pending_tid, opcode::HOST_CONNECTION_REQ)
+                .as_bytes()
+                .to_vec(),
+            LmpFeaturesReq::new(self.role_bit()).as_bytes().to_vec(),
+        ])
+    }
+
+    /// The host said no: emit the `LMP_not_accepted` carrying `reason`.
+    pub fn reject_pending_connection(&mut self, reason: u8) -> Result<Vec<Vec<u8>>, SimbleError> {
+        if self.state != LmpLinkState::ConnectionPending {
+            return Err(SimbleError::DeviceError(
+                "LMP: no connection request is awaiting a host decision".into(),
+            ));
+        }
+        self.state = LmpLinkState::Rejected;
+        self.rejected_reason = Some(reason);
+        Ok(vec![
+            LmpNotAccepted::new(self.pending_tid, opcode::HOST_CONNECTION_REQ, reason)
+                .as_bytes()
+                .to_vec(),
+        ])
     }
 
     /// Returns `true` once the link has reached `Connected`.
@@ -370,6 +445,13 @@ impl LmpLink {
         }
 
         let tid = pkt.tid();
+        if self.defer_to_host {
+            // Say nothing. The owner raises HCI Connection Request to its
+            // host and calls accept/reject when the host answers.
+            self.pending_tid = tid;
+            self.state = LmpLinkState::ConnectionPending;
+            return Ok(Vec::new());
+        }
         if !self.accept_connections {
             self.state = LmpLinkState::Rejected;
             self.rejected_reason = Some(reject_reason::CONNECTION_REJECTED_LIMITED_RESOURCES);
@@ -538,5 +620,119 @@ mod tests {
     fn test_only_central_builds_connection_request() {
         let mut peripheral = LmpLink::new(LmpRole::Peripheral, [0; 8]);
         assert!(peripheral.build_connection_request().is_err());
+    }
+
+    /// A deferring link is what a *controller* needs: the decision to answer a
+    /// page belongs to the host above HCI, not to the link manager. Without
+    /// this, an `LmpLink` accepts on the host's behalf and the host is told
+    /// about a connection it never agreed to.
+    #[test]
+    fn test_a_deferring_peripheral_answers_nothing_until_its_host_decides() {
+        let mut central = LmpLink::new(LmpRole::Central, [0xFF; 8]);
+        let mut peripheral = LmpLink::deferring([0x0F; 8]);
+
+        let request = central.build_connection_request().unwrap();
+        let answer = peripheral.receive(&request).unwrap();
+        assert!(
+            answer.is_empty(),
+            "a deferring link must say nothing at all — the Connection \
+             Request event goes to the host, and the host answers"
+        );
+        assert_eq!(peripheral.state, LmpLinkState::ConnectionPending);
+        assert!(peripheral.has_pending_connection());
+        assert_eq!(
+            central.state,
+            LmpLinkState::ConnectionRequested,
+            "and the central is still waiting, not connected"
+        );
+    }
+
+    #[test]
+    fn test_a_deferred_connection_completes_once_the_host_accepts() {
+        let central_features = [0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let peripheral_features = [0x0F, 0xF0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        let mut central = LmpLink::new(LmpRole::Central, central_features);
+        let mut peripheral = LmpLink::deferring(peripheral_features);
+
+        let request = central.build_connection_request().unwrap();
+        peripheral.receive(&request).unwrap();
+
+        // The host says yes — the same PDUs a non-deferring link would have
+        // sent straight away, just later.
+        let mut to_central = peripheral.accept_pending_connection().unwrap();
+        let mut to_peripheral: Vec<Vec<u8>> = Vec::new();
+        for _ in 0..8 {
+            if to_central.is_empty() && to_peripheral.is_empty() {
+                break;
+            }
+            let mut next_to_peripheral = Vec::new();
+            for pdu in to_central.drain(..) {
+                next_to_peripheral.extend(central.receive(&pdu).unwrap());
+            }
+            let mut next_to_central = Vec::new();
+            for pdu in to_peripheral.drain(..) {
+                next_to_central.extend(peripheral.receive(&pdu).unwrap());
+            }
+            to_central = next_to_central;
+            to_peripheral = next_to_peripheral;
+        }
+
+        assert!(central.is_connected());
+        assert!(peripheral.is_connected());
+        assert_eq!(central.peer_features, Some(peripheral_features));
+        assert_eq!(peripheral.peer_features, Some(central_features));
+    }
+
+    #[test]
+    fn test_a_deferred_connection_the_host_refuses_ends_rejected_at_both_ends() {
+        let mut central = LmpLink::new(LmpRole::Central, [0xFF; 8]);
+        let mut peripheral = LmpLink::deferring([0x0F; 8]);
+        let request = central.build_connection_request().unwrap();
+        peripheral.receive(&request).unwrap();
+
+        let pdus = peripheral
+            .reject_pending_connection(reject_reason::CONNECTION_REJECTED_LIMITED_RESOURCES)
+            .unwrap();
+        for pdu in pdus {
+            central.receive(&pdu).unwrap();
+        }
+
+        assert_eq!(peripheral.state, LmpLinkState::Rejected);
+        assert_eq!(central.state, LmpLinkState::Rejected);
+        assert_eq!(
+            central.rejected_reason,
+            Some(reject_reason::CONNECTION_REJECTED_LIMITED_RESOURCES),
+            "the initiator learns *why*, which is what its host puts in the \
+             Connection Complete's status"
+        );
+    }
+
+    #[test]
+    fn test_accepting_a_connection_nobody_requested_is_an_error() {
+        // The state-with-no-exit guard: accept/reject are only legal from
+        // ConnectionPending, so a stray HCI Accept cannot invent a link.
+        let mut peripheral = LmpLink::deferring([0; 8]);
+        assert!(peripheral.accept_pending_connection().is_err());
+        assert!(
+            peripheral
+                .reject_pending_connection(reject_reason::CONNECTION_REJECTED_LIMITED_RESOURCES)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn test_a_non_deferring_link_is_unchanged() {
+        // The original peer-to-peer behaviour must survive: `deferring` is an
+        // opt-in, and every existing caller relies on the immediate answer.
+        let mut central = LmpLink::new(LmpRole::Central, [0xFF; 8]);
+        let mut peripheral = LmpLink::new(LmpRole::Peripheral, [0x0F; 8]);
+        let request = central.build_connection_request().unwrap();
+        let answer = peripheral.receive(&request).unwrap();
+        assert_eq!(
+            answer.len(),
+            2,
+            "LMP_accepted plus this end's own LMP_features_req, immediately"
+        );
+        assert!(!peripheral.has_pending_connection());
     }
 }

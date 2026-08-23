@@ -2227,6 +2227,343 @@ impl CentralDevice {
     }
 }
 
+// ---------------------------------------------------------------------------
+// BR/EDR devices in a scene
+// ---------------------------------------------------------------------------
+
+use crate::classic::rfcomm::RFCOMM_PSM;
+use crate::classic::sdp::{SDP_PSM, SdpServer, SdpUuid};
+use crate::device::classic_host::{self, spp_service_record};
+use crate::device::{
+    ClassicHost, DiscoveredDevice, RfcommHandler, SdpHandler, SdpQueryHandler, SharedRfcommPort,
+    SharedSdpQueryResults,
+};
+
+/// The Serial Port Profile service class (Assigned Numbers) — what an SPP
+/// record advertises itself as, and what a client searches for.
+const SERIAL_PORT_SERVICE_CLASS: SdpUuid = SdpUuid::Uuid16(0x1101);
+
+/// How far a classic client has got through its plan.
+///
+/// The phases are the real BR/EDR connection sequence, in order, and each
+/// one is entered only when the previous one's *event* arrived. That is the
+/// point of naming them: a client stuck in `Paging` has not been refused, it
+/// has been left without a Connection Complete — which is the failure this
+/// whole layer exists to make visible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClassicPhase {
+    /// Bring-up commands have not been queued yet.
+    Starting,
+    /// HCI Inquiry is running; waiting for Inquiry Complete.
+    Inquiring,
+    /// Resolving the names of what the inquiry found.
+    ResolvingNames,
+    /// Paging the target; waiting for Connection Complete.
+    Paging,
+    /// Opening the SDP channel and asking what the peer offers.
+    QueryingSdp,
+    /// Opening RFCOMM on the server channel SDP advertised.
+    OpeningRfcomm,
+    /// The data link is open and bytes are moving.
+    Exchanging,
+    /// Everything asked for was done and the link was torn down.
+    Done,
+    /// The plan could not continue; see `ClassicDevice::error`.
+    Failed,
+    /// This device answers rather than initiates, so it has no plan.
+    Accepting,
+}
+
+/// One BR/EDR device in a [`SceneEngine`]: a [`ClassicHost`], the plan it is
+/// following, and the handles a test or a page reads its progress from.
+///
+/// A device with no `target` is the *acceptor*: it makes itself discoverable
+/// and connectable, serves SDP and RFCOMM, and waits. A device with a target
+/// is the *initiator*, and runs the sequence a phone runs — inquire, resolve
+/// the name, page, query SDP, open the advertised RFCOMM channel, exchange
+/// data, disconnect.
+pub struct ClassicDevice {
+    host: ClassicHost,
+    /// Who to connect to. `None` makes this an acceptor.
+    target: Option<Address>,
+    /// The Scan Enable this device brings up with. An acceptor that is not
+    /// discoverable is a legitimate thing to want to test.
+    scan_enable: u8,
+    phase: ClassicPhase,
+    /// The RFCOMM service class the client looks for in the peer's SDP.
+    wanted_service: SdpUuid,
+    sdp_results: Option<SharedSdpQueryResults>,
+    port: Option<SharedRfcommPort>,
+    /// What the client writes once the DLC opens.
+    to_send: Vec<u8>,
+    /// What came back over the serial port.
+    received: Vec<Vec<u8>>,
+    error: Option<String>,
+}
+
+impl ClassicDevice {
+    /// An acceptor: discoverable, connectable, serving SDP plus an echoing
+    /// RFCOMM port on `rfcomm_channel`, advertised in its SDP record under
+    /// the Serial Port service class.
+    pub fn acceptor(name: &str, class_of_device: [u8; 3], rfcomm_channel: u8) -> Self {
+        let mut host = ClassicHost::new(name, class_of_device);
+        let mut sdp = SdpHandler::new(SdpServer::new());
+        sdp.server_mut().service_records.insert(
+            0x00010001,
+            spp_service_record(0x00010001, rfcomm_channel, name),
+        );
+        let _ = host.register_handler(Box::new(sdp));
+        let (rfcomm, port) = RfcommHandler::echoing(rfcomm_channel);
+        let _ = host.register_handler(Box::new(rfcomm));
+        Self {
+            host,
+            target: None,
+            scan_enable: classic_host::scan_enable::INQUIRY_AND_PAGE,
+            phase: ClassicPhase::Accepting,
+            wanted_service: SERIAL_PORT_SERVICE_CLASS,
+            sdp_results: None,
+            port: Some(port),
+            to_send: Vec::new(),
+            received: Vec::new(),
+            error: None,
+        }
+    }
+
+    /// An initiator that discovers `target`, opens its Serial Port service
+    /// and sends `payload` over it.
+    pub fn initiator(
+        name: &str,
+        class_of_device: [u8; 3],
+        target: Address,
+        payload: impl Into<Vec<u8>>,
+    ) -> Self {
+        let mut host = ClassicHost::new(name, class_of_device);
+        let (sdp, results) = SdpQueryHandler::searching(SERIAL_PORT_SERVICE_CLASS);
+        let _ = host.register_handler(Box::new(sdp));
+        Self {
+            host,
+            target: Some(target),
+            // A client need be neither discoverable nor connectable: it is
+            // the one doing the finding.
+            scan_enable: classic_host::scan_enable::NONE,
+            phase: ClassicPhase::Starting,
+            wanted_service: SERIAL_PORT_SERVICE_CLASS,
+            sdp_results: Some(results),
+            port: None,
+            to_send: payload.into(),
+            received: Vec::new(),
+            error: None,
+        }
+    }
+
+    /// Makes this device's Scan Enable `value` — used to build a device that
+    /// is deliberately not discoverable.
+    pub fn with_scan_enable(mut self, value: u8) -> Self {
+        self.scan_enable = value;
+        self
+    }
+
+    /// How far the plan has got.
+    pub fn phase(&self) -> ClassicPhase {
+        self.phase
+    }
+
+    /// Why the plan stopped, if it did.
+    pub fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
+    /// The devices this device's inquiry turned up.
+    pub fn discovered(&self) -> &[DiscoveredDevice] {
+        self.host.discovered()
+    }
+
+    /// The underlying host, for assertions a plan does not cover.
+    pub fn host(&self) -> &ClassicHost {
+        &self.host
+    }
+
+    /// What arrived over the serial port.
+    pub fn received(&self) -> &[Vec<u8>] {
+        &self.received
+    }
+
+    /// Queues this device's bring-up on its channel.
+    fn queue_start(&mut self, channel: &HciChannel) {
+        for packet in self.host.start_commands() {
+            let _ = channel.inject_host_packet(packet);
+        }
+        for packet in self.host.set_scan_enable(self.scan_enable) {
+            let _ = channel.inject_host_packet(packet);
+        }
+        self.phase = match self.target {
+            Some(_) => ClassicPhase::Starting,
+            None => ClassicPhase::Accepting,
+        };
+    }
+
+    fn fail(&mut self, reason: impl Into<String>) {
+        self.error = Some(reason.into());
+        self.phase = ClassicPhase::Failed;
+    }
+
+    /// Advance the plan one step, emitting whatever HCI it asks for.
+    ///
+    /// Every transition is gated on something the *controller* said, never
+    /// on a tick count: that is what makes a stalled step visible as a phase
+    /// that stops moving rather than as a scene that silently drifts on.
+    fn produce(&mut self, channel: &HciChannel) {
+        let Some(target) = self.target else {
+            // An acceptor still has to drain what its profiles want to send.
+            for packet in self.host.poll() {
+                let _ = channel.inject_host_packet(packet);
+            }
+            return;
+        };
+
+        let packets = match self.phase {
+            ClassicPhase::Starting => {
+                self.phase = ClassicPhase::Inquiring;
+                self.host.start_inquiry(1)
+            }
+            ClassicPhase::Inquiring => {
+                if !self.host.inquiry_finished() {
+                    Vec::new()
+                } else if self.host.discovered().iter().any(|d| d.address == target) {
+                    self.phase = ClassicPhase::ResolvingNames;
+                    self.host.request_remote_name(target)
+                } else {
+                    self.fail(format!("inquiry did not find {target}"));
+                    Vec::new()
+                }
+            }
+            ClassicPhase::ResolvingNames => {
+                if self.host.name_of(target).is_none() {
+                    Vec::new()
+                } else {
+                    self.phase = ClassicPhase::Paging;
+                    self.host.create_connection(target)
+                }
+            }
+            ClassicPhase::Paging => {
+                if self.host.connection().is_none() {
+                    Vec::new()
+                } else {
+                    self.phase = ClassicPhase::QueryingSdp;
+                    // The SDP query itself leaves on its own, from the
+                    // handler's `poll_output`, once this channel opens.
+                    self.host.open_channel(SDP_PSM).unwrap_or_default()
+                }
+            }
+            ClassicPhase::QueryingSdp => self.advance_sdp(),
+            ClassicPhase::OpeningRfcomm => {
+                let open = self
+                    .port
+                    .as_ref()
+                    .and_then(|port| port.lock().ok().map(|port| port.is_open()))
+                    .unwrap_or(false);
+                if !open {
+                    Vec::new()
+                } else {
+                    self.phase = ClassicPhase::Exchanging;
+                    if let Some(port) = self.port.as_ref()
+                        && let Ok(mut port) = port.lock()
+                    {
+                        port.write(std::mem::take(&mut self.to_send));
+                    }
+                    Vec::new()
+                }
+            }
+            ClassicPhase::Exchanging => {
+                self.drain_port();
+                if self.received.is_empty() {
+                    Vec::new()
+                } else {
+                    self.phase = ClassicPhase::Done;
+                    self.host.disconnect()
+                }
+            }
+            ClassicPhase::Done | ClassicPhase::Failed | ClassicPhase::Accepting => Vec::new(),
+        };
+
+        for packet in packets {
+            let _ = channel.inject_host_packet(packet);
+        }
+        // Profiles speak unprompted too — the RFCOMM initiator's SABM leaves
+        // this way, not from the plan above.
+        for packet in self.host.poll() {
+            let _ = channel.inject_host_packet(packet);
+        }
+    }
+
+    /// The SDP stage: wait for the answer, then register an RFCOMM initiator
+    /// on the server channel the peer advertised and open its L2CAP channel.
+    ///
+    /// The handler cannot be registered any earlier: which channel to open a
+    /// DLC on is precisely what the SDP query is for, and guessing it is how
+    /// a client ends up with a DLC refused by DM.
+    fn advance_sdp(&mut self) -> Vec<Vec<u8>> {
+        let Some(results) = self.sdp_results.as_ref() else {
+            self.fail("no SDP results handle");
+            return Vec::new();
+        };
+        let Ok(results) = results.lock() else {
+            return Vec::new();
+        };
+        if !results.answered {
+            return Vec::new();
+        }
+        if let Some(code) = results.error {
+            drop(results);
+            self.fail(format!("peer's SDP server returned error {code:#06x}"));
+            return Vec::new();
+        }
+        let Some(rfcomm_channel) = results.channel_for(self.wanted_service) else {
+            drop(results);
+            self.fail("peer advertises no Serial Port service".to_string());
+            return Vec::new();
+        };
+        drop(results);
+
+        let (rfcomm, port) = RfcommHandler::initiator(rfcomm_channel);
+        if let Err(e) = self.host.register_handler(Box::new(rfcomm)) {
+            self.fail(e.to_string());
+            return Vec::new();
+        }
+        self.port = Some(port);
+        self.phase = ClassicPhase::OpeningRfcomm;
+        match self.host.open_channel(RFCOMM_PSM) {
+            Ok(packets) => packets,
+            Err(e) => {
+                self.fail(e.to_string());
+                Vec::new()
+            }
+        }
+    }
+
+    /// Move anything the serial port received into this device's record of it.
+    fn drain_port(&mut self) {
+        if let Some(port) = self.port.as_ref()
+            && let Ok(mut port) = port.lock()
+        {
+            self.received.extend(port.take_received());
+        }
+    }
+
+    /// Feed one controller packet to the host and send back what it answers.
+    fn consume(&mut self, channel: &HciChannel, packet: &[u8]) {
+        match self.host.handle_packet(packet) {
+            Ok(out) => {
+                for reply in out {
+                    let _ = channel.inject_host_packet(reply);
+                }
+            }
+            Err(e) => self.fail(e.to_string()),
+        }
+        self.drain_port();
+    }
+}
+
 /// The role a device plays in a [`SceneEngine`].
 enum SceneRole {
     /// A scripted GATT peripheral that advertises and serves. Boxed because a
@@ -2239,6 +2576,9 @@ enum SceneRole {
     /// A central whose behaviour is a Rhai script (`android::BluetoothGatt`).
     /// Boxed for the same reason the peripheral is: it carries an engine.
     ScriptedCentral(Box<ScriptedCentral>),
+    /// A BR/EDR device — the fifth thing a scene can host, and the only one
+    /// that is not LE. Boxed: it carries a whole `ClassicHost`.
+    Classic(Box<ClassicDevice>),
 }
 
 /// One device in a scene: the controller-side [`HciChannel`] it shares with the
@@ -2338,6 +2678,38 @@ impl SceneEngine {
         Ok(index)
     }
 
+    /// Adds a **BR/EDR** device at `address`; returns its device index.
+    ///
+    /// This is the fifth thing a scene can host, beside the four LE roles
+    /// above, and the first that speaks Bluetooth Classic. Build the device
+    /// with [`ClassicDevice::acceptor`] (discoverable, connectable, serving
+    /// SDP and an echoing RFCOMM port) or [`ClassicDevice::initiator`]
+    /// (inquires, pages, queries SDP, opens the advertised serial port).
+    ///
+    /// Nothing about it is LE: it shares the [`Link`] with the LE devices
+    /// because they share a simulated room and an ACL router, not because
+    /// they share a transport.
+    pub fn add_classic_device(&mut self, address: Address, device: ClassicDevice) -> usize {
+        let channel = self.link.add_device(address);
+        let index = self.devices.len();
+        self.devices.push(SceneDevice {
+            channel,
+            role: SceneRole::Classic(Box::new(device)),
+            started: false,
+        });
+        index
+    }
+
+    /// The classic device at `index`, or `None` if that device is something
+    /// else — the handle a test needs for its phase, what its inquiry found,
+    /// and what came back over its serial port.
+    pub fn classic_device(&self, index: usize) -> Option<&ClassicDevice> {
+        match self.devices.get(index)?.role {
+            SceneRole::Classic(ref d) => Some(d),
+            _ => None,
+        }
+    }
+
     /// The number of devices in the scene.
     pub fn device_count(&self) -> usize {
         self.devices.len()
@@ -2350,13 +2722,17 @@ impl SceneEngine {
     pub fn tick(&mut self, t_seconds: f64) {
         for device in &mut self.devices {
             if !device.started {
-                let _ = match &device.role {
+                let _ = match &mut device.role {
                     SceneRole::Peripheral(p) => p.queue_start(&device.channel),
                     SceneRole::Scanner(_) => queue_scanner_start(&device.channel),
                     // Both centrals queue their own bring-up: the scene one
                     // in `produce`, the scripted one when its script called
                     // `connect`.
                     SceneRole::Central(_) | SceneRole::ScriptedCentral(_) => Ok(()),
+                    SceneRole::Classic(c) => {
+                        c.queue_start(&device.channel);
+                        Ok(())
+                    }
                 };
                 device.started = true;
             }
@@ -2376,6 +2752,7 @@ impl SceneEngine {
                         let _ = device.channel.inject_host_packet(packet);
                     }
                 }
+                SceneRole::Classic(c) => c.produce(&device.channel),
                 SceneRole::Scanner(_) => {}
             }
         }
@@ -2408,6 +2785,11 @@ impl SceneEngine {
                         }
                     }
                 }
+                SceneRole::Classic(c) => {
+                    while let Some(pkt) = device.channel.poll_controller_packet() {
+                        c.consume(&device.channel, &pkt);
+                    }
+                }
             }
         }
     }
@@ -2436,7 +2818,10 @@ impl SceneEngine {
     pub fn peripheral_status_json(&self, index: usize) -> Option<String> {
         match self.devices.get(index)?.role {
             SceneRole::Peripheral(ref p) => Some(p.status_json()),
-            SceneRole::Scanner(_) | SceneRole::Central(_) | SceneRole::ScriptedCentral(_) => None,
+            SceneRole::Scanner(_)
+            | SceneRole::Central(_)
+            | SceneRole::ScriptedCentral(_)
+            | SceneRole::Classic(_) => None,
         }
     }
 
@@ -2446,7 +2831,7 @@ impl SceneEngine {
         match self.devices.get(index)?.role {
             SceneRole::Central(ref c) => Some(c.status_json()),
             SceneRole::ScriptedCentral(ref c) => Some(c.status_json()),
-            SceneRole::Peripheral(_) | SceneRole::Scanner(_) => None,
+            SceneRole::Peripheral(_) | SceneRole::Scanner(_) | SceneRole::Classic(_) => None,
         }
     }
 
@@ -5593,5 +5978,244 @@ mod tests {
         let long = "a-demo-advertiser-name-well-past-the-legacy-advertising-limit";
         let payload = build_demo_adv_payload(long, 0x181A, 0, &[]);
         assert!(payload.len() <= 31, "payload {} bytes", payload.len());
+    }
+}
+
+#[cfg(test)]
+mod classic_scene_tests {
+    use super::*;
+
+    /// The RFCOMM server channel the acceptor advertises and serves.
+    const SPP_CHANNEL: u8 = 3;
+
+    fn addr(s: &str) -> Address {
+        s.parse().unwrap()
+    }
+
+    /// Run the scene until `done` or `limit` ticks have passed. Returns the
+    /// number of ticks used, so a test can assert progress rather than merely
+    /// eventual success.
+    fn run_until(
+        scene: &mut SceneEngine,
+        limit: usize,
+        mut done: impl FnMut(&SceneEngine) -> bool,
+    ) -> usize {
+        for tick in 0..limit {
+            if done(scene) {
+                return tick;
+            }
+            scene.tick(tick as f64 * 0.01);
+        }
+        limit
+    }
+
+    /// Two `ClassicHost`s in one scene, with nothing but the simulated
+    /// controller between them: A finds B by inquiry, learns its name, pages
+    /// it, opens L2CAP, queries SDP, opens the RFCOMM channel that SDP
+    /// advertised, exchanges data, and disconnects.
+    ///
+    /// This is the whole point of the BR/EDR work in `controller::sim`: none
+    /// of it was reachable before, because a `ClassicHost` had nothing to
+    /// talk to except netsim.
+    #[test]
+    fn test_two_classic_hosts_discover_connect_and_exchange_data() {
+        let mut scene = SceneEngine::new();
+        let acceptor_address = addr("AA:BB:CC:00:00:02");
+        let acceptor = scene.add_classic_device(
+            acceptor_address,
+            ClassicDevice::acceptor("Simble SPP", [0x04, 0x04, 0x24], SPP_CHANNEL),
+        );
+        let initiator = scene.add_classic_device(
+            addr("AA:BB:CC:00:00:01"),
+            ClassicDevice::initiator(
+                "Simble Phone",
+                [0x04, 0x02, 0x5A],
+                acceptor_address,
+                b"hello serial".to_vec(),
+            ),
+        );
+
+        let ticks = run_until(&mut scene, 200, |scene| {
+            matches!(
+                scene.classic_device(initiator).map(ClassicDevice::phase),
+                Some(ClassicPhase::Done) | Some(ClassicPhase::Failed)
+            )
+        });
+
+        let client = scene.classic_device(initiator).expect("classic device");
+        assert_eq!(
+            client.phase(),
+            ClassicPhase::Done,
+            "the whole BR/EDR sequence must complete (stopped after {ticks} \
+             ticks): {:?}",
+            client.error()
+        );
+
+        // Each stage, asserted for itself — a plan that reached `Done` by
+        // skipping one would be a worse bug than one that never finished.
+        assert_eq!(
+            client.discovered().len(),
+            1,
+            "exactly the one discoverable device in the scene"
+        );
+        let found = &client.discovered()[0];
+        assert_eq!(found.address, acceptor_address, "found by inquiry");
+        assert_eq!(
+            found.class_of_device,
+            [0x04, 0x04, 0x24],
+            "with the Class of Device the acceptor's host wrote"
+        );
+        assert_eq!(
+            found.name.as_deref(),
+            Some("Simble SPP"),
+            "and its name, which only a Remote Name Request can supply — an \
+             inquiry result carries no name"
+        );
+        assert_eq!(
+            client.received(),
+            [b"hello serial".to_vec()],
+            "the acceptor's echoing serial port answered over RFCOMM, which \
+             means SDP, L2CAP and the ACL underneath all worked"
+        );
+
+        // The acceptor saw a real link too, and it is gone again.
+        let server = scene.classic_device(acceptor).expect("classic device");
+        assert!(
+            server.host().connection().is_none(),
+            "the initiator disconnected, and the acceptor was told"
+        );
+    }
+
+    /// The negative half, and the reason Scan Enable is modelled at all: a
+    /// device that never made itself discoverable must not be found. A
+    /// simulator that connected regardless would hide the single most common
+    /// BR/EDR bring-up bug there is.
+    #[test]
+    fn test_a_device_that_is_not_discoverable_is_not_found() {
+        let mut scene = SceneEngine::new();
+        let hidden_address = addr("AA:BB:CC:00:00:02");
+        scene.add_classic_device(
+            hidden_address,
+            ClassicDevice::acceptor("Invisible", [0x04, 0x04, 0x24], SPP_CHANNEL)
+                .with_scan_enable(classic_host::scan_enable::NONE),
+        );
+        let initiator = scene.add_classic_device(
+            addr("AA:BB:CC:00:00:01"),
+            ClassicDevice::initiator(
+                "Simble Phone",
+                [0x04, 0x02, 0x5A],
+                hidden_address,
+                b"hello".to_vec(),
+            ),
+        );
+
+        run_until(&mut scene, 200, |scene| {
+            matches!(
+                scene.classic_device(initiator).map(ClassicDevice::phase),
+                Some(ClassicPhase::Done) | Some(ClassicPhase::Failed)
+            )
+        });
+
+        let client = scene.classic_device(initiator).expect("classic device");
+        assert!(
+            client.discovered().is_empty(),
+            "a device with Scan Enable 0x00 answers no inquiry: {:?}",
+            client.discovered()
+        );
+        assert_eq!(
+            client.phase(),
+            ClassicPhase::Failed,
+            "and the client must give up rather than hang"
+        );
+        assert!(
+            client.error().is_some_and(|e| e.contains("inquiry")),
+            "with a reason that names the stage it failed at: {:?}",
+            client.error()
+        );
+    }
+
+    /// A device that is discoverable but not connectable is found by an
+    /// inquiry and then refuses to say what it is — which is exactly what an
+    /// "unknown device" entry in a phone's Bluetooth list means, since a
+    /// Remote Name Request pages the device.
+    #[test]
+    fn test_a_discoverable_but_unconnectable_device_is_found_but_not_named() {
+        let mut scene = SceneEngine::new();
+        let shy_address = addr("AA:BB:CC:00:00:02");
+        scene.add_classic_device(
+            shy_address,
+            ClassicDevice::acceptor("Shy", [0x04, 0x04, 0x24], SPP_CHANNEL)
+                .with_scan_enable(classic_host::scan_enable::INQUIRY_ONLY),
+        );
+        let initiator = scene.add_classic_device(
+            addr("AA:BB:CC:00:00:01"),
+            ClassicDevice::initiator(
+                "Simble Phone",
+                [0x04, 0x02, 0x5A],
+                shy_address,
+                b"hello".to_vec(),
+            ),
+        );
+
+        run_until(&mut scene, 60, |_| false);
+
+        let client = scene.classic_device(initiator).expect("classic device");
+        assert_eq!(
+            client.discovered().len(),
+            1,
+            "inquiry scan alone is enough to be found"
+        );
+        assert_eq!(
+            client.discovered()[0].name,
+            None,
+            "but page scan is what it takes to be named"
+        );
+        assert_eq!(
+            client.phase(),
+            ClassicPhase::ResolvingNames,
+            "the client is still waiting on a name it will never get — and it \
+             is *visibly* stuck at that stage rather than silently elsewhere"
+        );
+    }
+
+    /// A scene can hold LE and BR/EDR devices at once. They share the
+    /// simulated room and nothing else, so neither shows up in the other's
+    /// discovery.
+    #[test]
+    fn test_classic_and_le_devices_coexist_without_seeing_each_other() {
+        let mut scene = SceneEngine::new();
+        let acceptor_address = addr("AA:BB:CC:00:00:02");
+        scene.add_classic_device(
+            acceptor_address,
+            ClassicDevice::acceptor("Simble SPP", [0x04, 0x04, 0x24], SPP_CHANNEL),
+        );
+        let initiator = scene.add_classic_device(
+            addr("AA:BB:CC:00:00:01"),
+            ClassicDevice::initiator(
+                "Simble Phone",
+                [0x04, 0x02, 0x5A],
+                acceptor_address,
+                b"ping".to_vec(),
+            ),
+        );
+        let scanner = scene.add_scanner(addr("AA:BB:CC:00:00:03"));
+
+        run_until(&mut scene, 200, |scene| {
+            matches!(
+                scene.classic_device(initiator).map(ClassicDevice::phase),
+                Some(ClassicPhase::Done) | Some(ClassicPhase::Failed)
+            )
+        });
+
+        assert_eq!(
+            scene.classic_device(initiator).map(ClassicDevice::phase),
+            Some(ClassicPhase::Done),
+            "the classic pair is unaffected by an LE scanner in the room"
+        );
+        assert!(
+            scene.scanner_reports_json(scanner) == "[]",
+            "and an LE scanner sees no BR/EDR device: inquiry and advertising \
+             are different radios doing different things"
+        );
     }
 }

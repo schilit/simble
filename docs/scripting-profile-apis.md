@@ -148,8 +148,9 @@ The general rule, because it decides how much work each profile is:
 
 > **A native support function is enough when the device already fits something
 > a scene can host.** For LE that is everything, because every LE device is a
-> peripheral or a central. Classic needs the scene to learn a new kind of
-> device first, and only then do bindings become the easy part.
+> peripheral or a central. Classic needed *two* things first — a controller
+> that speaks BR/EDR and a scene slot to put a device in — and both now
+> exist, so its bindings are the easy part too.
 
 ### LE — a binding is the whole job
 
@@ -161,24 +162,58 @@ That covers the 17 unbound profiles, the Auracast source (wrapping
 `BigBroadcaster`) and Channel Sounding (wrapping `CsInitiator`). Roughly
 mechanical work against implementations that already have tests.
 
-### Classic — blocked one layer below scripting
+### Classic — the layer below scripting is now built
 
 A2DP, AVRCP, HFP and Classic HID are **not** blocked by a missing Rhai binding.
-`ClassicHost` appears nowhere in `wasm_ws.rs` or `scene/mod.rs`: there is no
-path for a BR/EDR device to enter a scene at all. Its constructor takes an
-`SdpServer` and it speaks H4 straight to a controller.
+They were blocked by two things below it, and both are now done:
 
-Adding `android::BluetoothA2dp` today would produce a script that compiles and
-has nothing to attach to — which is worse than not having it, because it looks
-like support.
+1. **The simulated controller spoke only LE.** This was the real blocker, and
+   an earlier version of this document did not name it. `SceneEngine`'s
+   `Link` (`controller/sim.rs`) had no inquiry, no scan enable, no paging and
+   no BR/EDR Connection Complete — so even with a scene slot, a `ClassicHost`
+   would have sat idle for ever: it consumes H4 and emits H4, and nothing was
+   ever going to send it a Connection Request. `sim.rs` now models scan
+   enable, inquiry, paging, Remote Name Request and classic ACL routing.
+2. **The scene could not host a BR/EDR device.** `SceneEngine::add_classic_device`
+   is now the fifth thing a scene can host, beside `add_peripheral`,
+   `add_scanner`, `add_central` and `add_scripted_central`.
 
-The prerequisite is the scene/transport adapter described in
-`docs/peripheral-support.md`: a fifth thing a scene can host. Once that exists,
-four profiles unlock together and the bindings are as mechanical as the LE ones.
+Two `ClassicHost`s in one scene now inquire, page, open L2CAP, query SDP,
+open the advertised RFCOMM channel and exchange data with no netsim and no
+radio — see `classic_scene_tests` in `transport/wasm_ws.rs`.
 
-**So the two halves are different kinds of work.** The LE half is ~17
-bindings against tested Rust. The Classic half is one piece of architecture.
-Do not price them the same, and do not start the Classic bindings first.
+**Two corrections to what this document used to say.** `ClassicHost`'s
+constructor does *not* take an `SdpServer`: it is `ClassicHost::new(name,
+class_of_device)`, and handlers — `SdpHandler`, `RfcommHandler`, and anything
+else implementing `ProtocolHandler` — are registered separately with
+`register_handler`. And `controller/lmp.rs` is easy to over-trust: it models
+LMP, which is controller-to-controller *below* HCI, so it produces no
+host-facing events. It is now used inside `sim.rs` for the connection
+handshake (with a new host-gated `ConnectionPending` state, because answering
+a page is the host's decision), but it was never the missing layer.
+
+**What is left for the profile bindings** is now genuinely the binding work
+plus a `ProtocolHandler` per profile: A2DP, AVRCP, HFP and Classic HID have
+protocol implementations in `classic/*` but are not yet registered as
+handlers. That is per-profile work, not architecture.
+
+### Android names for the Classic surface
+
+When those bindings are written, they should use Android's API set, exactly
+as the LE ones do — `@SystemApi` is not a reason to avoid a name.
+
+| simble | Android proxy |
+|---|---|
+| A2DP source / sink | `BluetoothA2dp` / `BluetoothA2dpSink` |
+| AVRCP controller | `BluetoothAvrcpController` |
+| HFP AG / HF | `BluetoothHeadset` / `BluetoothHeadsetClient` |
+| Classic HID host / device | `BluetoothHidHost` / `BluetoothHidDevice` |
+
+The one that maps onto the **controller** layer built here is not a profile
+proxy at all. Android's discovery surface is `BluetoothAdapter.startDiscovery()`
+with the `ACTION_FOUND` broadcast — which is HCI Inquiry plus Inquiry Result —
+and the remote name is `BluetoothDevice.getName()`, which is HCI Remote Name
+Request. Both are now real underneath.
 
 ## Deliberately out of scope
 

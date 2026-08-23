@@ -25,8 +25,8 @@ use crate::classic::sdp::{
 use crate::l2cap::classic::ClassicChannelManager;
 use crate::l2cap::{L2capHeader, cid};
 use crate::packets::{
-    ConfigurationRequestHeader, ConfigurationResponseHeader, ConnectionRequestHeader, HciEvent,
-    L2capSignalingHeader, signaling_code,
+    ConfigurationRequestHeader, ConfigurationResponseHeader, ConnectionRequestHeader,
+    ConnectionResponseHeader, HciEvent, L2capSignalingHeader, signaling_code,
 };
 use crate::types::{Address, SimbleError};
 use zerocopy::{FromBytes, IntoBytes};
@@ -47,6 +47,43 @@ mod opcode {
     pub const WRITE_SIMPLE_PAIRING_MODE: [u8; 2] = [0x56, 0x0C];
     /// Accept Connection Request.
     pub const ACCEPT_CONNECTION_REQUEST: [u8; 2] = [0x09, 0x04];
+    /// Inquiry — the initiator's half of discovery.
+    pub const INQUIRY: [u8; 2] = [0x01, 0x04];
+    /// Create Connection: page a device found by inquiry.
+    pub const CREATE_CONNECTION: [u8; 2] = [0x05, 0x04];
+    /// Disconnect.
+    pub const DISCONNECT: [u8; 2] = [0x06, 0x04];
+    /// Remote Name Request: ask a discovered device what it is called.
+    pub const REMOTE_NAME_REQUEST: [u8; 2] = [0x19, 0x04];
+}
+
+/// HCI event codes this host reacts to beyond the ones [`HciEvent`] gives a
+/// typed variant for.
+mod event_code {
+    /// Inquiry Complete — discovery is over.
+    pub const INQUIRY_COMPLETE: u8 = 0x01;
+    /// Inquiry Result — one or more devices answered.
+    pub const INQUIRY_RESULT: u8 = 0x02;
+    /// Remote Name Request Complete.
+    pub const REMOTE_NAME_REQUEST_COMPLETE: u8 = 0x07;
+}
+
+/// The General/Unlimited Inquiry Access Code, 0x9E8B33 — the LAP every
+/// discoverable device listens on. A host that inquires on any other LAP
+/// finds only devices in limited discoverable mode.
+const GIAC: [u8; 3] = [0x33, 0x8B, 0x9E];
+
+/// A device this host found by inquiry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredDevice {
+    /// The device's address.
+    pub address: Address,
+    /// Its Class of Device, which is what a UI turns into an icon.
+    pub class_of_device: [u8; 3],
+    /// Its name, once a Remote Name Request has been answered. An inquiry
+    /// alone never carries a name — that is why phones show "unknown device"
+    /// while they are still resolving one.
+    pub name: Option<String>,
 }
 
 /// Scan Enable values (Vol 4, Part E, Section 7.3.18). Inquiry scan makes a
@@ -124,7 +161,14 @@ pub trait ProtocolHandler: std::fmt::Debug {
     /// peer — a device writing bytes to an open serial port, say. The host
     /// drains this after every packet and whenever it is polled, so data a
     /// device queues is not stuck waiting for the peer to speak first.
-    fn poll_output(&mut self) -> Vec<Vec<u8>> {
+    ///
+    /// This is also how a *client* profile speaks first at all: an RFCOMM
+    /// initiator's SABM and an SDP query are both unprompted, so they leave
+    /// here. `peer_mtu` is the negotiated L2CAP MTU of the channel being
+    /// polled, which a profile that must size frames to the channel (RFCOMM)
+    /// needs and cannot learn any other way before the first inbound frame.
+    fn poll_output(&mut self, peer_mtu: u16) -> Vec<Vec<u8>> {
+        let _ = peer_mtu;
         Vec::new()
     }
 
@@ -173,6 +217,173 @@ impl ProtocolHandler for SdpHandler {
 
     fn on_data(&mut self, data: &[u8], peer_mtu: u16) -> Vec<Vec<u8>> {
         vec![self.server.handle_request(data, peer_mtu)]
+    }
+}
+
+/// What an [`SdpQueryHandler`] learned from a peer's SDP server.
+#[derive(Debug, Default)]
+pub struct SdpQueryResults {
+    /// Whether a response — even an empty or failed one — has arrived. This
+    /// is what tells a driver "discovery finished and found nothing" apart
+    /// from "discovery has not answered yet", which are the same thing to
+    /// anyone only looking at `rfcomm_channels`.
+    pub answered: bool,
+    /// The error code, if the peer's server answered with an SDP error.
+    pub error: Option<u16>,
+    /// RFCOMM server channel numbers advertised, with their service classes.
+    pub rfcomm_channels: Vec<(u8, Vec<SdpUuid>)>,
+}
+
+impl SdpQueryResults {
+    /// The server channel of the service advertising `uuid`, if any. This is
+    /// the number an RFCOMM client must open a DLC on; opening any other is
+    /// refused with DM.
+    pub fn channel_for(&self, uuid: SdpUuid) -> Option<u8> {
+        self.rfcomm_channels
+            .iter()
+            .find(|(_, classes)| classes.contains(&uuid))
+            .map(|(channel, _)| *channel)
+    }
+}
+
+/// A shared [`SdpQueryResults`]: the handler writes, the driver reads.
+pub type SharedSdpQueryResults = std::sync::Arc<std::sync::Mutex<SdpQueryResults>>;
+
+/// The SDP **client** as a channel handler: it asks the peer what it offers
+/// and records the answer.
+///
+/// It builds [`SdpPdu`]s directly rather than using [`crate::classic::sdp::SdpClient`].
+/// That client takes a `FnMut(&[u8]) -> Vec<u8>` transport — it *blocks* on
+/// each response — which cannot work above an event loop where the answer
+/// comes back several ticks later on an HCI channel. Only the one-shot,
+/// no-continuation case is handled here, which is every record a simble
+/// device serves; a peer whose answer needs continuation is reported as
+/// unanswered rather than silently truncated.
+#[derive(Debug)]
+pub struct SdpQueryHandler {
+    /// The service class UUID to search for.
+    uuid: SdpUuid,
+    /// Whether the query has been sent.
+    sent: bool,
+    /// Where the answer is put for the driver to read.
+    results: SharedSdpQueryResults,
+}
+
+impl SdpQueryHandler {
+    /// A client that searches for services advertising `uuid`, and the
+    /// results handle to read the answer from.
+    pub fn searching(uuid: SdpUuid) -> (Self, SharedSdpQueryResults) {
+        let results: SharedSdpQueryResults =
+            std::sync::Arc::new(std::sync::Mutex::new(SdpQueryResults::default()));
+        (
+            Self {
+                uuid,
+                sent: false,
+                results: results.clone(),
+            },
+            results,
+        )
+    }
+
+    /// Pulls the RFCOMM server channel and service classes out of one
+    /// record's attribute list. The protocol descriptor is
+    /// `[[L2CAP], [RFCOMM, channel]]`, so the channel is the second element
+    /// of the second layer.
+    fn read_record(attributes: &[ServiceAttribute]) -> Option<(u8, Vec<SdpUuid>)> {
+        let mut channel = None;
+        let mut classes = Vec::new();
+        for attribute in attributes {
+            match attribute.id {
+                attribute_id::PROTOCOL_DESCRIPTOR_LIST => {
+                    if let Some(rfcomm) = attribute
+                        .value
+                        .as_sequence()
+                        .and_then(|layers| layers.get(1))
+                        .and_then(DataElement::as_sequence)
+                        && let Some((value, _)) =
+                            rfcomm.get(1).and_then(DataElement::as_unsigned_integer)
+                    {
+                        channel = Some(value as u8);
+                    }
+                }
+                attribute_id::SERVICE_CLASS_ID_LIST => {
+                    if let Some(list) = attribute.value.as_sequence() {
+                        classes = list.iter().filter_map(DataElement::as_uuid).collect();
+                    }
+                }
+                _ => {}
+            }
+        }
+        channel.map(|channel| (channel, classes))
+    }
+}
+
+impl ProtocolHandler for SdpQueryHandler {
+    fn psm(&self) -> u16 {
+        SDP_PSM
+    }
+
+    fn on_data(&mut self, data: &[u8], _peer_mtu: u16) -> Vec<Vec<u8>> {
+        use crate::classic::sdp::SdpPdu;
+        let Ok(mut results) = self.results.lock() else {
+            return Vec::new();
+        };
+        match SdpPdu::parse(data) {
+            Some(SdpPdu::ServiceSearchAttributeResponse {
+                attribute_lists, ..
+            }) => {
+                results.answered = true;
+                let records = DataElement::from_bytes(&attribute_lists)
+                    .as_ref()
+                    .and_then(DataElement::as_sequence)
+                    .map(<[DataElement]>::to_vec)
+                    .unwrap_or_default();
+                for record in &records {
+                    let Some(items) = record.as_sequence() else {
+                        continue;
+                    };
+                    let attributes = ServiceAttribute::list_from_data_elements(items);
+                    if let Some(found) = Self::read_record(&attributes) {
+                        results.rfcomm_channels.push(found);
+                    }
+                }
+            }
+            Some(SdpPdu::ErrorResponse { error_code, .. }) => {
+                results.answered = true;
+                results.error = Some(error_code);
+            }
+            // Anything else is not an answer to what we asked. Saying so
+            // beats recording a success we did not get.
+            _ => {}
+        }
+        Vec::new()
+    }
+
+    fn poll_output(&mut self, _peer_mtu: u16) -> Vec<Vec<u8>> {
+        if self.sent {
+            return Vec::new();
+        }
+        self.sent = true;
+        // Ask for the protocol descriptor (which carries the RFCOMM channel)
+        // and the service class list (which says what the channel is *for*).
+        // Asking for both in one request is what makes the answer actionable.
+        let request = crate::classic::sdp::SdpPdu::ServiceSearchAttributeRequest {
+            transaction_id: 1,
+            service_search_pattern: DataElement::sequence(vec![DataElement::uuid(self.uuid)]),
+            maximum_attribute_byte_count: 0xFFFF,
+            attribute_id_list: DataElement::sequence(vec![
+                DataElement::unsigned_integer_16(attribute_id::PROTOCOL_DESCRIPTOR_LIST),
+                DataElement::unsigned_integer_16(attribute_id::SERVICE_CLASS_ID_LIST),
+            ]),
+            continuation_state: vec![0x00],
+        };
+        vec![request.to_bytes()]
+    }
+
+    fn on_channel_closed(&mut self) {
+        // A fresh channel means a fresh peer, so the question must be asked
+        // again — a stale `sent` would leave the next peer never queried.
+        self.sent = false;
     }
 }
 
@@ -249,6 +460,15 @@ pub struct RfcommHandler {
     /// and initial credits.
     listen: Vec<(u8, u16, u8)>,
     port: SharedRfcommPort,
+    /// When set, this end *drives* the session rather than answering one: it
+    /// starts the multiplexer and opens a DLC on this server channel without
+    /// waiting to be asked. `None` is the responder — the original
+    /// behaviour, and what a peripheral wants.
+    open_channel: Option<u8>,
+    /// Whether the initiator has sent its SABM on DLCI 0 yet.
+    started: bool,
+    /// Whether the initiator has asked for its data DLC yet.
+    dlc_requested: bool,
 }
 
 impl RfcommHandler {
@@ -262,6 +482,19 @@ impl RfcommHandler {
             // peer may negotiate, so a DLC never has to fragment.
             listen: vec![(channel, 127, 7)],
             port,
+            open_channel: None,
+            started: false,
+            dlc_requested: false,
+        }
+    }
+
+    /// The initiating end: as soon as the L2CAP channel opens this brings the
+    /// multiplexer up and opens a DLC on `channel` — the server channel the
+    /// peer's SDP record advertised.
+    pub fn initiating(channel: u8, port: SharedRfcommPort) -> Self {
+        Self {
+            open_channel: Some(channel),
+            ..Self::new(channel, port)
         }
     }
 
@@ -271,6 +504,69 @@ impl RfcommHandler {
         let port: SharedRfcommPort =
             std::sync::Arc::new(std::sync::Mutex::new(RfcommPort::echoing()));
         (Self::new(channel, port.clone()), port)
+    }
+
+    /// An initiating handler and its port. The port does not echo: an
+    /// initiator is the one asking, so echoing would bounce its own bytes
+    /// back for ever.
+    pub fn initiator(channel: u8) -> (Self, SharedRfcommPort) {
+        let port: SharedRfcommPort =
+            std::sync::Arc::new(std::sync::Mutex::new(RfcommPort::default()));
+        (Self::initiating(channel, port.clone()), port)
+    }
+
+    /// This end's multiplexer, created on first use — it must be sized to the
+    /// L2CAP channel's negotiated MTU, which is not known until the channel
+    /// is open.
+    fn multiplexer_for(&mut self, peer_mtu: u16) -> &mut crate::classic::rfcomm::Multiplexer {
+        use crate::classic::rfcomm::{Multiplexer, Role};
+        let role = if self.open_channel.is_some() {
+            Role::Initiator
+        } else {
+            Role::Responder
+        };
+        let listen = self.listen.clone();
+        self.multiplexer.get_or_insert_with(|| {
+            let mut multiplexer = Multiplexer::new(role, peer_mtu);
+            for (channel, max_frame_size, credits) in listen {
+                multiplexer.listen(channel, max_frame_size, credits);
+            }
+            multiplexer
+        })
+    }
+
+    /// Move the initiating end's handshake along one step: bring the
+    /// multiplexer up, then — once DLCI 0 is established — open the data DLC.
+    ///
+    /// Split into steps rather than done in one go because each step needs
+    /// the peer's answer first: the SABM must be acknowledged with UA before
+    /// a PN on any other DLCI means anything.
+    fn drive_initiator(&mut self, peer_mtu: u16) -> Vec<Vec<u8>> {
+        let Some(channel) = self.open_channel else {
+            return Vec::new();
+        };
+        if !self.started {
+            self.started = true;
+            let multiplexer = self.multiplexer_for(peer_mtu);
+            return multiplexer
+                .start()
+                .map(|sabm| vec![sabm])
+                .unwrap_or_default();
+        }
+        if self.dlc_requested {
+            return Vec::new();
+        }
+        let Some(multiplexer) = self.multiplexer.as_mut() else {
+            return Vec::new();
+        };
+        if !multiplexer.is_connected() {
+            return Vec::new();
+        }
+        self.dlc_requested = true;
+        multiplexer
+            .open_dlc(channel, 127, 7)
+            .map(|pn| vec![pn])
+            .unwrap_or_default()
     }
 
     /// Applies the multiplexer's events to the port, returning any frames
@@ -329,27 +625,24 @@ impl ProtocolHandler for RfcommHandler {
     }
 
     fn on_data(&mut self, data: &[u8], peer_mtu: u16) -> Vec<Vec<u8>> {
-        use crate::classic::rfcomm::{Multiplexer, Role};
-        let multiplexer = self.multiplexer.get_or_insert_with(|| {
-            // The peer paged us, so it drives the multiplexer: we respond.
-            let mut multiplexer = Multiplexer::new(Role::Responder, peer_mtu);
-            for &(channel, max_frame_size, credits) in &self.listen {
-                multiplexer.listen(channel, max_frame_size, credits);
-            }
-            multiplexer
-        });
+        let multiplexer = self.multiplexer_for(peer_mtu);
         // A malformed frame or FCS mismatch is the peer's problem: drop it
         // rather than tearing down a working session.
         let Ok((mut frames, events)) = multiplexer.receive(data) else {
             return Vec::new();
         };
         self.apply_events(events);
+        // An initiator's handshake advances on what just arrived: the UA(0)
+        // answering its SABM is what lets it ask for a DLC.
+        frames.extend(self.drive_initiator(peer_mtu));
         frames.extend(self.drain_outbound());
         frames
     }
 
-    fn poll_output(&mut self) -> Vec<Vec<u8>> {
-        self.drain_outbound()
+    fn poll_output(&mut self, peer_mtu: u16) -> Vec<Vec<u8>> {
+        let mut out = self.drive_initiator(peer_mtu);
+        out.extend(self.drain_outbound());
+        out
     }
 
     fn on_channel_closed(&mut self) {
@@ -358,6 +651,8 @@ impl ProtocolHandler for RfcommHandler {
         // device queued while nobody was connected stays queued for whoever
         // connects next.
         self.multiplexer = None;
+        self.started = false;
+        self.dlc_requested = false;
         if let Ok(mut port) = self.port.lock() {
             port.open_dlci = None;
         }
@@ -421,9 +716,13 @@ pub struct ClassicHost {
     connection: Option<(u16, Address)>,
     /// Next signalling identifier to use for host-initiated requests.
     next_identifier: u8,
-    /// Local CIDs this host has accepted, so channel state can be inspected
-    /// (the CID allocator does not expose iteration).
+    /// Local CIDs this host has accepted or opened, so channel state can be
+    /// inspected (the CID allocator does not expose iteration).
     local_cids: Vec<u16>,
+    /// Devices seen during inquiry, in the order they answered.
+    discovered: Vec<DiscoveredDevice>,
+    /// Whether an Inquiry Complete has arrived since the last inquiry began.
+    inquiry_finished: bool,
 }
 
 impl ClassicHost {
@@ -439,6 +738,8 @@ impl ClassicHost {
             connection: None,
             next_identifier: 1,
             local_cids: Vec::new(),
+            discovered: Vec::new(),
+            inquiry_finished: false,
         }
     }
 
@@ -485,6 +786,122 @@ impl ClassicHost {
             command(opcode::WRITE_SIMPLE_PAIRING_MODE, &[0x01]),
             command(opcode::WRITE_SCAN_ENABLE, &[scan_enable::INQUIRY_AND_PAGE]),
         ]
+    }
+
+    // -- the initiator side ------------------------------------------------
+    //
+    // Everything above this point answers a peer. Everything below starts
+    // something: discovery, paging, and opening an L2CAP channel as a client.
+    // A device that only responds cannot be half of a two-device scene, and
+    // until there was a simulated controller to talk to there was never a
+    // reason for this host to page anyone.
+
+    /// HCI Inquiry on the General Inquiry Access Code for `length` × 1.28 s,
+    /// reporting every device that answers. Clears whatever the last inquiry
+    /// found, so a caller cannot mistake a stale result for a fresh one.
+    pub fn start_inquiry(&mut self, length: u8) -> Vec<Vec<u8>> {
+        self.discovered.clear();
+        self.inquiry_finished = false;
+        let mut params = GIAC.to_vec();
+        params.push(length.max(1));
+        params.push(0x00); // Num_Responses: 0 = unlimited
+        vec![command(opcode::INQUIRY, &params)]
+    }
+
+    /// The devices this inquiry has found so far.
+    pub fn discovered(&self) -> &[DiscoveredDevice] {
+        &self.discovered
+    }
+
+    /// Whether an Inquiry Complete has arrived — i.e. whether
+    /// [`Self::discovered`] is the whole answer rather than a partial one.
+    pub fn inquiry_finished(&self) -> bool {
+        self.inquiry_finished
+    }
+
+    /// HCI Remote Name Request: ask a discovered device what it is called.
+    /// The answer lands in [`Self::discovered`].
+    pub fn request_remote_name(&self, address: Address) -> Vec<Vec<u8>> {
+        let mut params = address.as_slice().to_vec();
+        params.push(0x01); // Page_Scan_Repetition_Mode R1
+        params.push(0x00); // Reserved
+        params.extend_from_slice(&[0x00, 0x00]); // Clock_Offset
+        vec![command(opcode::REMOTE_NAME_REQUEST, &params)]
+    }
+
+    /// HCI Create Connection: page `address` and open an ACL link to it.
+    ///
+    /// The answer is a Command Status, and then — much later — a Connection
+    /// Complete once the peer's host has accepted. Nothing here waits for it;
+    /// [`Self::connection`] becomes `Some` when it arrives.
+    pub fn create_connection(&self, address: Address) -> Vec<Vec<u8>> {
+        let mut params = address.as_slice().to_vec();
+        params.extend_from_slice(&[
+            0x18, 0xCC, // Packet_Type: the usual DM1/DH1/DM3/DH3/DM5/DH5 set
+            0x01, // Page_Scan_Repetition_Mode R1
+            0x00, // Reserved
+            0x00, 0x00, // Clock_Offset
+            0x01, // Allow_Role_Switch
+        ]);
+        vec![command(opcode::CREATE_CONNECTION, &params)]
+    }
+
+    /// Opens an L2CAP channel to the peer's `psm` as a client: allocates a
+    /// CID and sends the Connection Request. The channel is not usable until
+    /// both sides have configured — see [`Self::channel_is_open`].
+    pub fn open_channel(&mut self, psm: u16) -> Result<Vec<Vec<u8>>, SimbleError> {
+        let Some((handle, _)) = self.connection else {
+            return Err(SimbleError::DeviceError(
+                "L2CAP: no ACL connection to open a channel on".into(),
+            ));
+        };
+        let spec = crate::l2cap::classic::ClassicChannelSpec::with_mtu(psm, DEFAULT_L2CAP_MTU);
+        let (local_cid, request) = self.channels.connect(&spec)?;
+        self.local_cids.push(local_cid);
+        Ok(vec![acl_packet(
+            handle,
+            &signaling_pdu(
+                signaling_code::CONNECTION_REQUEST,
+                self.take_identifier(),
+                request.as_bytes(),
+            ),
+        )])
+    }
+
+    /// Whether the channel for `psm` has completed configuration in both
+    /// directions and can carry data.
+    pub fn channel_is_open(&self, psm: u16) -> bool {
+        self.local_cids
+            .iter()
+            .filter_map(|cid| self.channels.get_channel(*cid))
+            .any(|channel| channel.psm == psm && channel.is_open())
+    }
+
+    /// HCI Disconnect on the current ACL link.
+    pub fn disconnect(&self) -> Vec<Vec<u8>> {
+        let Some((handle, _)) = self.connection else {
+            return Vec::new();
+        };
+        let mut params = handle.to_le_bytes().to_vec();
+        params.push(0x13); // Remote User Terminated Connection
+        vec![command(opcode::DISCONNECT, &params)]
+    }
+
+    /// HCI Write Scan Enable on its own — for a device that wants to be
+    /// something other than discoverable *and* connectable. A pure client
+    /// needs neither; a device that should be findable but not connectable
+    /// wants [`scan_enable::INQUIRY_ONLY`].
+    pub fn set_scan_enable(&self, value: u8) -> Vec<Vec<u8>> {
+        vec![command(opcode::WRITE_SCAN_ENABLE, &[value])]
+    }
+
+    /// The peer's name, if a Remote Name Request for `address` has been
+    /// answered.
+    pub fn name_of(&self, address: Address) -> Option<&str> {
+        self.discovered
+            .iter()
+            .find(|d| d.address == address)
+            .and_then(|d| d.name.as_deref())
     }
 
     /// Handles one H4 packet from the controller, returning what to send back.
@@ -539,7 +956,86 @@ impl ClassicHost {
                     &[scan_enable::INQUIRY_AND_PAGE],
                 )]
             }
+            HciEvent::Other { code, parameters } => {
+                self.handle_discovery_event(code, parameters);
+                Vec::new()
+            }
             _ => Vec::new(),
+        }
+    }
+
+    /// Records what an inquiry turned up. These arrive as `HciEvent::Other`
+    /// because they carry no typed variant; the layouts are Vol 4, Part E,
+    /// Sections 7.7.1, 7.7.2 and 7.7.7.
+    fn handle_discovery_event(&mut self, code: u8, parameters: &[u8]) {
+        match code {
+            event_code::INQUIRY_COMPLETE => self.inquiry_finished = true,
+            event_code::INQUIRY_RESULT => {
+                // Num_Responses, then that many 14-octet responses:
+                // BD_ADDR(6), Page_Scan_Repetition_Mode(1), Reserved(2),
+                // Class_of_Device(3), Clock_Offset(2).
+                const RESPONSE_LEN: usize = 14;
+                let Some((&count, rest)) = parameters.split_first() else {
+                    return;
+                };
+                for index in 0..usize::from(count) {
+                    let Some(response) = rest.get(index * RESPONSE_LEN..(index + 1) * RESPONSE_LEN)
+                    else {
+                        return; // truncated: stop rather than misread past it
+                    };
+                    let address = Address::new([
+                        response[0],
+                        response[1],
+                        response[2],
+                        response[3],
+                        response[4],
+                        response[5],
+                    ]);
+                    let class_of_device = [response[9], response[10], response[11]];
+                    // A real controller reports the same device repeatedly
+                    // for as long as the inquiry runs, so deduping is the
+                    // host's job — not the simulator's.
+                    if let Some(existing) =
+                        self.discovered.iter_mut().find(|d| d.address == address)
+                    {
+                        existing.class_of_device = class_of_device;
+                        continue;
+                    }
+                    self.discovered.push(DiscoveredDevice {
+                        address,
+                        class_of_device,
+                        name: None,
+                    });
+                }
+            }
+            event_code::REMOTE_NAME_REQUEST_COMPLETE => {
+                // Status(1), BD_ADDR(6), Remote_Name(248, NUL-padded).
+                if parameters.first() != Some(&0x00) || parameters.len() < 7 {
+                    return;
+                }
+                let address = Address::new([
+                    parameters[1],
+                    parameters[2],
+                    parameters[3],
+                    parameters[4],
+                    parameters[5],
+                    parameters[6],
+                ]);
+                let name = String::from_utf8_lossy(&parameters[7..])
+                    .trim_end_matches('\0')
+                    .to_string();
+                match self.discovered.iter_mut().find(|d| d.address == address) {
+                    Some(device) => device.name = Some(name),
+                    // A name can be asked for without an inquiry first — a
+                    // host reconnecting to a bonded device does exactly that.
+                    None => self.discovered.push(DiscoveredDevice {
+                        address,
+                        class_of_device: [0; 3],
+                        name: Some(name),
+                    }),
+                }
+            }
+            _ => {}
         }
     }
 
@@ -602,6 +1098,42 @@ impl ClassicHost {
                 if local_cid != 0
                     && let Ok((config, mtu_option)) =
                         self.channels.make_configuration_request(local_cid)
+                {
+                    let mut payload = config.as_bytes().to_vec();
+                    payload.extend_from_slice(&mtu_option);
+                    out.push(acl_packet(
+                        handle,
+                        &signaling_pdu(
+                            signaling_code::CONFIGURATION_REQUEST,
+                            self.take_identifier(),
+                            &payload,
+                        ),
+                    ));
+                }
+            }
+            // The peer answered a channel *we* opened. Without this arm a
+            // client's Connection Request is a dead end: the channel stays in
+            // WaitConnectRsp for ever and never learns the peer's CID, so
+            // nothing can be sent on it and nothing arriving on it matches.
+            signaling_code::CONNECTION_RESPONSE => {
+                let Ok((response, _)) = ConnectionResponseHeader::ref_from_prefix(params) else {
+                    return out;
+                };
+                // source_cid echoes the CID we chose — ours.
+                let local_cid = response.source_cid.get();
+                if self
+                    .channels
+                    .on_connection_response(local_cid, response)
+                    .is_err()
+                {
+                    // Refused, and the channel manager has dropped it.
+                    self.local_cids.retain(|cid| *cid != local_cid);
+                    return out;
+                }
+                // A client configures as soon as it is accepted; the channel
+                // opens once both sides have.
+                if let Ok((config, mtu_option)) =
+                    self.channels.make_configuration_request(local_cid)
                 {
                     let mut payload = config.as_bytes().to_vec();
                     payload.extend_from_slice(&mtu_option);
@@ -692,20 +1224,20 @@ impl ClassicHost {
         };
         // Map each open channel to its handler once, so a handler is polled
         // against the channel it actually serves.
-        let open: Vec<(u16, u16)> = self
+        let open: Vec<(u16, u16, u16)> = self
             .local_cids
             .iter()
             .filter_map(|cid| self.channels.get_channel(*cid))
             .filter(|channel| channel.is_open())
-            .map(|channel| (channel.psm, channel.peer_cid))
+            .map(|channel| (channel.psm, channel.peer_cid, channel.peer_mtu))
             .collect();
 
         let mut out = Vec::new();
-        for (psm, peer_cid) in open {
+        for (psm, peer_cid, peer_mtu) in open {
             let Some(handler) = self.handlers.iter_mut().find(|h| h.psm() == psm) else {
                 continue;
             };
-            for sdu in handler.poll_output() {
+            for sdu in handler.poll_output(peer_mtu) {
                 if sdu.is_empty() {
                     continue;
                 }
@@ -1036,7 +1568,7 @@ mod tests {
 
         // The device speaks first: nothing inbound prompted this.
         port.lock().unwrap().write(b"READY\r\n".to_vec());
-        let frames = handler.poll_output();
+        let frames = handler.poll_output(672);
         assert!(!frames.is_empty(), "queued data must leave on a poll");
 
         let events = shuttle(&mut peer, &mut handler, frames);
@@ -1085,7 +1617,7 @@ mod tests {
         let (mut handler, port) = RfcommHandler::echoing(3);
         port.lock().unwrap().write(b"early".to_vec());
         assert!(
-            handler.poll_output().is_empty(),
+            handler.poll_output(672).is_empty(),
             "nothing can be sent with no DLC open"
         );
 
@@ -1301,7 +1833,7 @@ mod tests {
 
         port.lock().unwrap().write(b"queued while alone".to_vec());
         assert!(
-            handler.poll_output().is_empty(),
+            handler.poll_output(672).is_empty(),
             "with no DLC open there is nowhere to send it, so it waits"
         );
 
