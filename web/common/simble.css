@@ -24,6 +24,15 @@
   --fs-label: 0.8rem;   /* uppercase section labels, hints */
   --fs-meta:  0.72rem;  /* uuids, chips, badges, footnotes */
   --fs-code:  0.8rem;   /* code and log blocks */
+
+  /* Content width. Every page had picked its own -- 52, 54, 60, 68, 72, 75 and
+     82rem across ten pages -- so the content edge jumped on every tab change,
+     which reads as the pages belonging to different sites. Two widths, each
+     with a reason: a tool page needs room for side-by-side panels, a reading
+     page wants a measure you can actually read. Pick one; do not invent a
+     third. */
+  --page-w: 72rem;      /* workspaces: panels, grids, live device views */
+  --read-w: 54rem;      /* prose: landing, docs, explanations */
 }
 * { box-sizing: border-box; }
 body {
@@ -262,7 +271,7 @@ details pre {
 .gatt-view .chr-actions button.on { color: var(--good); border-color: var(--good); }
 
 footer { color: var(--dim); font-size: var(--fs-meta); padding: 0 1.5rem 1.5rem;
-  max-width: 75rem; margin: 0 auto; }
+  max-width: var(--page-w); margin: 0 auto; }
 footer code { color: var(--good); }
 
 /* --- domain layout ------------------------------------------------------
@@ -272,9 +281,9 @@ footer code { color: var(--good); }
    whether it is mounted into the Devices shell's stage or into its own
    standalone <main> -- neither of which the module owns. */
 .domain { display: grid; gap: 1.25rem; padding: 1.25rem 1.5rem; margin: 0 auto; }
-.domain.one-up { grid-template-columns: minmax(20rem, 1fr); max-width: 52rem; }
+.domain.one-up { grid-template-columns: minmax(20rem, 1fr); max-width: var(--read-w); }
 .domain.two-up { grid-template-columns: minmax(20rem, 1fr) minmax(20rem, 1fr);
-  max-width: 72rem; }
+  max-width: var(--page-w); }
 /* Anything that spans the row: a backend selector, an intro paragraph. */
 .domain > .full { grid-column: 1 / -1; }
 @media (max-width: 60rem) { .domain { grid-template-columns: 1fr; } }
@@ -302,9 +311,14 @@ footer code { color: var(--good); }
 .about-body p:last-child { margin-bottom: 0; }
 
 /* --- the controller bar, in the Devices shell chrome --------------------- */
-.controller-host { max-width: 72rem; margin: 0 auto; padding: 1.25rem 1.5rem 0; }
+.controller-host { max-width: var(--page-w); margin: 0 auto; padding: 1.25rem 1.5rem 0; }
 .controller-bar { background: var(--panel); border: 1px solid var(--border);
   border-radius: 8px; padding: 0.55rem 0.9rem; font-size: var(--fs-body); }
+/* In the domain shell the bar sits in `.controller-host`, which supplies the
+   gap below it. A standalone page drops the bar straight into its column, so
+   it carries its own — one rule rather than the same margin copied into three
+   pages' style blocks. */
+.controller-bar.standalone { margin-bottom: 0.9rem; }
 /* Row one is identical on every domain, so switching tabs does not reshape
    it; anything domain-specific is the sentence below. */
 .controller-row { display: flex; align-items: center; gap: 1.1rem; flex-wrap: wrap; }

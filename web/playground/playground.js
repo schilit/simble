@@ -10,7 +10,7 @@ import { renderGatt } from "../common/viewer.js";
 import { wireAi } from "../common/ai.js";
 import { encodeScript, decodeScript } from "../common/share.js";
 import { attachHighlightedEditor } from "../common/highlight.js";
-import { createBackendSelector } from "../common/backend.js";
+import { createControllerBar } from "../common/controller-bar.js";
 
 const IN_PAGE_ADDR = "CC:1E:57:00:00:03";
 const WS_URL =
@@ -268,7 +268,7 @@ function loop() {
       const json = link.peripheral_status_json(linkIndex);
       if (json) {
         const status = JSON.parse(json);
-        setPill("in browser · advertising", "ok");
+        setPill("on air · advertising", "ok");
         render(status);
       }
     } catch (e) {
@@ -369,13 +369,17 @@ wireAi();
 
 // Controller backend: "in-page" (a wasm WebLink in this tab, no netsim) or
 // "websocket" (a real netsim scene). Switching resets to the stopped state.
-mode = createBackendSelector($("backend"), {
+const controllerBar = createControllerBar({
+  supports: { "in-page": true, "websocket": true },
   onChange: (m) => {
     mode = m;
     openedOnce = false;
     stop(); // tears down both backends, hides the setup panel, holds stopped
   },
 });
+controllerBar.el.classList.add("standalone");
+$("backend").append(controllerBar.el);
+mode = controllerBar.selected;
 
 // Start stopped: the editor holds the script, the device runs only on Run.
 setRunning(false);

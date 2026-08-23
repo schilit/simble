@@ -7,7 +7,7 @@
 //   • websocket — a real netsim / rootcanal-ws scene over ws://localhost:7681.
 
 import init, { WebScanner, WebAdvertiser, WebLink } from "../pkg/simble.js";
-import { createBackendSelector } from "../common/backend.js";
+import { createControllerBar } from "../common/controller-bar.js";
 
 const SCANNER_ADDR = "CC:1E:57:00:00:01";
 const wsUrl = (node, addr) =>
@@ -121,7 +121,7 @@ function makeInPageBackend() {
       let reports = [];
       try { reports = JSON.parse(link.scanner_reports_json(scannerIndex)); } catch (e) { console.error("tick:", e); }
       const n = link.device_count() - 1;
-      setPill(`in browser · ${n} advertiser${n === 1 ? "" : "s"}`, "ok");
+      setPill(`scanning · ${n} advertiser${n === 1 ? "" : "s"}`, "ok");
       return { reports };
     },
     teardown() { try { link.free(); } catch (_) { /* gone */ } },
@@ -206,9 +206,13 @@ function loop() {
 
 await init();
 
-mode = createBackendSelector($("backend"), {
+const controllerBar = createControllerBar({
+  supports: { "in-page": true, "websocket": true },
   onChange: (m) => { mode = m; rebuildBackend(); },
 });
+controllerBar.el.classList.add("standalone");
+$("backend").append(controllerBar.el);
+mode = controllerBar.selected;
 $("demo-toggle").addEventListener("change", (e) => {
   demosOn = e.target.checked;
   rebuildBackend();

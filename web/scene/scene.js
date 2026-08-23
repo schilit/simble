@@ -14,7 +14,7 @@
 
 import init, { WebLink, WebPeripheral, WebScanner } from "../pkg/simble.js";
 import { renderGatt, gattViewFor, escapeHtml } from "../common/viewer.js";
-import { createBackendSelector } from "../common/backend.js";
+import { createControllerBar } from "../common/controller-bar.js";
 import { createAboutBox } from "../common/about-box.js";
 
 const $ = (id) => document.getElementById(id);
@@ -486,7 +486,13 @@ function loopWs() {
 // ===========================================================================
 await init();
 
-mode = createBackendSelector($("backend"), { onChange: setMode });
+const controllerBar = createControllerBar({
+  supports: { "in-page": true, "websocket": true },
+  onChange: setMode,
+});
+controllerBar.el.classList.add("standalone");
+$("backend").append(controllerBar.el);
+mode = controllerBar.selected;
 
 // This used to be a bare paragraph above the controller card. It is the same
 // explanation every other page keeps in its About box, so it lives in one now

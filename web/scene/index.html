@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="../common/simble.css">
 <link rel="stylesheet" href="../common/nav.css">
 <style>
-  main { max-width: 82rem; margin: 0 auto; padding: 1rem 1.25rem 2rem; }
+  main { max-width: var(--page-w); margin: 0 auto; padding: 1rem 1.25rem 2rem; }
   /* The shared about box carries no outer margin of its own — it is normally a
      grid item in the domain shell. Here it is a block in a plain column, so it
      gets the same gap the controller card above it uses. */
@@ -79,7 +79,7 @@
   .rpt .chip { display: inline-block; border: 1px solid var(--border); border-radius: 1rem;
     padding: 0 0.5rem; margin: 0.2rem 0.3rem 0 0; font-size: var(--fs-meta); color: var(--accent); }
 
-  footer { max-width: 82rem; }
+  footer { max-width: var(--page-w); }
 
   /* netsim setup hint (websocket mode, no connection) */
   #setup { display: none; border-color: var(--warn); margin-bottom: 1rem; }
