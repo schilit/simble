@@ -65,6 +65,8 @@ const OP_DOWN = 0x00;
 const OP_UP = 0x01;
 const OP_UNMUTE_UP = 0x03;
 const OP_SET_ABSOLUTE = 0x04;
+const OP_UNMUTE = 0x05;
+const OP_MUTE = 0x06;
 
 // What makes an advertiser a sink worth streaming to: ASCS carries the
 // endpoint a client configures, PACS says what the device can decode. A
@@ -260,9 +262,12 @@ function applySpeaker(volume, muted, changeCounter) {
   });
   $("muteMark").setAttribute("opacity", muted ? "1" : "0");
   $("cone").setAttribute("fill", muted ? "#d1495b" : "#33cc77");
+  // Terser than it was, and still every field of the characteristic: the
+  // number now also sits beside the slider, where it is actually being read.
   $("readout").innerHTML =
-    `Volume State — volume <b>${volume}</b> · muted <b>${muted ? "yes" : "no"}</b> ` +
-    `· change counter <b>${changeCounter}</b>`;
+    `Volume State <b>${volume}</b> · <b>${muted ? "muted" : "unmuted"}</b> ` +
+    `· ctr <b>${changeCounter}</b>`;
+  $("vol-num").textContent = String(volume);
   if (document.activeElement !== slider) slider.value = String(volume);
   player.setVolume(volume, muted);
 }
@@ -790,6 +795,62 @@ function onKeyDown(event) {
 
 // --- markup ----------------------------------------------------------------
 
+// Icons are inline SVG rather than emoji: emoji are a different size and
+// weight in every platform's font, they cannot be dimmed when a button is
+// disabled, and 🔊 on a technical page reads as decoration. These draw in
+// `currentColor`, so they inherit the button's state for free.
+// The cone is deliberately small and hard-left, leaving over half the box for
+// the mark that distinguishes one opcode from the next. A first attempt gave
+// each icon a large cone and a small mark, and at this size all five were the
+// same grey blob -- which is worse than the words they replaced.
+const CONE = `<path d="M1.6 6.2h2L5.9 3.6v8.8L3.6 9.8h-2z" fill="currentColor" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/>`;
+const icon = (body) =>
+  `<svg viewBox="0 0 20 16" width="20" height="16" aria-hidden="true" fill="none"` +
+  ` stroke="currentColor" stroke-width="1.7" stroke-linecap="round">${CONE}${body}</svg>`;
+
+const WAVE_NEAR = `<path d="M8.4 6a3.6 3.6 0 0 1 0 4"/>`;
+const WAVE_FAR = `<path d="M11.4 3.9a7.2 7.2 0 0 1 0 8.2"/>`;
+
+const ICON = {
+  // Volume steps: a full-height arithmetic sign, nothing speaker-ish beside
+  // the cone, so they never blur into the three mute glyphs.
+  // The bars are short and stand well clear of the cone: a long one butted up
+  // against it turned "speaker minus" into a left arrow.
+  up: icon(`<path d="M14 5.2v5.6M11.2 8h5.6"/>`),
+  down: icon(`<path d="M11.2 8h5.6"/>`),
+  mute: icon(`<path d="M9.6 5.2l7 5.6M16.6 5.2l-7 5.6"/>`),
+  unmute: icon(WAVE_NEAR),
+  // Unmute *and* step up: both arcs, so it reads as the loudest of the three.
+  unmuteUp: icon(`${WAVE_NEAR}${WAVE_FAR}`),
+  // The sound gate is not a volume control at all, so it gets a power symbol —
+  // no cone, nothing that could be mistaken for an opcode button.
+  power:
+    `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none"` +
+    ` stroke="currentColor" stroke-width="1.7" stroke-linecap="round">` +
+    `<path d="M8 2.2v5.2"/><path d="M4.5 4.6a4.8 4.8 0 1 0 7 0"/></svg>`,
+  check:
+    `<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" fill="none"` +
+    ` stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">` +
+    `<path d="M3.2 8.4l3.2 3.2 6.4-7.2"/></svg>`,
+};
+
+// The five control-point opcodes the page exposes, in the order a person
+// reaches for them: the two steps, then the three mute states. The hex stays
+// in the tooltip because the prose below the panel is about exactly that — an
+// icon says what the button does, the title says what goes on the wire.
+const OPS = [
+  { op: OP_DOWN, name: "Relative Volume Down", icon: "down" },
+  { op: OP_UP, name: "Relative Volume Up", icon: "up" },
+  { op: OP_MUTE, name: "Mute", icon: "mute", group: true },
+  { op: OP_UNMUTE, name: "Unmute", icon: "unmute" },
+  { op: OP_UNMUTE_UP, name: "Unmute / Relative Volume Up", icon: "unmuteUp" },
+];
+
+const opButton = (o) =>
+  `<button class="icon-btn${o.group ? " grouped" : ""}" data-op="${o.op}"` +
+  ` title="0x${o.op.toString(16).padStart(2, "0").toUpperCase()} · ${o.name}"` +
+  ` aria-label="${o.name}">${ICON[o.icon]}</button>`;
+
 const STYLE_ID = "simble-audio-style";
 
 function injectStyles() {
@@ -827,22 +888,59 @@ function injectStyles() {
   .audio-page .stages li.active::before { content: "◐"; color: var(--good); }
   .audio-page .stages.off { opacity: 0.45; }
 
-  .audio-page .speaker-stage { display: flex; flex-direction: column; align-items: center;
-    padding: 0.5rem 0 0.25rem; }
-  .audio-page #speakerSvg { width: 160px; height: auto; }
+  /* The sink used to be a single centred column six rows tall: art, meter,
+     two readouts, a control row and five word-and-hex buttons, each row
+     centred so nothing shared an edge with anything. Two columns instead --
+     the device on the left, everything you can do to it on the right -- which
+     is also how the thing reads: an object, and its controls. */
+  .audio-page .sink-face { display: flex; align-items: center; gap: 1.1rem;
+    padding: 0.35rem 0 0.15rem; flex-wrap: wrap; }
+  .audio-page .sink-visual { display: flex; flex-direction: column; align-items: center;
+    gap: 0.45rem; flex: 0 0 auto; width: 7rem; }
+  /* Cropped to the artwork. The 150x120 box had ~20 units of empty right edge,
+     which at this size shrank the speaker itself and left the meter beneath
+     sharing an edge with nothing. */
+  .audio-page #speakerSvg { width: 7rem; height: auto; display: block; }
   .audio-page #cone { transition: fill 0.15s; }
   .audio-page .waves path { transition: opacity 0.15s; }
-  .audio-page .meter { display: flex; gap: 3px; margin-top: 0.9rem; height: 2.2rem;
-    align-items: flex-end; }
-  .audio-page .meter i { width: 7px; background: var(--border); border-radius: 2px; display: block; }
+  .audio-page .sink-controls { flex: 1 1 15rem; min-width: 0;
+    display: flex; flex-direction: column; gap: 0.5rem; }
+
+  /* 16 bars stretched to the artwork's width, so the meter reads as the
+     speaker's own level rather than as a stray widget beside it. */
+  .audio-page .meter { display: flex; gap: 2px; height: 1.4rem; align-items: flex-end;
+    width: 100%; }
+  .audio-page .meter i { flex: 1 1 0; min-width: 0; background: var(--border);
+    border-radius: 2px; display: block; transition: background 0.1s; }
   .audio-page .meter i.on { background: var(--good); }
   .audio-page .meter i.muted { background: var(--bad); }
-  .audio-page .controls { display: flex; align-items: center; gap: 0.6rem;
-    justify-content: center; margin-top: 0.9rem; flex-wrap: wrap; }
-  .audio-page input[type=range] { width: 13rem; }
-  .audio-page .ops { display: flex; gap: 0.4rem; flex-wrap: wrap; justify-content: center;
-    margin-top: 0.8rem; }
-  .audio-page .ops button { font-family: ui-monospace, Menlo, monospace; font-size: var(--fs-label); }
+
+  .audio-page .vol-row { display: flex; align-items: center; gap: 0.55rem; }
+  /* Chrome paints a range track in the same accent blue as .primary, so the
+     slider and the power button read as one control group. They are unrelated
+     -- one is a GATT write, the other a browser permission -- so the slider
+     goes neutral and blue is left to mean "the thing to click first". */
+  .audio-page input[type=range] { flex: 1 1 auto; min-width: 6rem; margin: 0;
+    accent-color: var(--dim); }
+  /* Tabular figures so the slider does not twitch as the number changes width. */
+  .audio-page .vol-num { font-family: ui-monospace, Menlo, monospace;
+    font-size: var(--fs-label); color: var(--dim); font-variant-numeric: tabular-nums;
+    min-width: 2.2ch; text-align: right; }
+
+  /* Icon buttons: square, so five of them make an even strip rather than five
+     different widths. */
+  .audio-page .icon-btn { display: inline-flex; align-items: center; justify-content: center;
+    width: 2rem; height: 2rem; padding: 0; flex: 0 0 auto; color: var(--text); }
+  .audio-page .icon-btn svg { display: block; }
+  .audio-page .icon-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  .audio-page .icon-btn.gate { border-radius: 50%; }
+  .audio-page .icon-btn.gate.primary { color: #fff; }
+  .audio-page .icon-btn.gate.on { color: var(--good); border-color: var(--good); opacity: 1; }
+  .audio-page .ops { display: flex; gap: 0.3rem; }
+  /* One wider gap splits the two volume steps from the three mute states. */
+  .audio-page .ops .grouped { margin-left: 0.55rem; }
+  /* Scoped to the sink: the source column's readouts keep their own spacing. */
+  .audio-page .sink-controls .readout { margin-top: 0; }
   .audio-page .warn-line { color: var(--warn); font-size: var(--fs-label); margin-top: 0.5rem; }
   `;
   document.head.appendChild(style);
@@ -906,54 +1004,56 @@ const TEMPLATE = `
   <section class="panel">
       <div id="sink-head"></div>
       <div id="sink-script"></div>
-      <div class="speaker-stage">
-        <svg id="speakerSvg" viewBox="0 0 150 120" role="img" aria-label="speaker">
-          <rect x="8" y="20" width="58" height="80" rx="8" fill="#57606a"/>
-          <circle cx="37" cy="48" r="10" fill="#2d333b"/>
-          <circle id="cone" cx="37" cy="76" r="16" fill="#33cc77"/>
-          <circle cx="37" cy="76" r="6" fill="#2d333b"/>
-          <g class="waves" stroke="#33cc77" stroke-width="4" fill="none" stroke-linecap="round">
-            <path id="w1" d="M78 60 Q86 60 86 60" opacity="0"/>
-            <path id="w2" d="M80 46 Q96 60 80 74" opacity="0"/>
-            <path id="w3" d="M94 36 Q116 60 94 84" opacity="0"/>
-            <path id="w4" d="M108 26 Q136 60 108 94" opacity="0"/>
-          </g>
-          <g id="muteMark" opacity="0" stroke="#d1495b" stroke-width="6" stroke-linecap="round">
-            <path d="M92 44 L124 76"/><path d="M124 44 L92 76"/>
-          </g>
-        </svg>
-        <div class="meter" id="meter"></div>
-        <div class="readout" id="sink-stats">0 SDUs received · audio off</div>
-        <div class="readout" id="readout">Volume State — volume <b>128</b> · muted <b>no</b> · change counter <b>0</b></div>
-        <div class="controls">
-          <button id="sound" class="primary">🔊 Enable sound</button>
-          <label for="vol">Volume</label>
-          <input type="range" id="vol" min="0" max="255" value="128">
+      <div class="sink-face">
+        <div class="sink-visual">
+          <svg id="speakerSvg" viewBox="4 16 136 88" role="img" aria-label="speaker">
+            <rect x="8" y="20" width="58" height="80" rx="8" fill="#57606a"/>
+            <circle cx="37" cy="48" r="10" fill="#2d333b"/>
+            <circle id="cone" cx="37" cy="76" r="16" fill="#33cc77"/>
+            <circle cx="37" cy="76" r="6" fill="#2d333b"/>
+            <g class="waves" stroke="#33cc77" stroke-width="4" fill="none" stroke-linecap="round">
+              <path id="w1" d="M78 60 Q86 60 86 60" opacity="0"/>
+              <path id="w2" d="M80 46 Q96 60 80 74" opacity="0"/>
+              <path id="w3" d="M94 36 Q116 60 94 84" opacity="0"/>
+              <path id="w4" d="M108 26 Q136 60 108 94" opacity="0"/>
+            </g>
+            <g id="muteMark" opacity="0" stroke="#d1495b" stroke-width="6" stroke-linecap="round">
+              <path d="M92 44 L124 76"/><path d="M124 44 L92 76"/>
+            </g>
+          </svg>
+          <div class="meter" id="meter"></div>
         </div>
-        <div class="ops">
-          <button data-op="1">0x01 up</button>
-          <button data-op="0">0x00 down</button>
-          <button data-op="6">0x06 mute</button>
-          <button data-op="5">0x05 unmute</button>
-          <button data-op="3">0x03 unmute+up</button>
+
+        <div class="sink-controls">
+          <div class="vol-row">
+            <button id="sound" class="icon-btn gate primary"
+              title="Enable sound — a browser only starts an AudioContext from a real click"
+              aria-label="Enable sound">${ICON.power}</button>
+            <input type="range" id="vol" min="0" max="255" value="128" aria-label="Volume">
+            <span class="vol-num" id="vol-num">128</span>
+          </div>
+          <div class="ops">${OPS.map(opButton).join("")}</div>
+          <div class="readout" id="readout">Volume State <b>128</b> · <b>unmuted</b> · ctr <b>0</b></div>
+          <div class="readout" id="sink-stats">0 SDUs received · audio off</div>
         </div>
       </div>
 
-      <p class="hint" style="margin-top:1rem">
-        <strong>Enable sound must be a real click.</strong> A browser only lets a user gesture
-        create a running <code>AudioContext</code>; one made from script starts
+      <p class="hint" style="margin-top:0.9rem">
+        The round <strong>power button must be a real click</strong>. A browser only lets a user
+        gesture create a running <code>AudioContext</code>; one made from script starts
         <em>suspended</em>, and then SDUs are still counted and still scheduled while nothing is
-        heard — which looks exactly like a broken audio path. The counter above reports the
+        heard — which looks exactly like a broken audio path. The line above reports the
         context's own state so the two can be told apart.
       </p>
       <p class="hint" style="margin-top:0.5rem">
-        The buttons are the <strong>control-point idiom</strong>, the pattern behind most settable
-        BLE devices. Nothing here sets the volume directly: every control writes an opcode to the
-        write-only <code>Volume Control Point</code> (<code>2B7E</code>), the sink's own script
-        applies it, updates <code>Volume State</code> (<code>2B7D</code>) and bumps the change
-        counter — exactly what a phone does over LE Audio's Volume Control Service. The output
-        gain follows the characteristic, so <em>what you hear is the GATT value</em>, and a
-        connected central writing the same opcodes moves it too.
+        The five square buttons are the <strong>control-point idiom</strong>, the pattern behind
+        most settable BLE devices — hover one to see the opcode it writes. Nothing here sets the
+        volume directly: every control writes an opcode to the write-only
+        <code>Volume Control Point</code> (<code>2B7E</code>), the sink's own script applies it,
+        updates <code>Volume State</code> (<code>2B7D</code>) and bumps the change counter —
+        exactly what a phone does over LE Audio's Volume Control Service. The output gain follows
+        the characteristic, so <em>what you hear is the GATT value</em>, and a connected central
+        writing the same opcodes moves it too.
       </p>
       <p class="hint" id="mode-hint" style="margin-top:0.5rem"></p>
       <div id="script-error" class="error"></div>
@@ -1205,9 +1305,12 @@ function wireControls() {
   $("sound").addEventListener("click", (event) => {
     if (!player) return;
     player.enable();
-    event.currentTarget.textContent = "🔊 sound on";
-    event.currentTarget.classList.remove("primary");
-    event.currentTarget.disabled = true;
+    const gate = event.currentTarget;
+    gate.innerHTML = ICON.check;
+    gate.classList.replace("primary", "on");
+    gate.title = "Sound is on — the AudioContext is running";
+    gate.setAttribute("aria-label", "Sound is on");
+    gate.disabled = true;
   });
 
   // The slider sends Set Absolute Volume, the same command a phone's volume UI
