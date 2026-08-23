@@ -281,7 +281,13 @@ footer code { color: var(--good); }
    whether it is mounted into the Devices shell's stage or into its own
    standalone <main> -- neither of which the module owns. */
 .domain { display: grid; gap: 1.25rem; padding: 1.25rem 1.5rem; margin: 0 auto; }
-.domain.one-up { grid-template-columns: minmax(20rem, 1fr); max-width: var(--read-w); }
+/* One column, but still a workspace: --page-w, not --read-w. The controller
+   bar above every domain is --page-w, so a narrower grid cannot line up with
+   it -- which is exactly how this was noticed, the Broadcast cards sitting
+   inset from the controller box while every other page's agreed. A domain
+   whose content is genuinely prose should cap its own text measure rather
+   than shrink the frame everything else aligns to. */
+.domain.one-up { grid-template-columns: minmax(20rem, 1fr); max-width: var(--page-w); }
 .domain.two-up { grid-template-columns: minmax(20rem, 1fr) minmax(20rem, 1fr);
   max-width: var(--page-w); }
 /* Anything that spans the row: a backend selector, an intro paragraph. */
