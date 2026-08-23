@@ -863,7 +863,6 @@ const TEMPLATE = `
 
   <div class="col">
     <section class="panel">
-      <h2>The source</h2>
       <div id="source-head"></div>
 
       <div id="drop" class="drop">
@@ -932,7 +931,6 @@ const TEMPLATE = `
 
   <div class="col">
     <section class="panel">
-      <h2>The speaker, as a device</h2>
       <div id="sink-head"></div>
       <div id="sink-script"></div>
       <div class="speaker-stage">

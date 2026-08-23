@@ -160,7 +160,6 @@ const MARKUP = `
 </section>
 
 <section class="panel">
-  <h2>The tag — set the truth</h2>
   <div id="rg-tag-head"></div>
   <svg id="rg-plan" viewBox="0 0 680 340" role="img"
        aria-label="floor plan with a draggable tag"></svg>
@@ -191,7 +190,6 @@ const MARKUP = `
 </section>
 
 <section class="panel">
-  <h2>The locator — two estimates</h2>
   <div id="rg-locator-head"></div>
   <div class="rg-estimates">
     <div class="rg-card rg-rssi">

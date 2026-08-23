@@ -133,7 +133,6 @@ const MARKUP = `
 
   <!-- ============ the phone: Audio Gateway ============ -->
   <section class="panel">
-    <h2>The phone — Audio Gateway</h2>
     <div id="car-ag-head"></div>
     <svg class="mock" viewBox="0 0 176 250" role="img" aria-label="a phone">
       <rect x="16" y="4" width="144" height="242" rx="18" fill="#2b3138"/>
@@ -188,7 +187,6 @@ const MARKUP = `
 
   <!-- ============ the head unit: Hands-Free ============ -->
   <section class="panel">
-    <h2>The head unit — Hands-Free</h2>
     <div id="car-hf-head"></div>
     <svg class="mock" viewBox="0 0 240 150" role="img" aria-label="a car head unit">
       <rect x="2" y="6" width="236" height="138" rx="12" fill="#2b3138"/>

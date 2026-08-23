@@ -329,7 +329,6 @@ const TEMPLATE = `
 </section>
 
 <section class="panel">
-  <h2>The device <span class="hint">— GATT peripheral, HID Service 0x1812</span></h2>
 
   <div id="hid-kbd-head"></div>
   <div id="hid-kbd-script"></div>
@@ -368,7 +367,6 @@ const TEMPLATE = `
 </section>
 
 <section class="panel">
-  <h2>The host <span class="hint">— GATT central, a HID Host</span></h2>
   <p class="hint" style="margin-top:0">
     One computer, but two centrals: HOGP is a per-device connection, so the keyboard and the mouse
     each get their own, and each host reads its peer's Report Map before it knows what it is
