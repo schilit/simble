@@ -105,6 +105,63 @@ pub mod audio_location {
     pub fn channel_count(locations: u32) -> u32 {
         locations.count_ones()
     }
+
+    /// The assigned name of each location bit, LSB first (Assigned Numbers 6.12.1).
+    const NAMES: [&str; 28] = [
+        "Front Left",
+        "Front Right",
+        "Front Center",
+        "Low Frequency Effects 1",
+        "Back Left",
+        "Back Right",
+        "Front Left of Center",
+        "Front Right of Center",
+        "Back Center",
+        "Low Frequency Effects 2",
+        "Side Left",
+        "Side Right",
+        "Top Front Left",
+        "Top Front Right",
+        "Top Front Center",
+        "Top Center",
+        "Top Back Left",
+        "Top Back Right",
+        "Top Side Left",
+        "Top Side Right",
+        "Top Back Center",
+        "Bottom Front Center",
+        "Bottom Front Left",
+        "Bottom Front Right",
+        "Front Left Wide",
+        "Front Right Wide",
+        "Left Surround",
+        "Right Surround",
+    ];
+
+    /// Names the locations in `locations` — `"Front Left"`, or
+    /// `"Front Left + Front Right"` for a bitmap carrying both.
+    ///
+    /// This is what a BASE's per-BIS Audio Channel Allocation *means*, and both
+    /// ends of a broadcast need to say it the same way: the source publishes the
+    /// bitmap and a receiver reads it back to decide which speaker a BIS feeds.
+    /// A bit with no assigned name is reported as its hex value rather than
+    /// dropped, so an unknown allocation is visible instead of silently absent.
+    pub fn describe(locations: u32) -> String {
+        if locations == NOT_ALLOWED {
+            return "no location".to_string();
+        }
+        let mut parts = Vec::new();
+        for bit in 0..32 {
+            if locations & (1 << bit) == 0 {
+                continue;
+            }
+            match NAMES.get(bit as usize) {
+                Some(name) => parts.push((*name).to_string()),
+                None => parts.push(format!("0x{:08X}", 1u32 << bit)),
+            }
+        }
+        parts.join(" + ")
+    }
 }
 
 /// Bluetooth Assigned Numbers, Section 6.12.3 - Context Type bitmask (16-bit).
@@ -137,6 +194,116 @@ pub mod context_type {
     /// Emergency Alarm.
     pub const EMERGENCY_ALARM: u16 = 0x0800;
     // fmt: on
+
+    /// The assigned name of each context bit, LSB first.
+    const NAMES: [&str; 12] = [
+        "Unspecified",
+        "Conversational",
+        "Media",
+        "Game",
+        "Instructional",
+        "Voice Assistants",
+        "Live",
+        "Sound Effects",
+        "Notifications",
+        "Ringtone",
+        "Alerts",
+        "Emergency Alarm",
+    ];
+
+    /// Names the contexts in `contexts`, e.g. `"Media"`. An unassigned bit is
+    /// reported as its hex value rather than dropped.
+    pub fn describe(contexts: u16) -> String {
+        if contexts == PROHIBITED {
+            return "none".to_string();
+        }
+        let mut parts = Vec::new();
+        for bit in 0..16 {
+            if contexts & (1 << bit) == 0 {
+                continue;
+            }
+            match NAMES.get(bit as usize) {
+                Some(name) => parts.push((*name).to_string()),
+                None => parts.push(format!("0x{:04X}", 1u16 << bit)),
+            }
+        }
+        parts.join(" + ")
+    }
+}
+
+/// Bluetooth Assigned Numbers, Section 6.12.6 - Metadata LTV types.
+pub mod metadata_type {
+    /// Preferred Audio Contexts.
+    pub const PREFERRED_AUDIO_CONTEXTS: u8 = 0x01;
+    /// Streaming Audio Contexts.
+    pub const STREAMING_AUDIO_CONTEXTS: u8 = 0x02;
+    /// Program Info.
+    pub const PROGRAM_INFO: u8 = 0x03;
+    /// Language, three lowercase ISO 639-3 letters.
+    pub const LANGUAGE: u8 = 0x04;
+    /// CCID List.
+    pub const CCID_LIST: u8 = 0x05;
+    /// Parental Rating.
+    pub const PARENTAL_RATING: u8 = 0x06;
+    /// Program Info URI.
+    pub const PROGRAM_INFO_URI: u8 = 0x07;
+    /// Audio Active State.
+    pub const AUDIO_ACTIVE_STATE: u8 = 0x08;
+    /// Broadcast Audio Immediate Rendering Flag; carries no value.
+    pub const IMMEDIATE_RENDERING_FLAG: u8 = 0x09;
+    /// Extended Metadata.
+    pub const EXTENDED: u8 = 0xFE;
+    /// Vendor Specific.
+    pub const VENDOR_SPECIFIC: u8 = 0xFF;
+}
+
+/// Decodes a Metadata LTV blob into `(name, value)` pairs for display.
+///
+/// The blob itself stays opaque everywhere it is carried — see this module's
+/// header — but a *reader* of a BASE has to be told what the source declared
+/// about its programme, and "03 02 04 00" is not that. Unknown tags are kept
+/// with their hex value so nothing published is silently dropped.
+pub fn describe_metadata(data: &[u8]) -> Vec<(String, String)> {
+    ltv_entries(data)
+        .into_iter()
+        .map(|(tag, value)| match tag {
+            metadata_type::PREFERRED_AUDIO_CONTEXTS => (
+                "Preferred Audio Contexts".to_string(),
+                context_type::describe(le_uint(value) as u16),
+            ),
+            metadata_type::STREAMING_AUDIO_CONTEXTS => (
+                "Streaming Audio Contexts".to_string(),
+                context_type::describe(le_uint(value) as u16),
+            ),
+            metadata_type::PROGRAM_INFO => (
+                "Program Info".to_string(),
+                String::from_utf8_lossy(value).into_owned(),
+            ),
+            metadata_type::LANGUAGE => (
+                "Language".to_string(),
+                String::from_utf8_lossy(value).into_owned(),
+            ),
+            metadata_type::PARENTAL_RATING => {
+                ("Parental Rating".to_string(), format!("{}", le_uint(value)))
+            }
+            metadata_type::PROGRAM_INFO_URI => (
+                "Program Info URI".to_string(),
+                String::from_utf8_lossy(value).into_owned(),
+            ),
+            metadata_type::IMMEDIATE_RENDERING_FLAG => (
+                "Immediate Rendering".to_string(),
+                "declared".to_string(),
+            ),
+            other => (
+                format!("type 0x{other:02X}"),
+                value
+                    .iter()
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ),
+        })
+        .collect()
 }
 
 /// Bluetooth Assigned Numbers, Section 6.12.5.1 - Sampling Frequency.
@@ -778,6 +945,39 @@ mod tests {
         assert_eq!(
             bits_to_channel_counts(channel_counts_to_bits(&[1, 2])),
             vec![1, 2]
+        );
+    }
+
+    /// What a BASE's per-BIS allocation says out loud. The single-bit cases are
+    /// what a stereo broadcast publishes, one per BIS.
+    #[test]
+    fn test_audio_locations_are_named() {
+        assert_eq!(audio_location::describe(audio_location::FRONT_LEFT), "Front Left");
+        assert_eq!(
+            audio_location::describe(audio_location::STEREO),
+            "Front Left + Front Right"
+        );
+        assert_eq!(audio_location::describe(audio_location::RIGHT_SURROUND), "Right Surround");
+        assert_eq!(audio_location::describe(audio_location::NOT_ALLOWED), "no location");
+        // Bit 28 has no assigned name: reported, not dropped.
+        assert_eq!(audio_location::describe(1 << 28), "0x10000000");
+    }
+
+    #[test]
+    fn test_metadata_is_described() {
+        // The blob a general-purpose Auracast source publishes.
+        assert_eq!(
+            describe_metadata(&[0x03, 0x02, 0x04, 0x00]),
+            vec![("Streaming Audio Contexts".to_string(), "Media".to_string())]
+        );
+        assert_eq!(
+            describe_metadata(&[0x04, 0x04, b'e', b'n', b'g']),
+            vec![("Language".to_string(), "eng".to_string())]
+        );
+        // An unknown tag keeps its bytes rather than vanishing.
+        assert_eq!(
+            describe_metadata(&[0x02, 0x7F, 0xAB]),
+            vec![("type 0x7F".to_string(), "AB".to_string())]
         );
     }
 }

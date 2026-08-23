@@ -3662,6 +3662,546 @@ mod web {
         }
     }
 
+    // -- Broadcast / Auracast ----------------------------------------------
+    //
+    // The connectionless media plane, both ends. Unlike every other pair on
+    // this site these two devices never meet: there is no ACL, no GATT and no
+    // pairing between them, so neither wrapper has a `target` and neither can
+    // report anything about the other except what it heard on the air.
+    //
+    // netsim only. The in-page `Link` does not model periodic advertising or a
+    // BIG, so there is nothing here for it to carry.
+
+    /// Hex, space-separated — the form the pages already show wire bytes in.
+    fn hex_bytes(bytes: &[u8]) -> String {
+        bytes
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// The names of the HCI statuses these two devices can actually produce.
+    /// A page showing "0x1D" and nothing else makes the reader look it up; the
+    /// interesting failures here (a source that is encrypted, a BIG that never
+    /// established) deserve to say what they are.
+    fn hci_status_name(status: u8) -> &'static str {
+        match status {
+            0x02 => "Unknown Connection Identifier",
+            0x07 => "Memory Capacity Exceeded",
+            0x0C => "Command Disallowed",
+            0x11 => "Unsupported Feature or Parameter Value",
+            0x12 => "Invalid HCI Command Parameters",
+            // What a receiver is told when the source tears its BIG down: the
+            // BIG Sync Lost event carries the terminating side's reason.
+            0x13 => "Remote User Terminated Connection",
+            0x14 => "Remote Device Terminated due to Low Resources",
+            0x15 => "Remote Device Terminated due to Power Off",
+            0x16 => "Connection Terminated by Local Host",
+            0x1A => "Unsupported Remote Feature",
+            0x1D => "Insufficient Security",
+            0x1E => "Parameter Out of Mandatory Range",
+            0x22 => "LMP/LL Response Timeout",
+            0x3D => "Connection Terminated due to MIC Failure",
+            0x3E => "Connection Failed to be Established",
+            0x42 => "Unknown Advertising Identifier",
+            0x43 => "Limit Reached",
+            0x44 => "Operation Cancelled by Host",
+            0x45 => "Packet Too Long",
+            0xFF => "malformed event",
+            _ => "unknown status",
+        }
+    }
+
+    /// One BASE, rendered the same way whichever end of the broadcast is
+    /// holding it. The Broadcast page puts the source's copy beside the
+    /// receiver's and compares them field by field, which only means anything
+    /// if both were serialized by the same code.
+    fn base_json(base: &crate::profiles::bap::BasicAudioAnnouncement) -> serde_json::Value {
+        use crate::profiles::bap;
+        let subgroups: Vec<serde_json::Value> = base
+            .subgroups
+            .iter()
+            .map(|subgroup| {
+                let config = &subgroup.codec_specific_configuration;
+                let bis: Vec<serde_json::Value> = subgroup
+                    .bis
+                    .iter()
+                    .map(|bis| {
+                        let location = bis.codec_specific_configuration.audio_channel_allocation;
+                        serde_json::json!({
+                            "index": bis.index,
+                            "audio_location": location,
+                            "location_name": location.map(bap::audio_location::describe),
+                        })
+                    })
+                    .collect();
+                let metadata: Vec<serde_json::Value> = bap::describe_metadata(&subgroup.metadata)
+                    .into_iter()
+                    .map(|(name, value)| serde_json::json!({ "name": name, "value": value }))
+                    .collect();
+                serde_json::json!({
+                    "codec_id": hex_bytes(&subgroup.codec_id),
+                    "codec_name": if subgroup.codec_id == bap::LC3_CODEC_ID {
+                        "LC3"
+                    } else {
+                        "not LC3"
+                    },
+                    "sampling_frequency_hz": config.sampling_frequency.map(|f| f.hz()),
+                    "frame_duration_us": config.frame_duration.map(|d| d.us()),
+                    "octets_per_codec_frame": config.octets_per_codec_frame,
+                    "codec_frames_per_sdu": config.codec_frames_per_sdu,
+                    "metadata_hex": hex_bytes(&subgroup.metadata),
+                    "metadata": metadata,
+                    "bis": bis,
+                })
+            })
+            .collect();
+        serde_json::json!({
+            "presentation_delay": base.presentation_delay,
+            "subgroups": subgroups,
+        })
+    }
+
+    /// A Broadcast_Code from what the page's text field holds: 16 octets,
+    /// left-justified, zero-padded (BAP 3.7.1). Refused rather than truncated
+    /// if it is too long — silently dropping the tail would produce a code
+    /// that works nowhere and looks right everywhere.
+    fn broadcast_code(code: Option<String>) -> Result<Option<[u8; 16]>, JsValue> {
+        let Some(code) = code.filter(|c| !c.is_empty()) else {
+            return Ok(None);
+        };
+        let bytes = code.as_bytes();
+        if bytes.len() > 16 {
+            return Err(js_error(format!(
+                "a Broadcast Code is at most 16 octets; \"{code}\" is {}",
+                bytes.len()
+            )));
+        }
+        let mut padded = [0u8; 16];
+        padded[..bytes.len()].copy_from_slice(bytes);
+        Ok(Some(padded))
+    }
+
+    /// An **Auracast broadcast source** on netsim: an extended advertising set
+    /// carrying the Broadcast Audio Announcement, a periodic train carrying the
+    /// BASE, and a BIG whose BISes this page writes LC3 into.
+    ///
+    /// Wraps [`BigBroadcaster`](crate::device::BigBroadcaster), which is
+    /// transport-free, so this type is only the browser's WebSocket, a running
+    /// order, and the status a page renders. The interop scripts in
+    /// `tests/interop/` drive the same device against Bumble.
+    #[wasm_bindgen]
+    pub struct WebBigBroadcaster {
+        transport: WasmWsTransport,
+        channel: HciChannel,
+        broadcaster: crate::device::BigBroadcaster,
+        started: bool,
+        /// SDUs accepted per BIS — the count the page reports as "sent".
+        sent: u64,
+        /// SDUs refused because the BIG was not streaming yet.
+        refused: u64,
+    }
+
+    #[wasm_bindgen]
+    impl WebBigBroadcaster {
+        /// Creates a source that will publish `broadcast_id` under
+        /// `broadcast_name` on `num_bis` streams. A non-empty `code` encrypts
+        /// the BISes, which a receiver then needs the same code to join.
+        #[wasm_bindgen(constructor)]
+        pub fn new(
+            url: &str,
+            broadcast_id: u32,
+            broadcast_name: &str,
+            num_bis: u8,
+            code: Option<String>,
+        ) -> Result<WebBigBroadcaster, JsValue> {
+            install_panic_hook();
+            if num_bis == 0 || num_bis > 4 {
+                return Err(js_error("a BIG here carries between one and four BISes"));
+            }
+            let config = crate::device::BroadcastConfig {
+                broadcast_id: broadcast_id & 0x00FF_FFFF,
+                broadcast_name: broadcast_name.to_string(),
+                num_bis,
+                broadcast_code: broadcast_code(code)?,
+                ..Default::default()
+            };
+            let url = ws_url_with_wire_address(url);
+            Ok(Self {
+                transport: WasmWsTransport::connect(&url)?,
+                channel: HciChannel::new(),
+                broadcaster: crate::device::BigBroadcaster::new(config),
+                started: false,
+                sent: 0,
+                refused: 0,
+            })
+        }
+
+        /// Returns the underlying WebSocket ready state (per the WebSocket API).
+        pub fn ready_state(&self) -> u16 {
+            self.transport.ready_state()
+        }
+
+        /// True once SDUs written here go out over the air.
+        pub fn is_streaming(&self) -> bool {
+            self.broadcaster.is_streaming()
+        }
+
+        /// Writes one SDU to BIS `bis_index` (1-based, as in the BASE).
+        /// Returns whether it went out: before the data paths are open the
+        /// controller would drop it, so it is refused and counted instead.
+        ///
+        /// There is deliberately no queue. A broadcaster has no peer to wait
+        /// for — the BIG is up or it is not — and audio held back while a
+        /// throttled tab catches up would be played late to every receiver at
+        /// once.
+        pub fn send_sdu(&mut self, bis_index: u8, sdu: Vec<u8>) -> bool {
+            match self.broadcaster.send_sdu(bis_index, &sdu) {
+                Some(packet) => {
+                    let _ = self.channel.inject_host_packet(packet);
+                    if bis_index == 1 {
+                        self.sent += 1;
+                    }
+                    true
+                }
+                None => {
+                    if bis_index == 1 {
+                        self.refused += 1;
+                    }
+                    false
+                }
+            }
+        }
+
+        /// Tears the BIG down. The advertising set stays up until this device
+        /// is dropped, which is also what stops the periodic train.
+        pub fn terminate(&mut self) {
+            let _ = self
+                .channel
+                .inject_host_packet(self.broadcaster.terminate());
+            let _ = self.transport.pump(&self.channel);
+        }
+
+        /// One pump: bring the controller up, advance the setup sequence, and
+        /// return render-ready status JSON.
+        pub fn tick(&mut self) -> Result<String, JsValue> {
+            self.transport.pump(&self.channel)?;
+
+            if !self.started && self.transport.is_open() {
+                // Reset and both event masks. The post-Reset default event mask
+                // excludes LE Meta Events, so LE Create BIG Complete — the only
+                // announcement of the BIS handles — would never arrive.
+                for packet in crate::device::host::init_commands().into_iter().take(3) {
+                    self.channel.send_command(&packet[1..]).map_err(js_error)?;
+                }
+                for packet in self.broadcaster.start() {
+                    self.channel.inject_host_packet(packet).map_err(js_error)?;
+                }
+                self.started = true;
+            }
+
+            while let Some(packet) = self.channel.poll_controller_packet() {
+                for command in self.broadcaster.on_packet(&packet) {
+                    self.channel.inject_host_packet(command).map_err(js_error)?;
+                }
+            }
+            self.transport.pump(&self.channel)?;
+            Ok(self.status_json())
+        }
+
+        /// Everything the page renders, including the two payloads this source
+        /// puts on the air: the advertising data a scanner sees and the BASE
+        /// the periodic train carries.
+        pub fn status_json(&self) -> String {
+            use crate::device::BroadcastState;
+            let state = self.broadcaster.state();
+            let config = self.broadcaster.config();
+            let (stage, failed) = match state {
+                BroadcastState::Idle if !self.transport.is_open() => ("offline", None),
+                BroadcastState::Idle => ("starting", None),
+                BroadcastState::SettingAdvertisingParameters
+                | BroadcastState::SettingAdvertisingData => ("advertising set", None),
+                BroadcastState::SettingPeriodicParameters
+                | BroadcastState::SettingPeriodicData => ("periodic train", None),
+                BroadcastState::EnablingAdvertising
+                | BroadcastState::EnablingPeriodicAdvertising => ("on the air", None),
+                BroadcastState::CreatingBig => ("creating the BIG", None),
+                BroadcastState::OpeningDataPaths => ("opening data paths", None),
+                BroadcastState::Streaming => ("streaming", None),
+                BroadcastState::Terminated => ("terminated", None),
+                BroadcastState::Failed(status) => ("failed", Some(status)),
+            };
+            let value = serde_json::json!({
+                "stage": stage,
+                "state": format!("{state:?}"),
+                "streaming": self.broadcaster.is_streaming(),
+                "failed": failed,
+                "failed_name": failed.map(hci_status_name),
+                "bis_handles": self.broadcaster.bis_handles(),
+                "sent": self.sent,
+                "refused": self.refused,
+                "config": {
+                    "broadcast_id": config.broadcast_id,
+                    "broadcast_name": config.broadcast_name,
+                    "advertising_sid": config.advertising_sid,
+                    "num_bis": config.num_bis,
+                    "max_sdu": config.max_sdu,
+                    "sdu_interval_us": config.sdu_interval_us,
+                    "rtn": config.rtn,
+                    "max_transport_latency_ms": config.max_transport_latency_ms,
+                    "phy": config.phy,
+                    "encrypted": config.broadcast_code.is_some(),
+                    "sampling_frequency_hz": config.sampling_frequency.hz(),
+                    "frame_duration_us": config.frame_duration.us(),
+                    "octets_per_codec_frame": config.octets_per_codec_frame,
+                },
+                // The two payloads, exactly as they go out. The BASE's octets
+                // are what a receiver reassembles off the periodic train, so
+                // the page can compare the two strings directly.
+                "advertising_data": hex_bytes(&config.advertising_data()),
+                "base_hex": hex_bytes(&config.base().to_bytes()),
+                "base": base_json(&config.base()),
+            });
+            value.to_string()
+        }
+    }
+
+    /// An **Auracast broadcast sink** on netsim: scans for a Broadcast Audio
+    /// Announcement, syncs to the source's periodic train, reads the BASE and
+    /// the BIGInfo off it, joins the BIG and collects SDUs per BIS.
+    ///
+    /// Wraps [`BigReceiver`](crate::device::BigReceiver). Several of these can
+    /// exist at once against one source and none of them tells the source
+    /// anything — that is what makes it a broadcast.
+    #[wasm_bindgen]
+    pub struct WebBigReceiver {
+        transport: WasmWsTransport,
+        channel: HciChannel,
+        receiver: crate::device::BigReceiver,
+        started: bool,
+        /// Whether scanning has been turned off after joining. rootcanal keeps
+        /// delivering every advertisement in the simulation otherwise, which on
+        /// a page with several receivers is most of the traffic.
+        scanning_stopped: bool,
+        /// One queue of undelivered SDUs per BIS slot, in BIS index order.
+        audio: Vec<VecDeque<Vec<u8>>>,
+        /// SDUs received per BIS slot, counted before any bound is applied.
+        counts: Vec<u64>,
+        /// SDUs dropped because the page did not collect them in time.
+        dropped: u64,
+    }
+
+    /// How much undelivered audio one BIS may hold — about two seconds at a
+    /// 10 ms SDU interval. A hidden tab's timer runs at 1 Hz while the stream
+    /// keeps arriving at 100 SDUs a second, so without a bound the queue is
+    /// unbounded memory; with one, what it discards is counted rather than
+    /// quietly lost.
+    const RECEIVER_QUEUE_LIMIT: usize = 200;
+
+    #[wasm_bindgen]
+    impl WebBigReceiver {
+        /// Creates a receiver. `broadcast_id` filters which source to join —
+        /// omit it to take the first Auracast broadcast seen. `code` is the
+        /// Broadcast Code for an encrypted source.
+        #[wasm_bindgen(constructor)]
+        pub fn new(
+            url: &str,
+            broadcast_id: Option<u32>,
+            code: Option<String>,
+        ) -> Result<WebBigReceiver, JsValue> {
+            install_panic_hook();
+            let config = crate::device::ReceiverConfig {
+                broadcast_id: broadcast_id.map(|id| id & 0x00FF_FFFF),
+                broadcast_code: broadcast_code(code)?,
+                ..Default::default()
+            };
+            let url = ws_url_with_wire_address(url);
+            Ok(Self {
+                transport: WasmWsTransport::connect(&url)?,
+                channel: HciChannel::new(),
+                receiver: crate::device::BigReceiver::new(config),
+                started: false,
+                scanning_stopped: false,
+                audio: Vec::new(),
+                counts: Vec::new(),
+                dropped: 0,
+            })
+        }
+
+        /// Returns the underlying WebSocket ready state (per the WebSocket API).
+        pub fn ready_state(&self) -> u16 {
+            self.transport.ready_state()
+        }
+
+        /// True once SDUs are arriving.
+        pub fn is_receiving(&self) -> bool {
+            self.receiver.is_receiving()
+        }
+
+        /// Drains the SDUs received on BIS `bis_index` (1-based, as in the
+        /// BASE), as an array of byte arrays.
+        ///
+        /// Per BIS, not merged: LC3 carries decoder state between frames, so
+        /// two streams through one decoder corrupt both — and on this page the
+        /// two BISes are the left and right of a stereo pair, which is only
+        /// audible if they stay apart.
+        pub fn take_audio(&mut self, bis_index: u8) -> js_sys::Array {
+            let out = js_sys::Array::new();
+            if bis_index == 0 {
+                return out;
+            }
+            let Some(queue) = self.audio.get_mut(usize::from(bis_index - 1)) else {
+                return out;
+            };
+            for sdu in queue.drain(..) {
+                out.push(&js_sys::Uint8Array::from(&sdu[..]).into());
+            }
+            out
+        }
+
+        /// Leaves the BIG. The device stays on the air and keeps its periodic
+        /// sync, so the page can show a receiver that has stopped listening
+        /// without pretending it left the room.
+        pub fn terminate(&mut self) {
+            let _ = self.channel.inject_host_packet(self.receiver.terminate());
+            let _ = self.transport.pump(&self.channel);
+        }
+
+        /// One pump: advance the synchronization, collect whatever audio
+        /// arrived, and return render-ready status JSON.
+        pub fn tick(&mut self) -> Result<String, JsValue> {
+            self.transport.pump(&self.channel)?;
+
+            if !self.started && self.transport.is_open() {
+                for packet in crate::device::host::init_commands().into_iter().take(3) {
+                    self.channel.send_command(&packet[1..]).map_err(js_error)?;
+                }
+                for packet in self.receiver.start() {
+                    self.channel.inject_host_packet(packet).map_err(js_error)?;
+                }
+                self.started = true;
+            }
+
+            while let Some(packet) = self.channel.poll_controller_packet() {
+                for command in self.receiver.on_packet(&packet) {
+                    self.channel.inject_host_packet(command).map_err(js_error)?;
+                }
+            }
+
+            // Once the BIG is joined there is nothing left to look for.
+            if self.receiver.is_receiving() && !self.scanning_stopped {
+                self.channel
+                    .inject_host_packet(self.receiver.stop_scanning())
+                    .map_err(js_error)?;
+                self.scanning_stopped = true;
+            }
+
+            let slots = self.receiver.bis_handles().len();
+            if self.audio.len() != slots {
+                self.audio.resize_with(slots, VecDeque::new);
+                self.counts.resize(slots, 0);
+            }
+            while let Some(sdu) = self.receiver.poll_sdu() {
+                let Some(slot) = self
+                    .receiver
+                    .bis_handles()
+                    .iter()
+                    .position(|&handle| handle == sdu.handle)
+                else {
+                    continue;
+                };
+                self.counts[slot] += 1;
+                let queue = &mut self.audio[slot];
+                queue.push_back(sdu.payload);
+                while queue.len() > RECEIVER_QUEUE_LIMIT {
+                    queue.pop_front();
+                    self.dropped += 1;
+                }
+            }
+
+            self.transport.pump(&self.channel)?;
+            Ok(self.status_json())
+        }
+
+        /// Everything the page renders: where synchronization has got to, the
+        /// source it found, the BASE it read back, the BIGInfo the controller
+        /// reported, and the per-BIS counts.
+        pub fn status_json(&self) -> String {
+            use crate::device::ReceiverState;
+            let state = self.receiver.state();
+            let (stage, failed) = match state {
+                ReceiverState::Idle if !self.transport.is_open() => ("offline", None),
+                ReceiverState::Idle | ReceiverState::SettingScanParameters => ("starting", None),
+                ReceiverState::Scanning => ("scanning", None),
+                ReceiverState::SyncingToPeriodicAdvertising => ("syncing to the train", None),
+                ReceiverState::WaitingForAnnouncement => ("reading the announcement", None),
+                ReceiverState::SyncingToBig => ("joining the BIG", None),
+                ReceiverState::OpeningDataPaths => ("opening data paths", None),
+                ReceiverState::Receiving => ("receiving", None),
+                ReceiverState::Terminated => ("left the BIG", None),
+                ReceiverState::Lost(reason) => ("lost", Some(reason)),
+                ReceiverState::Failed(status) => ("failed", Some(status)),
+            };
+            let source = self.receiver.found().map(|found| {
+                serde_json::json!({
+                    "address": Address::new(found.address).to_string(),
+                    "address_type": super::address_type_name(found.address_type),
+                    "advertising_sid": found.advertising_sid,
+                    "broadcast_id": found.broadcast_id,
+                })
+            });
+            let big_info = self.receiver.big_info().map(|info| {
+                serde_json::json!({
+                    "num_bis": info.num_bis,
+                    "nse": info.nse,
+                    "iso_interval": info.iso_interval.get(),
+                    "bn": info.bn,
+                    "pto": info.pto,
+                    "irc": info.irc,
+                    "max_pdu": info.max_pdu.get(),
+                    "sdu_interval_us": info.sdu_interval.get(),
+                    "max_sdu": info.max_sdu.get(),
+                    "phy": info.phy,
+                    "framing": info.framing,
+                    "encrypted": info.encryption != 0,
+                })
+            });
+            let handles = self.receiver.bis_handles();
+            let streams: Vec<serde_json::Value> = handles
+                .iter()
+                .enumerate()
+                .map(|(slot, &handle)| {
+                    serde_json::json!({
+                        "index": slot + 1,
+                        "handle": handle,
+                        "sdus": self.counts.get(slot).copied().unwrap_or(0),
+                        "queued": self.audio.get(slot).map(VecDeque::len).unwrap_or(0),
+                    })
+                })
+                .collect();
+            let value = serde_json::json!({
+                "stage": stage,
+                "state": format!("{state:?}"),
+                "receiving": self.receiver.is_receiving(),
+                "failed": failed,
+                "failed_name": failed.map(hci_status_name),
+                "source": source,
+                "sync_handle": self.receiver.sync_handle(),
+                "base": self.receiver.base().map(base_json),
+                // The octets as they arrived, for comparison with the source's.
+                "base_hex": self.receiver.base_bytes().map(hex_bytes),
+                "big_info": big_info,
+                "streams": streams,
+                "sdu_count": self.receiver.sdu_count(),
+                "dropped": self.dropped,
+            });
+            value.to_string()
+        }
+    }
+
+    // -- end Broadcast -----------------------------------------------------
+
     /// A **scripted central on netsim**: the client half of
     /// [`WebPeripheral`], driven by a Rhai script.
     ///

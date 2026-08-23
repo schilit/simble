@@ -121,6 +121,8 @@ pub enum ReceiverState {
     OpeningDataPaths,
     /// Receiving SDUs.
     Receiving,
+    /// The host left the BIG itself, and the controller confirmed it.
+    Terminated,
     /// The periodic train or the BIG was lost, with the reason given.
     Lost(u8),
     /// A command failed, with the status byte given.
@@ -137,6 +139,13 @@ pub struct BigReceiver {
     /// Periodic advertising data reassembled across fragmented reports.
     periodic_data: Vec<u8>,
     base: Option<BasicAudioAnnouncement>,
+    /// The BASE exactly as it arrived — the Service Data payload the parse
+    /// above was run on. Kept because a consumer that shows a receiver its
+    /// source's announcement wants the octets too, not only the fields: the
+    /// bytes are the only way to say "what the broadcaster published is what
+    /// arrived", and re-serializing `base` would compare the parser with
+    /// itself.
+    base_bytes: Option<Vec<u8>>,
     big_info: Option<LeBigInfoAdvertisingReportEvent>,
     bis_handles: Vec<u16>,
     data_paths_open: usize,
@@ -154,6 +163,7 @@ impl BigReceiver {
             sync_handle: None,
             periodic_data: Vec::new(),
             base: None,
+            base_bytes: None,
             big_info: None,
             bis_handles: Vec::new(),
             data_paths_open: 0,
@@ -251,6 +261,20 @@ impl BigReceiver {
                 } else {
                     vec![self.setup_data_path(self.data_paths_open)]
                 }
+            }
+            // Leaving a BIG is confirmed by Command Complete and by nothing
+            // else — no BIG Sync Lost follows a *local* termination. Without
+            // this the receiver stayed in `Receiving` forever after
+            // [`terminate`](Self::terminate), holding BIS handles the
+            // controller had already dropped: a caller that stops a stream and
+            // then asks what state it is in was told it is still streaming.
+            _ if opcode == big_opcode::LE_BIG_TERMINATE_SYNC.get() => {
+                if status == 0x00 {
+                    self.bis_handles.clear();
+                    self.received.clear();
+                    self.state = ReceiverState::Terminated;
+                }
+                Vec::new()
             }
             _ => Vec::new(),
         }
@@ -416,6 +440,7 @@ impl BigReceiver {
             && let Some(base) = BasicAudioAnnouncement::parse(payload)
         {
             self.base = Some(base);
+            self.base_bytes = Some(payload.to_vec());
         }
         self.big_create_sync_if_ready()
     }
@@ -556,6 +581,12 @@ impl BigReceiver {
     /// The BASE read off the periodic train, if one has arrived.
     pub fn base(&self) -> Option<&BasicAudioAnnouncement> {
         self.base.as_ref()
+    }
+
+    /// The BASE's octets as they arrived on the periodic train — the Service
+    /// Data payload [`base`](Self::base) was parsed from.
+    pub fn base_bytes(&self) -> Option<&[u8]> {
+        self.base_bytes.as_deref()
     }
 
     /// The BIGInfo read off the periodic train, if one has arrived.
@@ -785,6 +816,47 @@ mod tests {
         assert_eq!(r.poll_sdu().unwrap().payload, vec![0xAA; 100]);
         assert_eq!(r.poll_sdu().unwrap().handle, 0x0E11);
         assert!(r.poll_sdu().is_none());
+    }
+
+    /// The octets the BASE arrived as, kept beside the parsed form: a consumer
+    /// showing a receiver's view of its source compares those bytes with what
+    /// the broadcaster published, which re-serializing the parse cannot do.
+    #[test]
+    fn test_the_base_octets_are_kept_as_they_arrived() {
+        let r = run_to_receiving(ReceiverConfig::default());
+        let source = BroadcastConfig {
+            broadcast_id: 0x00AB_CDEF,
+            ..Default::default()
+        };
+        // The Service Data payload, i.e. the periodic advertising data with its
+        // AD length, AD type and UUID stripped.
+        assert_eq!(r.base_bytes(), Some(&source.periodic_advertising_data()[4..]));
+    }
+
+    /// Leaving a BIG is answered by Command Complete and nothing else — no
+    /// BIG Sync Lost follows a local termination, so if this were not handled
+    /// the receiver would report `Receiving` forever after it had stopped.
+    #[test]
+    fn test_leaving_the_big_is_reflected_in_the_state() {
+        let mut r = run_to_receiving(ReceiverConfig::default());
+        let terminate = r.terminate();
+        assert_eq!(
+            u16::from_le_bytes([terminate[1], terminate[2]]),
+            big_opcode::LE_BIG_TERMINATE_SYNC.get()
+        );
+        assert!(
+            r.on_packet(&command_complete(
+                big_opcode::LE_BIG_TERMINATE_SYNC.get(),
+                &[0x00, 0x00]
+            ))
+            .is_empty()
+        );
+        assert_eq!(r.state(), ReceiverState::Terminated);
+        assert!(!r.is_receiving());
+        assert!(r.bis_handles().is_empty());
+        // And nothing that arrives afterwards is counted as audio.
+        r.on_packet(&build_iso_packet(0x0E10, 1, &[0xAA; 100]));
+        assert_eq!(r.sdu_count(), 0);
     }
 
     #[test]

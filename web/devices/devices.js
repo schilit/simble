@@ -27,6 +27,8 @@ const DOMAINS = [
     blurb: "Plain GATT: a server's own database beside what a client discovers" },
   { id: "media", label: "Media", module: "../audio/audio.js",
     blurb: "LE Audio: a source streaming LC3 to a sink over a real CIS" },
+  { id: "broadcast", label: "Broadcast", module: "../broadcast/broadcast.js",
+    blurb: "Auracast: one source, many listeners, no connection at all" },
   { id: "car", label: "Car", module: "../car/car.js",
     blurb: "Hands-free telephony: SDP, RFCOMM and AT over one link" },
   { id: "hid", label: "HID", module: "../hid/hid.js",

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>SimBLE Broadcast</title>
+<link rel="stylesheet" href="../common/simble.css">
+<link rel="stylesheet" href="../common/nav.css">
+</head>
+<body>
+<nav class="sitenav">
+  <a class="brand" href="../">Sim<b>BLE</b></a>
+  <div class="tabs">
+    <a href="../playground/">Playground</a>
+    <a href="../explorer/">API Explorer</a>
+    <a href="../scanner/">Scanner</a>
+    <a href="../devices/" aria-current="page">Devices</a>
+    <a href="../scene/">Scene</a>
+    <a href="../testing/">Testing</a>
+    <a href="../shared/">Shared</a>
+    <a href="../controllers/">Controllers</a>
+  </div>
+  <span class="spacer"></span>
+  <a class="ext" href="../doc/">Docs</a>
+  <a class="ext" href="https://github.com/schilit/simble">GitHub ↗</a>
+</nav>
+
+<!-- Everything below the nav is built by the module, so the same code can be
+     mounted as one tab of the domain shell or loaded standalone at this URL. -->
+<main></main>
+
+<footer>
+  SimBLE compiled to WebAssembly. An <strong>Auracast</strong> broadcast source and its listeners:
+  a Broadcast Audio Announcement (<code>0x1852</code>) on an extended advertising set, the BASE
+  (<code>0x1851</code>) on a periodic advertising train, BIGInfo in that train's ACAD, and a BIG
+  carrying one LC3 stream per BIS. No connection and no pairing exists anywhere on this page. On
+  netsim the devices join as <code>web-auracast-src</code> and <code>web-auracast-rx1…4</code>;
+  netsim is the only controller here, because the in-page radio models neither periodic
+  advertising nor a BIG.
+</footer>
+
+<script type="module">
+  import { mount } from "./broadcast.js";
+  mount(document.querySelector("main"));
+</script>
+</body>
+</html>
