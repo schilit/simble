@@ -26,6 +26,13 @@ import init, { WebLink } from "../pkg/simble.js";
 import { createDeviceHeader } from "../common/device-header.js";
 import { createAboutBox } from "../common/about-box.js";
 
+/// Which controllers this domain can run on. The shell's controller bar
+/// reads this: an option mapped to a string is offered disabled, with that
+/// string as the reason, rather than hidden.
+export const SUPPORTS = { "in-page": true,
+  "websocket": "the HID host is not wired for netsim yet" };
+
+
 // All four devices share one `WebLink`, and `WebLink` has `add_peripheral` and
 // `add_central` and no way at all to remove either: freeing the link is the
 // only teardown there is, and it takes every device with it. So none of these

@@ -16,11 +16,17 @@
 // produced it.
 
 import init, { WebLink, WebPeripheral, WebScriptedCentral, catalog_script } from "../pkg/simble.js";
-import { createBackendSelector } from "../common/backend.js";
+import { currentController } from "../common/controller-bar.js";
 import { createDeviceHeader } from "../common/device-header.js";
 import { createGattView } from "../common/gatt-view.js";
 import { bpmFromHex } from "../common/viewer-format.js";
 import { createAboutBox } from "../common/about-box.js";
+
+/// Which controllers this domain can run on. The shell's controller bar
+/// reads this: an option mapped to a string is offered disabled, with that
+/// string as the reason, rather than hidden.
+export const SUPPORTS = { "in-page": true, "websocket": true };
+
 
 const STYLE_ID = "simble-health-style";
 // The catalog's central examples connect to EXAMPLE_PEER_ADDRESS, and a test
@@ -296,9 +302,7 @@ export async function mount(container) {
   clientGatt = createGattView({ mode: "client", empty: "Connecting…" });
   $("client-gatt").append(clientGatt.el);
 
-  mode = createBackendSelector($("backend"), {
-    onChange: (m) => { mode = m; if (!stopped) run(); },
-  });
+  mode = currentController();
   run();
   timer = setInterval(loop, 100);
 }

@@ -22,8 +22,14 @@ import init, { WebPeripheral, WebLink, WebScriptedCentral, catalog_script } from
 import { createGattView } from "../common/gatt-view.js";
 import { createDeviceHeader } from "../common/device-header.js";
 import { attachHighlightedEditor } from "../common/highlight.js";
-import { createBackendSelector } from "../common/backend.js";
+import { currentController } from "../common/controller-bar.js";
 import { createAboutBox } from "../common/about-box.js";
+
+/// Which controllers this domain can run on. The shell's controller bar
+/// reads this: an option mapped to a string is offered disabled, with that
+/// string as the reason, rather than hidden.
+export const SUPPORTS = { "in-page": true, "websocket": true };
+
 
 const STYLE_ID = "simble-home-style";
 
@@ -484,9 +490,7 @@ export async function mount(container) {
       try { createPeripheral(scriptText()); } catch (e) { showScriptError(e); }
     }
   }
-  mode = createBackendSelector($("backend"), {
-    onChange: (m) => { mode = m; switchBackend(); },
-  });
+  mode = currentController();
   setModeHint();
 
   if (mode === "in-page") {

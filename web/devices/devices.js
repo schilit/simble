@@ -20,6 +20,8 @@
 // netsim accumulates ghost devices (it does not synthesise a disconnect when a
 // WebSocket drops, so a dead device lingers at the same address).
 
+import { createControllerBar } from "../common/controller-bar.js";
+
 const DOMAINS = [
   { id: "generic", label: "Generic", module: "../dual/dual.js",
     blurb: "Plain GATT: a server's own database beside what a client discovers" },
@@ -40,6 +42,7 @@ const DOMAINS = [
 const DEFAULT_ID = "generic";
 
 let current = null;      // { id, module }
+let bar = null;          // the one controller selector, in the chrome
 let switching = 0;       // guards against overlapping switches
 
 const $ = (id) => document.getElementById(id);
@@ -94,6 +97,18 @@ async function show(domain) {
   // A faster tab click may have superseded this load.
   if (token !== switching) return;
 
+  // The bar belongs to the shell, not the domain: one control, always
+  // present, so "which controller am I on" has a single answer.
+  const supports = module.SUPPORTS ?? { "in-page": true, websocket: true };
+  if (!bar) {
+    bar = createControllerBar({
+      supports,
+      onChange: () => show(domainFor(location.hash)),   // remount on the new one
+    });
+    $("controller").append(bar.el);
+  } else {
+    bar.setSupports(supports);
+  }
   try {
     await module.mount($("stage"));
     current = { id: domain.id, module };

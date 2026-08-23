@@ -21,6 +21,13 @@ import init, { WebCarKit } from "../pkg/simble.js";
 import { createDeviceHeader } from "../common/device-header.js";
 import { createAboutBox } from "../common/about-box.js";
 
+/// Which controllers this domain can run on. The shell's controller bar
+/// reads this: an option mapped to a string is offered disabled, with that
+/// string as the reason, rather than hidden.
+export const SUPPORTS = { "in-page": true,
+  "websocket": "the phone and head unit hand frames straight to each other — no controller sits between them" };
+
+
 // One timer for both endpoints. Chrome throttles a hidden tab hard enough
 // that a device hosted in one misses protocol deadlines, so a two-page design
 // would stall silently; both halves live here and share this interval.

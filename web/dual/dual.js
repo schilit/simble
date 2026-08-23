@@ -14,6 +14,13 @@ import { createGattView, promptForBytes } from "../common/gatt-view.js";
 import { renderGatt, nameFor, propChips, escapeHtml, decodeValue } from "../common/viewer.js";
 import { createAboutBox } from "../common/about-box.js";
 
+/// Which controllers this domain can run on. The shell's controller bar
+/// reads this: an option mapped to a string is offered disabled, with that
+/// string as the reason, rather than hidden.
+export const SUPPORTS = { "in-page": true,
+  "websocket": "both devices share one in-page link; this pair has no netsim path yet" };
+
+
 const STYLE_ID = "simble-generic-style";
 
 const STYLE = `main { max-width: 78rem; margin: 0 auto; padding: 1rem 1.25rem 2rem; }

@@ -29,8 +29,14 @@ import { LE_AUDIO_SINK_SCRIPT as DEFAULT_SCRIPT } from "../common/le-audio-sink.
 import { createGattView } from "../common/gatt-view.js";
 import { createDeviceHeader } from "../common/device-header.js";
 import { attachHighlightedEditor } from "../common/highlight.js";
-import { createBackendSelector } from "../common/backend.js";
+import { currentController } from "../common/controller-bar.js";
 import { createAboutBox } from "../common/about-box.js";
+
+/// Which controllers this domain can run on. The shell's controller bar
+/// reads this: an option mapped to a string is offered disabled, with that
+/// string as the reason, rather than hidden.
+export const SUPPORTS = { "in-page": true, "websocket": true };
+
 
 // Each device gets its own socket, which is to say its own controller, exactly
 // as three separate machines would have.
@@ -1036,12 +1042,7 @@ export function mount(container) {
     lc3 = new WebLc3(PCM_RATE, SDU_INTERVAL_MS * 1000);
     player = createSduPlayer({ sampleRate: PCM_RATE });
     renderSinkOptions();
-    mode = createBackendSelector($("backend"), {
-      onChange: (next) => {
-        mode = next;
-        switchBackend();
-      },
-    });
+    mode = currentController();
     switchBackend();
     timer = setInterval(loop, 20);
   })();

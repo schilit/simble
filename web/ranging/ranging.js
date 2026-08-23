@@ -21,6 +21,13 @@ import init, { WebRanging } from "../pkg/simble.js";
 import { createDeviceHeader } from "../common/device-header.js";
 import { createAboutBox } from "../common/about-box.js";
 
+/// Which controllers this domain can run on. The shell's controller bar
+/// reads this: an option mapped to a string is offered disabled, with that
+/// string as the reason, rather than hidden.
+export const SUPPORTS = { "in-page": true,
+  "websocket": "the tag and locator need a radio that models distance; on netsim the radio is netsim's, and positions come from `netsim move`" };
+
+
 const TAG_ADDRESS = "CC:1E:57:00:00:0A";
 const LOCATOR_ADDRESS = "CC:1E:57:00:00:0B";
 
