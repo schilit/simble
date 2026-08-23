@@ -142,10 +142,48 @@ testing nothing.
    `tests/catalog_test.rs` builds and ticks. A binding with no runnable example
    is undocumented.
 
+## Where a binding is enough, and where it is not
+
+The general rule, because it decides how much work each profile is:
+
+> **A native support function is enough when the device already fits something
+> a scene can host.** For LE that is everything, because every LE device is a
+> peripheral or a central. Classic needs the scene to learn a new kind of
+> device first, and only then do bindings become the easy part.
+
+### LE — a binding is the whole job
+
+`SceneEngine` hosts four things: `add_peripheral`, `add_scanner`, `add_central`,
+`add_scripted_central`. Every LE device is one of those, so the Rust already has
+somewhere to live and the only missing piece is a name a script can say.
+
+That covers the 17 unbound profiles, the Auracast source (wrapping
+`BigBroadcaster`) and Channel Sounding (wrapping `CsInitiator`). Roughly
+mechanical work against implementations that already have tests.
+
+### Classic — blocked one layer below scripting
+
+A2DP, AVRCP, HFP and Classic HID are **not** blocked by a missing Rhai binding.
+`ClassicHost` appears nowhere in `wasm_ws.rs` or `scene/mod.rs`: there is no
+path for a BR/EDR device to enter a scene at all. Its constructor takes an
+`SdpServer` and it speaks H4 straight to a controller.
+
+Adding `android::BluetoothA2dp` today would produce a script that compiles and
+has nothing to attach to — which is worse than not having it, because it looks
+like support.
+
+The prerequisite is the scene/transport adapter described in
+`docs/peripheral-support.md`: a fifth thing a scene can host. Once that exists,
+four profiles unlock together and the bindings are as mechanical as the LE ones.
+
+**So the two halves are different kinds of work.** The LE half is ~17
+bindings against tested Rust. The Classic half is one piece of architecture.
+Do not price them the same, and do not start the Classic bindings first.
+
 ## Deliberately out of scope
 
-- **Classic profiles** (A2DP, AVRCP, HFP, HID over BR/EDR). They need a
-  scene/transport adapter first — see `docs/peripheral-support.md`.
+- **Classic profile bindings**, until the scene can host a BR/EDR device — see
+  above. The blocker is architectural, not a naming exercise.
 - **Permissions, of any kind.** Noted once here so nobody re-derives the
   question: they are Android's deployment policy, not an API shape, and they do
   not apply to a simulator.
