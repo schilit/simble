@@ -11,11 +11,13 @@
 // renderer with the same { peripherals, scanners, centrals } snapshot shape, so
 // the UI code below doesn't care which one is live.
 //
-// The renderer is deliberately self-contained (no viewer.js import): a compact
-// services -> characteristics -> value view is enough for this demo.
+// The renderer is deliberately its own (no gatt-view.js widget): a compact
+// services -> characteristics -> value view is enough for this demo. It still
+// reads the site's shared formatting — escaping and the assigned-number name
+// table — from common/viewer-format.js rather than keeping copies.
 
 import init, { WebLink } from "../pkg/simble.js";
-import { escapeHtml } from "../common/viewer-format.js";
+import { escapeHtml, nameFor } from "../common/viewer-format.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -171,15 +173,9 @@ function showFatal(message) {
 // ===========================================================================
 // Rendering (shared by both hubs).
 // ===========================================================================
-const UUID_NAMES = {
-  "180D": "Heart Rate", "2A37": "Heart Rate Measurement",
-  "180F": "Battery", "2A19": "Battery Level",
-  "181A": "Environmental Sensing", "2A6E": "Temperature", "2A6F": "Humidity",
-  "180A": "Device Information", "1800": "Generic Access", "1801": "Generic Attribute",
-  "2902": "Client Characteristic Configuration",
-};
-const nameFor = (u) => UUID_NAMES[u] || null;
-
+// Names come from common/viewer-format.js — the one assigned-number table the
+// whole site reads. This page used to keep an eleven-entry copy, which is why
+// it was the only page that showed bare hex for anything outside it.
 function mineBadge(mine) {
   return mine ? '<span class="mine-badge">mine</span>' : "";
 }

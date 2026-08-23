@@ -68,8 +68,8 @@ const STYLE = `
 .val { font: 0.78rem ui-monospace, Menlo, monospace; color: var(--text); min-width: 1.6rem;
   text-align: right; }
 
-.answer { background: #1a7f37; border-color: #1a7f37; color: #fff; font-weight: 600; }
-.decline { background: #cf222e; border-color: #cf222e; color: #fff; font-weight: 600; }
+.answer { background: var(--good); border-color: var(--good); color: #fff; font-weight: 600; }
+.decline { background: var(--bad); border-color: var(--bad); color: #fff; font-weight: 600; }
 .answer:disabled, .decline:disabled { opacity: 0.35; }
 .car button.on { border-color: var(--accent); color: var(--accent); }
 
@@ -86,7 +86,7 @@ const STYLE = `
 .tape .hf > span:nth-child(3), .tape .ag > span:nth-child(1) { color: transparent; }
 .tape .bytes { color: var(--dim); font-size: var(--fs-code); padding-left: 0.4rem; white-space: pre-wrap;
   word-break: break-all; }
-.tape .unsolicited > span:nth-child(3) { color: #9a6700; }
+.tape .unsolicited > span:nth-child(3) { color: var(--warn); }
 .tape-empty { color: var(--dim); font-style: italic; }
 
 /* The stack step list, in the shape the Audio Source page uses. */

@@ -29,7 +29,7 @@
     cursor: pointer; background: var(--bg);
   }
   .dev-item:hover { border-color: var(--dim); }
-  .dev-item.open { border-color: var(--accent); background: #eaeef2; }
+  .dev-item.open { border-color: var(--accent); background: var(--panel2); }
   .dev-item .role-dot { font-size: var(--fs-label); line-height: 1; }
   .dev-item.peripheral .role-dot { color: var(--good); }
   .dev-item.scanner .role-dot { color: var(--warn); }
@@ -44,7 +44,6 @@
     border-radius: 6px; padding: 0.05rem 0.45rem; font-size: var(--fs-body); line-height: 1.2;
   }
   .dev-item .rm:hover { border-color: var(--bad); color: var(--bad); }
-  .empty { color: var(--dim); font-size: var(--fs-body); }
 
   /* Inspect panel (right) */
   #inspect { min-height: 20rem; }

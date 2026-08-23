@@ -251,7 +251,10 @@ details pre {
 .chr-val .raw { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
   font-size: var(--fs-meta); margin-left: 0.4rem; }
 .sub-note { color: var(--good); font-size: var(--fs-meta); margin-left: 0.4rem; }
-.viewer-empty { color: var(--dim); font-size: var(--fs-body); }
+/* "there is nothing here yet", in the two names the site had grown for it:
+   `.viewer-empty` is what the GATT widget writes, `.empty` is what four pages
+   were each declaring identically in their own <style> block. One rule. */
+.viewer-empty, .empty { color: var(--dim); font-size: var(--fs-body); }
 
 /* The client half of the shared widget (common/gatt-view.js): a discovered
    tree, nRF-Connect flavoured. The handle and the operation buttons appear
@@ -310,7 +313,10 @@ footer code { color: var(--good); }
 .about > summary { cursor: pointer; font-size: var(--fs-label); font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.05em; color: var(--dim);
   list-style-position: outside; padding-left: 0.4rem; }
-.about > summary:hover { color: var(--fg); }
+/* Was `var(--fg)`, a token that does not exist, so this hover never
+   applied at all. The tab-strip rules had the same typo and got away
+   with it because inheritance landed on --text regardless. */
+.about > summary:hover { color: var(--text); }
 .about[open] > summary { margin-bottom: 0.85rem; }
 .about-body { font-size: var(--fs-body); }
 .about-body p { margin: 0 0 0.7rem; }

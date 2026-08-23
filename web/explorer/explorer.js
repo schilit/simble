@@ -1271,10 +1271,11 @@ function allocName(type) {
 }
 
 // --- form field rendering --------------------------------------------------
-// The shared escapeHtml does not touch quotes, and defaults and tooltips here
-// do contain them, so attribute values get their own escaper. (Descriptions,
-// by contrast, are authored HTML — they carry <code> on purpose.)
-const attr = (s) => escapeHtml(s).replace(/"/g, "&quot;");
+// Attribute values go through the shared escapeHtml, which escapes quotes as
+// well as angle brackets — this file used to wrap it in a local `attr` that
+// re-escaped `"` a second time, from back when the shared one left quotes
+// alone. (Descriptions, by contrast, are authored HTML — they carry <code> on
+// purpose, so they are interpolated raw.)
 
 function uuidField(p) {
   // presetExpr, not an index: the option list grows and a numeric preset would
@@ -1287,20 +1288,20 @@ function uuidField(p) {
 }
 function flagsField(p) {
   return `<div class="flags">${p.options.map(([label, , value, doc], i) =>
-    `<label title="${attr(`${value} — ${doc || ""}`)}"><input type="checkbox" data-role="flag" value="${i}"${
+    `<label title="${escapeHtml(`${value} — ${doc || ""}`)}"><input type="checkbox" data-role="flag" value="${i}"${
       (p.defaults || []).includes(i) ? " checked" : ""}> ${escapeHtml(label)}</label>`).join("")}</div>`;
 }
 function selectField(role, options) {
   return `<select data-role="${role}">${options.map(([label, expr]) =>
-    `<option value="${attr(expr)}">${escapeHtml(label)}</option>`).join("")}</select>`;
+    `<option value="${escapeHtml(expr)}">${escapeHtml(label)}</option>`).join("")}</select>`;
 }
 
 function fieldControl(p) {
   switch (p.kind) {
-    case "text": return `<input type="text" data-role="text" value="${attr(p.default || "")}">`;
-    case "code": return `<input type="text" data-role="code" value="${attr(p.default || "")}" spellcheck="false">`;
-    case "number": return `<input type="text" data-role="number" value="${attr(p.default || "0")}">`;
-    case "bytes": return `<input type="text" data-role="bytes" value="${attr(p.default || "")}" placeholder="e.g. 0x00, 72">`;
+    case "text": return `<input type="text" data-role="text" value="${escapeHtml(p.default || "")}">`;
+    case "code": return `<input type="text" data-role="code" value="${escapeHtml(p.default || "")}" spellcheck="false">`;
+    case "number": return `<input type="text" data-role="number" value="${escapeHtml(p.default || "0")}">`;
+    case "bytes": return `<input type="text" data-role="bytes" value="${escapeHtml(p.default || "")}" placeholder="e.g. 0x00, 72">`;
     case "uuid": return uuidField(p);
     case "flags": return flagsField(p);
     case "servicetype": return selectField("expr", SERVICE_TYPE_OPTIONS);
