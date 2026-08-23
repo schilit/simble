@@ -32,7 +32,11 @@ export function createSduPlayer({ sampleRate }) {
   let gain = null;
   let cursor = 0;
   let lastPlayedAt = -Infinity; // context time of the previous batch
-  const stats = { received: 0, played: 0, underruns: 0 };
+  // `peak` is the loudest sample in the most recently decoded batch, 0..1.
+  // It is the only number here that describes the AUDIO rather than the
+  // plumbing, which is what lets a meter show whether sound is actually
+  // arriving instead of restating the volume the user already set.
+  const stats = { received: 0, played: 0, underruns: 0, peak: 0, peakAt: 0 };
 
   return {
     stats,
@@ -43,6 +47,8 @@ export function createSduPlayer({ sampleRate }) {
       stats.received = 0;
       stats.played = 0;
       stats.underruns = 0;
+      stats.peak = 0;
+      stats.peakAt = 0;
       lastPlayedAt = -Infinity;
       if (audio) cursor = audio.currentTime;
     },
@@ -127,10 +133,21 @@ export function createSduPlayer({ sampleRate }) {
       const buffer = audio.createBuffer(1, total, sampleRate);
       const channel = buffer.getChannelData(0);
       let at = 0;
+      let peak = 0;
       for (const pcm of decoded) {
-        for (let i = 0; i < pcm.length; i++) channel[at + i] = pcm[i] / 32768;
+        for (let i = 0; i < pcm.length; i++) {
+          const sample = pcm[i] / 32768;
+          channel[at + i] = sample;
+          const magnitude = sample < 0 ? -sample : sample;
+          if (magnitude > peak) peak = magnitude;
+        }
         at += pcm.length;
       }
+      stats.peak = peak;
+      // When the peak was measured. A meter needs to know that no audio has
+      // arrived recently, which a bare peak cannot say -- it would sit at the
+      // last batch's level forever after a file ended.
+      stats.peakAt = performance.now();
 
       const node = audio.createBufferSource();
       node.buffer = buffer;

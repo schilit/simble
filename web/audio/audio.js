@@ -68,6 +68,15 @@ const OP_SET_ABSOLUTE = 0x04;
 const OP_UNMUTE = 0x05;
 const OP_MUTE = 0x06;
 
+// The speaker artwork's own two colours. The page's tokens are picked for text
+// on white -- --good is #1a7f37, which is nearly black once it is a disc on a
+// dark cabinet -- so the mock's lit parts use the brighter pair the Car page's
+// phone already uses for its battery. Everything that is UI rather than
+// artwork stays on the tokens; this is the one place the two diverge, and the
+// reason is the ground the colour sits on.
+const ART_LIVE = "#46d17a";
+const ART_MUTED = "#e5534b";
+
 // What makes an advertiser a sink worth streaming to: ASCS carries the
 // endpoint a client configures, PACS says what the device can decode. A
 // targeted announcement puts ASCS in service *data* rather than the UUID list,
@@ -111,6 +120,7 @@ let target = SINK_ADDR;
 let runStart = 0;
 let lastRenderAt = 0;
 let lastCounter = -1; // the sink's change counter, echoed back with commands
+let lastMuted = false; // the sink's mute flag, so the meter can read empty
 let prevValues = new Map();
 let discovered = new Map(); // address -> { name }
 
@@ -182,6 +192,9 @@ async function loadFile(file) {
 
   frames = encoded;
   cursor = 0;
+  // The zone is the loudest thing in the column until it has been answered.
+  // A call to action that never acknowledges being obeyed keeps asking.
+  $("drop").classList.add("loaded");
   const seconds = (frames.length * SDU_INTERVAL_MS) / 1000;
   $("track").textContent =
     `${file.name} — ${seconds.toFixed(1)}s, ${frames.length} LC3 frames ` +
@@ -251,17 +264,22 @@ function pumpAudio(now) {
 // --- the sink --------------------------------------------------------------
 
 function applySpeaker(volume, muted, changeCounter) {
-  const bars = $("meter").children;
-  const lit = muted ? 0 : Math.round((volume / 255) * 16);
-  [...bars].forEach((bar, i) => {
-    bar.className = i < lit ? (muted ? "muted" : "on") : "";
-  });
+  // The meter is deliberately NOT touched here. It used to be
+  // `lit = (volume / 255) * 16` -- the volume again, in a widget shaped like a
+  // signal meter, so it danced when you dragged the slider and sat perfectly
+  // still while music played. Volume was on screen five times over (arcs,
+  // meter, slider, the number beside it, and Volume State) and the one display
+  // that looked like it reported the audio was the one that never did. It is
+  // driven from the decoded signal now, in renderMeter().
   ["w1", "w2", "w3", "w4"].forEach((id, i) => {
     const threshold = (i + 1) * 60; // each wave lights as the volume climbs
-    $(id).setAttribute("opacity", !muted && volume >= threshold ? "0.9" : "0.12");
+    // Fully off, not almost off: an unlit arc is drawn underneath in
+    // --border, so hiding this one reveals the empty slot rather than a hole.
+    $(id).setAttribute("opacity", !muted && volume >= threshold ? "1" : "0");
   });
+  lastMuted = muted;
   $("muteMark").setAttribute("opacity", muted ? "1" : "0");
-  $("cone").setAttribute("fill", muted ? "#d1495b" : "#33cc77");
+  $("cone").setAttribute("fill", muted ? ART_MUTED : ART_LIVE);
   // Terser than it was, and still every field of the characteristic: the
   // number now also sits beside the slider, where it is actually being read.
   $("readout").innerHTML =
@@ -299,6 +317,40 @@ function renderSink(status) {
     applySpeaker(volume, muted !== 0, changeCounter);
   }
   if (status.last_error) showScriptError(`tick error: ${status.last_error}`);
+}
+
+// Meter level, held between frames so the bars fall smoothly. Audio arrives in
+// batches and renders at ~10 Hz; without the decay the meter would snap to
+// zero in every gap between batches.
+let meterLevel = 0;
+const METER_DECAY = 0.55;
+// How long a peak still counts as "now". This must be comfortably LONGER than
+// the render interval or the meter goes dark between frames: at 120 ms it was
+// tighter than the loop's own period whenever the tab was throttled, so the
+// display depended on the render rate rather than on the audio. The loop asks
+// for 20 ms, so 400 ms holds through ordinary jitter and lets the decay -- not
+// the freshness cutoff -- be what takes the bars down when a track ends.
+const PEAK_FRESH_MS = 400;
+
+function renderMeter() {
+  // Muted means the speaker is emitting nothing, so the meter reads empty
+  // however loud the arriving signal is -- that is device state, not volume.
+  // The peak counts only while it is FRESH. Left as a standing value it meant
+  // the meter froze at the last batch's level when a file ended, still lit
+  // with nothing playing; consuming it on read instead made the reading depend
+  // on whether this loop ran before or after play(), which is not something a
+  // display should care about. A timestamp settles it either way.
+  let peak = 0;
+  if (player && !lastMuted && player.state === "running") {
+    const age = performance.now() - (player.stats.peakAt || 0);
+    if (age < PEAK_FRESH_MS) peak = player.stats.peak;
+  }
+  meterLevel = peak > meterLevel ? peak : meterLevel * METER_DECAY;
+  // sqrt curve: a linear peak leaves quiet passages invisible, because most
+  // music sits well below full scale.
+  const lit = Math.round(Math.sqrt(meterLevel) * 16);
+  const bars = $("meter").children;
+  for (let i = 0; i < bars.length; i++) bars[i].className = i < lit ? "on" : "";
 }
 
 function renderSinkStats() {
@@ -774,6 +826,7 @@ function loop() {
     showError(e);
   }
   renderSinkStats();
+  renderMeter();
   if (now - lastRenderAt > 100) lastRenderAt = now;
 }
 
@@ -808,20 +861,45 @@ const icon = (body) =>
   `<svg viewBox="0 0 20 16" width="20" height="16" aria-hidden="true" fill="none"` +
   ` stroke="currentColor" stroke-width="1.7" stroke-linecap="round">${CONE}${body}</svg>`;
 
-const WAVE_NEAR = `<path d="M8.4 6a3.6 3.6 0 0 1 0 4"/>`;
-const WAVE_FAR = `<path d="M11.4 3.9a7.2 7.2 0 0 1 0 8.2"/>`;
+// The arcs are struck from the cone's own mouth (5.9, 8) rather than drawn as
+// three unrelated curves at three unrelated origins, which is what made the
+// old pair read as parentheses instead of as sound leaving a speaker. Sweep
+// narrows as the radius grows so the fan stays inside the 16-unit box.
+const WAVE_1 = `<path d="M8.73 4.63A4.4 4.4 0 0 1 8.73 11.37"/>`;
+const WAVE_2 = `<path d="M11.27 2.63A7.6 7.6 0 0 1 11.27 13.37"/>`;
+// (A third arc existed while the two unmute icons were told apart by arc
+// count. That is what the plus does now, so it has no user.)
 
 const ICON = {
   // Volume steps: a full-height arithmetic sign, nothing speaker-ish beside
   // the cone, so they never blur into the three mute glyphs.
   // The bars are short and stand well clear of the cone: a long one butted up
   // against it turned "speaker minus" into a left arrow.
-  up: icon(`<path d="M14 5.2v5.6M11.2 8h5.6"/>`),
-  down: icon(`<path d="M11.2 8h5.6"/>`),
-  mute: icon(`<path d="M9.6 5.2l7 5.6M16.6 5.2l-7 5.6"/>`),
-  unmute: icon(WAVE_NEAR),
-  // Unmute *and* step up: both arcs, so it reads as the loudest of the three.
-  unmuteUp: icon(`${WAVE_NEAR}${WAVE_FAR}`),
+  // Both signs sit in one 10.0-15.4 box so the pair share a stem line, and
+  // that box ends where the widest arc ends -- the two families are drawn
+  // differently on purpose, but they are not allowed to sit at different
+  // optical centres in the same strip.
+  up: icon(`<path d="M12.7 5.3v5.4M10 8h5.4"/>`),
+  down: icon(`<path d="M10 8h5.4"/>`),
+  // Mute is the X *instead of* the arcs, which is the universal glyph, so it
+  // occupies the band the arcs would have. Square, not the old squat 7x5.6.
+  mute: icon(`<path d="M9.7 5.1l5.7 5.8M15.4 5.1l-5.7 5.8"/>`),
+  // These two differ by a PLUS, not by how many arcs they have.
+  //
+  // Arc count was tried twice -- one-vs-two, then two-vs-three -- and both
+  // fail the same way: more arcs is the universal loudness scale, so the pair
+  // reads as "softer / louder" and looks like a duplicate of the - and +
+  // buttons beside them. It is not a loudness scale. Arcs here mean the mute
+  // flag is clear; the volume number is a separate thing that only - and +
+  // move. A reader asked outright what the difference was, which is the whole
+  // answer to whether the icons worked.
+  //
+  // 0x03 is defined as 0x05 plus 0x01 -- unmute AND step up -- so it is drawn
+  // that way: the unmute glyph carrying the same plus that 0x01 uses. The
+  // fan is trimmed to one arc to make room, which is fine because the plus,
+  // not the arc count, is now what tells them apart.
+  unmute: icon(`${WAVE_1}${WAVE_2}`),
+  unmuteUp: icon(`${WAVE_1}<path d="M15 5.3v5.4M12.3 8h5.4"/>`),
   // The sound gate is not a volume control at all, so it gets a power symbol —
   // no cone, nothing that could be mistaken for an opcode button.
   power:
@@ -833,6 +911,15 @@ const ICON = {
     ` stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">` +
     `<path d="M3.2 8.4l3.2 3.2 6.4-7.2"/></svg>`,
 };
+
+// The drop zone's glyph. Bars rather than a document-with-a-note, because the
+// same bars are the sink's level meter at the other end of the page: a file
+// goes in as a waveform and comes out on a meter, and drawing both from one
+// vocabulary is the cheapest way to say that the two panels are one path.
+const WAVEFORM =
+  `<svg class="drop-art" viewBox="0 0 56 26" aria-hidden="true" fill="none"` +
+  ` stroke="currentColor" stroke-width="3" stroke-linecap="round">` +
+  `<path d="M3 9v8M11 5v16M19 2v22M27 7v12M35 3v20M43 8v10M51 10v6"/></svg>`;
 
 // The five control-point opcodes the page exposes, in the order a person
 // reaches for them: the two steps, then the three mute states. The hex stays
@@ -861,11 +948,48 @@ function injectStyles() {
   /* Each column is its own flex stack so panels of unequal height do not drag
      their neighbour's top edge down. */
 
-  .audio-page .drop { border: 2px dashed var(--border); border-radius: 10px;
-    padding: 1.4rem 1rem; text-align: center; color: var(--dim);
-    transition: border-color .15s, background .15s; }
-  .audio-page .drop.over { border-color: var(--good); background: rgba(26,127,55,0.06); }
-  .audio-page .drop input { display: block; margin: 0.7rem auto 0; }
+  /* The drop zone is the page's one real call to action -- nothing else here
+     does anything until a file is loaded -- and it used to be the quietest
+     thing in the column: a grey dashed box round the browser's own file
+     button, which is the only control on the site not drawn by the site. So
+     the whole box is the target now (it is a <label>, the input is only
+     visually hidden so it stays focusable), and it carries the accent that
+     everywhere else on the site means "the thing to click first".
+     Colour is the state: accent = give me a file, green = got one. */
+  /* Two columns -- artwork beside the words, not stacked above them. Centred
+     and stacked, this was 189px tall: taller than the speaker it feeds, for a
+     control that is one line of instruction and a list of extensions. The
+     waveform spans the three text rows, so the block is as tall as its text
+     and no taller. */
+  .audio-page .drop { display: grid; grid-template-columns: auto minmax(0, 1fr);
+    align-items: center; column-gap: 0.9rem; row-gap: 0.1rem;
+    border: 1.5px dashed var(--accent); border-radius: 10px;
+    background: rgba(9,105,218,0.045); /* --accent, washed out; the same trick .chr.pulse uses */
+    padding: 0.85rem 1.1rem; text-align: left; cursor: pointer;
+    color: var(--accent); /* the waveform draws in currentColor, so state flips it */
+    transition: border-color .15s, background .15s, color .15s; }
+  .audio-page .drop.over { border-color: var(--good); background: rgba(26,127,55,0.07);
+    color: var(--good); }
+  /* Once a file is in, the call to action has been answered: it stops
+     shouting and turns into a receipt. #track below spells out which file. */
+  .audio-page .drop.loaded { border-style: solid; border-color: var(--good);
+    background: rgba(26,127,55,0.05); color: var(--good); }
+  .audio-page .drop:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+  /* Kept in the layout so it is still tab-reachable and still the label's
+     control; display:none would take both away. */
+  .audio-page .drop input[type=file] { position: absolute; width: 1px; height: 1px;
+    opacity: 0; pointer-events: none; }
+  /* Three tiers, one per question: what to do, how else to do it, what will be
+     accepted. One paragraph carrying all three wrapped mid-list, and a list of
+     file extensions broken across two lines is the kind of detail that makes a
+     panel look unconsidered even when nobody can say why. */
+  .audio-page .drop-art { display: block; width: 3rem; height: auto;
+    grid-column: 1; grid-row: 1 / span 3; align-self: center; }
+  .audio-page .drop-title { grid-column: 2; font-size: var(--fs-title); font-weight: 600;
+    color: var(--text); line-height: 1.2; }
+  .audio-page .drop-sub { grid-column: 2; font-size: var(--fs-label); color: var(--dim); }
+  .audio-page .drop-sub b { color: var(--text); font-weight: 600; }
+  .audio-page .drop-formats { grid-column: 2; font-size: var(--fs-meta); color: var(--dim); }
   .audio-page .readout { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
     font-size: var(--fs-body); margin-top: 0.6rem; }
   .audio-page .readout b { color: var(--text); }
@@ -893,35 +1017,56 @@ function injectStyles() {
      centred so nothing shared an edge with anything. Two columns instead --
      the device on the left, everything you can do to it on the right -- which
      is also how the thing reads: an object, and its controls. */
-  .audio-page .sink-face { display: flex; align-items: center; gap: 1.1rem;
-    padding: 0.35rem 0 0.15rem; flex-wrap: wrap; }
+  /* ...and the two columns sit in a well of their own -- the same inset the
+     site already uses for a textarea or a <pre> inside a panel -- because the
+     device and its controls are one object, and without a boundary they were
+     just four loose rows floating between a script editor and a paragraph.
+     Stretch plus space-between below gives the two columns a shared top and
+     bottom line, which centring never did. */
+  .audio-page .sink-face { display: flex; align-items: stretch; gap: 1rem;
+    flex-wrap: wrap; margin: 0.2rem 0 0;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.85rem 0.95rem; }
   .audio-page .sink-visual { display: flex; flex-direction: column; align-items: center;
-    gap: 0.45rem; flex: 0 0 auto; width: 7rem; }
-  /* Cropped to the artwork. The 150x120 box had ~20 units of empty right edge,
-     which at this size shrank the speaker itself and left the meter beneath
-     sharing an edge with nothing. */
+    justify-content: space-between; gap: 0.55rem; flex: 0 0 auto; width: 7rem; }
+  /* The viewBox is cropped to the ink -- the drawing is laid out so the
+     cabinet's left margin and the outermost arc's right margin match -- so
+     this width is the width of the speaker, and the meter below it can share
+     an edge with something instead of floating under empty box. */
   .audio-page #speakerSvg { width: 7rem; height: auto; display: block; }
   .audio-page #cone { transition: fill 0.15s; }
   .audio-page .waves path { transition: opacity 0.15s; }
+  /* The unlit fan, drawn once and never touched: without it the whole right
+     half of the artwork was empty at low volume, and there was no way to see
+     that the lit arcs were four steps of a scale rather than decoration. It is
+     the same idea as the meter's dark bars, in the same token. */
+  .audio-page .waves-off path { stroke: var(--border); }
   .audio-page .sink-controls { flex: 1 1 15rem; min-width: 0;
-    display: flex; flex-direction: column; gap: 0.5rem; }
+    display: flex; flex-direction: column; justify-content: space-between; gap: 0.5rem; }
 
   /* 16 bars stretched to the artwork's width, so the meter reads as the
-     speaker's own level rather than as a stray widget beside it. */
-  .audio-page .meter { display: flex; gap: 2px; height: 1.4rem; align-items: flex-end;
-    width: 100%; }
+     speaker's own level rather than as a stray widget beside it -- and set
+     into a recessed track, so the unlit end of the scale is visibly part of
+     the instrument rather than absent. */
+  .audio-page .meter { display: flex; gap: 2px; height: 1.55rem; align-items: flex-end;
+    width: 100%; padding: 3px; background: var(--panel2);
+    border: 1px solid var(--border); border-radius: 5px; }
   .audio-page .meter i { flex: 1 1 0; min-width: 0; background: var(--border);
-    border-radius: 2px; display: block; transition: background 0.1s; }
+    border-radius: 1.5px; display: block; transition: background 0.1s; }
   .audio-page .meter i.on { background: var(--good); }
-  .audio-page .meter i.muted { background: var(--bad); }
+  /* No muted-bar colour: a muted speaker emits nothing, so the meter reads
+     empty rather than red-at-some-level. (No backticks in this block -- one
+     ends the template literal and takes the whole module down.) */
 
   .audio-page .vol-row { display: flex; align-items: center; gap: 0.55rem; }
   /* Chrome paints a range track in the same accent blue as .primary, so the
      slider and the power button read as one control group. They are unrelated
-     -- one is a GATT write, the other a browser permission -- so the slider
-     goes neutral and blue is left to mean "the thing to click first". */
+     -- one is a GATT write, the other a browser permission -- so blue stays
+     reserved for "the thing to click first". Green rather than grey, though:
+     the slider and the meter beside it are the same quantity, and a dead grey
+     track made the one live control in the panel look disabled. */
   .audio-page input[type=range] { flex: 1 1 auto; min-width: 6rem; margin: 0;
-    accent-color: var(--dim); }
+    accent-color: var(--good); }
   /* Tabular figures so the slider does not twitch as the number changes width. */
   .audio-page .vol-num { font-family: ui-monospace, Menlo, monospace;
     font-size: var(--fs-label); color: var(--dim); font-variant-numeric: tabular-nums;
@@ -936,11 +1081,32 @@ function injectStyles() {
   .audio-page .icon-btn.gate { border-radius: 50%; }
   .audio-page .icon-btn.gate.primary { color: #fff; }
   .audio-page .icon-btn.gate.on { color: var(--good); border-color: var(--good); opacity: 1; }
-  .audio-page .ops { display: flex; gap: 0.3rem; }
-  /* One wider gap splits the two volume steps from the three mute states. */
-  .audio-page .ops .grouped { margin-left: 0.55rem; }
+  /* One segmented strip, not five loose tiles. These five buttons are one
+     family -- every one of them is a byte written to the same control point --
+     and five separate boxes with five separate gaps said the opposite. Sharing
+     borders also removes five stray vertical hairlines from a small panel.
+     One wider gap still splits the two volume steps from the three mute
+     states; that gap is now the only division in the strip, so it carries. */
+  .audio-page .ops { display: flex; }
+  .audio-page .ops .icon-btn { border-radius: 0; margin-left: -1px; }
+  .audio-page .ops .icon-btn:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+  /* The one button that starts the second segment: rounded on its left, and
+     the only gap in the strip. Both live in one rule because a separate,
+     less specific .grouped rule lost its margin to the reset above. */
+  .audio-page .ops .icon-btn.grouped { border-radius: 6px 0 0 6px; margin-left: 0.5rem; }
+  .audio-page .ops .icon-btn:last-child,
+  .audio-page .ops .icon-btn:has(+ .grouped) { border-radius: 0 6px 6px 0; }
+  /* A hovered button's coloured border has to sit above its neighbours' or it
+     is clipped along the shared seam. */
+  .audio-page .ops .icon-btn:hover:not(:disabled) { position: relative; z-index: 1; }
   /* Scoped to the sink: the source column's readouts keep their own spacing. */
   .audio-page .sink-controls .readout { margin-top: 0; }
+  /* Two mono lines that looked identical said the wrong thing: the first is
+     the characteristic read back off the device, the second is this page's own
+     plumbing. A rule sets the state line off from the controls that change it;
+     the diagnostics drop a size. */
+  .audio-page #readout { padding-top: 0.5rem; border-top: 1px solid var(--border); }
+  .audio-page #sink-stats { font-size: var(--fs-meta); }
   .audio-page .warn-line { color: var(--warn); font-size: var(--fs-label); margin-top: 0.5rem; }
   `;
   document.head.appendChild(style);
@@ -958,11 +1124,13 @@ const TEMPLATE = `
   <section class="panel">
       <div id="source-head"></div>
 
-      <div id="drop" class="drop">
-        <strong>Drop an audio file here</strong><br>
-        <span class="readout">mp3, m4a, wav, flac — whatever your browser can decode</span>
+      <label id="drop" class="drop" for="file">
+        ${WAVEFORM}
+        <span class="drop-title">Drop an audio file here</span>
+        <span class="drop-sub">or <b>click to choose one</b></span>
+        <span class="drop-formats">mp3 · m4a · wav · flac — whatever your browser can decode</span>
         <input type="file" id="file" accept="audio/*">
-      </div>
+      </label>
 
       <label class="field" for="sink-pick">Stream to</label>
       <div class="row">
@@ -1006,19 +1174,50 @@ const TEMPLATE = `
       <div id="sink-script"></div>
       <div class="sink-face">
         <div class="sink-visual">
-          <svg id="speakerSvg" viewBox="4 16 136 88" role="img" aria-label="speaker">
-            <rect x="8" y="20" width="58" height="80" rx="8" fill="#57606a"/>
-            <circle cx="37" cy="48" r="10" fill="#2d333b"/>
-            <circle id="cone" cx="37" cy="76" r="16" fill="#33cc77"/>
-            <circle cx="37" cy="76" r="6" fill="#2d333b"/>
-            <g class="waves" stroke="#33cc77" stroke-width="4" fill="none" stroke-linecap="round">
-              <path id="w1" d="M78 60 Q86 60 86 60" opacity="0"/>
-              <path id="w2" d="M80 46 Q96 60 80 74" opacity="0"/>
-              <path id="w3" d="M94 36 Q116 60 94 84" opacity="0"/>
-              <path id="w4" d="M108 26 Q136 60 108 94" opacity="0"/>
+          <!-- A cabinet, not a rounded rectangle with two holes in it. The
+               previous drawing was one flat mid-grey slab, a black disc that
+               read as a hole rather than a tweeter, and four arcs struck from
+               four different origins with four different curvatures -- the
+               first of which was a zero-length path that the round line cap
+               turned into a stray blob. Redrawn against the Car page's phone
+               and head unit so the three mocks are recognisably the same
+               workshop: two-tone dark body, an inset baffle, flat fills, no
+               gradients, and exactly one part of the object that is alive.
+               The four arcs are now genuinely concentric on the cabinet's
+               right edge at its vertical centre, radii 12/22/32/42 at a
+               constant 52 degrees of half-sweep, with the stroke thinning
+               outward the way the energy does. -->
+          <svg id="speakerSvg" viewBox="0 0 108 100" role="img"
+               aria-label="the sink, drawn as a speaker">
+            <rect x="4" y="4" width="58" height="92" rx="9" fill="#2b3138"/>
+            <rect x="8" y="8" width="50" height="84" rx="5" fill="#161b21"/>
+            <!-- Both drivers are built the same way -- a basket ring with
+                 something seated in it -- because that repetition is most of
+                 what makes a shape read as a loudspeaker rather than as two
+                 circles. The tweeter was a single near-black disc before, and
+                 against a near-black baffle it read as a hole. -->
+            <circle cx="33" cy="28" r="9" fill="#3d444d"/>
+            <circle cx="33" cy="28" r="6.5" fill="#2b3138"/>
+            <circle cx="33" cy="65" r="19" fill="#3d444d"/>
+            <circle id="cone" cx="33" cy="65" r="15" fill="${ART_LIVE}"/>
+            <circle cx="33" cy="65" r="6" fill="#161b21"/>
+            <g class="waves-off" fill="none" stroke-linecap="round">
+              <path d="M69.39 40.54A12 12 0 0 1 69.39 59.46" stroke-width="3.2"/>
+              <path d="M75.55 32.66A22 22 0 0 1 75.55 67.34" stroke-width="3"/>
+              <path d="M81.70 24.78A32 32 0 0 1 81.70 75.22" stroke-width="2.8"/>
+              <path d="M87.86 16.90A42 42 0 0 1 87.86 83.10" stroke-width="2.6"/>
             </g>
-            <g id="muteMark" opacity="0" stroke="#d1495b" stroke-width="6" stroke-linecap="round">
-              <path d="M92 44 L124 76"/><path d="M124 44 L92 76"/>
+            <g class="waves" stroke="${ART_LIVE}" fill="none" stroke-linecap="round">
+              <path id="w1" d="M69.39 40.54A12 12 0 0 1 69.39 59.46" stroke-width="3.2" opacity="0"/>
+              <path id="w2" d="M75.55 32.66A22 22 0 0 1 75.55 67.34" stroke-width="3" opacity="0"/>
+              <path id="w3" d="M81.70 24.78A32 32 0 0 1 81.70 75.22" stroke-width="2.8" opacity="0"/>
+              <path id="w4" d="M87.86 16.90A42 42 0 0 1 87.86 83.10" stroke-width="2.6" opacity="0"/>
+            </g>
+            <!-- Centred on the fan it cancels, so mute reads as the whole
+                 right half being struck out rather than as a mark beside it. -->
+            <g id="muteMark" opacity="0" stroke="${ART_MUTED}" stroke-width="6"
+               stroke-linecap="round">
+              <path d="M69 35L99 65"/><path d="M99 35L69 65"/>
             </g>
           </svg>
           <div class="meter" id="meter"></div>
@@ -1123,10 +1322,15 @@ export function mount(container) {
   sinkOpenedOnce = false;
   lastRenderAt = 0;
 
+  // A gentle ramp, 55% to 100%, not the old 20% to 95%. The steep version put
+  // two variables on one quantity -- the bars got taller *and* they lit up --
+  // and at low volume the lit end of the scale was a row of four-pixel stubs,
+  // so the bottom third of the range was unreadable. The slope now only says
+  // "left is quieter"; how far it is lit says the rest.
   const meter = $("meter");
   for (let i = 0; i < 16; i++) {
     const bar = document.createElement("i");
-    bar.style.height = `${20 + i * 5}%`;
+    bar.style.height = `${55 + i * 3}%`;
     meter.appendChild(bar);
   }
 
