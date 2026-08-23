@@ -27,6 +27,26 @@ impl OpCode {
     pub fn get(&self) -> u16 {
         self.0.get()
     }
+
+    /// The opcode's two wire bytes, little-endian.
+    ///
+    /// `const` on purpose: it lets the other representations of an opcode be
+    /// *derived* from this one at compile time rather than written out a
+    /// second time. The Channel Sounding opcodes used to be declared three
+    /// times over -- as `OpCode` here, as `u16` in the simulated controller,
+    /// and as `[u8; 2]` in the host that sends them -- with nothing tying the
+    /// copies together. Those last two are the two ends of the same wire, so a
+    /// value fixed on one side and not the other would not fail loudly: the
+    /// controller would simply fall through to its unknown-command path and
+    /// ranging would stop working.
+    pub const fn to_bytes(self) -> [u8; 2] {
+        self.0.to_bytes()
+    }
+
+    /// The opcode as a `u16`, for callers that match on one.
+    pub const fn as_u16(self) -> u16 {
+        u16::from_le_bytes(self.to_bytes())
+    }
 }
 
 /// Trait for static HCI Command definitions.

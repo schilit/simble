@@ -52,6 +52,7 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Ref, Unaligned};
 /// is answered with a success Command Complete so a host's bring-up sequence
 /// never stalls on an unimplemented command.
 mod opcode {
+    use crate::packets::hci::cs_opcode;
     /// Disconnect (OGF 0x01, OCF 0x0006).
     pub const DISCONNECT: u16 = 0x0406;
     /// Reset (OGF 0x03, OCF 0x0003).
@@ -73,15 +74,15 @@ mod opcode {
     /// LE Create Connection Cancel (OGF 0x08, OCF 0x000E).
     pub const LE_CREATE_CONNECTION_CANCEL: u16 = 0x200E;
     /// LE CS Security Enable (OGF 0x08, OCF 0x008C).
-    pub const LE_CS_SECURITY_ENABLE: u16 = 0x208C;
+    pub const LE_CS_SECURITY_ENABLE: u16 = cs_opcode::LE_CS_SECURITY_ENABLE.as_u16();
     /// LE CS Create Config (OGF 0x08, OCF 0x0090).
-    pub const LE_CS_CREATE_CONFIG: u16 = 0x2090;
+    pub const LE_CS_CREATE_CONFIG: u16 = cs_opcode::LE_CS_CREATE_CONFIG.as_u16();
     /// LE CS Remove Config (OGF 0x08, OCF 0x0091).
-    pub const LE_CS_REMOVE_CONFIG: u16 = 0x2091;
+    pub const LE_CS_REMOVE_CONFIG: u16 = cs_opcode::LE_CS_REMOVE_CONFIG.as_u16();
     /// LE CS Set Procedure Parameters (OGF 0x08, OCF 0x0093).
-    pub const LE_CS_SET_PROCEDURE_PARAMETERS: u16 = 0x2093;
+    pub const LE_CS_SET_PROCEDURE_PARAMETERS: u16 = cs_opcode::LE_CS_SET_PROCEDURE_PARAMETERS.as_u16();
     /// LE CS Procedure Enable (OGF 0x08, OCF 0x0094).
-    pub const LE_CS_PROCEDURE_ENABLE: u16 = 0x2094;
+    pub const LE_CS_PROCEDURE_ENABLE: u16 = cs_opcode::LE_CS_PROCEDURE_ENABLE.as_u16();
 }
 
 /// HCI event codes the controller generates.

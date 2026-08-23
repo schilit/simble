@@ -43,14 +43,15 @@ use crate::profiles::ras::RangingData;
 
 /// HCI opcodes for Channel Sounding (Vol 4, Part E, Section 7.8).
 pub mod opcode {
+    use crate::packets::hci::cs_opcode;
     /// LE CS Security Enable.
-    pub const LE_CS_SECURITY_ENABLE: [u8; 2] = [0x8C, 0x20];
+    pub const LE_CS_SECURITY_ENABLE: [u8; 2] = cs_opcode::LE_CS_SECURITY_ENABLE.to_bytes();
     /// LE CS Create Config.
-    pub const LE_CS_CREATE_CONFIG: [u8; 2] = [0x90, 0x20];
+    pub const LE_CS_CREATE_CONFIG: [u8; 2] = cs_opcode::LE_CS_CREATE_CONFIG.to_bytes();
     /// LE CS Set Procedure Parameters.
-    pub const LE_CS_SET_PROCEDURE_PARAMETERS: [u8; 2] = [0x93, 0x20];
+    pub const LE_CS_SET_PROCEDURE_PARAMETERS: [u8; 2] = cs_opcode::LE_CS_SET_PROCEDURE_PARAMETERS.to_bytes();
     /// LE CS Procedure Enable.
-    pub const LE_CS_PROCEDURE_ENABLE: [u8; 2] = [0x94, 0x20];
+    pub const LE_CS_PROCEDURE_ENABLE: [u8; 2] = cs_opcode::LE_CS_PROCEDURE_ENABLE.to_bytes();
 }
 
 /// LE Meta subevent codes for Channel Sounding.
@@ -536,6 +537,28 @@ impl CsReflector {
 
 #[cfg(test)]
 mod tests {
+
+    /// The host's `[u8; 2]` opcodes and the simulated controller's `u16` ones
+    /// are now derived from `packets::hci::cs_opcode`, so this asserts the
+    /// derivation rather than a hand-copied value: if the canonical constant
+    /// moves, all three move together, and if someone re-introduces a literal
+    /// on one side this fails.
+    #[test]
+    fn cs_opcodes_agree_across_host_controller_and_packets() {
+        use crate::packets::hci::cs_opcode;
+        for (host, canonical) in [
+            (opcode::LE_CS_SECURITY_ENABLE, cs_opcode::LE_CS_SECURITY_ENABLE),
+            (opcode::LE_CS_CREATE_CONFIG, cs_opcode::LE_CS_CREATE_CONFIG),
+            (
+                opcode::LE_CS_SET_PROCEDURE_PARAMETERS,
+                cs_opcode::LE_CS_SET_PROCEDURE_PARAMETERS,
+            ),
+            (opcode::LE_CS_PROCEDURE_ENABLE, cs_opcode::LE_CS_PROCEDURE_ENABLE),
+        ] {
+            assert_eq!(host, canonical.to_bytes());
+            assert_eq!(u16::from_le_bytes(host), canonical.as_u16());
+        }
+    }
     use super::*;
 
     /// An LE Meta event packet carrying `parameters` (subevent code first).
