@@ -9,7 +9,10 @@
 <link rel="stylesheet" href="../common/nav.css">
 <style>
   main { max-width: 82rem; margin: 0 auto; padding: 1rem 1.25rem 2rem; }
-  .intro { color: var(--dim); font-size: var(--fs-body); margin: 0 0 1rem; max-width: 62rem; }
+  /* The shared about box carries no outer margin of its own — it is normally a
+     grid item in the domain shell. Here it is a block in a plain column, so it
+     gets the same gap the controller card above it uses. */
+  #about .about { margin: 0 0 0.9rem; }
 
   .two { display: grid; grid-template-columns: 22rem 1fr; gap: 1.1rem; align-items: start; }
   @media (max-width: 60rem) { .two { grid-template-columns: 1fr; } }
@@ -119,13 +122,8 @@
 </header>
 
 <main>
-  <p class="intro">Build a Bluetooth scene device by device — scripted <strong class="peripheral-role">servers</strong>
-    (peripherals), passive <strong class="scanner-role">scanners</strong>, and <strong class="central-role">clients</strong>
-    (centrals) that connect to a server and discover its GATT. Pick a <a href="../controllers/">controller</a>:
-    <strong>In browser</strong> hosts the whole scene on one wasm Link in this tab (no netsim), or
-    <strong>WebSocket</strong> spins each device up as its own engine in a real netsim scene. Click any device to inspect it.</p>
-
   <div id="backend"></div>
+  <div id="about"></div>
 
   <section id="setup" class="panel">
     <h2>netsim is not reachable</h2>

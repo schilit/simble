@@ -17,16 +17,25 @@ const STORE_KEY = "simble-about-open";
 
 /// Builds the box. `html` is page-authored prose — links and <code> are
 /// expected — never anything a device reported.
-export function createAboutBox(html) {
+///
+/// `key` gives a page its own remembered preference instead of the shared one.
+/// The shared key is right for the seven domain tabs, which are interchangeable
+/// views of the same shell — collapsing the box on one and finding it collapsed
+/// on the next is the point. A standalone workspace page is not one of those:
+/// Scene is somewhere you arrive needing orientation, so it keeps its own
+/// preference and starts open even for a reader who folded the domains' box
+/// away weeks ago.
+export function createAboutBox(html, { key = "" } = {}) {
   const box = document.createElement("details");
   box.className = "about full";
+  const storeKey = key ? `${STORE_KEY}:${key}` : STORE_KEY;
 
   // Default open: a first-time reader should not have to discover the
   // explanation. localStorage can throw outright in a private window or with
   // site data blocked, so a failure to read it just means "open".
   let open = true;
   try {
-    open = localStorage.getItem(STORE_KEY) !== "closed";
+    open = localStorage.getItem(storeKey) !== "closed";
   } catch (e) {
     /* no stored preference is a fine answer */
   }
@@ -41,7 +50,7 @@ export function createAboutBox(html) {
 
   box.addEventListener("toggle", () => {
     try {
-      localStorage.setItem(STORE_KEY, box.open ? "open" : "closed");
+      localStorage.setItem(storeKey, box.open ? "open" : "closed");
     } catch (e) {
       /* the box still works, it just will not be remembered */
     }

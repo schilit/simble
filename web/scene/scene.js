@@ -15,6 +15,7 @@
 import init, { WebLink, WebPeripheral, WebScanner } from "../pkg/simble.js";
 import { renderGatt, gattViewFor, escapeHtml } from "../common/viewer.js";
 import { createBackendSelector } from "../common/backend.js";
+import { createAboutBox } from "../common/about-box.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -486,6 +487,23 @@ function loopWs() {
 await init();
 
 mode = createBackendSelector($("backend"), { onChange: setMode });
+
+// This used to be a bare paragraph above the controller card. It is the same
+// explanation every other page keeps in its About box, so it lives in one now
+// — below the control it talks about, rather than above it. Scene keeps its
+// own open/closed preference: see the note in common/about-box.js.
+$("about").append(createAboutBox(
+  `<p>Build a Bluetooth scene device by device — scripted
+   <strong class="peripheral-role">servers</strong> (peripherals), passive
+   <strong class="scanner-role">scanners</strong>, and
+   <strong class="central-role">clients</strong> (centrals) that connect to a server and
+   discover its GATT. Click any device to inspect it.</p>
+   <p style="margin-bottom:0">The controller above decides how the scene is hosted:
+   <strong>In browser</strong> puts every device on one wasm <code>Link</code> in this tab and
+   needs nothing installed, while <strong>WebSocket</strong> gives each device its own engine in
+   a real netsim scene — the same scene the
+   <a href="../emulator/">Android emulator</a> is on.</p>`,
+  { key: "scene" }));
 
 $("add-server").addEventListener("click", addServer);
 $("add-scanner").addEventListener("click", addScanner);
