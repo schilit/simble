@@ -38,6 +38,68 @@ This is the check that counts, and it has already earned its keep twice:
   wrong handle; against a simble server that write even succeeds. The client
   issues Find Information over the descriptor range instead.
 
+## `classic_peer.py`
+
+The **BR/EDR** direction, and the one that had no foreign witness at all:
+simble's Classic *initiator* against a Bumble classic device. Bumble is
+discoverable and connectable on netsim with a name, a Class of Device, an SPP
+record and an RFCOMM echo server; `examples/classic_initiator.rs` inquires,
+finds it, reads its name, pages it, queries SDP, opens the DLC on the channel
+**the peer's record named**, writes, checks the echo and disconnects. The
+client's exit status is the verdict, and Bumble adds one check of its own —
+that the bytes really did reach a foreign RFCOMM server.
+
+```bash
+cargo build --example classic_initiator
+python3 tests/interop/classic_peer.py                        # the base run
+python3 tests/interop/classic_peer.py --inquiry-mode rssi    # event 0x22
+python3 tests/interop/classic_peer.py --inquiry-mode eir     # event 0x2F
+python3 tests/interop/classic_peer.py --records 40           # forces SDP continuation
+```
+
+Every fact asserted is one only Bumble knows: the name comes from its
+`HCI_Write_Local_Name`, the Class of Device (0x2C0114, nothing like the
+0x240404 headset simble's examples use) from its `HCI_Write_Class_Of_Device`,
+and the RFCOMM channel — **7**, deliberately not the 3 every simble example
+hardcodes — is allocated by Bumble's `rfcomm.Server.listen()` and read back
+out of the record Bumble serialised. A client that guessed instead of reading
+the answer passes everywhere else and fails here.
+
+rootcanal *dies* on malformed HCI rather than returning an error, so a run
+that reaches the end is also a statement about the Inquiry, Remote Name
+Request and Create Connection parameter layouts in particular.
+
+It has already earned its keep three times:
+
+- **The SDP client ignored continuation state.** Bumble caps each response at
+  the negotiated L2CAP MTU less nine and returns the rest under a
+  continuation state; simble's event-loop client treated the first chunk as
+  the whole answer. The prefix is a well-formed PDU whose payload is half a
+  data element, so it did not fail loudly — it reported "the peer advertises
+  no Serial Port service". Every simble record fits in one response, which is
+  why nothing in-tree had ever seen it. `--records 40` reproduces it.
+- **Two of the three inquiry-result event forms were unhandled.** rootcanal
+  honours `HCI_Write_Inquiry_Mode`, and the host understood only the reset
+  default (event 0x02). With mode 0x01 or 0x02 set the inquiry completed
+  having found nothing, with no error anywhere. Handling 0x22 and 0x2F also
+  bought the EIR name: in `--inquiry-mode eir` the run reads "Bumble SPP
+  Peer" out of the inquiry result and never sends a Remote Name Request at
+  all, which is what a phone does.
+- **The RSSI form's Class of Device offset.** The first fix read event 0x22
+  with the standard form's 15-octet stride and offset 9; it is 14 and 8 (one
+  reserved octet, not two). The peer's real 0x2C0114 caught it — a
+  self-consistent test never would.
+
+`tests/classic_foreign_bytes_test.rs` pins the octets rootcanal and Bumble
+actually sent, so `cargo test` re-checks all of the above with no netsim in
+sight. Each of the three bugs was mutation-proven against it.
+
+**Not covered:** pairing and encryption (Bumble accepts the link unpaired),
+SCO/eSCO, and **ACL reassembly** — rootcanal never fragmented, so the 672-byte
+SDP responses arrived whole and simble's lack of a reassembly buffer in
+`ClassicHost::handle_acl` was never exercised. A controller with a smaller
+ACL data length would truncate.
+
 ## `lea_source.py`
 
 A complete LE Audio source: connects to a simble sink, discovers ASCS,

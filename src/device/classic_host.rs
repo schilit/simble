@@ -55,6 +55,24 @@ mod opcode {
     pub const DISCONNECT: [u8; 2] = [0x06, 0x04];
     /// Remote Name Request: ask a discovered device what it is called.
     pub const REMOTE_NAME_REQUEST: [u8; 2] = [0x19, 0x04];
+    /// Write Inquiry Mode: choose which of the three inquiry-result event
+    /// forms the controller reports with.
+    pub const WRITE_INQUIRY_MODE: [u8; 2] = [0x45, 0x0C];
+}
+
+/// Inquiry Mode values (Vol 4, Part E, Section 7.3.49) — which event form
+/// the controller reports inquiry results in. This is a *host* setting: it
+/// changes nothing on the air, only which of three event layouts arrives.
+pub mod inquiry_mode {
+    /// Inquiry Result (event 0x02). The reset default.
+    pub const STANDARD: u8 = 0x00;
+    /// Inquiry Result with RSSI (event 0x22).
+    pub const WITH_RSSI: u8 = 0x01;
+    /// Extended Inquiry Result (event 0x2F), which carries the peer's EIR —
+    /// its name and service UUIDs — without a Remote Name Request. This is
+    /// what Android asks for, which is why a phone can list device names
+    /// before it has paged anything.
+    pub const WITH_EXTENDED: u8 = 0x02;
 }
 
 /// HCI event codes this host reacts to beyond the ones [`HciEvent`] gives a
@@ -66,12 +84,40 @@ mod event_code {
     pub const INQUIRY_RESULT: u8 = 0x02;
     /// Remote Name Request Complete.
     pub const REMOTE_NAME_REQUEST_COMPLETE: u8 = 0x07;
+    /// Inquiry Result with RSSI — the same information one byte to the left,
+    /// plus an RSSI octet.
+    pub const INQUIRY_RESULT_WITH_RSSI: u8 = 0x22;
+    /// Extended Inquiry Result — one response, with 240 octets of EIR.
+    pub const EXTENDED_INQUIRY_RESULT: u8 = 0x2F;
 }
 
 /// The General/Unlimited Inquiry Access Code, 0x9E8B33 — the LAP every
 /// discoverable device listens on. A host that inquires on any other LAP
 /// finds only devices in limited discoverable mode.
 const GIAC: [u8; 3] = [0x33, 0x8B, 0x9E];
+
+/// The name carried in an Extended Inquiry Response, if it carries one.
+///
+/// EIR uses the same AD structure encoding as LE advertising data (CSS Part
+/// A), which is why this walks it with the GAP parser rather than a second
+/// copy. A shortened name counts: it is what the peer chose to fit, and a
+/// list entry reading "Bumble SP" beats one reading "unknown device".
+fn name_from_eir(eir: &[u8]) -> Option<String> {
+    use crate::gap::ad_type;
+    let mut shortened = None;
+    for (kind, value) in crate::gap::advertising::ad_structures(eir) {
+        match kind {
+            ad_type::COMPLETE_LOCAL_NAME => {
+                return Some(String::from_utf8_lossy(value).into_owned());
+            }
+            ad_type::SHORTENED_LOCAL_NAME if shortened.is_none() => {
+                shortened = Some(String::from_utf8_lossy(value).into_owned());
+            }
+            _ => {}
+        }
+    }
+    shortened
+}
 
 /// A device this host found by inquiry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -232,6 +278,12 @@ pub struct SdpQueryResults {
     pub error: Option<u16>,
     /// RFCOMM server channel numbers advertised, with their service classes.
     pub rfcomm_channels: Vec<(u8, Vec<SdpUuid>)>,
+    /// The peer kept asking us to continue past the watchdog, so what is in
+    /// `rfcomm_channels` is a prefix of the answer rather than the answer.
+    /// Reported rather than hidden: a truncated SDP answer looks exactly
+    /// like a peer with fewer services, and acting on it opens a DLC on a
+    /// channel nobody is listening to.
+    pub truncated: bool,
 }
 
 impl SdpQueryResults {
@@ -255,16 +307,27 @@ pub type SharedSdpQueryResults = std::sync::Arc<std::sync::Mutex<SdpQueryResults
 /// It builds [`SdpPdu`]s directly rather than using [`crate::classic::sdp::SdpClient`].
 /// That client takes a `FnMut(&[u8]) -> Vec<u8>` transport — it *blocks* on
 /// each response — which cannot work above an event loop where the answer
-/// comes back several ticks later on an HCI channel. Only the one-shot,
-/// no-continuation case is handled here, which is every record a simble
-/// device serves; a peer whose answer needs continuation is reported as
-/// unanswered rather than silently truncated.
+/// comes back several ticks later on an HCI channel. What it does share with
+/// that client is **continuation**: a server whose answer does not fit in
+/// one response returns a prefix plus a continuation state, and expects the
+/// identical request back with those bytes echoed in. Bumble's SDP server
+/// caps each response at the negotiated L2CAP MTU less nine, so any peer
+/// with more than a couple of dozen records continues — as every phone
+/// does. Ignoring the field yields a truncated byte string that still looks
+/// like a well-formed response, which is exactly why the omission survived
+/// every test against a peer whose records happened to fit.
 #[derive(Debug)]
 pub struct SdpQueryHandler {
     /// The service class UUID to search for.
     uuid: SdpUuid,
     /// Whether the query has been sent.
     sent: bool,
+    /// Attribute-list bytes accumulated so far, across continuations. The
+    /// data element they form is only parseable once the last chunk has
+    /// arrived — a prefix of a SEQUENCE is not a SEQUENCE.
+    partial: Vec<u8>,
+    /// How many continuation round-trips this query has taken.
+    continuations: u32,
     /// Where the answer is put for the driver to read.
     results: SharedSdpQueryResults,
 }
@@ -279,10 +342,33 @@ impl SdpQueryHandler {
             Self {
                 uuid,
                 sent: false,
+                partial: Vec::new(),
+                continuations: 0,
                 results: results.clone(),
             },
             results,
         )
+    }
+
+    /// The ServiceSearchAttributeRequest this client asks with. The search
+    /// pattern and attribute list must be *identical* on a continuation —
+    /// the server matches the request, not just the state bytes — so the
+    /// same builder produces both the first request and every follow-up.
+    fn request(&self, transaction_id: u16, continuation_state: Vec<u8>) -> Vec<u8> {
+        // Ask for the protocol descriptor (which carries the RFCOMM channel)
+        // and the service class list (which says what the channel is *for*).
+        // Asking for both in one request is what makes the answer actionable.
+        crate::classic::sdp::SdpPdu::ServiceSearchAttributeRequest {
+            transaction_id,
+            service_search_pattern: DataElement::sequence(vec![DataElement::uuid(self.uuid)]),
+            maximum_attribute_byte_count: 0xFFFF,
+            attribute_id_list: DataElement::sequence(vec![
+                DataElement::unsigned_integer_16(attribute_id::PROTOCOL_DESCRIPTOR_LIST),
+                DataElement::unsigned_integer_16(attribute_id::SERVICE_CLASS_ID_LIST),
+            ]),
+            continuation_state,
+        }
+        .to_bytes()
     }
 
     /// Pulls the RFCOMM server channel and service classes out of one
@@ -324,20 +410,43 @@ impl ProtocolHandler for SdpQueryHandler {
     }
 
     fn on_data(&mut self, data: &[u8], _peer_mtu: u16) -> Vec<Vec<u8>> {
-        use crate::classic::sdp::SdpPdu;
-        let Ok(mut results) = self.results.lock() else {
+        use crate::classic::sdp::{SDP_CONTINUATION_WATCHDOG, SdpPdu, is_final_continuation};
+        // Clone the handle before locking: the guard would otherwise borrow
+        // `self` for as long as it lives, and accumulating into `self.partial`
+        // needs `&mut self`.
+        let shared = self.results.clone();
+        let Ok(mut results) = shared.lock() else {
             return Vec::new();
         };
         match SdpPdu::parse(data) {
             Some(SdpPdu::ServiceSearchAttributeResponse {
-                attribute_lists, ..
+                transaction_id,
+                attribute_lists,
+                continuation_state,
             }) => {
+                self.partial.extend_from_slice(&attribute_lists);
+                if !is_final_continuation(&continuation_state) {
+                    self.continuations += 1;
+                    if self.continuations > SDP_CONTINUATION_WATCHDOG {
+                        // A server that never finishes is a server we stop
+                        // asking. Say the answer is partial rather than
+                        // pretending the prefix is the whole database.
+                        results.answered = true;
+                        results.truncated = true;
+                        return Vec::new();
+                    }
+                    // The same request again, with the server's state echoed
+                    // back. This is the whole of the fix: without it the
+                    // prefix above is treated as the entire answer.
+                    return vec![self.request(transaction_id, continuation_state)];
+                }
                 results.answered = true;
-                let records = DataElement::from_bytes(&attribute_lists)
+                let records = DataElement::from_bytes(&self.partial)
                     .as_ref()
                     .and_then(DataElement::as_sequence)
                     .map(<[DataElement]>::to_vec)
                     .unwrap_or_default();
+                self.partial = Vec::new();
                 for record in &records {
                     let Some(items) = record.as_sequence() else {
                         continue;
@@ -364,26 +473,18 @@ impl ProtocolHandler for SdpQueryHandler {
             return Vec::new();
         }
         self.sent = true;
-        // Ask for the protocol descriptor (which carries the RFCOMM channel)
-        // and the service class list (which says what the channel is *for*).
-        // Asking for both in one request is what makes the answer actionable.
-        let request = crate::classic::sdp::SdpPdu::ServiceSearchAttributeRequest {
-            transaction_id: 1,
-            service_search_pattern: DataElement::sequence(vec![DataElement::uuid(self.uuid)]),
-            maximum_attribute_byte_count: 0xFFFF,
-            attribute_id_list: DataElement::sequence(vec![
-                DataElement::unsigned_integer_16(attribute_id::PROTOCOL_DESCRIPTOR_LIST),
-                DataElement::unsigned_integer_16(attribute_id::SERVICE_CLASS_ID_LIST),
-            ]),
-            continuation_state: vec![0x00],
-        };
-        vec![request.to_bytes()]
+        // A null continuation state — one zero byte — opens the exchange.
+        vec![self.request(1, vec![0x00])]
     }
 
     fn on_channel_closed(&mut self) {
         // A fresh channel means a fresh peer, so the question must be asked
-        // again — a stale `sent` would leave the next peer never queried.
+        // again — a stale `sent` would leave the next peer never queried,
+        // and a stale `partial` would splice one peer's records onto
+        // another's.
         self.sent = false;
+        self.partial = Vec::new();
+        self.continuations = 0;
     }
 }
 
@@ -966,47 +1067,34 @@ impl ClassicHost {
 
     /// Records what an inquiry turned up. These arrive as `HciEvent::Other`
     /// because they carry no typed variant; the layouts are Vol 4, Part E,
-    /// Sections 7.7.1, 7.7.2 and 7.7.7.
+    /// Sections 7.7.1, 7.7.2, 7.7.7, 7.7.33 and 7.7.38.
+    ///
+    /// All **three** inquiry-result forms are handled, because which one
+    /// arrives is not this host's choice alone: it follows the controller's
+    /// Inquiry Mode, and a host that understands only the reset default goes
+    /// blind — the inquiry completes, `discovered` stays empty, and the
+    /// symptom is "the device is not there" with no error anywhere.
     fn handle_discovery_event(&mut self, code: u8, parameters: &[u8]) {
         match code {
             event_code::INQUIRY_COMPLETE => self.inquiry_finished = true,
-            event_code::INQUIRY_RESULT => {
-                // Num_Responses, then that many 14-octet responses:
-                // BD_ADDR(6), Page_Scan_Repetition_Mode(1), Reserved(2),
-                // Class_of_Device(3), Clock_Offset(2).
-                const RESPONSE_LEN: usize = 14;
-                let Some((&count, rest)) = parameters.split_first() else {
-                    return;
-                };
-                for index in 0..usize::from(count) {
-                    let Some(response) = rest.get(index * RESPONSE_LEN..(index + 1) * RESPONSE_LEN)
-                    else {
-                        return; // truncated: stop rather than misread past it
-                    };
-                    let address = Address::new([
-                        response[0],
-                        response[1],
-                        response[2],
-                        response[3],
-                        response[4],
-                        response[5],
-                    ]);
-                    let class_of_device = [response[9], response[10], response[11]];
-                    // A real controller reports the same device repeatedly
-                    // for as long as the inquiry runs, so deduping is the
-                    // host's job — not the simulator's.
-                    if let Some(existing) =
-                        self.discovered.iter_mut().find(|d| d.address == address)
-                    {
-                        existing.class_of_device = class_of_device;
-                        continue;
-                    }
-                    self.discovered.push(DiscoveredDevice {
-                        address,
-                        class_of_device,
-                        name: None,
-                    });
-                }
+            // The three forms differ only in the fixed part's length and in
+            // where Class_of_Device sits — the standard form has *two*
+            // reserved octets after Page_Scan_Repetition_Mode, the other two
+            // have one. Reading the standard offset out of an RSSI result
+            // shifts the Class of Device by a byte, which turns a headset
+            // into whatever the clock offset's low byte says it is.
+            event_code::INQUIRY_RESULT => self.record_inquiry_results(parameters, 14, 9, false),
+            event_code::INQUIRY_RESULT_WITH_RSSI => {
+                // BD_ADDR(6), PSRM(1), Reserved(1), CoD(3), Clock_Offset(2),
+                // RSSI(1) — the same 14 octets as the standard form, with
+                // one reserved octet traded for the RSSI.
+                self.record_inquiry_results(parameters, 14, 8, false);
+            }
+            event_code::EXTENDED_INQUIRY_RESULT => {
+                // Num_Responses is always 1 here, and the response carries
+                // 240 octets of EIR after the RSSI — which is how a phone
+                // shows a name it never asked for. 14 + 240 = 254.
+                self.record_inquiry_results(parameters, 254, 8, true);
             }
             event_code::REMOTE_NAME_REQUEST_COMPLETE => {
                 // Status(1), BD_ADDR(6), Remote_Name(248, NUL-padded).
@@ -1037,6 +1125,78 @@ impl ClassicHost {
             }
             _ => {}
         }
+    }
+
+    /// The body all three inquiry-result forms share: `Num_Responses`, then
+    /// that many fixed-size responses, each starting with a BD_ADDR and
+    /// carrying its Class of Device at `cod_offset`.
+    ///
+    /// `response_len` is the whole per-response record — for an Extended
+    /// Inquiry Result that includes the 240 EIR octets, and `has_eir` says
+    /// to read a name out of them.
+    fn record_inquiry_results(
+        &mut self,
+        parameters: &[u8],
+        response_len: usize,
+        cod_offset: usize,
+        has_eir: bool,
+    ) {
+        let Some((&count, rest)) = parameters.split_first() else {
+            return;
+        };
+        for index in 0..usize::from(count) {
+            let Some(response) = rest.get(index * response_len..(index + 1) * response_len) else {
+                return; // truncated: stop rather than misread past it
+            };
+            let address = Address::new([
+                response[0],
+                response[1],
+                response[2],
+                response[3],
+                response[4],
+                response[5],
+            ]);
+            let class_of_device = [
+                response[cod_offset],
+                response[cod_offset + 1],
+                response[cod_offset + 2],
+            ];
+            // The EIR sits after the RSSI octet: BD_ADDR(6) + PSRM(1) +
+            // Reserved(1) + CoD(3) + Clock_Offset(2) + RSSI(1) = 14.
+            let eir_name = if has_eir {
+                response.get(14..).and_then(name_from_eir)
+            } else {
+                None
+            };
+            // A real controller reports the same device repeatedly for as
+            // long as the inquiry runs, so deduping is the host's job — not
+            // the simulator's.
+            if let Some(existing) = self.discovered.iter_mut().find(|d| d.address == address) {
+                existing.class_of_device = class_of_device;
+                // A name already resolved by a Remote Name Request is the
+                // authoritative one; an EIR name only fills a blank.
+                if existing.name.is_none() {
+                    existing.name = eir_name;
+                }
+                continue;
+            }
+            self.discovered.push(DiscoveredDevice {
+                address,
+                class_of_device,
+                name: eir_name,
+            });
+        }
+    }
+
+    /// HCI Write Inquiry Mode: ask the controller for a richer inquiry
+    /// result. [`inquiry_mode::WITH_EXTENDED`] is what a phone sets, and the
+    /// reason its device list shows names before anything is paired.
+    ///
+    /// Not part of [`Self::start_commands`]: the reset default is the
+    /// standard form, and a device that only accepts connections has no
+    /// inquiry results to shape.
+    pub fn set_inquiry_mode(&self, mode: u8) -> Vec<Vec<u8>> {
+        vec![command(opcode::WRITE_INQUIRY_MODE, &[mode])]
     }
 
     fn handle_acl(&mut self, packet: &[u8]) -> Result<Vec<Vec<u8>>, SimbleError> {
@@ -1443,6 +1603,46 @@ mod tests {
                 DataElement::uuid(SdpUuid::Uuid16(0x0003)),
                 DataElement::unsigned_integer(3, 1),
             ])
+        );
+    }
+
+    /// A peer that answers every continuation with another continuation
+    /// would keep an SDP client asking for ever. The watchdog stops it, and
+    /// — this is the part that matters — says the answer is a *prefix*
+    /// rather than letting a partial record list pass for the whole
+    /// database. Acting on a truncated answer opens a DLC on a channel
+    /// nobody is listening to.
+    #[test]
+    fn test_an_endless_sdp_continuation_is_stopped_and_declared_partial() {
+        use crate::classic::sdp::{SDP_CONTINUATION_WATCHDOG, SdpPdu};
+
+        let (mut query, results) = SdpQueryHandler::searching(SdpUuid::Uuid16(0x1101));
+        assert_eq!(query.poll_output(672).len(), 1, "the query goes out once");
+
+        // A response that never ends: an empty attribute list and a
+        // continuation state that is never the null one.
+        let endless = SdpPdu::ServiceSearchAttributeResponse {
+            transaction_id: 1,
+            attribute_lists: Vec::new(),
+            continuation_state: vec![0x01, 0x00],
+        }
+        .to_bytes();
+
+        let mut asked_again = 0;
+        for _ in 0..=SDP_CONTINUATION_WATCHDOG {
+            asked_again += query.on_data(&endless, 672).len();
+        }
+        assert_eq!(
+            asked_again as u32, SDP_CONTINUATION_WATCHDOG,
+            "the client asks again exactly {SDP_CONTINUATION_WATCHDOG} times, \
+             then gives up"
+        );
+
+        let results = results.lock().expect("results readable");
+        assert!(results.answered, "giving up is still an outcome to report");
+        assert!(
+            results.truncated,
+            "and it must be reported as partial, not as a peer with no services"
         );
     }
 

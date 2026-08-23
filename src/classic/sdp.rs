@@ -18,7 +18,7 @@ use std::collections::HashMap;
 pub const SDP_PSM: u16 = 0x0001;
 
 /// Safety cap on continuation round-trips for a single logical request.
-const SDP_CONTINUATION_WATCHDOG: u32 = 64;
+pub(crate) const SDP_CONTINUATION_WATCHDOG: u32 = 64;
 
 /// SDP data elements nest via SEQUENCE/ALTERNATIVE; cap recursion so a
 /// malicious peer can't stack-overflow the parser with a deeply nested PDU.
@@ -1062,7 +1062,16 @@ impl SdpClient {
     }
 }
 
-fn is_final_continuation(state: &[u8]) -> bool {
+/// Whether a response's continuation state says "that was all of it".
+///
+/// The null continuation state is a single zero byte (Vol 3, Part B,
+/// Section 4.3): an InfoLength of 0 with no bytes after it. Anything else
+/// means the server is holding the rest of the answer and expects the same
+/// request back with these bytes echoed into it. A client that ignores this
+/// field gets a **truncated** answer that still parses as a well-formed PDU,
+/// which is why the mistake survives every test against a peer whose records
+/// happen to fit in one response.
+pub(crate) fn is_final_continuation(state: &[u8]) -> bool {
     state.len() == 1 && state[0] == 0
 }
 
