@@ -28,7 +28,13 @@
     overflow: auto; font-family: ui-monospace, Menlo, monospace; white-space: pre-wrap;
     color: var(--dim);
   }
-  .ai-panel { margin-top: 1rem; }
+  /* The editor leads and the assistant sits beside it: generating a device
+     is part of writing one, not an afterthought below the output. */
+  .editor-row { display: grid; grid-template-columns: 2fr 1fr; gap: 1rem;
+    align-items: start; }
+  .editor-col { display: flex; flex-direction: column; min-width: 0; }
+  .editor-row .ai-panel { margin-top: 0; }
+  @media (max-width: 68rem) { .editor-row { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -69,20 +75,42 @@
        <a href="../scanner/">the scanner</a> in a second tab to watch your device on the air.</p>
   </section>
 
-  <div class="toolbar">
-    <button id="run" class="primary">▶ Run</button>
-    <button id="stop" disabled>■ Stop</button>
-    <button id="share">🔗 Share</button>
-    <label class="status" for="examples">Examples:</label>
-    <select id="examples">
-      <option value="">Load an example…</option>
-    </select>
-    <button id="reset">↺ Reset</button>
-    <span class="spacer"></span>
-    <span id="run-state" class="status"></span>
+  <div class="editor-row">
+    <div class="editor-col">
+    <div class="toolbar">
+      <button id="run" class="primary">▶ Run</button>
+      <button id="stop" disabled>■ Stop</button>
+      <button id="share">🔗 Share</button>
+      <label class="status" for="examples">Examples:</label>
+      <select id="examples">
+        <option value="">Load an example…</option>
+      </select>
+      <button id="reset">↺ Reset</button>
+      <span class="spacer"></span>
+      <span id="run-state" class="status"></span>
+    </div>
+    <textarea id="script" class="code" spellcheck="false"></textarea>
+    <div id="script-error" class="error"></div>
+    </div>
+
+    <section class="panel ai-panel">
+      <h2>Generate a device with AI</h2>
+      <div class="row">
+        <span class="hint">Describe a device, generate the Rhai with an LLM, paste it above, press Run:</span>
+        <a id="ai-claude" class="btn" target="_blank" rel="noopener">Open in Claude</a>
+        <a id="ai-chatgpt" class="btn" target="_blank" rel="noopener">Open in ChatGPT</a>
+        <button id="ai-gemini">Gemini</button>
+        <button id="ai-copy">Copy prompt</button>
+      </div>
+      <div class="suggest" id="suggest"></div>
+      <div id="req-echo"></div>
+      <div id="ai-hint" class="hint"></div>
+      <details>
+        <summary>view the AI prompt</summary>
+        <pre id="ai-prompt-view"></pre>
+      </details>
+    </section>
   </div>
-  <textarea id="script" class="code" spellcheck="false"></textarea>
-  <div id="script-error" class="error"></div>
 
   <div class="cols">
     <section class="panel">
@@ -105,23 +133,6 @@
     </section>
   </div>
 
-  <section class="panel ai-panel">
-    <h2>Generate a device with AI</h2>
-    <div class="row">
-      <span class="hint">Describe a device, generate the Rhai with an LLM, paste it above, press Run:</span>
-      <a id="ai-claude" class="btn" target="_blank" rel="noopener">Open in Claude</a>
-      <a id="ai-chatgpt" class="btn" target="_blank" rel="noopener">Open in ChatGPT</a>
-      <button id="ai-gemini">Gemini</button>
-      <button id="ai-copy">Copy prompt</button>
-    </div>
-    <div class="suggest" id="suggest"></div>
-    <div id="req-echo"></div>
-    <div id="ai-hint" class="hint"></div>
-    <details>
-      <summary>view the AI prompt</summary>
-      <pre id="ai-prompt-view"></pre>
-    </details>
-  </section>
 </main>
 
 <footer>
