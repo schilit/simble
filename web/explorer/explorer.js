@@ -566,7 +566,8 @@ const METHODS = [
   { group: "profiles", kind: "method",
     sig: "server.advertise_set_identity(sirk, prand)", ret: "()",
     desc: "Advertise the Resolvable Set Identifier (AD type 2E) for a coordinated set.",
-    prose: "Stages <code>prand || sih(sirk, prand)</code> into the advertisement. A coordinator " +
+    prose: "Stages <code>sih(sirk, prand) || prand</code> into the advertisement — hash first, " +
+      "then the random half it was taken over (CSIS Section 4.9). A coordinator " +
       "recomputes the hash with each SIRK it holds; a match means \"member of that set\". Without " +
       "this a set member is discoverable but not identifiable as a member.",
     receiver: "server",

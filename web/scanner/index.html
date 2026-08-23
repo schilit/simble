@@ -8,71 +8,144 @@
 <link rel="stylesheet" href="../common/simble.css">
 <link rel="stylesheet" href="../common/nav.css">
 <style>
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; background: var(--bg); color: var(--text);
-    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  }
-  header {
-    display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
-    padding: 1rem 1.5rem; border-bottom: 1px solid var(--border);
-  }
-  header h1 { font-size: 1.15rem; margin: 0; }
-  header .sub { color: var(--dim); font-size: 0.85rem; }
-  header a { color: var(--accent); text-decoration: none; margin-left: auto; font-size: 0.85rem; }
-  .pill {
-    font-size: 0.75rem; padding: 0.1rem 0.6rem; border-radius: 1rem;
-    border: 1px solid var(--border); color: var(--dim);
-  }
-  .pill.ok { color: var(--good); border-color: var(--good); }
-  .pill.bad { color: var(--bad); border-color: var(--bad); }
+  /* Only what is specific to a scanner list lives here. The page frame —
+     body, header, .pill, .panel, .setup, button, .hint, .empty, footer — comes
+     from common/simble.css, and every size is one of its --fs-* steps. */
   main { padding: 1.25rem 1.5rem; max-width: var(--page-w); margin: 0 auto; }
-  .panel {
-    background: var(--panel); border: 1px solid var(--border);
-    border-radius: 8px; padding: 1rem; margin-bottom: 1.25rem;
+  .panel { margin-bottom: 1.25rem; }
+
+  /* --- the scope line: "why only these devices?", answered above the list --- */
+  #scope {
+    font-size: var(--fs-body); color: var(--dim); margin: 0 0 0.7rem;
+    padding: 0.5rem 0.75rem; border-left: 3px solid var(--border);
+    background: var(--panel);
   }
-  .panel h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em;
-    color: var(--dim); margin: 0 0 0.75rem; }
-  #setup { display: none; border-color: var(--warn); }
-  #setup.visible { display: block; }
-  #setup pre {
-    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-    padding: 0.6rem; overflow-x: auto; font-size: 0.8rem;
+  #scope b { color: var(--text); }
+  #scope code { color: var(--good); font-family: ui-monospace, Menlo, monospace; }
+
+  /* --- the catalog picker ------------------------------------------------ */
+  #catalog { margin: 0 0 1rem; }
+  #catalog > summary { font-size: var(--fs-body); }
+  #picker {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr));
+    gap: 0.25rem 1rem; margin-top: 0.6rem;
   }
-  #setup code { color: var(--good); }
-  #setup a { color: var(--accent); }
+  .pick {
+    display: grid; grid-template-columns: auto 1fr; gap: 0 0.45rem;
+    align-items: baseline; padding: 0.25rem 0.4rem; border-radius: 6px;
+    cursor: pointer; font-size: var(--fs-body);
+  }
+  .pick:hover { background: var(--panel2); }
+  .pick input { grid-row: 1 / 3; align-self: center; }
+  .pick-name { font-weight: 500; }
+  .pick-note { grid-column: 2; color: var(--dim); font-size: var(--fs-meta); }
+
+  /* --- a device row ------------------------------------------------------
+     The row element is created once per address and written to thereafter,
+     so hover, focus, text selection and which row is expanded all survive an
+     update. Nothing here may depend on a rebuild. */
   .device {
     border: 1px solid var(--border); border-radius: 8px; background: var(--panel);
-    padding: 0.7rem 0.9rem; margin-bottom: 0.6rem;
-    display: grid; grid-template-columns: 1fr auto; gap: 0.2rem 1rem;
-    transition: opacity 0.5s;
+    margin-bottom: 0.5rem; transition: opacity 0.5s;
   }
-  .device.stale { opacity: 0.35; }
-  .device .name { font-weight: 600; }
-  .device .name .anon { color: var(--dim); font-weight: 400; font-style: italic; }
-  .device .addr { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    color: var(--dim); font-size: 0.8rem; }
-  .device .ad { grid-column: 1 / -1; font-size: 0.78rem; color: var(--dim);
-    font-family: ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
+  .device.stale { opacity: 0.4; }
+  .device .top {
+    display: grid; grid-template-columns: 1rem minmax(0, 1fr) auto;
+    align-items: center; gap: 0 0.5rem; padding: 0.55rem 0.8rem; cursor: pointer;
+  }
+  .device .top:hover { background: var(--panel2); border-radius: 8px; }
+  .device .top:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .device .caret {
+    color: var(--dim); font-size: var(--fs-body); line-height: 1;
+    text-align: center; user-select: none;
+  }
+  .device .top:hover .caret { color: var(--text); }
+  .device .ident { min-width: 0; }
+  .device .nameline {
+    display: flex; align-items: baseline; gap: 0.3rem; flex-wrap: wrap;
+    font-weight: 600;
+  }
+  /* A nameless device shows its address where the name goes, styled as the
+     placeholder it is — the same move nRF Connect makes, so the column always
+     has something to scan down. */
+  .device .nm-none {
+    font-family: ui-monospace, Menlo, monospace; font-weight: 400;
+    font-style: italic; color: var(--dim);
+  }
+  .device .addrline {
+    display: block; color: var(--dim); font-size: var(--fs-meta); margin-top: 0.1rem;
+  }
+  .device .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .chip {
     display: inline-block; border: 1px solid var(--border); border-radius: 1rem;
-    padding: 0 0.5rem; margin-right: 0.3rem; font-size: 0.72rem; color: var(--accent);
-    font-family: -apple-system, sans-serif;
+    padding: 0 0.45rem; font-size: var(--fs-meta); color: var(--dim);
+    font-weight: 400; white-space: nowrap;
   }
-  .rssi { text-align: right; }
-  .rssi .db { font-size: 0.8rem; color: var(--dim);
-    font-family: ui-monospace, Menlo, monospace; }
-  .bar { width: 7rem; height: 5px; background: var(--border); border-radius: 3px;
-    margin-top: 0.35rem; overflow: hidden; }
-  .bar span { display: block; height: 100%; background: var(--good); border-radius: 3px; }
-  #empty { color: var(--dim); font-size: 0.9rem; }
-  .controls { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
-    margin-bottom: 0.9rem; font-size: 0.85rem; }
-  .controls label { display: flex; align-items: center; gap: 0.4rem; cursor: pointer; }
-  .controls .note { color: var(--dim); font-size: 0.78rem; }
-  footer { color: var(--dim); font-size: 0.78rem; padding: 0 1.5rem 1.5rem;
-    max-width: var(--page-w); margin: 0 auto; }
-  footer code { color: var(--good); }
+  .chip.yes { color: var(--good); border-color: var(--good); }
+  .chip.no { color: var(--dim); }
+  .chip.set { color: var(--accent); border-color: var(--accent); }
+
+  /* Signal: the number, and four bars for reading a column at a glance. */
+  .device .signal { display: flex; align-items: center; gap: 0.45rem; }
+  .device .db {
+    font-family: ui-monospace, Menlo, monospace; font-size: var(--fs-meta);
+    color: var(--dim); min-width: 4.2rem; text-align: right;
+  }
+  .bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 13px; }
+  .bars i { width: 3px; background: var(--border); border-radius: 1px; }
+  .bars i:nth-child(1) { height: 4px; }
+  .bars i:nth-child(2) { height: 7px; }
+  .bars i:nth-child(3) { height: 10px; }
+  .bars i:nth-child(4) { height: 13px; }
+  .bars i.on { background: var(--good); }
+
+  /* --- the expanded pane ------------------------------------------------- */
+  .device .detail {
+    border-top: 1px solid var(--border); padding: 0.7rem 0.8rem 0.8rem;
+    background: var(--bg); border-radius: 0 0 8px 8px;
+  }
+  .dsec + .dsec { margin-top: 0.9rem; }
+  .dsec h4 {
+    margin: 0 0 0.4rem; font-size: var(--fs-label); text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--dim); font-weight: 600;
+  }
+  table.adtab { border-collapse: collapse; width: 100%; font-size: var(--fs-body); }
+  table.adtab td { padding: 0.2rem 0.5rem 0.2rem 0; vertical-align: top; }
+  table.adtab td.t {
+    font-family: ui-monospace, Menlo, monospace; font-size: var(--fs-meta);
+    color: var(--dim); white-space: nowrap; width: 1%;
+  }
+  table.adtab td.k { color: var(--dim); white-space: nowrap; width: 1%; }
+  table.adtab td.v { overflow-wrap: anywhere; }
+  table.adtab .nm { color: var(--accent); }
+  table.adtab .hex {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: var(--fs-code); user-select: all;
+  }
+  table.adtab .sub { color: var(--dim); font-size: var(--fs-meta); font-style: italic; }
+  table.adtab .skip { color: var(--warn); font-size: var(--fs-meta); font-style: italic; }
+  /* `width: 1%` asks the column to be as narrow as its content allows, so the
+     label column must stay `nowrap` or the browser takes that literally and
+     breaks "Complete Local Name" across three lines. */
+  table.adtab.raw td.t { padding-right: 0.75rem; }
+
+  .pl + .pl { margin-top: 0.7rem; }
+  .pl-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.2rem; }
+  .pl-title { font-size: var(--fs-body); font-weight: 500; }
+  .pl-len { color: var(--dim); font-size: var(--fs-meta); }
+  .pl-head .copy {
+    margin-left: auto; padding: 0.05rem 0.45rem; font-size: var(--fs-meta);
+    border-radius: 5px;
+  }
+  .hexdump {
+    margin-top: 0.35rem; padding: 0.4rem 0.5rem; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: var(--fs-code); color: var(--dim); overflow-wrap: anywhere;
+    user-select: all;
+  }
+
+  #empty { margin: 0.4rem 0 0; }
 </style>
 </head>
 <body>
@@ -94,13 +167,14 @@
 </nav>
 <header>
   <h1>SimBLE Scanner</h1>
-  <span class="sub">SimBLE's real HCI + GAP stack, compiled to WebAssembly, scanning your local netsim scene</span>
+  <span class="sub">SimBLE's real HCI + GAP stack, compiled to WebAssembly, decoding
+    every AD structure on the air</span>
   <span id="conn" class="pill">starting…</span>
 </header>
 
 <main>
   <div id="backend"></div>
-  <section id="setup" class="panel">
+  <section id="setup" class="panel setup">
     <h2>netsim is not reachable</h2>
     <p>Could not reach netsim at <code>localhost:7681</code> — is <code>netsimd</code> running with its
        WebSocket frontend enabled? This page is served from the cloud, but the Bluetooth scene runs
@@ -108,26 +182,36 @@
        <code>netsimd</code> over <code>ws://localhost:7681</code>. Start it with:</p>
     <pre><code>netsimd --logtostderr --no-shutdown --ws-port 7681</code></pre>
     <p>Needs the canary-channel emulator (see the README's <em>Testing Against netsim</em> section).
-       Tip: open <a href="../hrm/">the scripted device</a> in a second tab — both tabs join the same
-       netsim scene. Edit its Rhai script there, press Run, and watch its advertisement change in
-       this list.</p>
+       Tip: open <a href="../devices/">the Devices page</a> in a second tab — both tabs join the same
+       netsim scene, and its devices appear in this list.</p>
   </section>
 
   <section>
-    <div class="controls">
-      <label><input type="checkbox" id="demo-toggle" checked> Show built-in demo devices</label>
-      <span class="note">self-spun advertisers so the scanner shows something with just a bare
-        <code>netsimd</code> — turn off to scan only real scene traffic</span>
-    </div>
+    <p id="scope"></p>
+
+    <details id="catalog">
+      <summary>Devices on the air — add from the catalog</summary>
+      <p class="hint">These are the real shared catalog scripts (<code>catalog/devices/*.rhai</code>),
+         fetched through the same <code>catalog_script</code> binding the Devices pages use, so what
+         you scan here is what an agent or a test gets by the same name. Ticking one stands it up
+         immediately; unticking rebuilds the scene without it.</p>
+      <div id="picker"></div>
+      <div class="row">
+        <button id="pick-all">Add all</button>
+        <button id="pick-none">Clear scene</button>
+      </div>
+    </details>
+
     <div id="devices"></div>
-    <p id="empty">No advertisements yet — scanning…</p>
+    <p id="empty" class="empty" hidden>No advertisements yet — scanning…</p>
   </section>
 </main>
 
 <footer>
-  The page joins netsim as device <code>web-scanner</code> and runs the real scan bring-up
-  (Reset → event masks → scan parameters → enable). Advertising reports are parsed and their AD
-  structures decoded by SimBLE's Rust code running in this tab.
+  The page joins its scene as device <code>web-scanner</code> and runs the real scan bring-up
+  (Reset → event masks → scan parameters → enable). Every value on a row is decoded by SimBLE's
+  Rust code running in this tab; the advertising interval is the one exception — it is measured
+  from report arrivals, because nothing on the air states it.
 </footer>
 
 <script type="module" src="./scanner.js"></script>
