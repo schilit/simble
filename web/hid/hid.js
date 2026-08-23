@@ -216,10 +216,6 @@ const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) =>
 // ===========================================================================
 const STYLE_ID = "simble-hid-style";
 const STYLES = `
-  .hid { display: grid; grid-template-columns: minmax(22rem, 1fr) minmax(22rem, 1fr);
-    gap: 1.25rem; padding: 1.25rem 1.5rem; max-width: 82rem; margin: 0 auto; }
-  @media (max-width: 62rem) { .hid { grid-template-columns: 1fr; } }
-  .hid .wide { grid-column: 1 / -1; }
   .hid .typebox { width: 100%; font-size: 0.95rem; padding: 0.5rem 0.6rem;
     border: 1px solid var(--border); border-radius: 6px; background: var(--bg);
     color: var(--text); font-family: ui-monospace, Menlo, monospace; }
@@ -914,7 +910,8 @@ export async function mount(root) {
   wasmReady ??= init();
   await wasmReady;
 
-  root.classList.add("hid");
+  // `.hid` keeps this domain's component styles; the grid is the shared one.
+  root.classList.add("hid", "domain", "two-up");
   root.innerHTML = TEMPLATE;
   (root.querySelector(".domain") ?? root).prepend(createAboutBox(ABOUT));
 
@@ -982,6 +979,7 @@ export function unmount() {
   // would keep a scene running with nothing rendering it.
   try { S.link.free(); } catch (_) { /* already freed */ }
   S.root.classList.remove("hid");
+  S.root.classList.remove("hid", "domain", "two-up");
   S.root.innerHTML = "";
   if (window.simbleHid === S) delete window.simbleHid;
   S = null;

@@ -44,10 +44,18 @@ export function createControllerBar({ supports, onChange }) {
   const el = document.createElement("div");
   el.className = "controller-bar";
 
+  // Row one is the same on every domain -- label, both buttons, help -- so
+  // switching tabs does not reshape it. Whatever differs goes in the sentence
+  // underneath.
+  const row = document.createElement("div");
+  row.className = "controller-row";
+  const why = document.createElement("p");
+  why.className = "controller-why";
+
   const label = document.createElement("span");
   label.className = "controller-label";
   label.textContent = "Controller";
-  el.append(label);
+  row.append(label);
 
   const help = document.createElement("a");
   help.className = "controller-help";
@@ -74,9 +82,17 @@ export function createControllerBar({ supports, onChange }) {
     }
     for (const input of inputs) input.wrap.remove();
     inputs.length = 0;
+
+    const blocked = CONTROLLERS.filter((c) => map[c.id] !== true);
+    why.textContent = blocked.length
+      ? blocked
+          .map((c) => `${c.label} is not available here — ${map[c.id]}.`)
+          .join(" ")
+      : "In browser needs nothing installed; netsim needs netsimd running, "
+        + "and puts the devices on the same radio as the Android emulator.";
     for (const c of CONTROLLERS) {
-      const why = map[c.id];
-      const usable = why === true;
+      const reason = map[c.id];
+      const usable = reason === true;
 
       const wrap = document.createElement("label");
       wrap.className = "controller-choice" + (usable ? "" : " unusable");
@@ -96,9 +112,7 @@ export function createControllerBar({ supports, onChange }) {
       const name = document.createElement("b");
       name.textContent = c.label;
 
-      const text = document.createElement("span");
-      text.className = "controller-note";
-      text.textContent = `— ${usable ? c.note : String(why)}`;
+
 
       radio.addEventListener("change", () => {
         if (!radio.checked) return;
@@ -112,15 +126,16 @@ export function createControllerBar({ supports, onChange }) {
       });
 
       pick.append(radio, name);
-      wrap.append(pick, text);
-      el.insertBefore(wrap, help);
+      wrap.append(pick);
+      row.insertBefore(wrap, help);
       inputs.push({ wrap });
     }
   }
 
   // The help link is appended first: render() inserts each choice before it,
   // so it has to already be a child.
-  el.append(help);
+  row.append(help);
+  el.append(row, why);
   render(supports);
 
   return {
