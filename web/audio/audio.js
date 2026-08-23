@@ -791,14 +791,8 @@ function injectStyles() {
   const style = document.createElement("style");
   style.id = STYLE_ID;
   style.textContent = `
-  .audio-page { display: grid; grid-template-columns: minmax(20rem, 1fr) minmax(20rem, 1fr);
-    gap: 1.25rem; padding: 1.25rem 1.5rem; max-width: 76rem; margin: 0 auto;
-    align-items: start; }
-  @media (max-width: 60rem) { .audio-page { grid-template-columns: 1fr; } }
   /* Each column is its own flex stack so panels of unequal height do not drag
      their neighbour's top edge down. */
-  .audio-page .col { display: flex; flex-direction: column; gap: 1.25rem; min-width: 0; }
-  .audio-page .full { grid-column: 1 / -1; }
 
   .audio-page .drop { border: 2px dashed var(--border); border-radius: 10px;
     padding: 1.4rem 1rem; text-align: center; color: var(--dim);
@@ -855,11 +849,10 @@ const ABOUT = `<p>Both halves of an LE Audio stream, on one page. Pick an audio 
    Volume Control Service currently holds.</p>`;
 
 const TEMPLATE = `
-<div class="audio-page">
+<div class="audio-page domain two-up">
   <div id="backend" class="full"></div>
 
-  <div class="col">
-    <section class="panel">
+  <section class="panel">
       <div id="source-head"></div>
 
       <div id="drop" class="drop">
@@ -905,29 +898,7 @@ const TEMPLATE = `
       </p>
     </section>
 
-    <section class="panel">
-      <h2>Handshake</h2>
-      <ul class="stages" id="stages">
-        <li data-stage="connecting">Connect to the sink</li>
-        <li data-stage="discovered">Discover its GATT</li>
-        <li data-stage="configuring the endpoint">Configure the ASE</li>
-        <li data-stage="opening the stream">Open the CIS</li>
-        <li data-stage="streaming">Stream</li>
-      </ul>
-      <div class="readout" id="status">offline</div>
-
-      <p class="hint" style="margin-top:1rem">
-        Every step is real protocol, not a picture of one: the ASE operations are the bytes ASCS
-        defines, and the stream is established with <code>LE Set CIG Parameters</code> →
-        <code>LE Create CIS</code> → <code>LE Setup ISO Data Path</code>. If the chosen sink is not
-        an LE Audio device the handshake stops at "Configure the ASE" — there is no control point
-        to write to, and the status line says so.
-      </p>
-    </section>
-  </div>
-
-  <div class="col">
-    <section class="panel">
+  <section class="panel">
       <div id="sink-head"></div>
       <div id="sink-script"></div>
       <div class="speaker-stage">
@@ -988,7 +959,25 @@ const TEMPLATE = `
       <div id="gatt"></div>
     </section>
 
-  </div>
+  <section class="panel full">
+      <h2>Handshake</h2>
+      <ul class="stages" id="stages">
+        <li data-stage="connecting">Connect to the sink</li>
+        <li data-stage="discovered">Discover its GATT</li>
+        <li data-stage="configuring the endpoint">Configure the ASE</li>
+        <li data-stage="opening the stream">Open the CIS</li>
+        <li data-stage="streaming">Stream</li>
+      </ul>
+      <div class="readout" id="status">offline</div>
+
+      <p class="hint" style="margin-top:1rem">
+        Every step is real protocol, not a picture of one: the ASE operations are the bytes ASCS
+        defines, and the stream is established with <code>LE Set CIG Parameters</code> →
+        <code>LE Create CIS</code> → <code>LE Setup ISO Data Path</code>. If the chosen sink is not
+        an LE Audio device the handshake stops at "Configure the ASE" — there is no control point
+        to write to, and the status line says so.
+      </p>
+    </section>
 
   <section id="setup" class="panel setup full">
     <h2>netsim is not reachable</h2>
@@ -1001,7 +990,8 @@ const TEMPLATE = `
        <strong>In browser</strong> to run the whole thing offline — the speaker and its volume
        controls work there, and audio still crosses the simulated radio, just without a CIS.</p>
   </section>
-</div>`;
+</div>
+`;
 
 // --- mount / unmount -------------------------------------------------------
 
@@ -1012,7 +1002,7 @@ export function mount(container) {
   injectStyles();
   root = container;
   root.innerHTML = TEMPLATE;
-  root.prepend(createAboutBox(ABOUT));
+  (root.querySelector(".domain") ?? root).prepend(createAboutBox(ABOUT));
   const gen = ++generation;
 
   slider = $("vol");

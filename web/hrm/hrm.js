@@ -263,7 +263,7 @@ export async function mount(container) {
   root = container;
   root.classList.add("domain", "two-up");
   root.innerHTML = MARKUP;
-  root.prepend(createAboutBox(ABOUT));
+  (root.querySelector(".domain") ?? root).prepend(createAboutBox(ABOUT));
 
   monitorScript = catalog_script("hrm");
   clientScript = catalog_script("hrm_client");

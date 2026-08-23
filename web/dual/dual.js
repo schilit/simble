@@ -255,7 +255,7 @@ export async function mount(root) {
   container = root;
   root.classList.add("domain", "two-up");
   root.innerHTML = MARKUP;
-  root.prepend(createAboutBox(ABOUT));
+  (root.querySelector(".domain") ?? root).prepend(createAboutBox(ABOUT));
 
   serverScript = catalog_script("smart_lock");
   clientScript = catalog_script("gatt_walker");

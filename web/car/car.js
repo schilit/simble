@@ -395,7 +395,7 @@ export async function mount(root) {
   styleEl.textContent = STYLE;
   document.head.appendChild(styleEl);
   root.innerHTML = MARKUP;
-  root.prepend(createAboutBox(ABOUT));
+  (root.querySelector(".domain") ?? root).prepend(createAboutBox(ABOUT));
 
   wasmReady = wasmReady || init();
   await wasmReady;

@@ -254,8 +254,11 @@ footer code { color: var(--good); }
 
 /* --- the "What this page is doing" box -----------------------------------
    Every domain opens with one, foldable. See common/about-box.js. */
-.about { border: 1px solid var(--line); border-radius: 8px;
-  background: var(--panel); padding: 0.5rem 0.85rem; }
+/* Same card as .panel -- it sits among them, so it should not look like a
+   different kind of object. Only the summary marks it as foldable. */
+.about { background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; padding: 1rem; }
+.about > summary::marker { color: var(--dim); }
 .about > summary { cursor: pointer; font-size: 0.82rem; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.05em; color: var(--dim);
   list-style-position: outside; }

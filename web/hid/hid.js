@@ -312,15 +312,7 @@ const STYLES = `
   .hid .prose p { font-size: 0.88rem; line-height: 1.6; }
 `;
 
-const ABOUT = `<p>A keyboard and a mouse as HID-over-GATT peripherals, and hosts that connect, subscribe
-   to their input reports and decode them. What each host shows is the report bytes interpreted
-   the way a real computer would — held keys differenced against the previous report, relative
-   motion read as signed — not the page reading the keyboard's variables.</p>`;
-
-const TEMPLATE = `
-<section class="panel wide prose">
-  <h2 style="margin:0">What is on this page</h2>
-  <p>
+const ABOUT = `<p>
     Two GATT peripherals — a keyboard and a mouse — and two GATT centrals that connect to them,
     all four hosted in this tab on one simulated radio. Type on the left and the characters appear
     on the right, but nothing on the right reads a variable on the left. The device turns your
@@ -331,9 +323,9 @@ const TEMPLATE = `
   <p class="hint">
     Everything runs on one timer in this page. A hidden tab is throttled by Chrome to about one
     tick a second, so keep this tab in front while you drive it.
-  </p>
-</section>
+  </p>`;
 
+const TEMPLATE = `
 <section class="panel">
 
   <div id="hid-kbd-head"></div>
@@ -917,7 +909,7 @@ export async function mount(root) {
 
   root.classList.add("hid");
   root.innerHTML = TEMPLATE;
-  root.prepend(createAboutBox(ABOUT));
+  (root.querySelector(".domain") ?? root).prepend(createAboutBox(ABOUT));
 
   const link = new WebLink();
   S = {

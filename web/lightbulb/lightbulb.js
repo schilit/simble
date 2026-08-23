@@ -371,7 +371,7 @@ export async function mount(container) {
   root = container;
   root.classList.add("domain", "two-up");
   root.innerHTML = MARKUP;
-  root.prepend(createAboutBox(ABOUT));
+  (root.querySelector(".domain") ?? root).prepend(createAboutBox(ABOUT));
 
   // Both halves come from the shared catalog -- the same definitions MCP's
   // `example` tool and the scene loader read -- rather than a copy living in
