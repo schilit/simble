@@ -39,7 +39,7 @@ pub use crate::gap::advertising::{build_adv_payload, build_adv_payload_with_extr
 use crate::l2cap::{AclReassembler, HciAclHeader, L2capHeader};
 use crate::packets::att::{AttExchangeMtuRsp, AttHandleValueHeader, opcode as att_op};
 use crate::scripting::bindings::{dynamic_to_bytes, runtime_error};
-use crate::scripting::{ScriptGattServer, ScriptedCentral, new_engine};
+use crate::scripting::{ScriptBroadcastSource, ScriptGattServer, ScriptedCentral, new_engine};
 use crate::types::{Address, AddressType, SimbleError, Uuid};
 use rhai::{AST, Array, Blob, CallFnOptions, Dynamic, Engine, EvalAltResult, Map, Scope};
 use serde::Serialize;
@@ -594,6 +594,16 @@ pub struct ScriptedPeripheral {
     ast: AST,
     scope: Scope<'static>,
     servers: Vec<ScriptGattServer>,
+    /// Auracast broadcast sources the script built
+    /// (`android::BluetoothLeBroadcast`).
+    ///
+    /// A source is not a GATT server and shares nothing with one: it drives an
+    /// extended advertising set, a periodic train and a BIG, all of which the
+    /// controller tracks separately from the legacy advertising this
+    /// peripheral's own bring-up uses. So the two coexist on one device — as
+    /// they do on a real Auracast TV, which is a connectable GATT peripheral
+    /// *and* a broadcast source.
+    sources: Vec<ScriptBroadcastSource>,
     /// The LE host layer: HCI event dispatch, ATT/SMP replies, ACL framing.
     host: LeHost,
     connection: Option<(u16, Address)>,
@@ -689,6 +699,11 @@ impl ScriptedPeripheral {
                 .to_string());
         }
 
+        let sources: Vec<ScriptBroadcastSource> = scope
+            .iter()
+            .filter_map(|(_, _, value)| value.try_cast::<ScriptBroadcastSource>())
+            .collect();
+
         let tick_defined = ast
             .iter_functions()
             .any(|f| f.name == "tick" && f.params.len() == 2);
@@ -701,6 +716,7 @@ impl ScriptedPeripheral {
             ast,
             scope,
             servers,
+            sources,
             host: LeHost::new(),
             connection: None,
             tick_defined,
@@ -733,6 +749,7 @@ impl ScriptedPeripheral {
             ast,
             scope: Scope::new(),
             servers: Vec::new(),
+            sources: Vec::new(),
             host: LeHost::new(),
             connection: None,
             tick_defined: false,
@@ -840,6 +857,12 @@ impl ScriptedPeripheral {
             // for the Encryption Change event as the spec requires.
             s.device.defer_key_distribution = true;
         });
+        // A broadcast source is addressed by the same identity: its
+        // announcement is what a receiver filters on, and the metadata an
+        // Assistant hands to a Scan Delegator names this address.
+        for source in &self.sources {
+            source.set_address(address);
+        }
     }
 
     /// Drains the isochronous SDUs this device has received (media plane).
@@ -897,7 +920,48 @@ impl ScriptedPeripheral {
         for packet in commands {
             channel.inject_host_packet(packet)?;
         }
+        self.flush_broadcast_sources(channel)?;
         Ok(())
+    }
+
+    /// Sends whatever the script's broadcast sources have queued — the setup
+    /// ladder `start_broadcast` began, a teardown, or an SDU.
+    fn flush_broadcast_sources(&self, channel: &HciChannel) -> Result<(), SimbleError> {
+        for source in &self.sources {
+            for packet in source.take_outbox() {
+                channel.inject_host_packet(packet)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Turns broadcast-source state transitions into the script's
+    /// `on_broadcast_*` / `on_playback_*` callbacks.
+    fn dispatch_broadcast_callbacks(&mut self) {
+        for source in self.sources.clone() {
+            let receiver = Dynamic::from(source.clone());
+            for (name, args) in source.take_callbacks() {
+                if !crate::scripting::broadcast::defines(&self.ast, name, args.len() + 1) {
+                    continue;
+                }
+                let mut all = vec![receiver.clone()];
+                all.extend(args);
+                let options = CallFnOptions::new()
+                    .eval_ast(false)
+                    .bind_this_ptr(&mut self.state);
+                let result = self.engine.call_fn_with_options::<Dynamic>(
+                    options,
+                    &mut self.scope,
+                    &self.ast,
+                    name,
+                    all,
+                );
+                match result {
+                    Ok(_) => self.last_error = None,
+                    Err(e) => self.last_error = Some(e.to_string()),
+                }
+            }
+        }
     }
 
     fn primary_service_uuids_16(&self) -> Vec<u16> {
@@ -914,8 +978,17 @@ impl ScriptedPeripheral {
 
     /// Indexes every notify/indicate-capable characteristic and its CCCD:
     /// the descriptor the script attached if present, otherwise the next
-    /// CCCD attribute in the database before the following declaration
-    /// (covering natively-registered profiles like `HeartRateService`).
+    /// CCCD attribute in the database before the following declaration.
+    ///
+    /// Two passes, because there are two ways a characteristic gets into a
+    /// device. `getServices()` returns only what went through the Android
+    /// layer — what the *script* built. A Rust profile registrar (`add_bass`,
+    /// `add_ascs`, `add_pacs`) writes straight into the `GattDatabase` and
+    /// never appears there, so for as long as this had only the first pass,
+    /// **no profile-registered characteristic could ever notify**: BASS's
+    /// Broadcast Receive State, ASCS's ASEs and control point, all
+    /// mandatory-notify, all silent. The second pass walks the database
+    /// itself and picks up whatever the first missed.
     fn rebuild_watch_list(&mut self) {
         self.watched.clear();
         self.last_values.clear();
@@ -945,6 +1018,18 @@ impl ScriptedPeripheral {
                     }
                 }
             });
+            let already: Vec<u16> = self.watched.iter().map(|w| w.value_handle).collect();
+            let from_database = server.with_server(|s| notifying_in_database(&s.device.gatt_db));
+            for (value_handle, cccd_handle) in from_database {
+                if already.contains(&value_handle) {
+                    continue;
+                }
+                self.watched.push(WatchedCharacteristic {
+                    server_index,
+                    value_handle,
+                    cccd_handle,
+                });
+            }
         }
         for watch in &self.watched {
             if let Some(value) = self.attribute_value(watch) {
@@ -999,6 +1084,14 @@ impl ScriptedPeripheral {
             .with_server(|s| self.host.handle_packet(&mut s.device, packet))?;
         for out in outgoing {
             channel.inject_host_packet(out)?;
+        }
+        // The broadcast ladder is command/event driven and shares the same
+        // controller: each source sees the whole stream and answers only the
+        // events it asked for.
+        for source in &self.sources {
+            for out in source.on_packet(packet) {
+                channel.inject_host_packet(out)?;
+            }
         }
         self.connection = self.host.connection();
         Ok(())
@@ -1062,8 +1155,16 @@ impl ScriptedPeripheral {
             let args = (Dynamic::from(self.primary().clone()), t_seconds);
             // eval_ast(false): the script body already ran in `run_script`;
             // re-evaluating it here would rebuild the device every tick.
+            //
+            // bind_this_ptr: `state` is documented as bound for `tick` *and*
+            // `on_event`, and only `on_event` ever got it — so a peripheral's
+            // `fn tick` could not remember anything between calls, while a
+            // central's could. `'this' not bound` is what a script saw.
+            let options = CallFnOptions::new()
+                .eval_ast(false)
+                .bind_this_ptr(&mut self.state);
             let result = self.engine.call_fn_with_options::<Dynamic>(
-                CallFnOptions::new().eval_ast(false),
+                options,
                 &mut self.scope,
                 &self.ast,
                 "tick",
@@ -1074,6 +1175,11 @@ impl ScriptedPeripheral {
                 Err(e) => self.last_error = Some(e.to_string()),
             }
         }
+        // Broadcast callbacks after the script's own tick, so a `fn tick` that
+        // called `start_broadcast` sees `on_broadcast_started` in the same
+        // pass rather than one tick later.
+        self.dispatch_broadcast_callbacks();
+        self.flush_broadcast_sources(channel)?;
         self.flush_value_notifications(channel)?;
         // Ship any SDUs the script queued with send_audio (the media plane
         // is unacknowledged, so this is fire-and-forget).
@@ -1194,6 +1300,34 @@ impl ScriptedPeripheral {
         };
         serde_json::to_string(&status).unwrap_or_else(|e| format!("{{\"error\":\"{e}\"}}"))
     }
+}
+
+/// Every notify/indicate-capable characteristic in `db`, as
+/// `(value_handle, cccd_handle)`, read from the Characteristic Declarations
+/// themselves rather than from the Android service list.
+///
+/// This is what reaches profile registrars: `add_bass` and friends write into
+/// the database and never touch `BluetoothGattServer::get_services`, so a
+/// declaration is the only record that a Broadcast Receive State exists at
+/// all. The declaration's value is `[properties, value_handle(2), uuid]`
+/// (Vol 3, Part G, Section 3.3.1).
+fn notifying_in_database(db: &crate::gatt::GattDatabase) -> Vec<(u16, Option<u16>)> {
+    const NOTIFYING: u8 = crate::gatt::CharacteristicProperties::NOTIFY
+        | crate::gatt::CharacteristicProperties::INDICATE;
+    db.attributes
+        .values()
+        .filter(|attribute| attribute.uuid == Uuid::CHARACTERISTIC)
+        .filter_map(|attribute| {
+            let [properties, low, high, ..] = attribute.value[..] else {
+                return None;
+            };
+            if properties & NOTIFYING == 0 {
+                return None;
+            }
+            let value_handle = u16::from_le_bytes([low, high]);
+            Some((value_handle, find_cccd_after(db, value_handle)))
+        })
+        .collect()
 }
 
 /// Finds the CCCD belonging to the characteristic whose value sits at

@@ -255,6 +255,13 @@ pub struct BigBroadcaster {
     data_paths_open: usize,
     /// One packet sequence number per BIS.
     tx_sequence: Vec<u16>,
+    /// Whether an [`Self::update_metadata`] re-publish is awaiting its
+    /// Command Complete. Only ever set while [`BroadcastState::Streaming`],
+    /// which is why it cannot be confused with the setup sequence's own
+    /// LE Set Periodic Advertising Data.
+    update_in_flight: bool,
+    /// The status of the last completed metadata update, until taken.
+    last_update_status: Option<u8>,
 }
 
 impl BigBroadcaster {
@@ -266,6 +273,8 @@ impl BigBroadcaster {
             bis_handles: Vec::new(),
             data_paths_open: 0,
             tx_sequence: Vec::new(),
+            update_in_flight: false,
+            last_update_status: None,
         }
     }
 
@@ -308,6 +317,15 @@ impl BigBroadcaster {
         let Some(&status) = return_parameters.first() else {
             return Vec::new();
         };
+        // A metadata re-publish is answered by the same opcode as the setup
+        // sequence's periodic-data write, so it is matched first — it can only
+        // be outstanding while streaming, where the setup match below is inert.
+        if self.update_in_flight && opcode == ext_adv_opcode::LE_SET_PERIODIC_ADVERTISING_DATA.get()
+        {
+            self.update_in_flight = false;
+            self.last_update_status = Some(status);
+            return Vec::new();
+        }
         let expected = match self.state {
             BroadcastState::SettingAdvertisingParameters => {
                 ext_adv_opcode::LE_SET_EXTENDED_ADVERTISING_PARAMETERS
@@ -548,6 +566,42 @@ impl BigBroadcaster {
         Some(build_iso_packet(handle, sequence, sdu))
     }
 
+    /// Re-publishes the BASE with new subgroup metadata, without disturbing
+    /// the BIG. Returns the command to send, or `None` if the broadcast is
+    /// not streaming — there is no periodic train to rewrite before then.
+    ///
+    /// This existed nowhere until a second consumer needed it: the setup
+    /// sequence wrote LE Set Periodic Advertising Data once and the BASE was
+    /// frozen for the life of the broadcast, so a source could start and stop
+    /// but never *change*. Only the metadata is settable, because everything
+    /// else in the BASE (codec configuration, BIS count, channel allocation)
+    /// has to agree with the `LE Create BIG` the controller already acted on;
+    /// changing those means tearing the BIG down and building another.
+    ///
+    /// The result arrives as a Command Complete and is read back with
+    /// [`Self::take_update_status`].
+    pub fn update_metadata(&mut self, metadata: Vec<u8>) -> Option<Vec<u8>> {
+        if self.state != BroadcastState::Streaming {
+            return None;
+        }
+        self.config.metadata = metadata;
+        self.update_in_flight = true;
+        Some(hci_command(
+            ext_adv_opcode::LE_SET_PERIODIC_ADVERTISING_DATA,
+            &LeSetPeriodicAdvertisingDataHeader::serialize(
+                self.config.advertising_handle,
+                data_operation::COMPLETE,
+                &self.config.periodic_advertising_data(),
+            ),
+        ))
+    }
+
+    /// Takes the controller's answer to the last [`Self::update_metadata`],
+    /// once, or `None` while none has arrived.
+    pub fn take_update_status(&mut self) -> Option<u8> {
+        self.last_update_status.take()
+    }
+
     /// Tears the BIG down. 0x16 is Connection Terminated by Local Host, the
     /// reason a host gives for its own decision.
     pub fn terminate(&self) -> Vec<u8> {
@@ -680,6 +734,48 @@ mod tests {
         assert_eq!(u16::from_le_bytes([right[5], right[6]]), 0);
         assert_eq!(u16::from_le_bytes([left2[5], left2[6]]), 1);
         assert!(b.send_sdu(3, &[0x04; 8]).is_none(), "no third BIS");
+    }
+
+    /// Metadata is the only part of a running broadcast that may change, and
+    /// it changes by rewriting the periodic train — not by touching the BIG.
+    #[test]
+    fn test_metadata_is_republished_without_disturbing_the_big() {
+        let mut b = BigBroadcaster::new(BroadcastConfig::default());
+        assert!(
+            b.update_metadata(vec![0x04, 0x04, b'e', b'n', b'g'])
+                .is_none(),
+            "nothing to rewrite before the train is up"
+        );
+
+        let mut b = run_to_streaming(&[0x0E00, 0x0E01]);
+        let handles = b.bis_handles().to_vec();
+        let command = b
+            .update_metadata(vec![0x04, 0x04, b'e', b'n', b'g'])
+            .expect("streaming, so the train exists");
+        assert_eq!(
+            u16::from_le_bytes([command[1], command[2]]),
+            ext_adv_opcode::LE_SET_PERIODIC_ADVERTISING_DATA.get()
+        );
+        // The new BASE is what a receiver will read on the next train.
+        assert!(
+            b.config()
+                .periodic_advertising_data()
+                .windows(3)
+                .any(|w| w == b"eng"),
+            "the language metadata reached the BASE"
+        );
+        assert!(b.take_update_status().is_none(), "not answered yet");
+
+        let replies = b.on_packet(&command_complete(
+            ext_adv_opcode::LE_SET_PERIODIC_ADVERTISING_DATA,
+            &[0x00],
+        ));
+        assert!(replies.is_empty(), "an update restarts nothing");
+        assert_eq!(b.take_update_status(), Some(0x00));
+        assert_eq!(b.take_update_status(), None, "taken once");
+        assert_eq!(b.state(), BroadcastState::Streaming, "the BIG is untouched");
+        assert_eq!(b.bis_handles(), handles.as_slice());
+        assert!(b.send_sdu(1, &[0xAA; 100]).is_some(), "audio keeps flowing");
     }
 
     #[test]

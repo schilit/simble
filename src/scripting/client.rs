@@ -67,6 +67,13 @@ struct ClientInner {
 }
 
 impl ScriptGattClient {
+    /// Crate-visible so a *profile* proxy that is a central underneath — the
+    /// Broadcast Assistant — can borrow the whole central role rather than
+    /// reimplementing a connection.
+    pub(crate) fn create_for(name: &str) -> Self {
+        Self::create(name)
+    }
+
     fn create(name: &str) -> Self {
         Self {
             inner: Rc::new(RefCell::new(ClientInner {
@@ -89,9 +96,27 @@ impl ScriptGattClient {
         f(&mut self.inner.borrow_mut().central)
     }
 
+    /// Points the client at `target`, queueing the controller bring-up — the
+    /// same path `client.connect("AA:BB:…")` takes from a script.
+    pub fn connect(&self, target: Address) {
+        let mut inner = self.inner.borrow_mut();
+        let packets = inner.central.connect(target);
+        inner.outbox.extend(packets);
+    }
+
     /// Drains the packets script calls have queued for the controller.
     pub fn take_outbox(&self) -> Vec<Vec<u8>> {
         std::mem::take(&mut self.inner.borrow_mut().outbox)
+    }
+
+    /// The return path to the host, as `client.emit(kind, payload)` uses it.
+    /// Public so a proxy built on this client offers the same `emit`.
+    pub fn emit(&self, kind: &str, payload: Dynamic) -> Result<(), Box<EvalAltResult>> {
+        let value: serde_json::Value = rhai::serde::from_dynamic(&payload)
+            .map_err(|e| runtime_error(format!("emit payload is not serializable: {e}")))?;
+        let message = serde_json::json!({ "event": kind, "payload": value });
+        self.push_emitted(message.to_string());
+        Ok(())
     }
 
     /// Drains what the script emitted for the host, oldest first.
@@ -144,9 +169,7 @@ pub fn register(engine: &mut Engine, android: &mut Module) {
                 let address = address.parse::<Address>().map_err(|e| {
                     runtime_error(format!("connect: {address:?} is not an address: {e}"))
                 })?;
-                let mut inner = client.inner.borrow_mut();
-                let packets = inner.central.connect(address);
-                inner.outbox.extend(packets);
+                client.connect(address);
                 Ok(())
             },
         )
@@ -237,13 +260,7 @@ pub fn register(engine: &mut Engine, android: &mut Module) {
             |client: &mut ScriptGattClient,
              kind: &str,
              payload: Dynamic|
-             -> Result<(), Box<EvalAltResult>> {
-                let value: serde_json::Value = rhai::serde::from_dynamic(&payload)
-                    .map_err(|e| runtime_error(format!("emit payload is not serializable: {e}")))?;
-                let message = serde_json::json!({ "event": kind, "payload": value });
-                client.push_emitted(message.to_string());
-                Ok(())
-            },
+             -> Result<(), Box<EvalAltResult>> { client.emit(kind, payload) },
         );
 
     // `android::BluetoothGatt("name")` — the type name as a module function,
@@ -307,6 +324,11 @@ pub struct ScriptedCentral {
     ast: AST,
     scope: Scope<'static>,
     client: ScriptGattClient,
+    /// The profile proxy this script actually built, when it built one rather
+    /// than a bare `BluetoothGatt`. A Broadcast Assistant *is* a central, so
+    /// it is hosted here; the BASS-shaped callbacks it owes the script are
+    /// derived from the same [`CentralEvent`] stream, by the proxy itself.
+    assistant: Option<crate::scripting::broadcast::ScriptBroadcastAssistant>,
     /// Per-client state bound as `this` for every handler — script functions
     /// are pure and cannot see the calling scope, so this map is the only
     /// thing a client can remember between calls.
@@ -331,14 +353,22 @@ impl ScriptedCentral {
             .run_ast_with_scope(&mut scope, &ast)
             .map_err(|e| e.to_string())?;
 
-        let client = scope
-            .iter()
-            .filter_map(|(_, _, value)| value.try_cast::<ScriptGattClient>())
-            .next()
-            .ok_or_else(|| {
-                "script must create an android::BluetoothGatt and keep it in a top-level variable"
-                    .to_string()
-            })?;
+        // A profile proxy that is a central underneath counts as a client: the
+        // Broadcast Assistant is hosted exactly like a `BluetoothGatt`, and
+        // only its extra callbacks differ.
+        let assistant = scope.iter().find_map(|(_, _, value)| {
+            value.try_cast::<crate::scripting::broadcast::ScriptBroadcastAssistant>()
+        });
+        let client = assistant.as_ref().map(|a| a.client()).or_else(|| {
+            scope
+                .iter()
+                .find_map(|(_, _, value)| value.try_cast::<ScriptGattClient>())
+        });
+        let client = client.ok_or_else(|| {
+            "script must create an android::BluetoothGatt (or an \
+             android::BluetoothLeBroadcastAssistant) and keep it in a top-level variable"
+                .to_string()
+        })?;
 
         let handlers = Handlers::detect(&ast);
         Ok(Self {
@@ -346,6 +376,7 @@ impl ScriptedCentral {
             ast,
             scope,
             client,
+            assistant,
             state: Dynamic::from_map(Map::new()),
             handlers,
             last_error: None,
@@ -375,8 +406,13 @@ impl ScriptedCentral {
         // Drop the bring-up the script's own `connect` queued: re-issuing it
         // would send Reset twice and confuse the phase gate.
         let _ = self.client.take_outbox();
-        let packets = self.client.with_central(|c| c.connect(target));
-        self.client.inner.borrow_mut().outbox.extend(packets);
+        self.client.connect(target);
+    }
+
+    /// The Broadcast Assistant this script built, if it built one — the
+    /// handle a host needs to drive or inspect the profile proxy directly.
+    pub fn assistant(&self) -> Option<&crate::scripting::broadcast::ScriptBroadcastAssistant> {
+        self.assistant.as_ref()
     }
 
     /// The first handler error, if any — a failed `assert` in a callback.
@@ -470,6 +506,19 @@ impl ScriptedCentral {
     }
 
     fn dispatch_one(&mut self, event: CentralEvent) {
+        // A profile proxy's callbacks come first: they are what the script
+        // asked for, and the raw GATT ones are the layer underneath.
+        if let Some(assistant) = self.assistant.clone() {
+            let receiver = Dynamic::from(assistant.clone());
+            for (name, args) in assistant.observe(&event) {
+                if !crate::scripting::broadcast::defines(&self.ast, name, args.len() + 1) {
+                    continue;
+                }
+                let mut all = vec![receiver.clone()];
+                all.extend(args);
+                self.invoke(name, all);
+            }
+        }
         if self.handlers.event {
             let map = event_map(&event);
             self.call("on_event", (Dynamic::from_map(map),));

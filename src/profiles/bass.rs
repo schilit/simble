@@ -624,7 +624,15 @@ impl BroadcastAudioScanService {
 
         let receive_state_value_handles: Vec<u16> = (0..num_receive_states)
             .map(|_| {
-                let (_, value_handle) = db.add_characteristic(
+                // `_with_cccd`, not the plain form: a Broadcast Receive State
+                // is mandatory-notify (BASS Section 3.2), and a notifiable
+                // characteristic without a Client Characteristic Configuration
+                // descriptor cannot be subscribed to at all (Vol 3, Part G,
+                // Section 3.3.3.3). This service published one for years with
+                // the NOTIFY property and nowhere to write the bit, so every
+                // Assistant that tried got "no CCCD" and fell back to polling
+                // — invisible until something on this side actually subscribed.
+                let (_, value_handle) = db.add_characteristic_with_cccd(
                     bass_uuid::BROADCAST_RECEIVE_STATE,
                     CharacteristicProperties(
                         CharacteristicProperties::READ | CharacteristicProperties::NOTIFY,

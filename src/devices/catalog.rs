@@ -44,6 +44,16 @@ pub const EXAMPLES: &[DeviceExample] = &[
         script: include_str!("../../catalog/devices/le-audio-sink.rhai"),
     },
     DeviceExample {
+        name: "auracast_source",
+        summary: "Auracast broadcast source (android::BluetoothLeBroadcast): a BIG driven from a script",
+        script: include_str!("../../catalog/devices/auracast_source.rhai"),
+    },
+    DeviceExample {
+        name: "auracast_sink",
+        summary: "Auracast earbud: the BASS Scan Delegator an Assistant adds a source to",
+        script: include_str!("../../catalog/devices/auracast_sink.rhai"),
+    },
+    DeviceExample {
         name: "hrm",
         summary: "Heart-rate monitor (180D): named uuid consts, live values via fn tick",
         script: include_str!("../../catalog/devices/hrm.rhai"),
@@ -253,6 +263,47 @@ fn on_characteristic_changed(client, uuid, value) {
     // The room starts at 18 and steps one degree per tick, so it must
     // never overshoot the target it was told to reach.
     assert(degrees <= this.target, "the room does not overshoot the setpoint");
+}
+"#,
+    },
+    ClientExample {
+        name: "broadcast_assistant",
+        summary: "Auracast Assistant (android::BluetoothLeBroadcastAssistant): Add Source, then watch the Receive State",
+        peer: "auracast_sink",
+        script: r#"// The phone in an Auracast handover, as Android's own profile proxy.
+// Underneath it is pure GATT: a BASS Add Source written to the earbud's
+// control point, and the Broadcast Receive State notified back.
+//
+// There is no connect() here, and Android has none either — the framework
+// owns the link, and addSource reaches a sink whether or not one is up.
+let assistant = android::BluetoothLeBroadcastAssistant("Phone");
+
+// A BluetoothLeBroadcastMetadata: what a scanner found, or in this case what
+// the catalog's auracast_source publishes. `broadcast.get_all_broadcast_metadata()`
+// hands out exactly this shape.
+const SOURCE = #{
+    source_device: "AA:BB:CC:00:00:01",
+    source_address_type: 0,
+    source_advertising_sid: 0,
+    broadcast_id: 0xC0FFEE,
+    pa_sync_interval: 80,
+    subgroups: [ #{ bis_sync: 0x03 } ],   // BIS 1 and 2
+};
+
+assistant.add_source("AA:BB:CC:00:00:01", SOURCE, false);
+// Remote Scan Started tells the earbud a phone is scanning on its behalf.
+// It names no sink, exactly as Android's startSearchingForSources does — so
+// it has to follow a call that did, because that is where this Assistant
+// learned which earbud it is talking to.
+assistant.start_searching_for_sources();
+
+fn on_source_added(assistant, sink, source_id, reason) {
+    assistant.emit("source_id", source_id);
+}
+
+fn on_receive_state_changed(assistant, sink, source_id, state) {
+    assert(state.broadcast_id == 0xC0FFEE, "the source the phone asked for");
+    assistant.emit("pa_sync_state", state.pa_sync_state);
 }
 "#,
     },

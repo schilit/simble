@@ -269,6 +269,14 @@ pub struct ScriptGattServer {
     /// Messages the script has emitted for the host/page, as JSON strings.
     /// The return path of the event channel: `server.emit(kind, payload)`.
     emitted: Rc<RefCell<Vec<String>>>,
+    /// The Broadcast Audio Scan Service this server registered, if any.
+    ///
+    /// A profile registrar usually writes into the database and is done, but
+    /// BASS keeps live Scan Delegator state behind its handle: the Source_IDs
+    /// it assigned and what each is synchronised to. Nothing can report a
+    /// synchronisation outcome without that handle, so the server holds on to
+    /// it. Separate from `inner` because both are borrowed at once.
+    bass: Rc<RefCell<Option<crate::profiles::BroadcastAudioScanService>>>,
 }
 
 impl ScriptGattServer {
@@ -285,7 +293,24 @@ impl ScriptGattServer {
             ))),
             events,
             emitted: Rc::new(RefCell::new(Vec::new())),
+            bass: Rc::new(RefCell::new(None)),
         }
+    }
+
+    /// Records the Scan Delegator this server registered (`add_bass`).
+    pub fn set_bass(&self, service: crate::profiles::BroadcastAudioScanService) {
+        *self.bass.borrow_mut() = Some(service);
+    }
+
+    /// Runs `f` against this server's Scan Delegator and its database, or
+    /// returns `None` if the server has no BASS.
+    pub fn with_bass<R>(
+        &self,
+        f: impl FnOnce(&crate::profiles::BroadcastAudioScanService, &mut crate::gatt::GattDatabase) -> R,
+    ) -> Option<R> {
+        let bass = self.bass.borrow();
+        let service = bass.as_ref()?;
+        Some(f(service, &mut self.inner.borrow_mut().device.gatt_db))
     }
 
     /// Host-side access to the wrapped server (and through it the real
@@ -695,6 +720,11 @@ fn register_android_module(engine: &mut Engine, events: SessionEvents) {
     // namespace: `android::BluetoothGatt` sits beside
     // `android::BluetoothGattServer`, as it does on Android.
     super::client::register(engine, &mut android);
+    // The Auracast pair — `android::BluetoothLeBroadcast` and
+    // `android::BluetoothLeBroadcastAssistant` — shares the same namespace,
+    // and is registered here rather than in the browser transport so every
+    // surface that builds an engine sees it.
+    super::broadcast::register(engine, &mut android);
 
     engine.register_static_module("android", android.into());
 }

@@ -27,10 +27,12 @@
 //! semantics, which fits Simble's synchronous ATT dispatch).
 
 pub mod bindings;
+pub mod broadcast;
 pub mod client;
 pub mod constants;
 
 pub use bindings::{ScriptEvent, ScriptGattServer, SessionEvents};
+pub use broadcast::{ScriptBroadcastAssistant, ScriptBroadcastSource};
 pub use client::{ScriptGattClient, ScriptedCentral};
 
 use rhai::Engine;
