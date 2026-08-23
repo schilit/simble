@@ -1089,8 +1089,22 @@ impl Link {
                 }
             }
             opcode::LE_CS_REMOVE_CONFIG => {
-                c.cs = None;
+                // Vol 4, Part E, 7.8.138: Command Status, and THEN an
+                // LE CS Config Complete carrying action 0x00. Sending only the
+                // status left a host that waits for the event hanging forever
+                // -- the same shape as the Procedure Enable silence, and the
+                // reason that one was found: a command whose declared answer
+                // nobody sends.
+                let removed = c.cs.take();
                 c.outbox.push_back(command_status(STATUS_SUCCESS, opcode));
+                if let Some(session) = removed {
+                    c.outbox.push_back(cs_config_complete(
+                        session.handle,
+                        session.config_id,
+                        session.role,
+                        cs_action::REMOVED,
+                    ));
+                }
             }
 
             // --- extended and periodic advertising ---------------------------
@@ -1426,7 +1440,7 @@ impl Link {
         });
         self.controllers[from]
             .outbox
-            .push_back(cs_config_complete(handle, config_id, role));
+            .push_back(cs_config_complete(handle, config_id, role, cs_action::CREATED));
 
         if !propagate_to_peer {
             return;
@@ -1446,7 +1460,7 @@ impl Link {
         });
         self.controllers[peer]
             .outbox
-            .push_back(cs_config_complete(handle, config_id, peer_role));
+            .push_back(cs_config_complete(handle, config_id, peer_role, cs_action::CREATED));
     }
 
     /// Enables or disables the configuration on both ends of `handle`.
@@ -2114,14 +2128,24 @@ fn le_u16(params: &[u8], offset: usize) -> u16 {
         .unwrap_or(0)
 }
 
-/// LE CS Config Complete (Vol 4, Part E, Section 7.7.65.47) for a
-/// configuration that was just created.
-fn cs_config_complete(handle: u16, config_id: u8, role: u8) -> Vec<u8> {
+/// The Action field of LE CS Config Complete (Vol 4, Part E, 7.7.65.47).
+mod cs_action {
+    /// The configuration was created.
+    pub const CREATED: u8 = 0x01;
+    /// The configuration was removed.
+    pub const REMOVED: u8 = 0x00;
+}
+
+/// LE CS Config Complete (Vol 4, Part E, Section 7.7.65.47).
+///
+/// `action` is 0x01 for a configuration that was created and 0x00 for one
+/// that was removed. Both are the same event; only this byte differs.
+fn cs_config_complete(handle: u16, config_id: u8, role: u8, action: u8) -> Vec<u8> {
     let body = crate::packets::hci::LeCsConfigCompleteEvent {
         status: STATUS_SUCCESS,
         connection_handle: U16::new(handle),
         config_id,
-        action: 0x01, // the configuration was created (0x00 would be removed)
+        action,
         main_mode_type: cs_plan::STEP_MODE_PBR,
         sub_mode_type: 0xFF, // unused
         min_main_mode_steps: cs_plan::TONES_PER_SUBEVENT as u8,
