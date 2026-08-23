@@ -286,3 +286,126 @@ fn test_rfcomm_sabm_frame_vector() {
         "re-encoding must reproduce the wire bytes"
     );
 }
+
+// --- Encrypted Advertising Data ---------------------------------------------
+//
+// From the Core Specification Supplement (CSS) Part A, Section 2.3 — the SIG's
+// own worked example for Encrypted Advertising Data, and the only external
+// reference this code has ever been checked against.
+//
+// `src/gap/ead.rs` was previously tested ONLY by encrypting and decrypting
+// against itself, which is exactly the failure this file exists to catch: a
+// self-consistent mistake in the nonce order, the AAD octet or the key
+// ordering round-trips perfectly and proves nothing. These are somebody
+// else's bytes.
+//
+// BYTE ORDER, which is the whole difficulty of using this vector. The
+// Supplement prints the IV and the Randomizer most-significant-octet first,
+// the way it prints any integer, but the CCM nonce is assembled from them in
+// over-the-air order — so both must be reversed before being handed to this
+// API, while the session key, being a byte array rather than an integer, is
+// used exactly as printed. Feeding all three verbatim produces a completely
+// different ciphertext.
+//
+// That was established empirically: of the eight combinations of reversing
+// key / IV / randomizer, exactly one reproduces the Supplement's ciphertext
+// and MIC, and it is the one this convention predicts. Neither Bumble nor
+// Zephyr implements EAD, so there was no second implementation to ask.
+
+/// The Supplement's own key material, in the order it prints them.
+const CSS_SESSION_KEY: &str = "57A9DA12D12E6E131E20612AD10A6A19";
+const CSS_IV_PRINTED: &str = "46E77AB1EF007A9E";
+const CSS_RANDOMIZER_PRINTED: &str = "DECA57E118";
+/// Two AD structures: `0F 09 "Short Mini-Bus"` then `03 19 0A 8C` (Appearance).
+/// That it decodes to something meaningful is itself a check on transcription.
+const CSS_PLAINTEXT: &str = "0F095368 6F727420 4D696E69 2D427573 03190A8C";
+const CSS_CIPHERTEXT: &str = "74E4DCAF DC51C728 2810C221 7F0E4CEF 4343181F";
+const CSS_MIC: &str = "BA0069CC";
+
+fn css_key() -> simble::gap::ead::KeyMaterial {
+    simble::gap::ead::KeyMaterial {
+        session_key: hex16(CSS_SESSION_KEY),
+        iv: rev8(hex8(CSS_IV_PRINTED)),
+    }
+}
+
+/// CSS Part A, Section 2.3 — encrypt direction.
+#[test]
+fn ead_css_vector_encrypts_to_the_spec_ciphertext() {
+    use simble::gap::ead::encrypt_ad;
+
+    let randomizer = rev5(hex5(CSS_RANDOMIZER_PRINTED));
+    let plaintext = hex(CSS_PLAINTEXT);
+    let out = encrypt_ad(&css_key(), &randomizer, &plaintext);
+
+    // Length || 0x31 || Randomizer || Ciphertext || MIC
+    assert_eq!(out[0] as usize, out.len() - 1, "AD length octet");
+    assert_eq!(out[1], 0x31, "Encrypted Data AD type");
+    assert_eq!(&out[2..7], &randomizer[..], "randomizer carried verbatim");
+    assert_eq!(
+        &out[7..7 + plaintext.len()],
+        &hex(CSS_CIPHERTEXT)[..],
+        "ciphertext must match the Supplement's worked example",
+    );
+    assert_eq!(
+        &out[7 + plaintext.len()..],
+        &hex(CSS_MIC)[..],
+        "MIC must match the Supplement's worked example",
+    );
+}
+
+/// The same vector backwards: the Supplement's ciphertext must decrypt to the
+/// Supplement's plaintext. Reaches the decrypt path, which the encrypt test
+/// alone does not.
+#[test]
+fn ead_css_vector_decrypts_the_spec_ciphertext() {
+    use simble::gap::ead::decrypt_ad;
+
+    let mut value = rev5(hex5(CSS_RANDOMIZER_PRINTED)).to_vec();
+    value.extend_from_slice(&hex(CSS_CIPHERTEXT));
+    value.extend_from_slice(&hex(CSS_MIC));
+
+    let plaintext = decrypt_ad(&css_key(), &value).expect("spec vector must authenticate");
+    assert_eq!(plaintext, hex(CSS_PLAINTEXT));
+    // It really is a Complete Local Name — the human check on the transcription.
+    assert_eq!(&plaintext[2..16], b"Short Mini-Bus");
+}
+
+/// A wrong MIC must not authenticate. Without this, a decrypt that ignored the
+/// tag entirely would pass every test above.
+#[test]
+fn ead_rejects_a_tampered_mic() {
+    use simble::gap::ead::decrypt_ad;
+
+    let mut value = rev5(hex5(CSS_RANDOMIZER_PRINTED)).to_vec();
+    value.extend_from_slice(&hex(CSS_CIPHERTEXT));
+    value.extend_from_slice(&hex(CSS_MIC));
+    *value.last_mut().unwrap() ^= 0x01;
+
+    assert!(decrypt_ad(&css_key(), &value).is_none());
+}
+
+fn hex(s: &str) -> Vec<u8> {
+    let clean: String = s.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+    (0..clean.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&clean[i..i + 2], 16).unwrap())
+        .collect()
+}
+fn hex16(s: &str) -> [u8; 16] {
+    hex(s).try_into().unwrap()
+}
+fn hex8(s: &str) -> [u8; 8] {
+    hex(s).try_into().unwrap()
+}
+fn hex5(s: &str) -> [u8; 5] {
+    hex(s).try_into().unwrap()
+}
+fn rev8(mut b: [u8; 8]) -> [u8; 8] {
+    b.reverse();
+    b
+}
+fn rev5(mut b: [u8; 5]) -> [u8; 5] {
+    b.reverse();
+    b
+}
