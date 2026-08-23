@@ -15,7 +15,8 @@
 // crossed a GATT subscription rather than been read out of the device that
 // produced it.
 
-import init, { WebLink, catalog_script } from "../pkg/simble.js";
+import init, { WebLink, WebPeripheral, WebScriptedCentral, catalog_script } from "../pkg/simble.js";
+import { createBackendSelector } from "../common/backend.js";
 import { createDeviceHeader } from "../common/device-header.js";
 import { createGattView } from "../common/gatt-view.js";
 import { bpmFromHex } from "../common/viewer-format.js";
@@ -26,6 +27,15 @@ const STYLE_ID = "simble-health-style";
 // scripts -- overriding the target afterwards is fighting the convention.
 const MONITOR_ADDR = "AA:BB:CC:00:00:01";
 const CLIENT_ADDR = "AA:BB:CC:00:00:02";
+
+// On netsim each device owns its own socket -- its own controller, as two
+// separate machines would have -- so the pair meets over the real ether
+// instead of a shared in-page link. That is also what lets an Android
+// emulator connect to the monitor, which the in-page link cannot offer.
+const MONITOR_NETSIM = "CC:1E:57:00:00:02";
+const CLIENT_NETSIM = "CC:1E:57:00:00:12";
+const WS = (name, address) =>
+  `ws://localhost:7681/v1/websocket/bt?name=${name}&address=${address}`;
 
 const STYLE = `main {
     display: grid; gap: 1.25rem; padding: 1.25rem 1.5rem;
@@ -50,7 +60,9 @@ const STYLE = `main {
   .bpm { font-size: 1.8rem; font-weight: 600; }
   .bpm small { color: var(--dim); font-size: 0.9rem; font-weight: 400; }`;
 
-const MARKUP = `<section class="panel">
+const MARKUP = `<div id="backend"></div>
+
+  <section class="panel">
     <div id="monitor-head"></div>
     <div id="monitor-script"></div>
     <h2 class="sub">Its GATT database (server view)</h2>
@@ -84,7 +96,10 @@ const CLIENT_NOTE =
 // domain at a time in a shared stage, and ids like `script` have collided
 // across modules before.
 let root = null;
-let link = null;
+let mode = "in-page";     // "in-page" (one wasm WebLink) | "websocket" (netsim)
+let link = null;          // in-page backend
+let monitorDev = null;    // netsim backend: WebPeripheral
+let clientDev = null;     // netsim backend: WebScriptedCentral
 let monitorHead = null, clientHead = null;
 let monitorGatt = null, clientGatt = null;
 let monitorIndex = -1, clientIndex = -1;
@@ -100,12 +115,30 @@ const $ = (id) => root.querySelector(`#${id}`);
 /// stop together -- which is why a single toggle drives the pair rather than
 /// each header carrying its own.
 function build() {
-  if (link) { try { link.free(); } catch (_) { /* gone */ } }
-  link = new WebLink();
-  monitorIndex = link.add_peripheral(MONITOR_ADDR, monitorScript);
-  clientIndex = link.add_scripted_central(CLIENT_ADDR, clientScript);
+  release();
+  if (mode === "in-page") {
+    link = new WebLink();
+    monitorIndex = link.add_peripheral(MONITOR_ADDR, monitorScript);
+    clientIndex = link.add_scripted_central(CLIENT_ADDR, clientScript);
+  } else {
+    monitorDev = new WebPeripheral(WS("web-hrm", MONITOR_NETSIM), monitorScript);
+    clientDev = new WebScriptedCentral(WS("web-hr-client", CLIENT_NETSIM), clientScript);
+    // The catalog's client scripts all connect to EXAMPLE_PEER_ADDRESS, which
+    // is the in-page convention; on netsim the monitor lives elsewhere.
+    clientDev.set_target(MONITOR_NETSIM);
+  }
   runStart = performance.now();
   lastBpm = null;
+}
+
+/// Frees whichever backend is live. A netsim device whose socket drops without
+/// a disconnect lingers as a ghost at the same address, so this is not
+/// optional bookkeeping.
+function release() {
+  for (const d of [link, monitorDev, clientDev]) {
+    if (d) { try { d.free(); } catch (_) { /* already gone */ } }
+  }
+  link = monitorDev = clientDev = null;
 }
 
 function run() {
@@ -121,8 +154,7 @@ function run() {
 
 function stop() {
   stopped = true;
-  try { link?.free(); } catch (_) { /* already gone */ }
-  link = null;
+  release();
   lastBpm = null;
   monitorGatt?.update({ services: [] });
   clientGatt?.update({ services: [] });
@@ -167,17 +199,28 @@ function renderHeart(clientStatus) {
 }
 
 function loop() {
-  if (stopped || !link) return;
+  if (stopped) return;
+  const t = (performance.now() - runStart) / 1000;
   try {
-    link.tick((performance.now() - runStart) / 1000);
+    let monitor, client;
+    if (mode === "in-page") {
+      if (!link) return;
+      link.tick(t);
+      monitor = JSON.parse(link.peripheral_status_json(monitorIndex));
+      client = JSON.parse(link.central_status_json(clientIndex));
+    } else {
+      if (!monitorDev || !clientDev) return;
+      // Each socket is pumped by its own tick; a device still connecting
+      // returns no status yet, which is not an error.
+      monitor = JSON.parse(monitorDev.tick(t));
+      client = JSON.parse(clientDev.tick(t));
+    }
 
-    const monitor = JSON.parse(link.peripheral_status_json(monitorIndex));
     monitorHead.setName(monitor.name);
     monitorHead.setState(true,
       monitor.connected ? "on air · client connected" : "on air · advertising", "ok");
     monitorGatt.update(monitor);
 
-    const client = JSON.parse(link.central_status_json(clientIndex));
     clientHead.setState(!!client.connected,
       client.connected ? `client · ${client.phase || "connected"}` : "connecting…",
       client.connected ? "ok" : "");
@@ -185,10 +228,14 @@ function loop() {
     renderHeart(client);
 
     // A failed assert in a callback is the run's verdict and never clears.
-    const failure = link.scripted_central_failure(clientIndex);
+    const failure = mode === "in-page"
+      ? link.scripted_central_failure(clientIndex)
+      : clientDev.failure();
     if (failure) clientHead.setState(false, `assert failed: ${failure}`, "bad");
 
-    const emitted = link.scripted_central_emitted(clientIndex);
+    const emitted = mode === "in-page"
+      ? link.scripted_central_emitted(clientIndex)
+      : clientDev.emitted();
     if (emitted && emitted.length) {
       $("client-log").textContent = Array.from(emitted).slice(-3).join(" · ");
     }
@@ -242,6 +289,9 @@ export async function mount(container) {
   clientGatt = createGattView({ mode: "client", empty: "Connecting…" });
   $("client-gatt").append(clientGatt.el);
 
+  mode = createBackendSelector($("backend"), {
+    onChange: (m) => { mode = m; if (!stopped) run(); },
+  });
   run();
   timer = setInterval(loop, 100);
 }

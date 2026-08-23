@@ -3656,6 +3656,112 @@ mod web {
         }
     }
 
+    /// A **scripted central on netsim**: the client half of
+    /// [`WebPeripheral`], driven by a Rhai script.
+    ///
+    /// `ScriptedCentral` is transport-free -- H4 packets in, H4 packets out --
+    /// so nothing about it assumed the in-page link it was first wired to.
+    /// This is the same wrapper `WebPeripheral` is, over the same
+    /// `WasmWsTransport` + `HciChannel` pair that `WebSource` already uses to
+    /// put a central on netsim. It exists so a scripted client can face a real
+    /// controller, and an Android emulator, rather than only its own scene.
+    #[wasm_bindgen]
+    pub struct WebScriptedCentral {
+        transport: WasmWsTransport,
+        channel: HciChannel,
+        central: crate::scripting::ScriptedCentral,
+        started: bool,
+    }
+
+    #[wasm_bindgen]
+    impl WebScriptedCentral {
+        /// Connects a scripted central to netsim at `url` and runs `script`.
+        #[wasm_bindgen(constructor)]
+        pub fn new(url: &str, script: &str) -> Result<WebScriptedCentral, JsValue> {
+            install_panic_hook();
+            let central =
+                crate::scripting::ScriptedCentral::run_script(script).map_err(js_error)?;
+            // netsim reads the URL address LSB-first; connect with the wire
+            // form so this device lands on the air where the page says it is.
+            let url = ws_url_with_wire_address(url);
+            Ok(Self {
+                transport: WasmWsTransport::connect(&url)?,
+                channel: HciChannel::new(),
+                central,
+                started: false,
+            })
+        }
+
+        /// Returns the underlying WebSocket ready state (per the WebSocket API).
+        pub fn ready_state(&self) -> u16 {
+            self.transport.ready_state()
+        }
+
+        /// Aims the script at `address`, overriding whatever it connected to.
+        pub fn set_target(&mut self, address: &str) -> Result<(), JsValue> {
+            let target: Address = address
+                .parse()
+                .map_err(|_| JsValue::from_str("target is not a Bluetooth address"))?;
+            self.central.set_target(target);
+            Ok(())
+        }
+
+        /// The first `assert(...)` failure, which is the run's verdict.
+        pub fn failure(&self) -> Option<String> {
+            self.central.failure().map(str::to_string)
+        }
+
+        /// Messages the script emitted since the last call.
+        pub fn emitted(&mut self) -> js_sys::Array {
+            let out = js_sys::Array::new();
+            for message in self.central.take_emitted() {
+                out.push(&JsValue::from_str(&message));
+            }
+            out
+        }
+
+        /// One pump: bring the controller up, hand it whatever the script
+        /// produced, and return the client's status JSON.
+        pub fn tick(&mut self, t_seconds: f64) -> Result<String, JsValue> {
+            self.transport.pump(&self.channel)?;
+
+            if !self.started && self.transport.is_open() {
+                // Reset and both event masks. The post-Reset default event mask
+                // excludes LE Meta Events, so nothing would ever report a
+                // connection completing.
+                for packet in crate::device::host::init_commands().into_iter().take(3) {
+                    self.channel.send_command(&packet[1..]).map_err(js_error)?;
+                }
+                // The script ran at construction, so its connect is already
+                // waiting in the outbox.
+                self.drain()?;
+                self.started = true;
+            }
+
+            while let Some(packet) = self.channel.poll_controller_packet() {
+                for out in self.central.on_packet(&packet) {
+                    self.channel.inject_host_packet(out).map_err(js_error)?;
+                }
+            }
+            for out in self.central.tick(t_seconds) {
+                self.channel.inject_host_packet(out).map_err(js_error)?;
+            }
+            self.drain()?;
+
+            self.transport.pump(&self.channel)?;
+            Ok(self.central.status_json())
+        }
+
+        /// Moves anything the script queued outside a packet callback -- a
+        /// read or subscribe issued from the page -- onto the wire.
+        fn drain(&mut self) -> Result<(), JsValue> {
+            for packet in self.central.take_outbox() {
+                self.channel.inject_host_packet(packet).map_err(js_error)?;
+            }
+            Ok(())
+        }
+    }
+
     /// The API Explorer's engine: a live [`ScriptedPeripheral`] session built
     /// one Rhai statement at a time. Each Execute in the page calls
     /// [`WebSession::eval_line`] with the single generated line; the session
