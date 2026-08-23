@@ -290,10 +290,9 @@ pub fn describe_metadata(data: &[u8]) -> Vec<(String, String)> {
                 "Program Info URI".to_string(),
                 String::from_utf8_lossy(value).into_owned(),
             ),
-            metadata_type::IMMEDIATE_RENDERING_FLAG => (
-                "Immediate Rendering".to_string(),
-                "declared".to_string(),
-            ),
+            metadata_type::IMMEDIATE_RENDERING_FLAG => {
+                ("Immediate Rendering".to_string(), "declared".to_string())
+            }
             other => (
                 format!("type 0x{other:02X}"),
                 value
@@ -952,13 +951,22 @@ mod tests {
     /// what a stereo broadcast publishes, one per BIS.
     #[test]
     fn test_audio_locations_are_named() {
-        assert_eq!(audio_location::describe(audio_location::FRONT_LEFT), "Front Left");
+        assert_eq!(
+            audio_location::describe(audio_location::FRONT_LEFT),
+            "Front Left"
+        );
         assert_eq!(
             audio_location::describe(audio_location::STEREO),
             "Front Left + Front Right"
         );
-        assert_eq!(audio_location::describe(audio_location::RIGHT_SURROUND), "Right Surround");
-        assert_eq!(audio_location::describe(audio_location::NOT_ALLOWED), "no location");
+        assert_eq!(
+            audio_location::describe(audio_location::RIGHT_SURROUND),
+            "Right Surround"
+        );
+        assert_eq!(
+            audio_location::describe(audio_location::NOT_ALLOWED),
+            "no location"
+        );
         // Bit 28 has no assigned name: reported, not dropped.
         assert_eq!(audio_location::describe(1 << 28), "0x10000000");
     }

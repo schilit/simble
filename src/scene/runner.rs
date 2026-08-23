@@ -255,8 +255,7 @@ fn run_on_netsim(scene: &ResolvedScene, options: &RunOptions) -> Result<RunRepor
 /// Reads a device's post-run status JSON into an outcome. A scanner has no
 /// status at all, which is not a failure.
 fn outcome(device: &Placement, status_json: Option<&str>) -> DeviceOutcome {
-    let status: Option<serde_json::Value> =
-        status_json.and_then(|s| serde_json::from_str(s).ok());
+    let status: Option<serde_json::Value> = status_json.and_then(|s| serde_json::from_str(s).ok());
     let field = |key: &str| -> Option<String> {
         status
             .as_ref()?
@@ -288,9 +287,8 @@ mod tests {
 
     #[test]
     fn a_catalog_peripheral_comes_up_and_reports_its_own_name() {
-        let scene = scene_from(
-            r#"{ "version": 1, "devices": [ { "id": "hr", "device": "hrm" } ] }"#,
-        );
+        let scene =
+            scene_from(r#"{ "version": 1, "devices": [ { "id": "hr", "device": "hrm" } ] }"#);
         let report = run(&scene, &RunOptions::default()).unwrap();
         assert!(report.ok(), "{report:?}");
         assert_eq!(report.devices[0].name.as_deref(), Some("HRM"));

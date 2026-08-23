@@ -92,7 +92,10 @@ fn negotiate_to_streaming() -> (Protocol, Protocol, u8, u8) {
     exchange(&mut source, &mut sink, pdus);
 
     assert_eq!(
-        source.get_local_endpoint_by_seid(source_seid).unwrap().state,
+        source
+            .get_local_endpoint_by_seid(source_seid)
+            .unwrap()
+            .state,
         StreamState::Streaming
     );
     assert_eq!(
@@ -154,7 +157,9 @@ fn test_media_flows_from_source_to_sink_and_stops_on_close() {
     // The transport channel is opened by whoever owns L2CAP; each side
     // registers its own CID for the stream.
     let (source_cid, sink_cid) = (0x0041, 0x0051);
-    source.attach_media_channel(source_seid, source_cid).unwrap();
+    source
+        .attach_media_channel(source_seid, source_cid)
+        .unwrap();
     sink.attach_media_channel(sink_seid, sink_cid).unwrap();
     assert!(source.has_media_channel(source_seid));
     assert!(sink.has_media_channel(sink_seid));
@@ -190,7 +195,10 @@ fn test_media_flows_from_source_to_sink_and_stops_on_close() {
     let pdus = source.suspend(&[sink_seid]).unwrap();
     exchange(&mut source, &mut sink, pdus);
     assert_eq!(
-        source.get_local_endpoint_by_seid(source_seid).unwrap().state,
+        source
+            .get_local_endpoint_by_seid(source_seid)
+            .unwrap()
+            .state,
         StreamState::Open
     );
     assert!(
@@ -218,12 +226,16 @@ fn test_media_flows_from_source_to_sink_and_stops_on_close() {
 fn test_a_large_frame_is_fragmented_and_arrives_whole() {
     let (mut source, mut sink, source_seid, sink_seid) = negotiate_to_streaming();
     let (source_cid, sink_cid) = (0x0041, 0x0051);
-    source.attach_media_channel(source_seid, source_cid).unwrap();
+    source
+        .attach_media_channel(source_seid, source_cid)
+        .unwrap();
     sink.attach_media_channel(sink_seid, sink_cid).unwrap();
 
     // Larger than the payload budget (MTU minus the 12-byte RTP header).
     let big: Vec<u8> = (0..2000u32).map(|i| i as u8).collect();
-    let packets = source.send_media(source_seid, std::slice::from_ref(&big), 500).unwrap();
+    let packets = source
+        .send_media(source_seid, std::slice::from_ref(&big), 500)
+        .unwrap();
     assert!(packets.len() > 1, "one frame spans several packets");
 
     // Every packet is well-formed RTP flagged as a fragment.
@@ -239,11 +251,15 @@ fn test_a_large_frame_is_fragmented_and_arrives_whole() {
         sink.on_media_pdu(sink_cid, packet).unwrap();
         assert!(sink.take_media().is_empty(), "still reassembling");
     }
-    sink.on_media_pdu(sink_cid, packets.last().unwrap()).unwrap();
+    sink.on_media_pdu(sink_cid, packets.last().unwrap())
+        .unwrap();
 
     let received = sink.take_media();
     assert_eq!(received.len(), 1);
-    assert_eq!(received[0].payload, big, "the frame comes back byte for byte");
+    assert_eq!(
+        received[0].payload, big,
+        "the frame comes back byte for byte"
+    );
 }
 
 /// A sink that never drains must not grow without bound.
@@ -289,10 +305,7 @@ fn test_bad_media_is_rejected() {
         sink.on_media_pdu(0x0051, &[0x80, 0x60, 0x00]).is_err(),
         "shorter than an RTP header"
     );
-    assert!(
-        sink.on_media_pdu(0x0051, &[]).is_err(),
-        "an empty PDU"
-    );
+    assert!(sink.on_media_pdu(0x0051, &[]).is_err(), "an empty PDU");
     assert!(sink.take_media().is_empty(), "nothing was queued");
 }
 
@@ -343,7 +356,10 @@ fn test_packets_respect_the_negotiated_mtu() {
 
     let frames: Vec<Vec<u8>> = (0..6u8).map(|i| vec![i; 30]).collect();
     let packets = source.send_media(source_seid, &frames, 0).unwrap();
-    assert!(packets.len() > 1, "six 30-byte frames cannot share 52 bytes");
+    assert!(
+        packets.len() > 1,
+        "six 30-byte frames cannot share 52 bytes"
+    );
     for packet in &packets {
         assert!(
             packet.len() <= usize::from(small_mtu),

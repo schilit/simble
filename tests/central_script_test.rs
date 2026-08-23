@@ -255,7 +255,9 @@ fn on_characteristic_write(client, uuid, status) {
     let (mut scene, p, c) = run(peripheral, central, 40);
     assert_eq!(scene.scripted_central(c).and_then(|c| c.failure()), None);
     assert!(
-        emitted(&mut scene, c).iter().any(|(kind, _)| kind == "wrote"),
+        emitted(&mut scene, c)
+            .iter()
+            .any(|(kind, _)| kind == "wrote"),
         "the write callback fired"
     );
     let status = scene.peripheral_status_json(p).expect("peripheral status");
@@ -288,7 +290,11 @@ fn on_services_discovered(client) {
 fn on_characteristic_write(client, uuid, status) { client.emit("wrote", status); }
 "#;
     let (mut scene, p, c) = run(peripheral, central, 40);
-    assert!(emitted(&mut scene, c).iter().any(|(kind, _)| kind == "wrote"));
+    assert!(
+        emitted(&mut scene, c)
+            .iter()
+            .any(|(kind, _)| kind == "wrote")
+    );
     let status = scene.peripheral_status_json(p).expect("peripheral status");
     assert!(status.contains("\"value\":\"07\""), "{status}");
 }
@@ -332,7 +338,12 @@ fn on_error(client, message) { client.emit("error", message); }
     assert!(text.contains("2A19"), "{text}");
     // It is also a script failure: a test that names a UUID the device does
     // not expose has found a real disagreement, not a timing problem.
-    assert!(scene.scripted_central(c).and_then(|c| c.failure()).is_some());
+    assert!(
+        scene
+            .scripted_central(c)
+            .and_then(|c| c.failure())
+            .is_some()
+    );
 }
 
 #[test]

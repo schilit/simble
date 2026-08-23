@@ -638,12 +638,14 @@ impl Scene {
         match spec.target.as_deref() {
             Some(target) if !spec.role.needs_target() => Err(SceneError::device(
                 &spec.id,
-                format!("role {} does not connect to anything, so it cannot have a \"target\" (found {target:?})", spec.role),
+                format!(
+                    "role {} does not connect to anything, so it cannot have a \"target\" (found {target:?})",
+                    spec.role
+                ),
             )),
-            Some(target) if target == spec.id => Err(SceneError::device(
-                &spec.id,
-                "targets itself",
-            )),
+            Some(target) if target == spec.id => {
+                Err(SceneError::device(&spec.id, "targets itself"))
+            }
             Some(target) => match addresses.get(target) {
                 Some(&address) => Ok(Some((target.to_string(), address))),
                 None => Err(SceneError::device(

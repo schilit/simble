@@ -30,7 +30,9 @@
 //! than draining the transport channel over time.
 
 use crate::classic::a2dp::codec_type;
-use crate::classic::rtp::{MediaPacket, MediaPacketError, RtpHeader, SbcReassembler, packetize_sbc};
+use crate::classic::rtp::{
+    MediaPacket, MediaPacketError, RtpHeader, SbcReassembler, packetize_sbc,
+};
 use crate::classic::sdp::{AttributeIdSpec, DataElement, SdpClient, SdpUuid, attribute_id};
 use crate::l2cap::classic::{ClassicChannelManager, ClassicChannelSpec};
 use crate::packets::l2cap_signaling::ConnectionRequestHeader;

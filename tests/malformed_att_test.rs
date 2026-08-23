@@ -108,10 +108,7 @@ fn connected_central() -> LeCentral {
         let mut next = Vec::new();
         for packet in pending {
             if packet.first() == Some(&0x01) && packet.len() >= 3 {
-                next.extend(central.on_packet(&command_complete(
-                    [packet[1], packet[2]],
-                    &[0x00],
-                )));
+                next.extend(central.on_packet(&command_complete([packet[1], packet[2]], &[0x00])));
             }
         }
         pending = next;

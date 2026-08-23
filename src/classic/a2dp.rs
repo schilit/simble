@@ -789,7 +789,9 @@ impl AacFrame {
                 | u8::from(self.crc.is_none()),
         );
         out.push(
-            (self.profile.to_bits() << 6) | (frequency_index << 2) | (self.channel_configuration >> 2),
+            (self.profile.to_bits() << 6)
+                | (frequency_index << 2)
+                | (self.channel_configuration >> 2),
         );
         out.push(((self.channel_configuration & 0b11) << 6) | ((frame_length >> 11) as u8 & 0b11));
         out.push((frame_length >> 3) as u8);

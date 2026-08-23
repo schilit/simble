@@ -350,7 +350,9 @@ impl LeCentral {
 
     /// The value handle of a discovered characteristic, by UUID.
     pub fn value_handle(&self, uuid: Uuid) -> Option<u16> {
-        self.client.find_characteristic(uuid).map(|c| c.value_handle)
+        self.client
+            .find_characteristic(uuid)
+            .map(|c| c.value_handle)
     }
 
     /// The last value seen for a characteristic — read or notified — or
@@ -391,7 +393,8 @@ impl LeCentral {
     /// descriptors are discovered first if they are not known yet, so the
     /// CCCD write lands on the handle the peer actually published.
     pub fn queue_subscribe(&mut self, uuid: Uuid, enable: bool) {
-        self.pending.push_back(Op::DiscoverDescriptors { uuid, enable });
+        self.pending
+            .push_back(Op::DiscoverDescriptors { uuid, enable });
     }
 
     /// Drains the events raised since the last call.
@@ -716,14 +719,17 @@ impl LeCentral {
             let value = att[3..].to_vec();
             self.values.insert(value_handle, value.clone());
             self.events.push(CentralEvent::CharacteristicChanged {
-                uuid: self.uuid_for_handle(value_handle).unwrap_or(Uuid::Uuid16(0)),
+                uuid: self
+                    .uuid_for_handle(value_handle)
+                    .unwrap_or(Uuid::Uuid16(0)),
                 handle: value_handle,
                 value,
             });
             if op == att_op::HANDLE_VALUE_IND {
                 // Vol 3, Part F, Section 3.4.7.2: one indication at a time.
                 // Without this the server's next indication is never sent.
-                let pdu = L2capHeader::serialize(crate::l2cap::cid::ATT, &[att_op::HANDLE_VALUE_CFM]);
+                let pdu =
+                    L2capHeader::serialize(crate::l2cap::cid::ATT, &[att_op::HANDLE_VALUE_CFM]);
                 out.extend(acl_packets(handle, &pdu));
             }
             return;
@@ -1040,7 +1046,11 @@ mod tests {
 
         // An advertisement from someone else is not the peer.
         let other: Address = "11:22:33:44:55:66".parse().unwrap();
-        assert!(central.on_packet(&advertising_report(other, 0x01)).is_empty());
+        assert!(
+            central
+                .on_packet(&advertising_report(other, 0x01))
+                .is_empty()
+        );
         assert_eq!(central.phase(), CentralPhase::Scanning);
 
         let out = central.on_packet(&advertising_report(target, 0x01));
@@ -1096,6 +1106,9 @@ mod tests {
     fn find_information_request_carries_the_descriptor_range() {
         let pdu = find_information_request(0x0010, 0x0014);
         // L2CAP header (4 bytes) then the ATT PDU.
-        assert_eq!(&pdu[4..], &[att_op::FIND_INFORMATION_REQ, 0x10, 0x00, 0x14, 0x00]);
+        assert_eq!(
+            &pdu[4..],
+            &[att_op::FIND_INFORMATION_REQ, 0x10, 0x00, 0x14, 0x00]
+        );
     }
 }

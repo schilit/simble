@@ -108,7 +108,8 @@ mod opcode {
     /// LE CS Remove Config (OGF 0x08, OCF 0x0091).
     pub const LE_CS_REMOVE_CONFIG: u16 = cs_opcode::LE_CS_REMOVE_CONFIG.as_u16();
     /// LE CS Set Procedure Parameters (OGF 0x08, OCF 0x0093).
-    pub const LE_CS_SET_PROCEDURE_PARAMETERS: u16 = cs_opcode::LE_CS_SET_PROCEDURE_PARAMETERS.as_u16();
+    pub const LE_CS_SET_PROCEDURE_PARAMETERS: u16 =
+        cs_opcode::LE_CS_SET_PROCEDURE_PARAMETERS.as_u16();
     /// LE CS Procedure Enable (OGF 0x08, OCF 0x0094).
     pub const LE_CS_PROCEDURE_ENABLE: u16 = cs_opcode::LE_CS_PROCEDURE_ENABLE.as_u16();
 
@@ -121,7 +122,8 @@ mod opcode {
     /// LE Set Extended Advertising Data.
     pub const LE_SET_EXT_ADV_DATA: u16 = ext_adv_opcode::LE_SET_EXTENDED_ADVERTISING_DATA.as_u16();
     /// LE Set Extended Advertising Enable.
-    pub const LE_SET_EXT_ADV_ENABLE: u16 = ext_adv_opcode::LE_SET_EXTENDED_ADVERTISING_ENABLE.as_u16();
+    pub const LE_SET_EXT_ADV_ENABLE: u16 =
+        ext_adv_opcode::LE_SET_EXTENDED_ADVERTISING_ENABLE.as_u16();
     /// LE Set Periodic Advertising Data.
     pub const LE_SET_PERIODIC_ADV_DATA: u16 =
         ext_adv_opcode::LE_SET_PERIODIC_ADVERTISING_DATA.as_u16();
@@ -673,7 +675,10 @@ enum Action {
     },
     /// LE Terminate BIG. Touches every receiver synchronized to it, which is
     /// how they learn the source is gone.
-    TerminateBig { from: usize, big_handle: u8 },
+    TerminateBig {
+        from: usize,
+        big_handle: u8,
+    },
     /// LE BIG Create Sync. Needs the source controller's BIG to answer, and
     /// the handle counter to name the receiver's own BIS handles.
     BigCreateSync {
@@ -1124,7 +1129,8 @@ impl Link {
             }
             opcode::LE_SET_EXT_ADV_DATA => {
                 if let Some((header, data)) = LeSetExtendedAdvertisingDataHeader::parse(params) {
-                    let (handle, operation, data) = (header.advertising_handle, header.operation, data.to_vec());
+                    let (handle, operation, data) =
+                        (header.advertising_handle, header.operation, data.to_vec());
                     let set = c.ext_adv_set(handle);
                     // Only a complete-data write is modelled; a host that
                     // fragments would need the first/intermediate/last states.
@@ -1139,8 +1145,7 @@ impl Link {
                 if let Some((header, entries)) = LeSetExtendedAdvertisingEnableHeader::parse(params)
                 {
                     let enable = header.enable == 0x01;
-                    let handles: Vec<u8> =
-                        entries.iter().map(|e| e.advertising_handle).collect();
+                    let handles: Vec<u8> = entries.iter().map(|e| e.advertising_handle).collect();
                     for handle in handles {
                         c.ext_adv_set(handle).enabled = enable;
                     }
@@ -1150,7 +1155,8 @@ impl Link {
             }
             opcode::LE_SET_PERIODIC_ADV_DATA => {
                 if let Some((header, data)) = LeSetPeriodicAdvertisingDataHeader::parse(params) {
-                    let (handle, operation, data) = (header.advertising_handle, header.operation, data.to_vec());
+                    let (handle, operation, data) =
+                        (header.advertising_handle, header.operation, data.to_vec());
                     let set = c.ext_adv_set(handle);
                     if operation == data_operation::COMPLETE {
                         set.periodic_data = data;
@@ -1354,7 +1360,10 @@ impl Link {
         // reuse the handle inherit a procedure its host never created — and
         // would leave `enabled` set on a session whose peer is gone.
         for index in [from, peer] {
-            if self.controllers[index].cs.is_some_and(|s| s.handle == handle) {
+            if self.controllers[index]
+                .cs
+                .is_some_and(|s| s.handle == handle)
+            {
                 self.controllers[index].cs = None;
             }
         }
@@ -1440,9 +1449,12 @@ impl Link {
             enabled: false,
             procedure_counter: 0,
         });
-        self.controllers[from]
-            .outbox
-            .push_back(cs_config_complete(handle, config_id, role, cs_action::CREATED));
+        self.controllers[from].outbox.push_back(cs_config_complete(
+            handle,
+            config_id,
+            role,
+            cs_action::CREATED,
+        ));
 
         if !propagate_to_peer {
             return;
@@ -1460,9 +1472,12 @@ impl Link {
             enabled: false,
             procedure_counter: 0,
         });
-        self.controllers[peer]
-            .outbox
-            .push_back(cs_config_complete(handle, config_id, peer_role, cs_action::CREATED));
+        self.controllers[peer].outbox.push_back(cs_config_complete(
+            handle,
+            config_id,
+            peer_role,
+            cs_action::CREATED,
+        ));
     }
 
     /// Enables or disables the configuration on both ends of `handle`.
@@ -1575,15 +1590,13 @@ impl Link {
                 let config_id = self.controllers[index]
                     .cs
                     .map_or(session.config_id, |s| s.config_id);
-                self.controllers[index]
-                    .outbox
-                    .push_back(cs_subevent_result(
-                        session.handle,
-                        config_id,
-                        counter,
-                        reference_power,
-                        &steps,
-                    ));
+                self.controllers[index].outbox.push_back(cs_subevent_result(
+                    session.handle,
+                    config_id,
+                    counter,
+                    reference_power,
+                    &steps,
+                ));
                 if let Some(peer_session) = self.controllers[index].cs.as_mut() {
                     peer_session.procedure_counter = counter.wrapping_add(1);
                 }
@@ -1665,9 +1678,7 @@ impl Link {
                 }
                 c.ext_adv_sets
                     .iter()
-                    .find(|s| {
-                        s.periodic_enabled && s.advertising_sid == pending.advertising_sid
-                    })
+                    .find(|s| s.periodic_enabled && s.advertising_sid == pending.advertising_sid)
                     .map(|s| (index, s.advertising_handle))
             });
             let Some((source, advertising_handle)) = found else {
@@ -1797,7 +1808,11 @@ impl Link {
         let Some((source, big)) = source_big else {
             self.controllers[from]
                 .outbox
-                .push_back(le_big_sync_established(STATUS_COMMAND_DISALLOWED, big_handle, &[]));
+                .push_back(le_big_sync_established(
+                    STATUS_COMMAND_DISALLOWED,
+                    big_handle,
+                    &[],
+                ));
             return;
         };
         // Every requested index has to exist in the source's BIG, and an
@@ -1809,18 +1824,26 @@ impl Link {
             && indices
                 .iter()
                 .all(|&index| index >= 1 && usize::from(index) <= big.bis_handles.len());
-        let code_valid =
-            encryption == big.encryption && (encryption == 0 || broadcast_code == big.broadcast_code);
+        let code_valid = encryption == big.encryption
+            && (encryption == 0 || broadcast_code == big.broadcast_code);
         if !indices_valid {
             self.controllers[from]
                 .outbox
-                .push_back(le_big_sync_established(STATUS_INVALID_PARAMETERS, big_handle, &[]));
+                .push_back(le_big_sync_established(
+                    STATUS_INVALID_PARAMETERS,
+                    big_handle,
+                    &[],
+                ));
             return;
         }
         if !code_valid {
             self.controllers[from]
                 .outbox
-                .push_back(le_big_sync_established(STATUS_CONNECTION_FAILED, big_handle, &[]));
+                .push_back(le_big_sync_established(
+                    STATUS_CONNECTION_FAILED,
+                    big_handle,
+                    &[],
+                ));
             return;
         }
         let bis_handles: Vec<u16> = (0..indices.len()).map(|_| self.alloc_handle()).collect();
@@ -2004,7 +2027,11 @@ fn le_extended_advertising_report(
 
 /// LE Periodic Advertising Sync Established, the event that hands a receiver
 /// the sync handle everything else about a broadcast is addressed by.
-fn le_periodic_sync_established(sync_handle: u16, advertising_sid: u8, address: Address) -> Vec<u8> {
+fn le_periodic_sync_established(
+    sync_handle: u16,
+    advertising_sid: u8,
+    address: Address,
+) -> Vec<u8> {
     let body = LePeriodicAdvertisingSyncEstablishedEvent {
         status: STATUS_SUCCESS,
         sync_handle: U16::new(sync_handle),
@@ -2068,7 +2095,18 @@ fn le_big_info_report(sync_handle: u16, big: &BigSource) -> Vec<u8> {
 fn le_create_big_complete(status: u8, big_handle: u8, handles: &[u16]) -> Vec<u8> {
     let mut body = vec![big_subevent_code::LE_CREATE_BIG_COMPLETE];
     body.extend_from_slice(&LeCreateBigCompleteEventHeader::serialize(
-        status, big_handle, 0x0186A0, 0x0124F8, adv_phy::LE_2M, 3, 1, 0, 2, 100, 8, handles,
+        status,
+        big_handle,
+        0x0186A0,
+        0x0124F8,
+        adv_phy::LE_2M,
+        3,
+        1,
+        0,
+        2,
+        100,
+        8,
+        handles,
     ));
     event_packet(event::LE_META, &body)
 }
@@ -2469,7 +2507,10 @@ mod tests {
         link.set_position(b, Position::new(3.0, 4.0));
         assert_eq!(link.distance_between(a, b), Some(5.0));
         assert!(!link.set_position(addr("AA:BB:CC:00:00:09"), Position::default()));
-        assert!(link.distance_between(a, addr("AA:BB:CC:00:00:09")).is_none());
+        assert!(
+            link.distance_between(a, addr("AA:BB:CC:00:00:09"))
+                .is_none()
+        );
     }
 
     #[test]
@@ -2488,7 +2529,9 @@ mod tests {
         link.set_position(reflector_address, Position::new(truth, 0.0));
         let handle = connect(&mut link, &initiator, &reflector, reflector_address);
 
-        initiator.send_command(&cs_create_config(handle, 1, 0x00)).unwrap();
+        initiator
+            .send_command(&cs_create_config(handle, 1, 0x00))
+            .unwrap();
         link.tick();
         assert_eq!(
             le_subevents(&initiator, event::LE_CS_CONFIG_COMPLETE).len(),
@@ -2544,7 +2587,9 @@ mod tests {
         let reflector = link.add_device(reflector_address);
         link.set_position(reflector_address, Position::new(9.0, 0.0));
         let handle = connect(&mut link, &initiator, &reflector, reflector_address);
-        initiator.send_command(&cs_create_config(handle, 1, 0x00)).unwrap();
+        initiator
+            .send_command(&cs_create_config(handle, 1, 0x00))
+            .unwrap();
         let mut enable = vec![0x94, 0x20, 0x04];
         enable.extend_from_slice(&handle.to_le_bytes());
         enable.extend_from_slice(&[0x01, 0x01]);
@@ -2587,7 +2632,9 @@ mod tests {
             "a connection alone is not a Channel Sounding procedure"
         );
 
-        initiator.send_command(&cs_create_config(handle, 1, 0x00)).unwrap();
+        initiator
+            .send_command(&cs_create_config(handle, 1, 0x00))
+            .unwrap();
         link.tick();
         let _ = le_subevents(&initiator, event::LE_CS_CONFIG_COMPLETE);
         link.tick();

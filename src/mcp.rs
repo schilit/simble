@@ -291,7 +291,11 @@ impl Server {
                 let query = args.and_then(|a| a.get("query")).and_then(Value::as_str);
                 match query {
                     Some(q) if !q.trim().is_empty() => tool_lookup(id, q),
-                    _ => tool_text(id, "lookup needs a query (a name fragment or a 16-bit UUID)", true),
+                    _ => tool_text(
+                        id,
+                        "lookup needs a query (a name fragment or a 16-bit UUID)",
+                        true,
+                    ),
                 }
             }
             other => error_response(id, -32602, &format!("unknown tool: {other}")),
@@ -557,11 +561,7 @@ impl Server {
             })
             .unwrap_or(None);
         let (Some(uuid), Some(bytes)) = (uuid, bytes) else {
-            return tool_text(
-                id,
-                "write needs: uuid, value (array of bytes 0-255)",
-                true,
-            );
+            return tool_text(id, "write needs: uuid, value (array of bytes 0-255)", true);
         };
         let Some(central) = self.central else {
             return tool_text(id, "not connected — call connect first", true);
@@ -1250,12 +1250,12 @@ fn tool_lookup(id: Option<Value>, query: &str) -> Value {
         && let Ok(uuid16) = u16::from_str_radix(as_hex, 16)
     {
         return match sig_names::name_of(uuid16) {
-            Some((kind, name)) => {
-                tool_text(id, &format!("0x{uuid16:04X} {kind} — {name}"), false)
-            }
+            Some((kind, name)) => tool_text(id, &format!("0x{uuid16:04X} {kind} — {name}"), false),
             None => tool_text(
                 id,
-                &format!("0x{uuid16:04X} has no SIG-assigned service/characteristic/descriptor name"),
+                &format!(
+                    "0x{uuid16:04X} has no SIG-assigned service/characteristic/descriptor name"
+                ),
                 true,
             ),
         };
@@ -1306,7 +1306,11 @@ fn annotate_uuid_names(value: &mut Value) {
             if let Some(uuids) = map.get("service_uuids").and_then(Value::as_array) {
                 let names: Vec<Value> = uuids
                     .iter()
-                    .map(|u| u.as_str().and_then(name_for).map_or(Value::Null, |n| json!(n)))
+                    .map(|u| {
+                        u.as_str()
+                            .and_then(name_for)
+                            .map_or(Value::Null, |n| json!(n))
+                    })
                     .collect();
                 if names.iter().any(|n| !n.is_null()) {
                     map.insert("service_names".to_string(), json!(names));
@@ -1440,7 +1444,11 @@ mod tests {
         // so the tool re-points it and says so. Without that, every client
         // script an agent copied out of `example` would sit in "connecting".
         let mut s = Server::default();
-        call(&mut s, "add_peripheral", json!({ "script": catalog::script("hrm").unwrap() }));
+        call(
+            &mut s,
+            "add_peripheral",
+            json!({ "script": catalog::script("hrm").unwrap() }),
+        );
         let added = call(
             &mut s,
             "add_central",
@@ -1458,7 +1466,11 @@ mod tests {
         // A client script is a test; if its assertions do not hold, the agent
         // must be told so rather than reading a healthy-looking GATT dump.
         let mut s = Server::default();
-        call(&mut s, "add_peripheral", json!({ "script": catalog::script("hrm").unwrap() }));
+        call(
+            &mut s,
+            "add_peripheral",
+            json!({ "script": catalog::script("hrm").unwrap() }),
+        );
         let added = call(
             &mut s,
             "add_central",
@@ -1554,7 +1566,10 @@ mod tests {
         let by_name = call(&mut s, "lookup", json!({"query": "therm"}));
         assert_eq!(by_name["result"]["isError"], false);
         let text = by_name["result"]["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("0x1809 service — Health Thermometer"), "{text}");
+        assert!(
+            text.contains("0x1809 service — Health Thermometer"),
+            "{text}"
+        );
 
         let chars = call(&mut s, "lookup", json!({"query": "temperature meas"}));
         assert!(
@@ -1725,24 +1740,40 @@ mod tests {
         let mut s = serve_example("smart_lock");
 
         // Starts locked.
-        let locked = call(&mut s, "assert", json!({"uuid": STATE, "op": "==", "value": 1, "byte": 0}));
+        let locked = call(
+            &mut s,
+            "assert",
+            json!({"uuid": STATE, "op": "==", "value": 1, "byte": 0}),
+        );
         assert_eq!(locked["result"]["isError"], false, "{locked}");
 
         // 0x02 = unlock.
         call(&mut s, "write", json!({"uuid": CONTROL, "value": [0x02]}));
         call(&mut s, "tick", json!({"seconds": 0.2}));
-        let unlocked = call(&mut s, "assert", json!({"uuid": STATE, "op": "==", "value": 0, "byte": 0}));
+        let unlocked = call(
+            &mut s,
+            "assert",
+            json!({"uuid": STATE, "op": "==", "value": 0, "byte": 0}),
+        );
         assert_eq!(unlocked["result"]["isError"], false, "{unlocked}");
 
         // The command is consumed, so the state holds until the next write.
         call(&mut s, "tick", json!({"seconds": 0.4}));
-        let still = call(&mut s, "assert", json!({"uuid": STATE, "op": "==", "value": 0, "byte": 0}));
+        let still = call(
+            &mut s,
+            "assert",
+            json!({"uuid": STATE, "op": "==", "value": 0, "byte": 0}),
+        );
         assert_eq!(still["result"]["isError"], false, "{still}");
 
         // 0x01 = lock again.
         call(&mut s, "write", json!({"uuid": CONTROL, "value": [0x01]}));
         call(&mut s, "tick", json!({"seconds": 0.2}));
-        let relocked = call(&mut s, "assert", json!({"uuid": STATE, "op": "==", "value": 1, "byte": 0}));
+        let relocked = call(
+            &mut s,
+            "assert",
+            json!({"uuid": STATE, "op": "==", "value": 1, "byte": 0}),
+        );
         assert_eq!(relocked["result"]["isError"], false, "{relocked}");
     }
 
@@ -1768,10 +1799,7 @@ mod tests {
             keys_seen.iter().any(|&k| k != 0),
             "a key should be held at some point: {keys_seen:?}"
         );
-        assert!(
-            keys_seen.contains(&0),
-            "and released again: {keys_seen:?}"
-        );
+        assert!(keys_seen.contains(&0), "and released again: {keys_seen:?}");
 
         // The report map must be readable and start with the HID descriptor
         // for Usage Page (Generic Desktop) — without it a host cannot decode
@@ -1921,7 +1949,10 @@ mod tests {
             let mut s = Server::default();
             let added = call(&mut s, "add_peripheral", json!({"script": script}));
             assert_eq!(added["result"]["isError"], false, "{name}: {added}");
-            assert_eq!(call(&mut s, "connect", json!({}))["result"]["isError"], false);
+            assert_eq!(
+                call(&mut s, "connect", json!({}))["result"]["isError"],
+                false
+            );
 
             // Real-Time Ranging Data is [f32 metres, f32 confidence] LE.
             call(&mut s, "tick", json!({"seconds": 1.0}));
@@ -1958,7 +1989,10 @@ mod tests {
         let script = catalog::script("volume").unwrap();
         let mut s = Server::default();
         call(&mut s, "add_peripheral", json!({"script": script}));
-        assert_eq!(call(&mut s, "connect", json!({}))["result"]["isError"], false);
+        assert_eq!(
+            call(&mut s, "connect", json!({}))["result"]["isError"],
+            false
+        );
 
         // Set Absolute Volume (0x04) to 200.
         let wrote = call(
@@ -1976,7 +2010,11 @@ mod tests {
         assert_eq!(at_200["result"]["isError"], false, "{at_200}");
 
         // Relative Volume Down (0x00) steps by 16.
-        call(&mut s, "write", json!({"uuid": "2B7E", "value": [0x00, 0x01]}));
+        call(
+            &mut s,
+            "write",
+            json!({"uuid": "2B7E", "value": [0x00, 0x01]}),
+        );
         call(&mut s, "tick", json!({"seconds": 0.2}));
         let stepped = call(
             &mut s,
@@ -1986,7 +2024,11 @@ mod tests {
         assert_eq!(stepped["result"]["isError"], false, "{stepped}");
 
         // Mute (0x06) sets the mute byte without touching the volume.
-        call(&mut s, "write", json!({"uuid": "2B7E", "value": [0x06, 0x02]}));
+        call(
+            &mut s,
+            "write",
+            json!({"uuid": "2B7E", "value": [0x06, 0x02]}),
+        );
         call(&mut s, "tick", json!({"seconds": 0.2}));
         let muted = call(
             &mut s,
@@ -2009,7 +2051,10 @@ mod tests {
         let script = catalog::script("thermostat").unwrap();
         let mut s = Server::default();
         call(&mut s, "add_peripheral", json!({"script": script}));
-        assert_eq!(call(&mut s, "connect", json!({}))["result"]["isError"], false);
+        assert_eq!(
+            call(&mut s, "connect", json!({}))["result"]["isError"],
+            false
+        );
 
         let wrote = call(
             &mut s,

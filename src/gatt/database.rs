@@ -445,7 +445,9 @@ impl GattDatabase {
     /// device's own logic must see its whole database, including write-only
     /// attributes like a control point the peer just wrote.
     pub fn value(&self, handle: u16) -> Option<&[u8]> {
-        self.attributes.get(&handle).map(|attr| attr.value.as_slice())
+        self.attributes
+            .get(&handle)
+            .map(|attr| attr.value.as_slice())
     }
 
     fn check_write_permitted(&mut self, handle: u16) -> Result<&mut Attribute, u8> {

@@ -48,8 +48,7 @@ fn test_ecdh_dhkey_matches_the_spec_vector() {
         "1ea1f0f0 1faf1d96 09592284 f19e4c00 47b58afd 8615a69f 559077b2 2faaa190";
     const PUBLIC_B_Y: &str =
         "4c55f33e 429dad37 7356703a 9ab85160 472d1130 e28e3676 5f89aff9 15b1214a";
-    const DHKEY: &str =
-        "ec0234a3 57c8ad05 341010a6 0a397d9b 99796b13 b4f866f1 868d34f3 73bfa698";
+    const DHKEY: &str = "ec0234a3 57c8ad05 341010a6 0a397d9b 99796b13 b4f866f1 868d34f3 73bfa698";
 
     // Simble stores public keys in SMP wire order (little-endian), which is
     // the reverse of how the spec prints them.
@@ -193,7 +192,10 @@ fn test_advertising_builder_emits_parseable_structures() {
     assert_eq!(
         structures,
         vec![
-            AdStructure { ad_type: ad_type::FLAGS, value: vec![0x06] },
+            AdStructure {
+                ad_type: ad_type::FLAGS,
+                value: vec![0x06]
+            },
             AdStructure {
                 ad_type: ad_type::COMPLETE_LOCAL_NAME,
                 value: b"simble".to_vec(),

@@ -492,12 +492,7 @@ impl MouseReport {
 
     /// Re-encodes the report in the four-byte (wheeled) form.
     pub fn to_bytes(self) -> [u8; 4] {
-        [
-            self.buttons,
-            self.dx as u8,
-            self.dy as u8,
-            self.wheel as u8,
-        ]
+        [self.buttons, self.dx as u8, self.dy as u8, self.wheel as u8]
     }
 
     /// Buttons down now that were up in `previous_buttons`.
@@ -591,7 +586,8 @@ mod tests {
     #[test]
     fn test_every_printable_ascii_character_survives_a_round_trip() {
         for c in ' '..='~' {
-            let (modifiers, usage) = ascii_to_hid(c).unwrap_or_else(|| panic!("no usage for {c:?}"));
+            let (modifiers, usage) =
+                ascii_to_hid(c).unwrap_or_else(|| panic!("no usage for {c:?}"));
             assert_eq!(hid_to_ascii(usage, modifiers), Some(c), "round trip {c:?}");
         }
     }

@@ -152,8 +152,8 @@ pub fn object_push_service_record(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::obex::server::put_packets;
     use crate::obex::packet::{Response, response};
+    use crate::obex::server::put_packets;
 
     #[test]
     fn test_a_vcard_can_be_pushed_without_connecting_first() {
@@ -195,11 +195,9 @@ mod tests {
     fn test_service_record_describes_the_obex_stack() {
         let record = object_push_service_record(9, "Simble Object Push", &[object_format::ANY]);
 
-        let classes = ServiceAttribute::find_attribute_in_list(
-            &record,
-            attribute_id::SERVICE_CLASS_ID_LIST,
-        )
-        .expect("service class list");
+        let classes =
+            ServiceAttribute::find_attribute_in_list(&record, attribute_id::SERVICE_CLASS_ID_LIST)
+                .expect("service class list");
         assert!(ServiceAttribute::is_uuid_in_value(
             opp_uuid::OBJECT_PUSH_SERVICE,
             classes

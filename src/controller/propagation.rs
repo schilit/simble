@@ -190,7 +190,11 @@ pub fn propagation_phase_rad(distance_m: f64, freq_hz: f64) -> f64 {
 pub fn wrap_phase(radians: f64) -> f64 {
     let two_pi = 2.0 * PI;
     let wrapped = radians.rem_euclid(two_pi);
-    if wrapped > PI { wrapped - two_pi } else { wrapped }
+    if wrapped > PI {
+        wrapped - two_pi
+    } else {
+        wrapped
+    }
 }
 
 /// A small deterministic PRNG (xorshift64*) with a Gaussian draw.
@@ -217,7 +221,11 @@ impl Rng {
     /// absorbing at zero).
     pub fn new(seed: u64) -> Self {
         Self {
-            state: if seed == 0 { 0x9E37_79B9_7F4A_7C15 } else { seed },
+            state: if seed == 0 {
+                0x9E37_79B9_7F4A_7C15
+            } else {
+                seed
+            },
             spare_normal: None,
         }
     }
@@ -341,7 +349,10 @@ mod tests {
     #[test]
     fn test_the_generator_is_deterministic_and_roughly_normal() {
         let first: Vec<f64> = (0..8).map(|_| Rng::new(7).normal()).collect();
-        assert!(first.windows(2).all(|w| w[0] == w[1]), "same seed, same draw");
+        assert!(
+            first.windows(2).all(|w| w[0] == w[1]),
+            "same seed, same draw"
+        );
 
         let mut rng = Rng::new(99);
         let samples: Vec<f64> = (0..20_000).map(|_| rng.normal()).collect();

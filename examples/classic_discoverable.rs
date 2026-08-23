@@ -25,8 +25,7 @@ fn main() {
     // the default looks reversed relative to what it advertises.
     let name = std::env::var("SIMBLE_NAME").unwrap_or_else(|_| "simble-classic".to_string());
     let address = std::env::var("SIMBLE_ADDR").unwrap_or_else(|_| "F0:DE:C0:00:0C:01".to_string());
-    let url =
-        format!("ws://127.0.0.1:7681/v1/websocket/bt?name={name}&address={address}");
+    let url = format!("ws://127.0.0.1:7681/v1/websocket/bt?name={name}&address={address}");
     let url = url.as_str();
     let mut transport = match NetsimTransport::connect(url) {
         Ok(transport) => transport,

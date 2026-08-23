@@ -106,13 +106,12 @@ impl RangingService {
         );
 
         // 2. Real-time Ranging Data (0x2C15) - Notify
-        let (realtime_data_handle, realtime_data_value_handle) = db
-            .add_characteristic_with_cccd(
-                ras_uuid::RANGING_REALTIME_DATA,
-                CharacteristicProperties(CharacteristicProperties::NOTIFY),
-                vec![0x00; 8],
-                AttributePermissions::default(),
-            );
+        let (realtime_data_handle, realtime_data_value_handle) = db.add_characteristic_with_cccd(
+            ras_uuid::RANGING_REALTIME_DATA,
+            CharacteristicProperties(CharacteristicProperties::NOTIFY),
+            vec![0x00; 8],
+            AttributePermissions::default(),
+        );
 
         // 3. RAS Control Point (0x2C17) - Write | Indicate
         let (control_point_handle, control_point_value_handle) = db.add_characteristic_with_cccd(
@@ -252,8 +251,8 @@ impl RangingData {
             out.push(tone.channel);
             out.push(layout::MODE_2_STEP_DATA_LEN as u8);
             out.push(0x00); // antenna permutation index
-            let packed = (u32::from(tone.i as u16) & 0x0FFF)
-                | ((u32::from(tone.q as u16) & 0x0FFF) << 12);
+            let packed =
+                (u32::from(tone.i as u16) & 0x0FFF) | ((u32::from(tone.q as u16) & 0x0FFF) << 12);
             out.extend_from_slice(&[packed as u8, (packed >> 8) as u8, (packed >> 16) as u8]);
             out.push(tone.quality);
         }
@@ -481,8 +480,14 @@ mod tests {
         let body = sample_data(2).to_bytes();
         let segments = segment(&body, 512);
         assert_eq!(segments.len(), 1);
-        assert_eq!(segments[0][0] & 0x03, segmentation::FIRST | segmentation::LAST);
-        assert_eq!(Reassembler::new().push(&segments[0]).as_deref(), Some(&body[..]));
+        assert_eq!(
+            segments[0][0] & 0x03,
+            segmentation::FIRST | segmentation::LAST
+        );
+        assert_eq!(
+            Reassembler::new().push(&segments[0]).as_deref(),
+            Some(&body[..])
+        );
     }
 
     #[test]
@@ -531,7 +536,10 @@ mod tests {
         let data = RangingData::from_subevent(&subevent, 0);
         assert_eq!(data.ranging_counter, 12);
         assert_eq!(data.tones.len(), 19);
-        assert_eq!(RangingData::parse(&data.to_bytes()).unwrap().tones.len(), 19);
+        assert_eq!(
+            RangingData::parse(&data.to_bytes()).unwrap().tones.len(),
+            19
+        );
     }
 
     #[test]

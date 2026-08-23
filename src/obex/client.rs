@@ -156,7 +156,12 @@ mod tests {
         client.handle_response(&response).unwrap();
         assert_eq!(client.state(), ClientState::Connected);
 
-        let mut packet = client.put(Some("obj.bin"), Some(b"application/octet-stream\0"), body, peer_max);
+        let mut packet = client.put(
+            Some("obj.bin"),
+            Some(b"application/octet-stream\0"),
+            body,
+            peer_max,
+        );
         loop {
             let (bytes, event) = server.handle_packet(&packet);
             response = bytes;

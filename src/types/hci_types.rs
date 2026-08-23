@@ -557,7 +557,10 @@ mod tests {
     fn test_netsim_wire_string_is_lsb_first() {
         let address: Address = "CC:1E:57:00:00:06".parse().unwrap();
         assert_eq!(address.to_netsim_wire_string(), "06:00:00:57:1E:CC");
-        assert_eq!(address.to_string(), "CC:1E:57:00:00:06", "display unchanged");
+        assert_eq!(
+            address.to_string(),
+            "CC:1E:57:00:00:06",
+            "display unchanged"
+        );
     }
-
 }

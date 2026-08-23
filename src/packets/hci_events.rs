@@ -329,13 +329,11 @@ impl<'a> HciEvent<'a> {
         let event = match code {
             event_code::LE_META => match parameters.first() {
                 Some(&le_subevent::CONNECTION_COMPLETE)
-                | Some(&le_subevent::ENHANCED_CONNECTION_COMPLETE) => {
-                    Self::LeConnectionComplete(LeConnectionCompletePrefix::ref_from_prefix(
-                        parameters,
-                    )
-                    .ok()?
-                    .0)
-                }
+                | Some(&le_subevent::ENHANCED_CONNECTION_COMPLETE) => Self::LeConnectionComplete(
+                    LeConnectionCompletePrefix::ref_from_prefix(parameters)
+                        .ok()?
+                        .0,
+                ),
                 Some(&le_subevent::LONG_TERM_KEY_REQUEST) => Self::LeLongTermKeyRequest(
                     LeLongTermKeyRequest::ref_from_prefix(parameters).ok()?.0,
                 ),

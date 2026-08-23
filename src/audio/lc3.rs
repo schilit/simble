@@ -176,14 +176,7 @@ impl Lc3Encode {
                 std::slice::from_raw_parts_mut(complex_buf.as_mut_ptr(), complex_buf.len()),
             )
         };
-        let encoder = Lc3Encoder::new(
-            1,
-            duration,
-            frequency,
-            integer_ref,
-            scaler_ref,
-            complex_ref,
-        );
+        let encoder = Lc3Encoder::new(1, duration, frequency, integer_ref, scaler_ref, complex_ref);
 
         Ok(Self {
             encoder,
@@ -351,10 +344,7 @@ mod tests {
         // 440 Hz over 50 ms is ~22 cycles, so ~44 zero crossings. Counting
         // them is a cheap way to prove it is the *right* tone rather than
         // merely loud: a wrong sample rate or a garbled frame lands far off.
-        let crossings = pcm
-            .windows(2)
-            .filter(|w| (w[0] < 0) != (w[1] < 0))
-            .count();
+        let crossings = pcm.windows(2).filter(|w| (w[0] < 0) != (w[1] < 0)).count();
         assert!(
             (36..=52).contains(&crossings),
             "expected ~44 zero crossings for 440 Hz over 50 ms, got {crossings}"

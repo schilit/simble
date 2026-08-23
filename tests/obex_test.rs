@@ -17,7 +17,11 @@ use simble::obex::{
 /// Relays packets between a client and server until the exchange ends,
 /// returning the server events it produced. This is the shape RFCOMM will
 /// take: two byte buffers passed back and forth.
-fn run_exchange(client: &mut ObexClient, server: &mut ObexServer, first: Vec<u8>) -> Vec<ServerEvent> {
+fn run_exchange(
+    client: &mut ObexClient,
+    server: &mut ObexServer,
+    first: Vec<u8>,
+) -> Vec<ServerEvent> {
     let mut events = Vec::new();
     let mut packet = first;
     loop {
@@ -45,7 +49,12 @@ fn test_a_push_completes_over_a_relayed_byte_stream() {
     assert_eq!(server.peer_max_packet_length(), Some(0x2000));
 
     let body: Vec<u8> = (0..3000u32).map(|i| (i % 97) as u8).collect();
-    let first = client.put(Some("data.bin"), Some(b"application/octet-stream\0"), &body, 256);
+    let first = client.put(
+        Some("data.bin"),
+        Some(b"application/octet-stream\0"),
+        &body,
+        256,
+    );
     let events = run_exchange(&mut client, &mut server, first);
 
     // Every packet but the last must have been answered Continue.
@@ -85,7 +94,10 @@ fn test_object_push_accepts_a_vcard_with_no_session() {
 
     let objects = server.take_objects();
     assert_eq!(objects[0].body, vcard);
-    assert_eq!(objects[0].mime_type.as_deref(), Some(&b"text/x-vcard\0"[..]));
+    assert_eq!(
+        objects[0].mime_type.as_deref(),
+        Some(&b"text/x-vcard\0"[..])
+    );
 }
 
 /// The SDP record is what a phone reads before it will push anything, so it
@@ -130,7 +142,10 @@ fn test_server_refuses_an_object_beyond_its_limit() {
         }
     }
     assert!(refused);
-    assert!(server.take_objects().is_empty(), "no partial object escapes");
+    assert!(
+        server.take_objects().is_empty(),
+        "no partial object escapes"
+    );
 }
 
 /// Garbage from a peer must produce a response rather than a panic — a
@@ -142,8 +157,8 @@ fn test_arbitrary_bytes_never_panic_the_server() {
         vec![],
         vec![0x00],
         vec![0xFF; 3],
-        vec![0x80, 0xFF, 0xFF],           // enormous declared length
-        vec![0x82, 0x00, 0x03],           // empty PUT-Final
+        vec![0x80, 0xFF, 0xFF],                   // enormous declared length
+        vec![0x82, 0x00, 0x03],                   // empty PUT-Final
         vec![0x02, 0x00, 0x06, 0x48, 0xFF, 0xFF], // body header overrunning
         (0..64).map(|i| i as u8).collect(),
     ];

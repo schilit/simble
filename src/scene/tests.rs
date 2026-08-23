@@ -60,7 +60,10 @@ fn the_starting_example_from_the_format_doc_parses_and_resolves() {
     assert_eq!(resolved.controller, Controller::Netsim);
     assert_eq!(resolved.devices[0].address.to_string(), "CC:1E:57:00:00:06");
     assert_eq!(
-        resolved.devices[1].target.as_ref().map(|(id, _)| id.as_str()),
+        resolved.devices[1]
+            .target
+            .as_ref()
+            .map(|(id, _)| id.as_str()),
         Some("sink")
     );
     // The peer was resolved to the *address* the sink actually holds.
@@ -84,7 +87,13 @@ fn a_catalog_name_resolves_to_the_catalog_script_and_an_inline_script_pins_its_o
     )
     .resolve()
     .unwrap();
-    assert!(pinned.devices[0].script.as_deref().unwrap().contains("Pinned"));
+    assert!(
+        pinned.devices[0]
+            .script
+            .as_deref()
+            .unwrap()
+            .contains("Pinned")
+    );
 }
 
 #[test]
@@ -167,8 +176,7 @@ fn every_committed_example_scene_parses_resolves_and_round_trips() {
             continue;
         }
         let text = std::fs::read_to_string(&path).unwrap();
-        let scene = Scene::from_json(&text)
-            .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let scene = Scene::from_json(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         scene
             .resolve()
             .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
@@ -208,7 +216,10 @@ fn a_duplicate_device_id_names_the_id() {
         r#"{ "version": 1, "devices": [
              { "id": "a", "device": "hrm" }, { "id": "a", "device": "battery" } ] }"#,
     );
-    assert!(message.contains("\"a\"") && message.contains("duplicate"), "{message}");
+    assert!(
+        message.contains("\"a\"") && message.contains("duplicate"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -231,11 +242,13 @@ fn two_devices_at_one_address_is_an_error() {
 
 #[test]
 fn an_unknown_catalog_device_lists_the_catalog() {
-    let message = error(
-        r#"{ "version": 1, "devices": [ { "id": "a", "device": "le_audio_sink" } ] }"#,
-    );
+    let message =
+        error(r#"{ "version": 1, "devices": [ { "id": "a", "device": "le_audio_sink" } ] }"#);
     assert!(message.contains("le_audio_sink"), "{message}");
-    assert!(message.contains("hrm"), "the catalog should be listed: {message}");
+    assert!(
+        message.contains("hrm"),
+        "the catalog should be listed: {message}"
+    );
 }
 
 #[test]
@@ -253,7 +266,10 @@ fn an_unknown_controller_lists_the_known_controllers() {
         r#"{ "version": 1, "controller": "rootcanal",
              "devices": [ { "id": "a", "device": "hrm" } ] }"#,
     );
-    assert!(message.contains("rootcanal") && message.contains("netsim"), "{message}");
+    assert!(
+        message.contains("rootcanal") && message.contains("netsim"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -264,7 +280,10 @@ fn a_dangling_target_names_the_devices_that_do_exist() {
              { "id": "phone", "role": "central", "target": "speaker" } ] }"#,
     );
     assert!(message.contains("speaker"), "{message}");
-    assert!(message.contains("hr"), "the message should list real ids: {message}");
+    assert!(
+        message.contains("hr"),
+        "the message should list real ids: {message}"
+    );
 }
 
 #[test]
@@ -278,8 +297,7 @@ fn a_device_cannot_target_itself() {
 
 #[test]
 fn a_client_role_without_a_target_is_refused() {
-    let message =
-        error(r#"{ "version": 1, "devices": [ { "id": "phone", "role": "central" } ] }"#);
+    let message = error(r#"{ "version": 1, "devices": [ { "id": "phone", "role": "central" } ] }"#);
     assert!(message.contains("needs a \"target\""), "{message}");
 }
 
@@ -310,9 +328,8 @@ fn a_peripheral_with_neither_a_device_nor_a_script_is_refused() {
 
 #[test]
 fn an_id_that_would_not_survive_a_netsim_url_is_refused() {
-    let message = error(
-        r#"{ "version": 1, "devices": [ { "id": "my device", "device": "hrm" } ] }"#,
-    );
+    let message =
+        error(r#"{ "version": 1, "devices": [ { "id": "my device", "device": "hrm" } ] }"#);
     assert!(message.contains("ids may use"), "{message}");
 }
 
@@ -395,9 +412,22 @@ fn a_side_override_replaces_only_that_sides_material() {
     let sink = &resolved.devices[0];
     let phone = &resolved.devices[1];
 
-    assert!(phone.bonds.load_security(sink.address).unwrap().keys.irk.is_some());
     assert!(
-        sink.bonds.load_security(phone.address).unwrap().keys.irk.is_none(),
+        phone
+            .bonds
+            .load_security(sink.address)
+            .unwrap()
+            .keys
+            .irk
+            .is_some()
+    );
+    assert!(
+        sink.bonds
+            .load_security(phone.address)
+            .unwrap()
+            .keys
+            .irk
+            .is_none(),
         "the shared block is untouched by the other side's override"
     );
 }
@@ -437,8 +467,10 @@ fn a_bond_without_a_long_term_key_cannot_start_encryption_and_is_refused() {
 
 #[test]
 fn a_key_size_outside_the_spec_range_is_refused() {
-    let message = error(&bonded(r#", "sides": { "sink": { "security": {
-        "keys": { "ltk": { "value": "00000000000000000000000000000000" } }, "key_size": 32 } } }"#));
+    let message = error(&bonded(
+        r#", "sides": { "sink": { "security": {
+        "keys": { "ltk": { "value": "00000000000000000000000000000000" } }, "key_size": 32 } } }"#,
+    ));
     assert!(message.contains("7..=16"), "{message}");
 }
 

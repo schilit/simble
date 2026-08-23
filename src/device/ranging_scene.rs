@@ -36,9 +36,9 @@ use crate::client::gatt_client::GattClient;
 use crate::controller::propagation::{PathLossModel, Position};
 use crate::controller::sim::Link;
 use crate::cs::path_loss::{RssiRanger, RssiRangingParams};
+use crate::device::VirtualDevice;
 use crate::device::channel_sounding::{CsInitiator, CsReflector, CsState};
 use crate::device::host::{LeHost, acl_packets, command};
-use crate::device::VirtualDevice;
 use crate::l2cap::{AclReassembler, HciAclHeader, L2capHeader};
 use crate::packets::att::opcode as att_op;
 use crate::packets::hci_events::HciEvent;
@@ -248,11 +248,7 @@ impl RangingScene {
 
     /// Queues both devices' controller bring-up.
     fn start(&mut self) {
-        if let Ok(commands) = self
-            .tag
-            .host
-            .start_advertising(&self.tag.device, &[0x185B])
-        {
+        if let Ok(commands) = self.tag.host.start_advertising(&self.tag.device, &[0x185B]) {
             for packet in commands {
                 let _ = self.tag.channel.send_command(&packet[1..]);
             }
@@ -291,10 +287,11 @@ impl RangingScene {
         // Only notify what a subscriber will actually receive; a notification
         // to nobody is dropped by the server and would inflate the count.
         while let Some(segment) = self.tag.outbound.pop_front() {
-            let pdu = self
-                .tag
-                .device
-                .create_notification_for(handle, self.tag.ras.realtime_data_value_handle, &segment);
+            let pdu = self.tag.device.create_notification_for(
+                handle,
+                self.tag.ras.realtime_data_value_handle,
+                &segment,
+            );
             for packet in acl_packets(handle, &pdu) {
                 let _ = self.tag.channel.send_acl_data(&packet[1..]);
             }
@@ -326,16 +323,10 @@ impl RangingScene {
     fn tag_consume(&mut self) {
         while let Some(packet) = self.tag.channel.poll_controller_packet() {
             self.tag.reflector.on_packet(&packet);
-            if let Ok(replies) = self
-                .tag
-                .host
-                .handle_packet(&mut self.tag.device, &packet)
-            {
+            if let Ok(replies) = self.tag.host.handle_packet(&mut self.tag.device, &packet) {
                 for reply in replies {
                     let _ = match reply.first() {
-                        Some(&h4_type::HCI_ACL_DATA) => {
-                            self.tag.channel.send_acl_data(&reply[1..])
-                        }
+                        Some(&h4_type::HCI_ACL_DATA) => self.tag.channel.send_acl_data(&reply[1..]),
                         _ => self.tag.channel.send_command(&reply[1..]),
                     };
                 }
@@ -411,11 +402,11 @@ impl RangingScene {
         let Some((header, payload)) = HciAclHeader::parse(&packet[1..]) else {
             return;
         };
-        let Ok(Some(frame)) =
-            self.locator
-                .reassembler
-                .push_fragment(header.handle(), header.is_first_fragment(), payload)
-        else {
+        let Ok(Some(frame)) = self.locator.reassembler.push_fragment(
+            header.handle(),
+            header.is_first_fragment(),
+            payload,
+        ) else {
             return;
         };
         let Some((_, att)) = L2capHeader::parse(&frame) else {

@@ -79,7 +79,11 @@ fn command(opcode: [u8; 2], params: &[u8]) -> Vec<u8> {
 /// Wraps an L2CAP PDU in an H4 ACL packet for `handle`.
 fn acl_packet(handle: u16, l2cap: &[u8]) -> Vec<u8> {
     use crate::l2cap::{AclPacketBoundary, HciAclHeader};
-    let header = HciAclHeader::new(handle, AclPacketBoundary::FirstNonFlushable, l2cap.len() as u16);
+    let header = HciAclHeader::new(
+        handle,
+        AclPacketBoundary::FirstNonFlushable,
+        l2cap.len() as u16,
+    );
     let mut packet = Vec::with_capacity(5 + l2cap.len());
     packet.push(crate::transport::h4_type::HCI_ACL_DATA);
     packet.extend_from_slice(header.as_bytes());
@@ -392,9 +396,7 @@ pub fn spp_service_record(handle: u32, rfcomm_channel: u8, name: &str) -> Servic
         },
         ServiceAttribute {
             id: attribute_id::BROWSE_GROUP_LIST,
-            value: DataElement::sequence(vec![DataElement::uuid(
-                SdpUuid::SDP_PUBLIC_BROWSE_ROOT,
-            )]),
+            value: DataElement::sequence(vec![DataElement::uuid(SdpUuid::SDP_PUBLIC_BROWSE_ROOT)]),
         },
         ServiceAttribute {
             // ServiceName sits at the primary language base (0x0100) rather
@@ -642,25 +644,19 @@ impl ClassicHost {
             // Echo the request body back as the response, per spec, and
             // drop the channel.
             signaling_code::DISCONNECTION_REQUEST if params.len() >= 4 => {
+                let local_cid = u16::from_le_bytes([params[0], params[1]]);
+                let psm = self.channels.get_channel(local_cid).map(|c| c.psm);
+                self.channels.remove_channel(local_cid);
+                self.local_cids.retain(|cid| *cid != local_cid);
+                if let Some(psm) = psm
+                    && let Some(handler) = self.handlers.iter_mut().find(|h| h.psm() == psm)
                 {
-                    let local_cid = u16::from_le_bytes([params[0], params[1]]);
-                    let psm = self.channels.get_channel(local_cid).map(|c| c.psm);
-                    self.channels.remove_channel(local_cid);
-                    self.local_cids.retain(|cid| *cid != local_cid);
-                    if let Some(psm) = psm
-                        && let Some(handler) = self.handlers.iter_mut().find(|h| h.psm() == psm)
-                    {
-                        handler.on_channel_closed();
-                    }
-                    out.push(acl_packet(
-                        handle,
-                        &signaling_pdu(
-                            signaling_code::DISCONNECTION_RESPONSE,
-                            identifier,
-                            params,
-                        ),
-                    ));
+                    handler.on_channel_closed();
                 }
+                out.push(acl_packet(
+                    handle,
+                    &signaling_pdu(signaling_code::DISCONNECTION_RESPONSE, identifier, params),
+                ));
             }
             _ => {}
         }
@@ -865,8 +861,7 @@ mod tests {
                 &signaling_pdu(signaling_code::CONNECTION_REQUEST, 1, request.as_bytes()),
             ))
             .unwrap();
-        let (response, _) =
-            ConnectionResponseHeader::ref_from_prefix(&out[0][13..]).unwrap();
+        let (response, _) = ConnectionResponseHeader::ref_from_prefix(&out[0][13..]).unwrap();
         let local_cid = response.destination_cid.get();
 
         // A malformed SDP request still gets an SDP error response, which
@@ -1076,7 +1071,11 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(echoed, vec![b"ping".to_vec()], "the port echoes: {events:?}");
+        assert_eq!(
+            echoed,
+            vec![b"ping".to_vec()],
+            "the port echoes: {events:?}"
+        );
     }
 
     #[test]

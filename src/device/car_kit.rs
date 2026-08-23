@@ -548,7 +548,9 @@ impl CarKit {
 
         let (channel, version, features) = match found {
             Ok(Some(record)) => record,
-            Ok(None) => return self.fail("the phone has no Hands-Free Audio Gateway record", events),
+            Ok(None) => {
+                return self.fail("the phone has no Hands-Free Audio Gateway record", events);
+            }
             Err(error) => return self.fail(&format!("SDP: {error}"), events),
         };
 

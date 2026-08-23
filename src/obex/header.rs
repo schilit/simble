@@ -289,8 +289,8 @@ impl Header {
                 Ok((header, 2))
             }
             HeaderEncoding::FourByte => {
-                let (view, _) =
-                    FourByteValue::ref_from_prefix(&bytes[1..]).map_err(|_| HeaderError::Truncated)?;
+                let (view, _) = FourByteValue::ref_from_prefix(&bytes[1..])
+                    .map_err(|_| HeaderError::Truncated)?;
                 let value = view.value.get();
                 let header = match identifier {
                     header_id::LENGTH => Self::Length(value),

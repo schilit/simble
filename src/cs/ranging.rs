@@ -434,7 +434,10 @@ mod tests {
             "an aliased fit landed at {} m",
             estimate.distance_m
         );
-        assert!(estimate.is_unambiguous(), "the alias folds inside the window");
+        assert!(
+            estimate.is_unambiguous(),
+            "the alias folds inside the window"
+        );
     }
 
     #[test]

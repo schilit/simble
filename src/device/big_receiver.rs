@@ -830,7 +830,10 @@ mod tests {
         };
         // The Service Data payload, i.e. the periodic advertising data with its
         // AD length, AD type and UUID stripped.
-        assert_eq!(r.base_bytes(), Some(&source.periodic_advertising_data()[4..]));
+        assert_eq!(
+            r.base_bytes(),
+            Some(&source.periodic_advertising_data()[4..])
+        );
     }
 
     /// Leaving a BIG is answered by Command Complete and nothing else — no

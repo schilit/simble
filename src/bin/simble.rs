@@ -302,7 +302,10 @@ fn run_scene(
         );
     }
     if check_only {
-        println!("{file}: OK — valid scene ({} device(s))", resolved.devices.len());
+        println!(
+            "{file}: OK — valid scene ({} device(s))",
+            resolved.devices.len()
+        );
         return ExitCode::SUCCESS;
     }
 

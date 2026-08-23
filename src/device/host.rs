@@ -405,7 +405,9 @@ mod tests {
     #[test]
     fn test_start_advertising_shapes_the_bring_up() {
         let host = LeHost::new();
-        let commands = host.start_advertising(&test_device(true), &[0x180D]).unwrap();
+        let commands = host
+            .start_advertising(&test_device(true), &[0x180D])
+            .unwrap();
         // Reset, both event masks, CIS host feature, adv params, adv data,
         // scan response, enable.
         assert_eq!(commands.len(), 8, "{commands:?}");
@@ -416,7 +418,11 @@ mod tests {
         );
         assert_eq!(&commands[3][4..6], &[32, 0x01], "bit 32 = CIS host support");
         let params = &commands[4];
-        assert_eq!(&params[1..3], &[0x06, 0x20], "LE Set Advertising Parameters");
+        assert_eq!(
+            &params[1..3],
+            &[0x06, 0x20],
+            "LE Set Advertising Parameters"
+        );
         assert_eq!(params[8], adv_type::ADV_IND);
         assert!(
             commands.iter().any(|c| c[1..3] == [0x09, 0x20]),
@@ -479,9 +485,7 @@ mod tests {
         let mut device = test_device(true);
 
         // LE CIS Request: acl handle 0x0040, cis handle 0x0060, CIG 1, CIS 1.
-        let request = [
-            0x04, 0x3E, 0x07, 0x1A, 0x40, 0x00, 0x60, 0x00, 0x01, 0x01,
-        ];
+        let request = [0x04, 0x3E, 0x07, 0x1A, 0x40, 0x00, 0x60, 0x00, 0x01, 0x01];
         let out = host.handle_packet(&mut device, &request).unwrap();
         assert_eq!(&out[0][1..3], &[0x66, 0x20], "LE Accept CIS Request");
         assert_eq!(&out[0][4..6], &[0x60, 0x00], "for the offered CIS handle");
@@ -547,6 +551,10 @@ mod tests {
                 .is_empty()
         );
         // Something that isn't an event or ACL data at all.
-        assert!(host.handle_packet(&mut device, &[0x09, 0x01]).unwrap().is_empty());
+        assert!(
+            host.handle_packet(&mut device, &[0x09, 0x01])
+                .unwrap()
+                .is_empty()
+        );
     }
 }

@@ -49,7 +49,8 @@ pub mod opcode {
     /// LE CS Create Config.
     pub const LE_CS_CREATE_CONFIG: [u8; 2] = cs_opcode::LE_CS_CREATE_CONFIG.to_bytes();
     /// LE CS Set Procedure Parameters.
-    pub const LE_CS_SET_PROCEDURE_PARAMETERS: [u8; 2] = cs_opcode::LE_CS_SET_PROCEDURE_PARAMETERS.to_bytes();
+    pub const LE_CS_SET_PROCEDURE_PARAMETERS: [u8; 2] =
+        cs_opcode::LE_CS_SET_PROCEDURE_PARAMETERS.to_bytes();
     /// LE CS Procedure Enable.
     pub const LE_CS_PROCEDURE_ENABLE: [u8; 2] = cs_opcode::LE_CS_PROCEDURE_ENABLE.to_bytes();
 }
@@ -176,7 +177,9 @@ impl CsInitiator {
     /// controller reported most recently, so they always belong to the same
     /// procedure as [`Self::remote_tones`] and [`Self::combined_tones`].
     pub fn local_tones(&self) -> &[Tone] {
-        self.measurement.as_ref().map_or(&[], |m| m.local.as_slice())
+        self.measurement
+            .as_ref()
+            .map_or(&[], |m| m.local.as_slice())
     }
 
     /// The tones this device's controller reported most recently, whether or
@@ -192,7 +195,9 @@ impl CsInitiator {
 
     /// The peer's tones from that same measurement.
     pub fn remote_tones(&self) -> &[Tone] {
-        self.measurement.as_ref().map_or(&[], |m| m.remote.as_slice())
+        self.measurement
+            .as_ref()
+            .map_or(&[], |m| m.remote.as_slice())
     }
 
     /// Their per-channel sums — what the distance was actually fitted to.
@@ -258,7 +263,10 @@ impl CsInitiator {
                 code: crate::packets::hci_event_code::COMMAND_STATUS,
                 parameters,
             } => self.on_command_status(parameters),
-            HciEvent::Other { code: 0x3E, parameters } => self.on_le_meta(parameters),
+            HciEvent::Other {
+                code: 0x3E,
+                parameters,
+            } => self.on_le_meta(parameters),
             _ => Vec::new(),
         }
     }
@@ -299,7 +307,10 @@ impl CsInitiator {
                 match parameters.get(1) {
                     Some(&0x00) => {
                         self.state = CsState::Configuring;
-                        vec![command(opcode::LE_CS_CREATE_CONFIG, &self.create_config_params())]
+                        vec![command(
+                            opcode::LE_CS_CREATE_CONFIG,
+                            &self.create_config_params(),
+                        )]
                     }
                     Some(&status) => {
                         self.state = CsState::Failed(status);
@@ -388,7 +399,11 @@ impl CsInitiator {
             }
             return;
         }
-        if self.measurement.as_ref().is_some_and(|m| m.counter == counter) {
+        if self
+            .measurement
+            .as_ref()
+            .is_some_and(|m| m.counter == counter)
+        {
             return; // already combined; both halves arriving twice is not two measurements
         }
         let combined = crate::cs::combine(&local.tones, &remote.tones);
@@ -580,13 +595,19 @@ mod tests {
     fn cs_opcodes_agree_across_host_controller_and_packets() {
         use crate::packets::hci::cs_opcode;
         for (host, canonical) in [
-            (opcode::LE_CS_SECURITY_ENABLE, cs_opcode::LE_CS_SECURITY_ENABLE),
+            (
+                opcode::LE_CS_SECURITY_ENABLE,
+                cs_opcode::LE_CS_SECURITY_ENABLE,
+            ),
             (opcode::LE_CS_CREATE_CONFIG, cs_opcode::LE_CS_CREATE_CONFIG),
             (
                 opcode::LE_CS_SET_PROCEDURE_PARAMETERS,
                 cs_opcode::LE_CS_SET_PROCEDURE_PARAMETERS,
             ),
-            (opcode::LE_CS_PROCEDURE_ENABLE, cs_opcode::LE_CS_PROCEDURE_ENABLE),
+            (
+                opcode::LE_CS_PROCEDURE_ENABLE,
+                cs_opcode::LE_CS_PROCEDURE_ENABLE,
+            ),
         ] {
             assert_eq!(host, canonical.to_bytes());
             assert_eq!(u16::from_le_bytes(host), canonical.as_u16());
@@ -655,8 +676,8 @@ mod tests {
         params.push(tones.len() as u8);
         for tone in tones {
             params.extend_from_slice(&[2, tone.channel, 5, 0x00]);
-            let packed = (u32::from(tone.i as u16) & 0x0FFF)
-                | ((u32::from(tone.q as u16) & 0x0FFF) << 12);
+            let packed =
+                (u32::from(tone.i as u16) & 0x0FFF) | ((u32::from(tone.q as u16) & 0x0FFF) << 12);
             params.extend_from_slice(&[packed as u8, (packed >> 8) as u8, (packed >> 16) as u8]);
             params.push(tone.quality);
         }
@@ -722,7 +743,10 @@ mod tests {
         // does not support Channel Sounding at all.
         for (stage, packet) in [
             ("security", security_complete(0x0C, 0x0040)),
-            ("config", config_complete(0x0C, 0x0040, 1, cs_role::INITIATOR)),
+            (
+                "config",
+                config_complete(0x0C, 0x0040, 1, cs_role::INITIATOR),
+            ),
         ] {
             let mut initiator = CsInitiator::new(1);
             initiator.start(0x0040);
@@ -790,7 +814,12 @@ mod tests {
         let mut initiator = measuring_initiator();
         let mut rng = crate::controller::propagation::Rng::new(2);
         let offsets: Vec<f64> = (0..19).map(|_| rng.uniform_phase()).collect();
-        initiator.on_packet(&subevent_result(0x0040, 1, 9, &tones_at(6.0, &offsets, 1.0)));
+        initiator.on_packet(&subevent_result(
+            0x0040,
+            1,
+            9,
+            &tones_at(6.0, &offsets, 1.0),
+        ));
 
         let stale = RangingData {
             ranging_counter: 8, // the previous procedure
@@ -852,7 +881,12 @@ mod tests {
         let mut initiator = measuring_initiator();
         let mut rng = crate::controller::propagation::Rng::new(5);
         let offsets: Vec<f64> = (0..19).map(|_| rng.uniform_phase()).collect();
-        initiator.on_packet(&subevent_result(0x0040, 1, 1, &tones_at(5.0, &offsets, 1.0)));
+        initiator.on_packet(&subevent_result(
+            0x0040,
+            1,
+            1,
+            &tones_at(5.0, &offsets, 1.0),
+        ));
         let peer = RangingData {
             ranging_counter: 1,
             config_id: 1,

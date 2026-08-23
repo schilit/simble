@@ -62,10 +62,7 @@ fn queue_command(channel: &HciChannel, opcode: [u8; 2], params: &[u8]) -> Result
 fn queue_common_init(channel: &HciChannel) -> Result<(), SimbleError> {
     // The demo advertiser/scanner share the host layer's bring-up, minus the
     // LE Audio host-feature command a real peripheral sends.
-    for packet in crate::device::host::init_commands()
-        .into_iter()
-        .take(3)
-    {
+    for packet in crate::device::host::init_commands().into_iter().take(3) {
         channel.send_command(&packet[1..])?;
     }
     Ok(())
@@ -201,7 +198,8 @@ pub fn parse_scan_reports(packet: &[u8]) -> Vec<ScanReport> {
     let Some(HciEvent::Other { code, parameters }) = HciEvent::parse_h4(packet) else {
         return Vec::new();
     };
-    if code != hci_event_code::LE_META || parameters.first() != Some(&le_subevent::ADVERTISING_REPORT)
+    if code != hci_event_code::LE_META
+        || parameters.first() != Some(&le_subevent::ADVERTISING_REPORT)
     {
         return Vec::new();
     }
@@ -450,7 +448,9 @@ fn register_web_extensions(engine: &mut Engine) {
         "advertise_service_uuid",
         |server: &mut ScriptGattServer, uuid16: i64| -> Result<(), Box<EvalAltResult>> {
             let uuid16 = u16::try_from(uuid16).map_err(|_| {
-                runtime_error(format!("advertise_service_uuid: not a 16-bit uuid: {uuid16}"))
+                runtime_error(format!(
+                    "advertise_service_uuid: not a 16-bit uuid: {uuid16}"
+                ))
             })?;
             server.with_server(|s| {
                 s.device
@@ -1811,7 +1811,11 @@ impl SceneEngine {
     /// The script names its own target with `client.connect("AA:BB:…")`, so
     /// unlike [`Self::add_central`] the scene does not supply one — the
     /// script is the whole behaviour.
-    pub fn add_scripted_central(&mut self, address: Address, script: &str) -> Result<usize, String> {
+    pub fn add_scripted_central(
+        &mut self,
+        address: Address,
+        script: &str,
+    ) -> Result<usize, String> {
         let central = ScriptedCentral::run_script(script)?;
         let channel = self.link.add_device(address);
         let index = self.devices.len();
@@ -2131,9 +2135,7 @@ mod scene_tests {
         scene.tick(0.1); // bring-up
 
         // LE Connection Complete with peer type 0x00 (public).
-        let mut event = vec![
-            0x04, 0x3E, 0x13, 0x01, 0x00, 0x40, 0x00, 0x01, 0x00,
-        ];
+        let mut event = vec![0x04, 0x3E, 0x13, 0x01, 0x00, 0x40, 0x00, 0x01, 0x00];
         event.extend_from_slice(&[0xB9, 0x62, 0xF7, 0xD6, 0x79, 0x7C]); // peer LE
         event.extend_from_slice(&[0x18, 0x00, 0x00, 0x00, 0x48, 0x00, 0x00]);
         let channel = scene.devices[index].channel.clone();
@@ -2216,7 +2218,10 @@ mod scene_tests {
         }
 
         let reports = scene.scanner_reports_json(scanner);
-        assert!(reports.contains("fe2c") || reports.contains("FE2C"), "{reports}");
+        assert!(
+            reports.contains("fe2c") || reports.contains("FE2C"),
+            "{reports}"
+        );
         assert!(
             reports.contains("001122") || reports.contains("[0,17,34]"),
             "service data bytes should be on the air: {reports}"
@@ -2260,8 +2265,12 @@ mod scene_tests {
 
         let level = peripheral
             .primary()
-            .with_server(|s| s.device.gatt_db.value_handle_for_uuid(crate::types::Uuid::Uuid16(0x2A19))
-                .and_then(|h| s.device.gatt_db.value(h).map(|v| v.to_vec())))
+            .with_server(|s| {
+                s.device
+                    .gatt_db
+                    .value_handle_for_uuid(crate::types::Uuid::Uuid16(0x2A19))
+                    .and_then(|h| s.device.gatt_db.value(h).map(|v| v.to_vec()))
+            })
             .unwrap();
         assert_eq!(level, vec![93], "the handler ran and applied the payload");
 
@@ -2272,7 +2281,10 @@ mod scene_tests {
             "emitted payload: {}",
             emitted[0]
         );
-        assert!(peripheral.take_emitted().is_empty(), "draining is destructive");
+        assert!(
+            peripheral.take_emitted().is_empty(),
+            "draining is destructive"
+        );
     }
 
     #[test]
@@ -2359,7 +2371,10 @@ mod scene_tests {
                 started = scene.central_start_hid(host);
             }
         }
-        assert!(started, "the central never finished discovering the keyboard");
+        assert!(
+            started,
+            "the central never finished discovering the keyboard"
+        );
 
         let identified: serde_json::Value =
             serde_json::from_str(&scene.central_hid_events_json(host)).unwrap();
@@ -2380,7 +2395,9 @@ mod scene_tests {
         ];
         let mut typed = String::new();
         for report in reports {
-            scene.peripheral_set_value(keyboard, "2A4D", &report).unwrap();
+            scene
+                .peripheral_set_value(keyboard, "2A4D", &report)
+                .unwrap();
             scene.tick(t);
             t += 0.05;
             let decoded: serde_json::Value =
@@ -2503,7 +2520,10 @@ mod scene_tests {
             }
         }
         assert_eq!(adv_type, Some(0x03), "should be ADV_NONCONN_IND");
-        assert!(!saw_scan_rsp, "a non-connectable beacon sends no scan response");
+        assert!(
+            !saw_scan_rsp,
+            "a non-connectable beacon sends no scan response"
+        );
     }
 
     #[test]
@@ -2519,7 +2539,10 @@ mod scene_tests {
         // Service data present…
         assert!(payload.windows(2).any(|w| w == [0x2C, 0xFE]));
         // …and no Complete Local Name AD type (0x09).
-        assert!(!payload.contains(&0x09), "name should be absent: {payload:?}");
+        assert!(
+            !payload.contains(&0x09),
+            "name should be absent: {payload:?}"
+        );
     }
 
     #[test]
@@ -2951,17 +2974,17 @@ mod web {
         }
 
         /// Encodes one frame of 16-bit PCM into `frame_bytes` of LC3.
-        pub fn encode(&mut self, samples: Vec<i16>, frame_bytes: usize) -> Result<Vec<u8>, JsValue> {
-            self.encoder
-                .encode(&samples, frame_bytes)
-                .map_err(js_error)
+        pub fn encode(
+            &mut self,
+            samples: Vec<i16>,
+            frame_bytes: usize,
+        ) -> Result<Vec<u8>, JsValue> {
+            self.encoder.encode(&samples, frame_bytes).map_err(js_error)
         }
 
         /// Decodes one LC3 frame back to 16-bit PCM.
         pub fn decode(&mut self, frame: Vec<u8>) -> Result<Vec<i16>, JsValue> {
-            self.decoder
-                .decode(&frame)
-                .map_err(js_error)
+            self.decoder.decode(&frame).map_err(js_error)
         }
     }
 
@@ -3193,7 +3216,7 @@ mod web {
             self.scene.central_write(index, value_handle, value);
         }
 
-    /// Queue enabling notifications on `value_handle` for central `index`.
+        /// Queue enabling notifications on `value_handle` for central `index`.
         pub fn central_subscribe(&mut self, index: usize, value_handle: u16) {
             self.scene.central_subscribe(index, value_handle);
         }
@@ -3587,15 +3610,18 @@ mod web {
             if !self.ase_requested {
                 let uuid = crate::profiles::ascs::ascs_uuid::ASE_CONTROL_POINT;
                 let Some(control_point) = self.central.characteristic_handle(uuid) else {
-                    self.error =
-                        Some("the peer has no ASE Control Point — it is not an LE Audio sink".into());
+                    self.error = Some(
+                        "the peer has no ASE Control Point — it is not an LE Audio sink".into(),
+                    );
                     self.ase_requested = true;
                     return;
                 };
                 // Queued together: the central sends one at a time and waits
                 // for each response, so this is the ASCS order, not a burst.
-                self.central.queue_write(control_point, self.ase.config_codec());
-                self.central.queue_write(control_point, self.ase.config_qos());
+                self.central
+                    .queue_write(control_point, self.ase.config_codec());
+                self.central
+                    .queue_write(control_point, self.ase.config_qos());
                 self.central.queue_write(control_point, self.ase.enable());
                 self.ase_requested = true;
                 return;
@@ -3922,8 +3948,9 @@ mod web {
                 BroadcastState::Idle => ("starting", None),
                 BroadcastState::SettingAdvertisingParameters
                 | BroadcastState::SettingAdvertisingData => ("advertising set", None),
-                BroadcastState::SettingPeriodicParameters
-                | BroadcastState::SettingPeriodicData => ("periodic train", None),
+                BroadcastState::SettingPeriodicParameters | BroadcastState::SettingPeriodicData => {
+                    ("periodic train", None)
+                }
                 BroadcastState::EnablingAdvertising
                 | BroadcastState::EnablingPeriodicAdvertising => ("on the air", None),
                 BroadcastState::CreatingBig => ("creating the BIG", None),
@@ -4261,21 +4288,29 @@ mod web {
         /// does. A page drives the script rather than replacing it: the
         /// request joins the same outbox the script's own calls use.
         pub fn read(&mut self, uuid: &str) -> Result<(), JsValue> {
-            let uuid: crate::types::Uuid = uuid.parse().map_err(|_| JsValue::from_str("bad UUID"))?;
+            let uuid: crate::types::Uuid =
+                uuid.parse().map_err(|_| JsValue::from_str("bad UUID"))?;
             self.central.read(uuid);
             Ok(())
         }
 
         /// Queues a write of `value` to `uuid`.
-        pub fn write(&mut self, uuid: &str, value: Vec<u8>, with_response: bool) -> Result<(), JsValue> {
-            let uuid: crate::types::Uuid = uuid.parse().map_err(|_| JsValue::from_str("bad UUID"))?;
+        pub fn write(
+            &mut self,
+            uuid: &str,
+            value: Vec<u8>,
+            with_response: bool,
+        ) -> Result<(), JsValue> {
+            let uuid: crate::types::Uuid =
+                uuid.parse().map_err(|_| JsValue::from_str("bad UUID"))?;
             self.central.write(uuid, value, with_response);
             Ok(())
         }
 
         /// Queues enabling or disabling notifications on `uuid`.
         pub fn subscribe(&mut self, uuid: &str, enable: bool) -> Result<(), JsValue> {
-            let uuid: crate::types::Uuid = uuid.parse().map_err(|_| JsValue::from_str("bad UUID"))?;
+            let uuid: crate::types::Uuid =
+                uuid.parse().map_err(|_| JsValue::from_str("bad UUID"))?;
             self.central.subscribe(uuid, enable);
             Ok(())
         }
@@ -4539,10 +4574,10 @@ pub use web::{
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::l2cap::AclPacketBoundary;
-    use zerocopy::IntoBytes;
     use crate::att::opcode;
+    use crate::l2cap::AclPacketBoundary;
     use crate::l2cap::{L2capHeader, cid};
+    use zerocopy::IntoBytes;
 
     fn drain_host_packets(channel: &HciChannel) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
@@ -4607,7 +4642,9 @@ mod tests {
     fn test_every_advertised_field_survives_the_round_trip() {
         let mut extras = AdvertisingData::new();
         extras.service_uuids_16.push(0x185B); // staged by advertise_service_uuid
-        extras.service_data_16.push((0xFE2C, vec![0x00, 0x11, 0x22]));
+        extras
+            .service_data_16
+            .push((0xFE2C, vec![0x00, 0x11, 0x22]));
         extras = extras.with_manufacturer_data(0x00E0, &[0xAB]);
 
         let payload = build_adv_payload_with_extras("Ranger", &[0x180F], Some(&extras))
@@ -4635,7 +4672,10 @@ mod tests {
             "service data survives: {:?}",
             report.service_data
         );
-        let mfg = report.manufacturer_data.as_ref().expect("manufacturer data");
+        let mfg = report
+            .manufacturer_data
+            .as_ref()
+            .expect("manufacturer data");
         assert_eq!((mfg.tag.as_str(), mfg.data.as_str()), ("00E0", "AB"));
         assert!(report.flags.is_some(), "flags survive");
     }
@@ -4758,7 +4798,9 @@ mod tests {
         // which a controller refuses to open an isochronous stream.
         assert_eq!(
             opcodes,
-            vec![0x0C03, 0x0C01, 0x2001, 0x2074, 0x2006, 0x2008, 0x2009, 0x200A]
+            vec![
+                0x0C03, 0x0C01, 0x2001, 0x2074, 0x2006, 0x2008, 0x2009, 0x200A
+            ]
         );
         // Advertising data carries the script device's name and the
         // Environmental Sensing service UUID (0x181A) the script declared.

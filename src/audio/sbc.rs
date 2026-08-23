@@ -186,12 +186,8 @@ const PROTO_8_80: [f64; 80] = [
 
 /// Loudness offsets for 4 subbands, indexed by sampling-frequency index then
 /// subband (SBC spec 12.6.3, `offset4`).
-const LOUDNESS_OFFSET_4: [[i32; 4]; 4] = [
-    [-1, 0, 0, 0],
-    [-2, 0, 0, 1],
-    [-2, 0, 0, 1],
-    [-2, 0, 0, 1],
-];
+const LOUDNESS_OFFSET_4: [[i32; 4]; 4] =
+    [[-1, 0, 0, 0], [-2, 0, 0, 1], [-2, 0, 0, 1], [-2, 0, 0, 1]];
 
 /// Loudness offsets for 8 subbands (SBC spec 12.6.3, `offset8`).
 const LOUDNESS_OFFSET_8: [[i32; 8]; 4] = [
@@ -377,7 +373,8 @@ impl SbcParameters {
 
     /// The bit rate this configuration implies, in bits per second.
     pub fn bitrate(&self) -> u32 {
-        (8 * self.frame_length() as u32 * self.sampling_frequency) / self.samples_per_channel() as u32
+        (8 * self.frame_length() as u32 * self.sampling_frequency)
+            / self.samples_per_channel() as u32
     }
 
     /// True when the header carries a joint-stereo `join` field.
@@ -1326,7 +1323,10 @@ mod tests {
             let delay = params.filter_delay() * channels;
             let skip = params.pcm_len();
             let n = decoded.len() - delay - skip;
-            let snr = snr_db(&pcm[skip..skip + n], &decoded[skip + delay..skip + delay + n]);
+            let snr = snr_db(
+                &pcm[skip..skip + n],
+                &decoded[skip + delay..skip + delay + n],
+            );
             assert!(snr > 12.0, "mode {mode} round trip only {snr:.1} dB");
         }
     }
@@ -1379,7 +1379,10 @@ mod tests {
             let delay = params.filter_delay() * 2;
             let skip = params.pcm_len();
             let n = decoded.len() - delay - skip;
-            let snr = snr_db(&pcm[skip..skip + n], &decoded[skip + delay..skip + delay + n]);
+            let snr = snr_db(
+                &pcm[skip..skip + n],
+                &decoded[skip + delay..skip + delay + n],
+            );
             assert!(
                 snr > previous,
                 "bitpool {bitpool} gave {snr:.1} dB, no better than the \

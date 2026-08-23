@@ -237,7 +237,10 @@ impl ObexServer {
 
     fn reject(&mut self, code: u8) -> (Vec<u8>, ServerEvent) {
         self.in_progress = None;
-        (Response::status(code).to_bytes(), ServerEvent::Rejected(code))
+        (
+            Response::status(code).to_bytes(),
+            ServerEvent::Rejected(code),
+        )
     }
 }
 
@@ -345,7 +348,12 @@ mod tests {
             let (response_bytes, event) = server.handle_packet(packet);
             let response = Response::parse(&response_bytes, false).unwrap();
             if i + 1 < packets.len() {
-                assert_eq!(response.code, response::CONTINUE, "packet {i} of {}", packets.len());
+                assert_eq!(
+                    response.code,
+                    response::CONTINUE,
+                    "packet {i} of {}",
+                    packets.len()
+                );
                 assert_eq!(event, ServerEvent::Continued);
             } else {
                 assert_eq!(response.code, response::SUCCESS, "the last packet");
@@ -360,7 +368,10 @@ mod tests {
         assert_eq!(object.mime_type.as_deref(), Some(&b"text/plain\0"[..]));
         assert_eq!(object.declared_length, Some(500));
         assert_eq!(object.body, body, "reassembled in order and complete");
-        assert!(server.take_objects().is_empty(), "collection is destructive");
+        assert!(
+            server.take_objects().is_empty(),
+            "collection is destructive"
+        );
     }
 
     #[test]
@@ -449,7 +460,10 @@ mod tests {
             response::SUCCESS
         );
         assert_eq!(event, ServerEvent::Aborted);
-        assert!(server.take_objects().is_empty(), "no partial object escapes");
+        assert!(
+            server.take_objects().is_empty(),
+            "no partial object escapes"
+        );
 
         // A fresh transfer after the abort is unaffected by the abandoned one.
         for packet in put_packets(Some("y"), None, b"ok", 0x2000) {
@@ -477,10 +491,10 @@ mod tests {
     fn test_malformed_packets_are_answered_bad_request() {
         let mut server = ObexServer::default();
         for bad in [
-            vec![0x80, 0x00],                          // truncated prefix
-            vec![0x80, 0x00, 0x01],                    // length below prefix
-            vec![0x82, 0x00, 0x06, 0x01, 0x00, 0x02],  // bad inner header
-            vec![0x80, 0x00, 0x05, 0x10, 0x00],        // CONNECT missing fields
+            vec![0x80, 0x00],                         // truncated prefix
+            vec![0x80, 0x00, 0x01],                   // length below prefix
+            vec![0x82, 0x00, 0x06, 0x01, 0x00, 0x02], // bad inner header
+            vec![0x80, 0x00, 0x05, 0x10, 0x00],       // CONNECT missing fields
         ] {
             let (bytes, event) = server.handle_packet(&bad);
             assert_eq!(

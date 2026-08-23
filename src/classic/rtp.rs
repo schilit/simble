@@ -389,8 +389,8 @@ pub fn packetize_sbc(frames: &[Vec<u8>], max_payload: usize) -> Vec<Vec<u8>> {
             }
             continue;
         }
-        let would_overflow = batch_len + frame.len() > budget
-            || batch.len() as u8 >= SBC_MAX_FRAMES_PER_PAYLOAD;
+        let would_overflow =
+            batch_len + frame.len() > budget || batch.len() as u8 >= SBC_MAX_FRAMES_PER_PAYLOAD;
         if would_overflow && !batch.is_empty() {
             payloads.push(SbcPayload::unfragmented(&batch).to_bytes());
             batch.clear();
@@ -570,7 +570,10 @@ mod tests {
 
         let first = SbcPayload::parse(&payloads[0]).unwrap().header;
         assert!(first.fragmented && first.start && !first.last);
-        assert_eq!(first.frame_count, 3, "three fragments remain, including this");
+        assert_eq!(
+            first.frame_count, 3,
+            "three fragments remain, including this"
+        );
         let last = SbcPayload::parse(&payloads[2]).unwrap().header;
         assert!(last.fragmented && !last.start && last.last);
 

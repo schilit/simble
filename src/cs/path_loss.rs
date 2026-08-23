@@ -251,7 +251,10 @@ mod tests {
         }
         let smoothed = ranger.distance_m().unwrap();
         let instant = ranger.instantaneous_distance_m().unwrap();
-        assert!(ranger.rssi_std_dev_db().unwrap() > 3.0, "the jitter is real");
+        assert!(
+            ranger.rssi_std_dev_db().unwrap() > 3.0,
+            "the jitter is real"
+        );
         assert!(
             (smoothed - 8.0).abs() < (instant - 8.0).abs().max(0.5),
             "smoothed {smoothed} should beat the single sample {instant}"

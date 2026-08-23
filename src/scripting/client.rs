@@ -187,9 +187,12 @@ pub fn register(engine: &mut Engine, android: &mut Module) {
         .register_fn("subscribe", |client: &mut ScriptGattClient, uuid: Uuid| {
             client.with_central(|c| c.queue_subscribe(uuid, true));
         })
-        .register_fn("unsubscribe", |client: &mut ScriptGattClient, uuid: Uuid| {
-            client.with_central(|c| c.queue_subscribe(uuid, false));
-        })
+        .register_fn(
+            "unsubscribe",
+            |client: &mut ScriptGattClient, uuid: Uuid| {
+                client.with_central(|c| c.queue_subscribe(uuid, false));
+            },
+        )
         .register_fn(
             // The last bytes seen for a characteristic, read or notified.
             // Empty when nothing has arrived on it — a script asserting on a
@@ -406,7 +409,8 @@ impl ScriptedCentral {
 
     /// Queues a subscribe (or unsubscribe) from outside the script.
     pub fn subscribe(&mut self, uuid: Uuid, enable: bool) {
-        self.client.with_central(|c| c.queue_subscribe(uuid, enable));
+        self.client
+            .with_central(|c| c.queue_subscribe(uuid, enable));
     }
 
     /// Drains the H4 packets the client has queued for the controller.
@@ -501,7 +505,9 @@ impl ScriptedCentral {
                 if status != 0 && self.handlers.error {
                     self.call(
                         "on_error",
-                        (Dynamic::from(format!("read {uuid}: ATT error {status:#04X}")),),
+                        (Dynamic::from(format!(
+                            "read {uuid}: ATT error {status:#04X}"
+                        )),),
                     );
                 }
             }
@@ -687,7 +693,12 @@ fn event_map(event: &CentralEvent) -> Map {
         } => {
             set(
                 "event",
-                if *connected { "connected" } else { "disconnected" }.into(),
+                if *connected {
+                    "connected"
+                } else {
+                    "disconnected"
+                }
+                .into(),
             );
             set("peer", peer.to_string().into());
             set("status", (*status as i64).into());

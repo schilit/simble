@@ -61,7 +61,10 @@ impl Tone {
 /// 12-bit signed Q in bits 12–23, little-endian on the wire.
 pub fn decode_pct(bytes: [u8; 3]) -> (i16, i16) {
     let packed = u32::from(bytes[0]) | u32::from(bytes[1]) << 8 | u32::from(bytes[2]) << 16;
-    (sign_extend_12(packed & 0x0FFF), sign_extend_12(packed >> 12))
+    (
+        sign_extend_12(packed & 0x0FFF),
+        sign_extend_12(packed >> 12),
+    )
 }
 
 /// Sign-extends a 12-bit two's-complement value into an `i16`.
@@ -151,9 +154,7 @@ pub fn parse_subevent_result(body: &[u8]) -> Option<SubeventResult> {
         // The first antenna path's tone; further paths and the extension slot
         // follow, and are not used — one path is what the simulated radio
         // reports and what a 1:1 antenna configuration provides.
-        let pct = data.get(
-            MODE_2_PERMUTATION_INDEX_LEN..MODE_2_PERMUTATION_INDEX_LEN + 4,
-        )?;
+        let pct = data.get(MODE_2_PERMUTATION_INDEX_LEN..MODE_2_PERMUTATION_INDEX_LEN + 4)?;
         let (i, q) = decode_pct([pct[0], pct[1], pct[2]]);
         result.tones.push(Tone {
             channel,

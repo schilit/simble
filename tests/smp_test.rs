@@ -534,7 +534,10 @@ fn legacy_pairing_rejects_a_tampered_confirm_and_derives_no_key() {
             corrupted = true;
         }
     });
-    assert!(corrupted, "the exchange must have carried a Pairing Confirm");
+    assert!(
+        corrupted,
+        "the exchange must have carried a Pairing Confirm"
+    );
 
     let failed = [&central, &peripheral].iter().any(|d| {
         d.connections
@@ -557,7 +560,10 @@ fn secure_connections_rejects_a_tampered_confirm_and_derives_no_key() {
             corrupted = true;
         }
     });
-    assert!(corrupted, "the exchange must have carried a Pairing Confirm");
+    assert!(
+        corrupted,
+        "the exchange must have carried a Pairing Confirm"
+    );
     assert_pairing_was_refused(&central, conn_c, &peripheral, conn_p);
 }
 

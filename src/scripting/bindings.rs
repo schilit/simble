@@ -581,7 +581,9 @@ fn register_types(engine: &mut Engine) {
              data: Dynamic|
              -> Result<(), Box<EvalAltResult>> {
                 let uuid16 = u16::try_from(uuid16).map_err(|_| {
-                    runtime_error(format!("advertise_service_data: not a 16-bit uuid: {uuid16}"))
+                    runtime_error(format!(
+                        "advertise_service_data: not a 16-bit uuid: {uuid16}"
+                    ))
                 })?;
                 let bytes = dynamic_to_bytes(data)?;
                 server.with_server(|s| {

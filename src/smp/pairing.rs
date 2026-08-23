@@ -170,7 +170,6 @@ fn random_bytes<const N: usize>() -> [u8; N] {
     out
 }
 
-
 fn build_16(op: u8, val: &[u8; 16]) -> Vec<u8> {
     let mut v = Vec::with_capacity(17);
     v.push(op);
