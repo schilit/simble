@@ -579,8 +579,8 @@ function switchBackend() {
   renderSinkOptions();
   applyMode();
   if (mode === "in-page") {
-    sourceHead.setState(false, "in browser · connecting…");
-    sinkHead.setState(false, "in browser · starting…");
+    sourceHead.setState(false, "connecting…");
+    sinkHead.setState(false, "starting…");
     try {
       buildInPage();
     } catch (e) {
@@ -752,11 +752,11 @@ function tickInPage(now) {
   player.play(link.peripheral_take_audio(linkSink), decodeSdu);
   const json = link.peripheral_status_json(linkSink);
   if (json && now - lastRenderAt > 100) renderSink(JSON.parse(json));
-  sinkHead.setState(true, "in browser · advertising", "ok");
+  sinkHead.setState(true, "advertising", "ok");
   // No CIS in the in-page controller: SDUs ride the connection handle, so the
   // source's dot means "there is a central attached and SDUs can go out".
   sourceHead.setState(linkCentral >= 0, linkCentral >= 0
-    ? "in browser · SDUs on the connection handle"
+    ? "SDUs on the connection handle"
     : "no central — streaming unavailable", linkCentral >= 0 ? "ok" : "warn");
 }
 

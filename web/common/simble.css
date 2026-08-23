@@ -153,10 +153,19 @@ details pre {
  * (disabled, with the reason beside it, for a device whose lifetime is shared
  * with others), and the on-air address hard right.
  * ------------------------------------------------------------------------- */
+/* A grid, not one wrapping flex row: the address is last in source order with
+   `margin-left: auto`, so any overflow used to wrap it down and it ended up in
+   a different place on almost every card. Row 1 is the device and its address;
+   the "why" note, which is what usually caused the overflow, gets row 2. */
 .dev-head {
-  display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline; column-gap: 0.75rem; row-gap: 0.3rem;
   padding: 0.5rem 0.7rem; margin: 0 0 0.7rem;
   border: 1px solid var(--border); border-radius: 8px; background: var(--panel2);
+}
+.dev-head .dev-main {
+  grid-column: 1; grid-row: 1; min-width: 0;
+  display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap;
 }
 .dev-head .dev-dot {
   width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%;
@@ -184,9 +193,13 @@ details pre {
 .dev-head .dev-icon:disabled { opacity: 0.4; cursor: not-allowed; }
 /* Why a device cannot be stopped on its own. Visible, not only a tooltip:
    the limitation is part of what these pages are explaining. */
-.dev-head .dev-why { color: var(--dim); font-size: var(--fs-meta); font-style: italic; }
+.dev-head .dev-why { grid-column: 1 / -1; grid-row: 2;
+  color: var(--dim); font-size: var(--fs-meta); font-style: italic; }
+/* Pinned to the top row's right edge on every card, so two devices side by
+   side can be compared by their addresses without hunting for them. */
 .dev-head .dev-addr {
-  margin-left: auto; font-family: ui-monospace, Menlo, monospace;
+  grid-column: 2; grid-row: 1; justify-self: end; white-space: nowrap;
+  font-family: ui-monospace, Menlo, monospace;
   color: var(--dim); font-size: var(--fs-meta);
 }
 .dev-head .dev-addr.none { font-style: italic; font-family: inherit; }

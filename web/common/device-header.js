@@ -8,11 +8,22 @@
 // on the next. The reader could not tell, from looking, whether a device was on
 // the air — which is the first question anyone has about a Bluetooth device.
 //
-// So the header is fixed, left to right:
+// So the header is fixed:
 //
-//   [dot] Name · role · what it is doing now   [✎] [▶/■] (why not)   address
+//   [dot] Name · role · what it is doing now  [✎] [▶/■]        address
+//   (why this device cannot be stopped on its own)
 //
-// and every part of it is answerable from the stack:
+// Two rows, not one wrapping row. Everything except the address and the "why"
+// lives in `.dev-main`, and the header is a grid, because a single flex-wrap
+// row put the address in a different place on almost every card: it is last in
+// source order with `margin-left: auto`, so as soon as the row overflowed --
+// which the italic "why" note reliably caused -- the address wrapped down with
+// it. A device whose state line was long pushed it to a third row. The address
+// is the device's identity and the first thing you look for when comparing two
+// cards, so it is pinned to the top row's right edge and the note gets its own
+// row underneath.
+//
+// Every part of it is answerable from the stack:
 //
 //   * the dot is filled when the device is *actually* doing its job — a
 //     peripheral on the air, a central connected. It is not decoration and it
@@ -106,7 +117,13 @@ export function createDeviceHeader(options) {
   const stateEl = document.createElement("span");
   stateEl.className = "dev-state";
 
-  el.append(dot, nameEl, kindEl, stateEl);
+  // Everything that belongs on the top row goes in here; the address and the
+  // "why" are placed by the grid, so neither can be pushed around by how long
+  // a device's name or state line happens to be.
+  const main = document.createElement("div");
+  main.className = "dev-main";
+  main.append(dot, nameEl, kindEl, stateEl);
+  el.append(main);
 
   // --- the script, and the pen that reveals it -----------------------------
   let panel = null;
@@ -164,7 +181,7 @@ export function createDeviceHeader(options) {
     pen.title = penTitle(Boolean(script.open));
     pen.setAttribute("aria-pressed", String(Boolean(script.open)));
     pen.addEventListener("click", () => showScript(panel.hidden));
-    el.append(pen);
+    main.append(pen);
   }
 
   // --- run / stop ----------------------------------------------------------
@@ -182,7 +199,10 @@ export function createDeviceHeader(options) {
     });
     whyEl = document.createElement("span");
     whyEl.className = "dev-why";
-    el.append(runBtn, whyEl);
+    // The toggle sits on the top row; its explanation gets its own row below,
+    // where a long reason cannot shove the address anywhere.
+    main.append(runBtn);
+    el.append(whyEl);
     setStopCapability({ disabled: Boolean(run.disabled), reason: run.reason || "" });
     setRunning(running);
   }

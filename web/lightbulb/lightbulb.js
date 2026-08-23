@@ -315,8 +315,8 @@ function loop() {
       const json = link.peripheral_status_json(linkIndex);
       if (json) {
         const status = JSON.parse(json);
-        head.setState(true, status.connected
-          ? "in browser · client connected" : "in browser · advertising", "ok");
+        head.setState(true,
+          status.connected ? "client connected" : "advertising", "ok");
         render(status);
       }
       renderClient(JSON.parse(link.central_status_json(clientIndex) || "{}"),
