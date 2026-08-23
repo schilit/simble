@@ -68,6 +68,35 @@ pub fn sih(sirk: &[u8; 16], prand: &[u8; 3]) -> [u8; 3] {
     [cipher[0], cipher[1], cipher[2]]
 }
 
+/// Builds the six-byte Resolvable Set Identifier a set member advertises (CSIP Section 5.3):
+/// `prand || sih(sirk, prand)`, both little-endian on the wire.
+///
+/// `prand`'s top two bits are forced to `0b01`, the same way a Resolvable Private Address's
+/// are (Core Vol 6, Part B, Section 1.3.2.2) — CSIP reuses that constraint so an RSI can
+/// never be mistaken for another address type.
+///
+/// A coordinator resolves this by recomputing `sih` with each SIRK it holds and comparing
+/// against the hash half. Until this existed, `sih` had exactly one caller and it was a test:
+/// the crypto was correct but unreachable, so no advertisement ever carried a set identity.
+pub fn rsi(sirk: &[u8; 16], prand: &[u8; 3]) -> [u8; 6] {
+    let mut prand = *prand;
+    prand[2] = (prand[2] & 0b0011_1111) | 0b0100_0000;
+    let hash = sih(sirk, &prand);
+    let mut out = [0u8; 6];
+    out[..3].copy_from_slice(&prand);
+    out[3..].copy_from_slice(&hash);
+    out
+}
+
+/// Checks whether an advertised Resolvable Set Identifier belongs to the set identified by
+/// `sirk` — the coordinator half of [`rsi`].
+pub fn rsi_matches(sirk: &[u8; 16], rsi: &[u8]) -> bool {
+    let Ok(prand) = <[u8; 3]>::try_from(&rsi[..3.min(rsi.len())]) else {
+        return false;
+    };
+    rsi.len() == 6 && sih(sirk, &prand) == rsi[3..]
+}
+
 /// Coordinated Set Identification Service GATT container.
 #[derive(Debug, Clone)]
 pub struct CoordinatedSetIdentificationService {

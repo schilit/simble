@@ -50,7 +50,7 @@ pub mod ras;
 /// Telephony and Media Audio Profile (TMAP) service.
 pub mod tmap;
 /// Volume Control Service/Profile (VCS/VCP).
-pub(crate) mod vcp;
+pub mod vcp;
 /// Volume Offset Control Service (VOCS, UUID 0x1845).
 pub mod vocs;
 

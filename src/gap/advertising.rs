@@ -28,6 +28,12 @@ pub mod ad_type {
     pub const SERVICE_DATA_16BIT: u8 = 0x16;
     /// Appearance (0x19).
     pub const APPEARANCE: u8 = 0x19;
+    /// Resolvable Set Identifier (0x2E) — the six bytes (`prand || hash`) a CSIP
+    /// set member advertises so a coordinator holding the set's SIRK can tell
+    /// "this is the other earbud" from "this is some other device". Without it
+    /// a set member is discoverable but not identifiable as a member, which is
+    /// the whole point of the profile (CSIP Section 5.3).
+    pub const RESOLVABLE_SET_IDENTIFIER: u8 = 0x2E;
     /// Broadcast Name (0x30) — the UTF-8 name an Auracast source publishes so
     /// a scanner can list broadcasts before syncing to any of them.
     pub const BROADCAST_NAME: u8 = 0x30;
@@ -62,6 +68,11 @@ pub struct AdvertisingData {
     pub service_data_16: Vec<(u16, Vec<u8>)>,
     /// Optional manufacturer-specific data (company ID prefixed).
     pub manufacturer_data: Option<Vec<u8>>,
+    /// Optional Resolvable Set Identifier: six bytes, `prand || hash`, as
+    /// produced by [`crate::profiles::csip::rsi`]. `#[serde(default)]` so scene
+    /// JSON written before this field existed still parses.
+    #[serde(default)]
+    pub resolvable_set_identifier: Option<Vec<u8>>,
 }
 
 impl AdvertisingData {
@@ -91,6 +102,13 @@ impl AdvertisingData {
     /// Adds 16-bit Service Data (e.g. Eddystone beacon payloads).
     pub fn with_service_data_16(mut self, uuid: u16, data: &[u8]) -> Self {
         self.service_data_16.push((uuid, data.to_vec()));
+        self
+    }
+
+    /// Sets the Resolvable Set Identifier (CSIP Section 5.3), six bytes of
+    /// `prand || hash`.
+    pub fn with_resolvable_set_identifier(mut self, rsi: &[u8]) -> Self {
+        self.resolvable_set_identifier = Some(rsi.to_vec());
         self
     }
 
@@ -145,6 +163,13 @@ impl AdvertisingData {
             bytes.push(ad_type::SERVICE_DATA_16BIT);
             bytes.extend_from_slice(&uuid.to_le_bytes());
             bytes.extend_from_slice(data);
+        }
+
+        // Resolvable Set Identifier
+        if let Some(ref rsi) = self.resolvable_set_identifier {
+            bytes.push((1 + rsi.len()) as u8);
+            bytes.push(ad_type::RESOLVABLE_SET_IDENTIFIER);
+            bytes.extend_from_slice(rsi);
         }
 
         // Manufacturer Specific Data
@@ -220,6 +245,7 @@ pub fn build_adv_payload_with_extras(
         }
         ad.service_data_16 = extras.service_data_16.clone();
         ad.manufacturer_data = extras.manufacturer_data.clone();
+        ad.resolvable_set_identifier = extras.resolvable_set_identifier.clone();
         ad.to_bytes()
     };
     let mut bytes = build(name, service_uuids);

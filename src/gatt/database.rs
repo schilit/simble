@@ -508,7 +508,27 @@ impl GattDatabase {
         Ok(())
     }
 
+    /// Whether an [`AttributeHandler`] is attached to `handle` — i.e. whether a
+    /// write to it drives a state machine rather than replacing stored bytes.
+    ///
+    /// A host-side caller simulating an external write (a page's control-point
+    /// button, a scene driving a peripheral) needs this to choose between
+    /// [`Self::write`] and [`Self::set_value`]: `set_value` bypasses the
+    /// handler, which on a control point means the command is stored and never
+    /// executed.
+    pub fn has_handler(&self, handle: u16) -> bool {
+        self.attributes
+            .get(&handle)
+            .is_some_and(|attr| attr.handler.is_some())
+    }
+
     /// Sets an attribute value directly from the host simulation without checking client permissions.
+    ///
+    /// **Bypasses any [`AttributeHandler`]** attached to the handle: the bytes
+    /// are stored as given and no state machine runs. That is right for
+    /// publishing a device's own state (a battery level, a sensor reading), and
+    /// wrong for simulating a write *to* a control point — use [`Self::write`]
+    /// for that, or check [`Self::has_handler`] first.
     pub fn set_value(&mut self, handle: u16, value: &[u8]) -> Result<(), u8> {
         let attr = self
             .attributes

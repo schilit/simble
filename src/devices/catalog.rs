@@ -148,6 +148,21 @@ pub const EXAMPLES: &[DeviceExample] = &[
         summary: "Settable device: custom 128-bit writable setpoint + convergence physics",
         script: include_str!("../../catalog/devices/thermostat.rhai"),
     },
+    DeviceExample {
+        name: "earbud",
+        summary: "CSIP set member (1846): a SIRK-keyed Resolvable Set Identifier a coordinator resolves",
+        script: include_str!("../../catalog/devices/earbud.rhai"),
+    },
+    DeviceExample {
+        name: "hearing_aid",
+        summary: "Hearing Access presets (1854): a control point that indicates its preset records",
+        script: include_str!("../../catalog/devices/hearing_aid.rhai"),
+    },
+    DeviceExample {
+        name: "media_player",
+        summary: "Media Control (1848/1849): a phone's player, so a headset's buttons reach the music",
+        script: include_str!("../../catalog/devices/media_player.rhai"),
+    },
 ];
 
 /// One **client** catalog entry: a script that *drives* a device instead of

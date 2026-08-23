@@ -494,6 +494,146 @@ const METHODS = [
     src: "transport/wasm_ws.rs (web runtime)",
     build: (on, a) => `${on}.add_ascs(${bytesExpr(a.sink)}, ${bytesExpr(a.source)})` },
 
+  { group: "profiles", kind: "method",
+    sig: "server.add_vcs(initial_volume, initial_mute)", ret: "()",
+    desc: "Install Volume Control (1844) — Android's BluetoothVolumeControl.",
+    prose: "Not inert: it installs the Volume Control Point handler, so a peer's write drives a real " +
+      "state machine. The operand's change counter is checked and a stale one is rejected with " +
+      "ATT error <code>0x80</code> Invalid Change Counter — which is the part a script cannot " +
+      "hand-build, because Rhai has no way to fail an ATT write. Only a write that actually moves " +
+      "the state advances the counter.",
+    receiver: "server",
+    params: [
+      { key: "vol", label: "initial_volume", kind: "code", type: "int (0-255)", default: "128",
+        doc: "The volume the device powers on at." },
+      { key: "mute", label: "initial_mute", kind: "code", type: "int", default: "0",
+        doc: "<code>0</code> not muted, <code>1</code> muted." },
+    ],
+    src: "transport/wasm_ws.rs (web runtime)",
+    build: (on, a) => `${on}.add_vcs(${a.vol}, ${a.mute})` },
+
+  { group: "profiles", kind: "method",
+    sig: "server.add_vocs(audio_location, description)", ret: "()",
+    desc: "Install one Volume Offset Control instance (1845) — one audio output's trim.",
+    prose: "A device includes one VOCS per output. Its control point has its own change counter, " +
+      "independent of the Volume Control Service's.",
+    receiver: "server",
+    params: [
+      { key: "loc", label: "audio_location", kind: "code", type: "int (bitmask)", default: "0x01",
+        doc: "Audio Location bitmask for this output — <code>0x01</code> front left, " +
+          "<code>0x02</code> front right." },
+      { key: "desc", label: "description", kind: "text", type: "string", default: "Left",
+        doc: "Human-readable name for the output." },
+    ],
+    src: "transport/wasm_ws.rs (web runtime)",
+    build: (on, a) => `${on}.add_vocs(${a.loc}, "${a.desc}")` },
+
+  { group: "profiles", kind: "method",
+    sig: "server.add_aics(gain_minimum, gain_maximum, description)", ret: "()",
+    desc: "Install one Audio Input Control instance (1843) — one audio input's gain.",
+    prose: "The input is typed <code>Bluetooth</code> and <code>Active</code>, the case an LE Audio " +
+      "sink actually has. Its control point validates gain range, mute and gain-mode transitions.",
+    receiver: "server",
+    params: [
+      { key: "min", label: "gain_minimum", kind: "code", type: "int (0-255)", default: "0",
+        doc: "Lowest gain setting the input accepts." },
+      { key: "max", label: "gain_maximum", kind: "code", type: "int (0-255)", default: "255",
+        doc: "Highest gain setting the input accepts." },
+      { key: "desc", label: "description", kind: "text", type: "string", default: "Line In",
+        doc: "Human-readable name for the input." },
+    ],
+    src: "transport/wasm_ws.rs (web runtime)",
+    build: (on, a) => `${on}.add_aics(${a.min}, ${a.max}, "${a.desc}")` },
+
+  { group: "profiles", kind: "method",
+    sig: "server.add_csis(sirk, set_size, rank)", ret: "()",
+    desc: "Install Coordinated Set Identification (1846) — Android's BluetoothCsipSetCoordinator.",
+    prose: "Makes this device one member of a set (a pair of earbuds, a pair of hearing aids). " +
+      "Pair it with <code>advertise_set_identity</code>, which is what actually makes the member " +
+      "recognisable — the SIRK crypto is the half a script cannot build, since Rhai has no AES.",
+    receiver: "server",
+    params: [
+      { key: "sirk", label: "sirk", kind: "bytes", type: "blob | array", default: "0x83, 0x8E, 0x68, 0x05, 0x53, 0xF1, 0x41, 0x5A, 0xA2, 0x65, 0xBB, 0xAF, 0xC6, 0xEA, 0x03, 0xB8",
+        doc: "The 16-byte Set Identity Resolving Key. Every member of one set carries the same one. " + BYTES_DOC },
+      { key: "size", label: "set_size", kind: "code", type: "int", default: "2",
+        doc: "How many devices are in the set." },
+      { key: "rank", label: "rank", kind: "code", type: "int", default: "1",
+        doc: "This member's 1-based rank within the set; a coordinator locks members in rank order." },
+    ],
+    src: "transport/wasm_ws.rs (web runtime)",
+    build: (on, a) => `${on}.add_csis(${bytesExpr(a.sirk)}, ${a.size}, ${a.rank})` },
+
+  { group: "profiles", kind: "method",
+    sig: "server.advertise_set_identity(sirk, prand)", ret: "()",
+    desc: "Advertise the Resolvable Set Identifier (AD type 2E) for a coordinated set.",
+    prose: "Stages <code>prand || sih(sirk, prand)</code> into the advertisement. A coordinator " +
+      "recomputes the hash with each SIRK it holds; a match means \"member of that set\". Without " +
+      "this a set member is discoverable but not identifiable as a member.",
+    receiver: "server",
+    params: [
+      { key: "sirk", label: "sirk", kind: "bytes", type: "blob | array", default: "0x83, 0x8E, 0x68, 0x05, 0x53, 0xF1, 0x41, 0x5A, 0xA2, 0x65, 0xBB, 0xAF, 0xC6, 0xEA, 0x03, 0xB8",
+        doc: "The same 16-byte SIRK passed to <code>add_csis</code>. " + BYTES_DOC },
+      { key: "prand", label: "prand", kind: "bytes", type: "blob | array", default: "0x69, 0xF5, 0x63",
+        doc: "Three random bytes. A real member draws fresh ones each time it starts advertising, " +
+          "so the identifier is not a stable tracker. " + BYTES_DOC },
+    ],
+    src: "transport/wasm_ws.rs (web runtime)",
+    build: (on, a) => `${on}.advertise_set_identity(${bytesExpr(a.sirk)}, ${bytesExpr(a.prand)})` },
+
+  { group: "profiles", kind: "method",
+    sig: "server.add_has(features, presets)", ret: "()",
+    desc: "Install Hearing Access (1854) — Android's BluetoothHapClient.",
+    prose: "Presets are named listening programs. The client pages the list with Read Presets Request " +
+      "and switches with Set Active Preset, over a control point that <em>indicates</em> its " +
+      "responses — a handshake a <code>tick</code> cannot hold, because it has to keep a read " +
+      "cursor across an indication and resume on the confirmation.",
+    receiver: "server",
+    params: [
+      { key: "feat", label: "features", kind: "code", type: "int (bitfield)", default: "0b10_0010",
+        doc: "HAS Section 3.1: bits 0-1 the hearing-aid type (00 binaural, 01 monaural, 10 banded), " +
+          "bit 2 preset synchronization, bit 3 independent presets, bit 4 dynamic presets, " +
+          "bit 5 writable presets." },
+      { key: "presets", label: "presets", kind: "code", type: "array of maps",
+        default: '[#{ index: 1, name: "Universal" }, #{ index: 2, name: "Restaurant" }]',
+        doc: "One map per preset: <code>index</code> and <code>name</code> are required, " +
+          "<code>writable</code> and <code>available</code> default to true. Names are 1-40 bytes." },
+    ],
+    src: "transport/wasm_ws.rs (web runtime)",
+    build: (on, a) => `${on}.add_has(${a.feat}, ${a.presets})` },
+
+  { group: "profiles", kind: "method",
+    sig: "server.add_gmcs(player_name, ccid)", ret: "()",
+    desc: "Install the Generic Media Control Service (1849) — a phone's device-wide player.",
+    prose: "Android has <em>no</em> Bluetooth profile proxy for this: an app controls media through " +
+      "<code>MediaSession</code>/<code>MediaController</code> and the stack bridges to MCS " +
+      "internally, so this binding is named for the Bluetooth service rather than borrowing an " +
+      "Android class that does not exist. Use <code>add_mcs</code> for a per-app player instance.",
+    receiver: "server",
+    params: [
+      { key: "name", label: "player_name", kind: "text", type: "string", default: "SimBLE Player",
+        doc: "What a headset shows as the player's name." },
+      { key: "ccid", label: "ccid", kind: "code", type: "int (0-255)", default: "1",
+        doc: "Content Control ID — how a Call/Media Control profile says which player a stream " +
+          "belongs to." },
+    ],
+    src: "transport/wasm_ws.rs (web runtime)",
+    build: (on, a) => `${on}.add_gmcs("${a.name}", ${a.ccid})` },
+
+  { group: "profiles", kind: "method",
+    sig: "server.add_mcs(player_name, ccid)", ret: "()",
+    desc: "Install one Media Control Service instance (1848) — a single app's player.",
+    prose: "A real phone registers one MCS per media app, each with its own Content Control ID, " +
+      "alongside the one Generic Media Control Service.",
+    receiver: "server",
+    params: [
+      { key: "name", label: "player_name", kind: "text", type: "string", default: "Podcasts",
+        doc: "What a headset shows as this player's name." },
+      { key: "ccid", label: "ccid", kind: "code", type: "int (0-255)", default: "2",
+        doc: "Content Control ID, distinct from every other player's." },
+    ],
+    src: "transport/wasm_ws.rs (web runtime)",
+    build: (on, a) => `${on}.add_mcs("${a.name}", ${a.ccid})` },
+
   // ---- BluetoothGattService ----
   { group: "service", kind: "ctor", sig: "android::BluetoothGattService(uuid, service_type)",
     ret: "BluetoothGattService", binds: "service",

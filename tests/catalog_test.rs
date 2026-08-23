@@ -56,6 +56,17 @@ fn every_catalog_peripheral_builds_and_ticks() {
         // A device that advertises nothing is a device nobody can find. Every
         // catalog entry is meant to be a working example, so each must put at
         // least one service in its database.
+        //
+        // Checking for the KEY was not enough, and this test passed happily
+        // while every device built from Rust profile registrars reported
+        // `"services": []` -- the registrars write into the GattDatabase and
+        // never reach the script's own service list, so the array was empty
+        // for exactly the devices most worth checking. Assert it is populated.
+        assert!(
+            !status.contains("\"services\":[]"),
+            "{} reports an empty service list: {status}",
+            example.name,
+        );
         assert!(
             status.contains("\"services\""),
             "{} exposes no services: {status}",
