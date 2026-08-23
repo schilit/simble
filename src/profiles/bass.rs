@@ -12,16 +12,18 @@
 //! The Control Point is wired through `AttributeHandler`, so an ordinary
 //! `GattDatabase::write` to it runs the operation and republishes the affected
 //! Broadcast Receive State value — there is no bespoke `write_control_point` method to
-//! call. Simble's controller doesn't model periodic-advertising or BIG synchronization,
-//! so a requested sync is treated as immediately achieved: the simulated Delegator
-//! reports `SynchronizedToPa` / the requested BIS bits as soon as an Add/Modify Source
-//! operation asks for them.
+//! call. A requested sync here is treated as immediately achieved: the simulated
+//! Delegator reports `SynchronizedToPa` / the requested BIS bits as soon as an
+//! Add/Modify Source operation asks for them, whether or not any such broadcast exists.
 //!
-//! That fake is now avoidable, at least against netsim: [`crate::device::BigReceiver`]
-//! does the real thing — periodic advertising sync, BASE and BIGInfo, LE BIG Create Sync,
-//! ISO data path — and has been checked against Bumble in both directions
-//! (`tests/interop/auracast_*.py`). Nothing here calls it yet; wiring the Delegator's
-//! Add Source operation to an actual sync, and reporting the state it really reaches,
+//! That fake is now avoidable in-process, not only against netsim.
+//! [`crate::device::BigReceiver`] does the real thing — periodic advertising sync, BASE
+//! and BIGInfo, LE BIG Create Sync, ISO data path — checked against Bumble in both
+//! directions (`tests/interop/auracast_*.py`) and now against a real broadcaster over
+//! [`crate::controller::sim::Link`], which models enough of periodic advertising and
+//! BIGs to establish, stream and tear one down (`tests/broadcast_e2e_test.rs`). Nothing
+//! here calls it yet; wiring the Delegator's Add Source operation to an actual sync, and
+//! reporting the state it really reaches — including the states where it *fails* —
 //! is the work this comment is still standing in for.
 
 use crate::att::error_code as att_error_code;

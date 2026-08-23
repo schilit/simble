@@ -41,7 +41,12 @@ pub mod pacs;
 /// Public Broadcast Profile (PBP) broadcast announcements.
 pub mod pbp;
 /// Ranging Service (RAS, UUID 0x185B).
-pub(crate) mod ras;
+///
+/// Public because the profile's carriage — [`ras::segment`] and
+/// [`ras::Reassembler`] — is what a caller has to drive to get a peer's
+/// Channel Sounding steps across a GATT link, and there is no way to use
+/// [`RangingData`] without it.
+pub mod ras;
 /// Telephony and Media Audio Profile (TMAP) service.
 pub mod tmap;
 /// Volume Control Service/Profile (VCS/VCP).

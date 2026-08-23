@@ -254,9 +254,42 @@ impl CsInitiator {
                     None => Vec::new(),
                 }
             }
+            HciEvent::Other {
+                code: crate::packets::hci_event_code::COMMAND_STATUS,
+                parameters,
+            } => self.on_command_status(parameters),
             HciEvent::Other { code: 0x3E, parameters } => self.on_le_meta(parameters),
             _ => Vec::new(),
         }
+    }
+
+    /// Records a command the controller refused outright.
+    ///
+    /// LE CS Security Enable, Create Config and Procedure Enable are all
+    /// answered by Command Status and *then* — only on success — by a
+    /// completion subevent. A non-zero status means that subevent will never
+    /// arrive, so without this the initiator waits in `Securing`,
+    /// `Configuring` or `Enabling` forever, which is indistinguishable from a
+    /// procedure that is merely slow to start. Asking to range on a handle
+    /// that is not connected is the ordinary way to reach this.
+    fn on_command_status(&mut self, parameters: &[u8]) -> Vec<Vec<u8>> {
+        // status(1) num_hci_command_packets(1) opcode(2)
+        let [status, _, opcode_low, opcode_high] = parameters[..] else {
+            return Vec::new();
+        };
+        if status == 0x00 {
+            return Vec::new();
+        }
+        let awaited = match self.state {
+            CsState::Securing => opcode::LE_CS_SECURITY_ENABLE,
+            CsState::Configuring => opcode::LE_CS_CREATE_CONFIG,
+            CsState::Enabling => opcode::LE_CS_PROCEDURE_ENABLE,
+            _ => return Vec::new(),
+        };
+        if [opcode_low, opcode_high] == awaited {
+            self.state = CsState::Failed(status);
+        }
+        Vec::new()
     }
 
     /// Dispatches one LE Meta subevent.

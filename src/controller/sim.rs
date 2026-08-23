@@ -8,12 +8,25 @@
 //!
 //! This is the lowest rung of Simble's controller ladder. It is deliberately a
 //! thin HCI *matchmaker*, not a faithful controller: it routes advertising to
-//! scanners, completes connections, and shuttles ACL data between peers, but it
-//! models none of the PHY (channel hopping, timing, encryption, ISO). For that
-//! fidelity, point a host at a real Rootcanal over the WebSocket transport; for
-//! ranging and device movement, at netsim. Because it is pure Rust with no FFI,
-//! it runs the same natively and on `wasm32`, so a single web page can host a
-//! whole scene of devices.
+//! scanners, completes connections, shuttles ACL and ISO data between peers,
+//! and fans a broadcast's ISO streams out to everyone synchronized to it — but
+//! it models none of the PHY (channel hopping, timing, encryption, retries,
+//! scheduling). For that fidelity, point a host at a real Rootcanal over the
+//! WebSocket transport; for ranging and device movement, at netsim. Because it
+//! is pure Rust with no FFI, it runs the same natively and on `wasm32`, so a
+//! single web page can host a whole scene of devices.
+//!
+//! Two subsystems are modelled past plain routing, and both are modelled as
+//! *sequencing only*:
+//!
+//! * **Channel Sounding** produces real tone phases from the devices'
+//!   positions — see [`Link::tick_channel_sounding`], the one place the
+//!   simulated radio computes physics rather than shuffling bytes.
+//! * **Periodic advertising and BIGs** carry an Auracast broadcast end to end,
+//!   with the BIGInfo a receiver reads derived from the source's own
+//!   `LE Create BIG`. Nothing about the air interface is simulated; what is
+//!   simulated is which command is legal when, which event answers it, and who
+//!   is told what when a BIG appears or goes away.
 //!
 //! HCI packets are parsed and built with zero-copy `#[repr(C)]` structs (the
 //! same idiom as [`crate::packets`]), so the wire layouts are explicit rather
@@ -39,6 +52,19 @@
 use crate::controller::propagation::{
     PathLossModel, Position, Rng, channel_frequency_hz, phase_noise_sigma_rad,
     propagation_phase_rad, wrap_phase,
+};
+use crate::packets::big::{
+    LeBigCreateSyncHeader, LeBigInfoAdvertisingReportEvent, LeBigSyncEstablishedEventHeader,
+    LeBigSyncLostEvent, LeBigTerminateSyncResponse, LeCreateBig, LeCreateBigCompleteEventHeader,
+    LeTerminateBig, LeTerminateBigCompleteEvent, big_subevent_code,
+};
+use crate::packets::ext_adv::{
+    ExtendedAdvertisingReportHeader, LeExtendedAdvertisingReportEvent,
+    LePeriodicAdvertisingCreateSync, LePeriodicAdvertisingReportEventHeader,
+    LePeriodicAdvertisingSyncEstablishedEvent, LeSetExtendedAdvertisingDataHeader,
+    LeSetExtendedAdvertisingEnableHeader, LeSetExtendedAdvertisingParameters,
+    LeSetExtendedScanEnable, LeSetPeriodicAdvertisingDataHeader, LeSetPeriodicAdvertisingEnable,
+    U24 as ExtU24, adv_phy, data_operation, ext_adv_subevent_code,
 };
 use crate::transport::HciChannel;
 use crate::transport::h4_type;
@@ -83,6 +109,39 @@ mod opcode {
     pub const LE_CS_SET_PROCEDURE_PARAMETERS: u16 = cs_opcode::LE_CS_SET_PROCEDURE_PARAMETERS.as_u16();
     /// LE CS Procedure Enable (OGF 0x08, OCF 0x0094).
     pub const LE_CS_PROCEDURE_ENABLE: u16 = cs_opcode::LE_CS_PROCEDURE_ENABLE.as_u16();
+
+    use crate::packets::big::big_opcode;
+    use crate::packets::ext_adv::ext_adv_opcode;
+
+    /// LE Set Extended Advertising Parameters.
+    pub const LE_SET_EXT_ADV_PARAMS: u16 =
+        ext_adv_opcode::LE_SET_EXTENDED_ADVERTISING_PARAMETERS.as_u16();
+    /// LE Set Extended Advertising Data.
+    pub const LE_SET_EXT_ADV_DATA: u16 = ext_adv_opcode::LE_SET_EXTENDED_ADVERTISING_DATA.as_u16();
+    /// LE Set Extended Advertising Enable.
+    pub const LE_SET_EXT_ADV_ENABLE: u16 = ext_adv_opcode::LE_SET_EXTENDED_ADVERTISING_ENABLE.as_u16();
+    /// LE Set Periodic Advertising Data.
+    pub const LE_SET_PERIODIC_ADV_DATA: u16 =
+        ext_adv_opcode::LE_SET_PERIODIC_ADVERTISING_DATA.as_u16();
+    /// LE Set Periodic Advertising Enable.
+    pub const LE_SET_PERIODIC_ADV_ENABLE: u16 =
+        ext_adv_opcode::LE_SET_PERIODIC_ADVERTISING_ENABLE.as_u16();
+    /// LE Set Extended Scan Enable.
+    pub const LE_SET_EXT_SCAN_ENABLE: u16 = ext_adv_opcode::LE_SET_EXTENDED_SCAN_ENABLE.as_u16();
+    /// LE Periodic Advertising Create Sync.
+    pub const LE_PERIODIC_ADV_CREATE_SYNC: u16 =
+        ext_adv_opcode::LE_PERIODIC_ADVERTISING_CREATE_SYNC.as_u16();
+    /// LE Periodic Advertising Terminate Sync.
+    pub const LE_PERIODIC_ADV_TERMINATE_SYNC: u16 =
+        ext_adv_opcode::LE_PERIODIC_ADVERTISING_TERMINATE_SYNC.as_u16();
+    /// LE Create BIG.
+    pub const LE_CREATE_BIG: u16 = big_opcode::LE_CREATE_BIG.as_u16();
+    /// LE Terminate BIG.
+    pub const LE_TERMINATE_BIG: u16 = big_opcode::LE_TERMINATE_BIG.as_u16();
+    /// LE BIG Create Sync.
+    pub const LE_BIG_CREATE_SYNC: u16 = big_opcode::LE_BIG_CREATE_SYNC.as_u16();
+    /// LE BIG Terminate Sync.
+    pub const LE_BIG_TERMINATE_SYNC: u16 = big_opcode::LE_BIG_TERMINATE_SYNC.as_u16();
 }
 
 /// HCI event codes the controller generates.
@@ -172,6 +231,18 @@ const REASON_LOCAL_HOST: u8 = 0x16;
 const REASON_REMOTE_USER: u8 = 0x13;
 /// `INVALID_HCI_COMMAND_PARAMETERS` (0x12).
 const STATUS_INVALID_PARAMETERS: u8 = 0x12;
+/// `UNKNOWN_CONNECTION_IDENTIFIER` (0x02) — the handle names no live
+/// connection.
+const STATUS_UNKNOWN_CONNECTION: u8 = 0x02;
+/// `COMMAND_DISALLOWED` (0x0C) — the command is well formed but not legal in
+/// the controller's current state.
+const STATUS_COMMAND_DISALLOWED: u8 = 0x0C;
+/// `UNKNOWN_ADVERTISING_IDENTIFIER` (0x42) — the advertising or periodic sync
+/// handle names nothing this controller issued.
+const STATUS_UNKNOWN_ADVERTISING_ID: u8 = 0x42;
+/// `CONNECTION_FAILED_TO_BE_ESTABLISHED` (0x3E) — used here for a BIG that
+/// could not be decrypted with the code the receiver offered.
+const STATUS_CONNECTION_FAILED: u8 = 0x3E;
 
 // --- zero-copy HCI packet layouts ------------------------------------------
 
@@ -356,6 +427,94 @@ struct CsSession {
     procedure_counter: u16,
 }
 
+/// One extended advertising set, with the periodic train that may ride on it.
+///
+/// Extended and periodic advertising are modelled only as *carriage*: whatever
+/// bytes the host set are handed to a scanner or a synchronized receiver
+/// verbatim, once per [`Link::tick`]. Nothing about the secondary channel, the
+/// AUX chain, the periodic interval or the advertising PHY is simulated, so a
+/// train here is always found immediately and never drifts.
+#[derive(Default, Clone)]
+struct ExtAdvSet {
+    /// Identifier the host gave this set.
+    advertising_handle: u8,
+    /// Advertising SID, which is half of what a receiver names a periodic
+    /// train by (the advertiser's address is the other half).
+    advertising_sid: u8,
+    /// Extended advertising data as the host last set it.
+    data: Vec<u8>,
+    /// Whether LE Set Extended Advertising Enable turned this set on.
+    enabled: bool,
+    /// Periodic advertising data as the host last set it — for an Auracast
+    /// source, the BASE.
+    periodic_data: Vec<u8>,
+    /// Whether LE Set Periodic Advertising Enable turned the train on.
+    periodic_enabled: bool,
+}
+
+/// A Broadcast Isochronous Group this controller transmits.
+///
+/// The fields are exactly what the host wrote in LE Create BIG, kept so the
+/// BIGInfo delivered to receivers can be *derived* from the source's own
+/// parameters rather than invented. That derivation is the point: it is what
+/// makes a broadcaster and a receiver in one process disagree if the
+/// broadcaster fills LE Create BIG in wrongly.
+#[derive(Clone)]
+struct BigSource {
+    /// Identifier the host gave the BIG.
+    big_handle: u8,
+    /// The advertising set whose periodic train carries the BIGInfo.
+    advertising_handle: u8,
+    /// One connection handle per BIS, BIS index 1 first.
+    bis_handles: Vec<u16>,
+    /// Whether the host asked for encrypted streams.
+    encryption: u8,
+    /// The broadcast code the host supplied.
+    broadcast_code: [u8; 16],
+    /// SDU interval, in microseconds.
+    sdu_interval_us: u32,
+    /// Largest SDU, in octets.
+    max_sdu: u16,
+    /// PHY bitfield.
+    phy: u8,
+    /// Framing (0 unframed, 1 framed).
+    framing: u8,
+}
+
+/// A periodic advertising train this controller is synchronized to.
+#[derive(Clone, Copy)]
+struct PaSync {
+    /// Handle the controller assigned to this synchronization.
+    sync_handle: u16,
+    /// Index of the controller whose train it is.
+    source: usize,
+    /// Which of that controller's advertising sets.
+    advertising_handle: u8,
+}
+
+/// A BIG this controller has joined as a receiver.
+#[derive(Clone)]
+struct BigSink {
+    /// Identifier the host gave the BIG it joined.
+    big_handle: u8,
+    /// Index of the controller transmitting it.
+    source: usize,
+    /// The 1-based BIS indices the host asked for, in the order it asked.
+    indices: Vec<u8>,
+    /// The local connection handles they were given, in the same order.
+    bis_handles: Vec<u16>,
+}
+
+/// An unresolved LE Periodic Advertising Create Sync: whom the host is looking
+/// for, kept until an advertiser matching it has its train on air.
+#[derive(Clone, Copy)]
+struct PendingPaSync {
+    /// Advertiser address named in the command.
+    address: Address,
+    /// Advertising SID named in the command.
+    advertising_sid: u8,
+}
+
 /// One device's simulated controller: it owns the controller side of an
 /// [`HciChannel`], tracks the minimal advertising/scanning/connection state a
 /// host drives over HCI, and buffers the events it will hand back.
@@ -376,6 +535,18 @@ struct SimController {
     /// The Channel Sounding configuration on this device, if a host created
     /// one.
     cs: Option<CsSession>,
+    /// Extended advertising sets, by the handle the host gave them.
+    ext_adv_sets: Vec<ExtAdvSet>,
+    /// Whether LE Set Extended Scan Enable turned extended scanning on.
+    ext_scanning: bool,
+    /// An LE Periodic Advertising Create Sync still looking for its train.
+    pending_pa_sync: Option<PendingPaSync>,
+    /// Periodic advertising trains this controller is synchronized to.
+    pa_syncs: Vec<PaSync>,
+    /// The BIG this controller transmits, if a host created one.
+    big: Option<BigSource>,
+    /// BIGs this controller has joined as a receiver.
+    big_sinks: Vec<BigSink>,
     /// H4 packets to deliver to this device's host at the end of the tick.
     outbox: VecDeque<Vec<u8>>,
 }
@@ -394,8 +565,37 @@ impl SimController {
             connections: Vec::new(),
             position: Position::default(),
             cs: None,
+            ext_adv_sets: Vec::new(),
+            ext_scanning: false,
+            pending_pa_sync: None,
+            pa_syncs: Vec::new(),
+            big: None,
+            big_sinks: Vec::new(),
             outbox: VecDeque::new(),
         }
+    }
+
+    /// The advertising set with `handle`, creating an empty one if the host
+    /// has not touched it yet — the order the parameter/data/enable commands
+    /// arrive in is the host's business, not the controller's.
+    fn ext_adv_set(&mut self, handle: u8) -> &mut ExtAdvSet {
+        if let Some(index) = self
+            .ext_adv_sets
+            .iter()
+            .position(|s| s.advertising_handle == handle)
+        {
+            return &mut self.ext_adv_sets[index];
+        }
+        self.ext_adv_sets.push(ExtAdvSet {
+            advertising_handle: handle,
+            ..Default::default()
+        });
+        self.ext_adv_sets.last_mut().expect("just pushed")
+    }
+
+    /// Whether `handle` names one of this controller's live connections.
+    fn is_connected(&self, handle: u16) -> bool {
+        self.connections.iter().any(|c| c.handle == handle)
     }
 
     /// Reset to power-on defaults (HCI Reset).
@@ -410,6 +610,12 @@ impl SimController {
         self.pending_connect = None;
         self.connections.clear();
         self.cs = None;
+        self.ext_adv_sets.clear();
+        self.ext_scanning = false;
+        self.pending_pa_sync = None;
+        self.pa_syncs.clear();
+        self.big = None;
+        self.big_sinks.clear();
     }
 }
 
@@ -453,6 +659,29 @@ enum Action {
         handle: u16,
         config_id: u8,
         enable: bool,
+    },
+    /// LE Create BIG. Deferred because allocating the BIS connection handles
+    /// needs the [`Link`]'s handle counter, not just the one controller.
+    CreateBig {
+        from: usize,
+        /// The BIG as the host described it in LE Create BIG.
+        source: Box<BigSource>,
+        /// How many BISes to allocate handles for.
+        num_bis: u8,
+    },
+    /// LE Terminate BIG. Touches every receiver synchronized to it, which is
+    /// how they learn the source is gone.
+    TerminateBig { from: usize, big_handle: u8 },
+    /// LE BIG Create Sync. Needs the source controller's BIG to answer, and
+    /// the handle counter to name the receiver's own BIS handles.
+    BigCreateSync {
+        from: usize,
+        big_handle: u8,
+        sync_handle: u16,
+        encryption: u8,
+        broadcast_code: [u8; 16],
+        /// 1-based BIS indices the host asked to join.
+        indices: Vec<u8>,
     },
 }
 
@@ -605,6 +834,11 @@ impl Link {
             }
         }
 
+        // Phase B2: extended advertising reports. Legacy reports above cannot
+        // carry an Advertising SID, so this is the only path by which a
+        // broadcast receiver can find a source's periodic train.
+        self.tick_extended_advertising();
+
         // Phase C: pending connections — a scanner that asked to connect to an
         // advertiser's address is joined to it once that advertiser is on air.
         for i in 0..self.controllers.len() {
@@ -618,6 +852,11 @@ impl Link {
                 self.controllers[i].pending_connect = None;
             }
         }
+
+        // Phase C2: resolve any outstanding LE Periodic Advertising Create
+        // Sync, the same "keep looking until the target is on air" shape as
+        // the pending connections above.
+        self.tick_periodic_sync_requests();
 
         // Phase D: apply disconnects and ACL routing (touch two controllers).
         for action in actions {
@@ -638,11 +877,38 @@ impl Link {
                     config_id,
                     enable,
                 } => self.route_cs_enable(from, handle, config_id, enable),
+                Action::CreateBig {
+                    from,
+                    source,
+                    num_bis,
+                } => self.route_create_big(from, *source, num_bis),
+                Action::TerminateBig { from, big_handle } => {
+                    self.route_terminate_big(from, big_handle)
+                }
+                Action::BigCreateSync {
+                    from,
+                    big_handle,
+                    sync_handle,
+                    encryption,
+                    broadcast_code,
+                    indices,
+                } => self.route_big_create_sync(
+                    from,
+                    big_handle,
+                    sync_handle,
+                    encryption,
+                    broadcast_code,
+                    &indices,
+                ),
             }
         }
 
         // Phase D2: run one Channel Sounding procedure per enabled session.
         self.tick_channel_sounding();
+
+        // Phase D3: one periodic advertising report — and, where a BIG hangs
+        // off the train, one BIGInfo report — to every synchronized receiver.
+        self.tick_periodic_advertising();
 
         // Phase E: flush every outbox to its host.
         for c in &mut self.controllers {
@@ -753,7 +1019,17 @@ impl Link {
                 // waits for the completion event gets one, and a host that
                 // skips the step is not stopped, which is the difference that
                 // matters for a demo. Vol 4, Part E, Section 7.8.133.
+                //
+                // A handle that names no connection is refused, though: every
+                // Channel Sounding command runs *on* a connection, and a
+                // controller that accepted one without would leave the host
+                // waiting for a completion event that can never come.
                 let handle = le_u16(params, 0);
+                if !c.is_connected(handle) {
+                    c.outbox
+                        .push_back(command_status(STATUS_UNKNOWN_CONNECTION, opcode));
+                    return;
+                }
                 c.outbox.push_back(command_status(STATUS_SUCCESS, opcode));
                 let mut body = vec![event::LE_CS_SECURITY_ENABLE_COMPLETE, STATUS_SUCCESS];
                 body.extend_from_slice(&handle.to_le_bytes());
@@ -767,6 +1043,11 @@ impl Link {
                     let config_id = params[2];
                     let propagate_to_peer = params[3] == 0x01;
                     let role = params[10];
+                    if !c.is_connected(handle) {
+                        c.outbox
+                            .push_back(command_status(STATUS_UNKNOWN_CONNECTION, opcode));
+                        return;
+                    }
                     c.outbox.push_back(command_status(STATUS_SUCCESS, opcode));
                     actions.push(Action::CsConfigure {
                         from: i,
@@ -810,6 +1091,190 @@ impl Link {
             opcode::LE_CS_REMOVE_CONFIG => {
                 c.cs = None;
                 c.outbox.push_back(command_status(STATUS_SUCCESS, opcode));
+            }
+
+            // --- extended and periodic advertising ---------------------------
+            opcode::LE_SET_EXT_ADV_PARAMS => {
+                // The SID is the last octet before scan_request_notification;
+                // it and the advertising handle are the only fields that
+                // change what a receiver can find.
+                if let Ok(params) = LeSetExtendedAdvertisingParameters::ref_from_bytes(params) {
+                    let sid = params.advertising_sid;
+                    c.ext_adv_set(params.advertising_handle).advertising_sid = sid;
+                }
+                // Status, then the selected TX power (Vol 4, Part E, 7.8.53).
+                c.outbox
+                    .push_back(command_complete(opcode, &[STATUS_SUCCESS, 0x00]));
+            }
+            opcode::LE_SET_EXT_ADV_DATA => {
+                if let Some((header, data)) = LeSetExtendedAdvertisingDataHeader::parse(params) {
+                    let (handle, operation, data) = (header.advertising_handle, header.operation, data.to_vec());
+                    let set = c.ext_adv_set(handle);
+                    // Only a complete-data write is modelled; a host that
+                    // fragments would need the first/intermediate/last states.
+                    if operation == data_operation::COMPLETE {
+                        set.data = data;
+                    }
+                }
+                c.outbox
+                    .push_back(command_complete(opcode, &[STATUS_SUCCESS]));
+            }
+            opcode::LE_SET_EXT_ADV_ENABLE => {
+                if let Some((header, entries)) = LeSetExtendedAdvertisingEnableHeader::parse(params)
+                {
+                    let enable = header.enable == 0x01;
+                    let handles: Vec<u8> =
+                        entries.iter().map(|e| e.advertising_handle).collect();
+                    for handle in handles {
+                        c.ext_adv_set(handle).enabled = enable;
+                    }
+                }
+                c.outbox
+                    .push_back(command_complete(opcode, &[STATUS_SUCCESS]));
+            }
+            opcode::LE_SET_PERIODIC_ADV_DATA => {
+                if let Some((header, data)) = LeSetPeriodicAdvertisingDataHeader::parse(params) {
+                    let (handle, operation, data) = (header.advertising_handle, header.operation, data.to_vec());
+                    let set = c.ext_adv_set(handle);
+                    if operation == data_operation::COMPLETE {
+                        set.periodic_data = data;
+                    }
+                }
+                c.outbox
+                    .push_back(command_complete(opcode, &[STATUS_SUCCESS]));
+            }
+            opcode::LE_SET_PERIODIC_ADV_ENABLE => {
+                if let Ok(enable) = LeSetPeriodicAdvertisingEnable::ref_from_bytes(params) {
+                    let on = enable.enable & 0x01 == 0x01;
+                    c.ext_adv_set(enable.advertising_handle).periodic_enabled = on;
+                }
+                c.outbox
+                    .push_back(command_complete(opcode, &[STATUS_SUCCESS]));
+            }
+            opcode::LE_SET_EXT_SCAN_ENABLE => {
+                if let Ok(enable) = LeSetExtendedScanEnable::ref_from_bytes(params) {
+                    c.ext_scanning = enable.enable == 0x01;
+                }
+                c.outbox
+                    .push_back(command_complete(opcode, &[STATUS_SUCCESS]));
+            }
+            opcode::LE_PERIODIC_ADV_CREATE_SYNC => {
+                if let Ok(sync) = LePeriodicAdvertisingCreateSync::ref_from_bytes(params) {
+                    let mut be = sync.advertiser_address;
+                    be.reverse();
+                    c.pending_pa_sync = Some(PendingPaSync {
+                        address: Address::from_be_bytes(be),
+                        advertising_sid: sync.advertising_sid,
+                    });
+                    c.outbox.push_back(command_status(STATUS_SUCCESS, opcode));
+                } else {
+                    c.outbox
+                        .push_back(command_status(STATUS_INVALID_PARAMETERS, opcode));
+                }
+            }
+            opcode::LE_PERIODIC_ADV_TERMINATE_SYNC => {
+                let handle = le_u16(params, 0);
+                c.pa_syncs.retain(|s| s.sync_handle != handle);
+                c.outbox
+                    .push_back(command_complete(opcode, &[STATUS_SUCCESS]));
+            }
+
+            // --- Broadcast Isochronous Groups --------------------------------
+            opcode::LE_CREATE_BIG => {
+                let Ok(create) = LeCreateBig::ref_from_bytes(params) else {
+                    c.outbox
+                        .push_back(command_status(STATUS_INVALID_PARAMETERS, opcode));
+                    return;
+                };
+                // A BIG rides in the ACAD of a periodic train, so there has to
+                // be one running on the named advertising set. This is the
+                // refusal a host meets when it enables the BIG before the
+                // train, and the reason the setup sequence has the order it
+                // does.
+                let train_running = c.ext_adv_sets.iter().any(|s| {
+                    s.advertising_handle == create.advertising_handle
+                        && s.enabled
+                        && s.periodic_enabled
+                });
+                if !train_running || create.num_bis == 0 {
+                    c.outbox
+                        .push_back(command_status(STATUS_COMMAND_DISALLOWED, opcode));
+                    return;
+                }
+                c.outbox.push_back(command_status(STATUS_SUCCESS, opcode));
+                actions.push(Action::CreateBig {
+                    from: i,
+                    num_bis: create.num_bis,
+                    source: Box::new(BigSource {
+                        big_handle: create.big_handle,
+                        advertising_handle: create.advertising_handle,
+                        bis_handles: Vec::new(),
+                        encryption: create.encryption,
+                        broadcast_code: create.broadcast_code,
+                        sdu_interval_us: create.sdu_interval.get(),
+                        max_sdu: create.max_sdu.get(),
+                        phy: create.phy,
+                        framing: create.framing,
+                    }),
+                });
+            }
+            opcode::LE_TERMINATE_BIG => {
+                let Ok(terminate) = LeTerminateBig::ref_from_bytes(params) else {
+                    c.outbox
+                        .push_back(command_status(STATUS_INVALID_PARAMETERS, opcode));
+                    return;
+                };
+                if c.big.as_ref().map(|b| b.big_handle) != Some(terminate.big_handle) {
+                    c.outbox
+                        .push_back(command_status(STATUS_UNKNOWN_CONNECTION, opcode));
+                    return;
+                }
+                c.outbox.push_back(command_status(STATUS_SUCCESS, opcode));
+                actions.push(Action::TerminateBig {
+                    from: i,
+                    big_handle: terminate.big_handle,
+                });
+            }
+            opcode::LE_BIG_CREATE_SYNC => {
+                let Some((header, indices)) = LeBigCreateSyncHeader::parse(params) else {
+                    c.outbox
+                        .push_back(command_status(STATUS_INVALID_PARAMETERS, opcode));
+                    return;
+                };
+                let sync_handle = header.sync_handle.get();
+                // 0x42 is Unknown Advertising Identifier, which is what a
+                // controller answers for a sync handle it never issued.
+                if !c.pa_syncs.iter().any(|s| s.sync_handle == sync_handle) {
+                    c.outbox
+                        .push_back(command_status(STATUS_UNKNOWN_ADVERTISING_ID, opcode));
+                    return;
+                }
+                let action = Action::BigCreateSync {
+                    from: i,
+                    big_handle: header.big_handle,
+                    sync_handle,
+                    encryption: header.encryption,
+                    broadcast_code: header.broadcast_code,
+                    indices: indices.to_vec(),
+                };
+                c.outbox.push_back(command_status(STATUS_SUCCESS, opcode));
+                actions.push(action);
+            }
+            opcode::LE_BIG_TERMINATE_SYNC => {
+                // Answered by Command Complete and by nothing else: leaving a
+                // BIG raises no BIG Sync Lost, because nothing was lost. A
+                // host that waits for one waits forever.
+                let big_handle = params.first().copied().unwrap_or(0);
+                let known = c.big_sinks.iter().any(|s| s.big_handle == big_handle);
+                c.big_sinks.retain(|s| s.big_handle != big_handle);
+                let status = if known {
+                    STATUS_SUCCESS
+                } else {
+                    STATUS_UNKNOWN_CONNECTION
+                };
+                let response = LeBigTerminateSyncResponse { status, big_handle };
+                c.outbox
+                    .push_back(command_complete(opcode, response.as_bytes()));
             }
             opcode::DISCONNECT => {
                 let handle = params
@@ -868,6 +1333,15 @@ impl Link {
         self.controllers[peer]
             .connections
             .retain(|c| c.handle != handle);
+        // A Channel Sounding configuration lives on a connection and dies with
+        // it. Leaving it behind would let a *later* connection that happened to
+        // reuse the handle inherit a procedure its host never created — and
+        // would leave `enabled` set on a session whose peer is gone.
+        for index in [from, peer] {
+            if self.controllers[index].cs.is_some_and(|s| s.handle == handle) {
+                self.controllers[index].cs = None;
+            }
+        }
         self.controllers[from]
             .outbox
             .push_back(disconnection_complete(handle, REASON_LOCAL_HOST));
@@ -887,7 +1361,14 @@ impl Link {
 
     /// Delivers an isochronous SDU to the connection's peer — the media
     /// plane's counterpart to [`Self::route_acl`].
+    ///
+    /// A BIS handle is tried first: it belongs to a broadcast rather than to a
+    /// connection, so its SDU goes to everyone synchronized to that BIG and to
+    /// nobody in particular.
     fn route_iso(&mut self, from: usize, handle: u16, data: &[u8]) {
+        if self.route_bis_iso(from, handle, data) {
+            return;
+        }
         if let Some(peer) = self.peer_of(from, handle) {
             let mut pkt = vec![h4_type::HCI_ISO_DATA];
             pkt.extend_from_slice(data);
@@ -969,7 +1450,30 @@ impl Link {
     }
 
     /// Enables or disables the configuration on both ends of `handle`.
+    ///
+    /// A request naming a configuration this controller never created is
+    /// refused with an LE CS Procedure Enable Complete carrying Command
+    /// Disallowed, rather than ignored. Silence would be worse than an error:
+    /// the requesting host blocks on that event, so a controller that says
+    /// nothing hangs it forever with no way to tell that apart from a
+    /// procedure that is merely slow to start.
     fn route_cs_enable(&mut self, from: usize, handle: u16, config_id: u8, enable: bool) {
+        let requester_has_config = self.controllers[from]
+            .cs
+            .is_some_and(|s| s.handle == handle && s.config_id == config_id);
+        if !requester_has_config {
+            let tx_power = self.path_loss.tx_power_dbm;
+            self.controllers[from]
+                .outbox
+                .push_back(cs_procedure_enable_complete(
+                    STATUS_COMMAND_DISALLOWED,
+                    handle,
+                    config_id,
+                    false,
+                    tx_power,
+                ));
+            return;
+        }
         let peer = self.peer_of(from, handle);
         for index in [Some(from), peer].into_iter().flatten() {
             let Some(session) = self.controllers[index].cs.as_mut() else {
@@ -983,7 +1487,11 @@ impl Link {
             self.controllers[index]
                 .outbox
                 .push_back(cs_procedure_enable_complete(
-                    handle, config_id, enable, tx_power,
+                    STATUS_SUCCESS,
+                    handle,
+                    config_id,
+                    enable,
+                    tx_power,
                 ));
         }
     }
@@ -1065,6 +1573,295 @@ impl Link {
                 }
             }
         }
+    }
+
+    // --- broadcast (periodic advertising + BIG) ----------------------------
+    //
+    // What follows models the *sequencing* of an Auracast broadcast, and only
+    // that. There is no radio in it: a periodic train is found the moment a
+    // receiver looks for it, every report arrives intact, BIS handles are
+    // whatever the handle counter says next, and an SDU written by the source
+    // reaches every synchronized receiver in the same tick, in order, always.
+    //
+    // What it does model is the part a state machine can get wrong: which
+    // command is legal when, which event answers which command, what the peer
+    // is told when a BIG appears or goes away, and the fact that a broadcast
+    // has no back-channel — a receiver's controller learns everything from the
+    // train and tells the source nothing. The BIGInfo a receiver reads is
+    // derived from the source's own LE Create BIG parameters, so a broadcaster
+    // that fills that command in wrongly is contradicted by its own receiver
+    // rather than agreed with.
+    //
+    // Not modelled: ISO data paths (an SDU is delivered whether or not
+    // LE Setup ISO Data Path was issued), periodic advertising intervals,
+    // sync timeouts, encryption (the broadcast code is compared, never used to
+    // encrypt), and fragmented advertising data.
+
+    /// Delivers one extended advertising report per enabled advertising set to
+    /// every extended-scanning controller.
+    fn tick_extended_advertising(&mut self) {
+        let advertisers: Vec<(Address, u8, Vec<u8>, Position)> = self
+            .controllers
+            .iter()
+            .flat_map(|c| {
+                c.ext_adv_sets
+                    .iter()
+                    .filter(|s| s.enabled)
+                    .map(|s| (c.address, s.advertising_sid, s.data.clone(), c.position))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        if advertisers.is_empty() {
+            return;
+        }
+        let path_loss = self.path_loss;
+        for i in 0..self.controllers.len() {
+            if !self.controllers[i].ext_scanning {
+                continue;
+            }
+            let (scanner_address, scanner_position) =
+                (self.controllers[i].address, self.controllers[i].position);
+            for (address, sid, data, position) in &advertisers {
+                if *address == scanner_address {
+                    continue;
+                }
+                let shadowing = self.rng.normal_scaled(path_loss.shadowing_sigma_db);
+                let rssi = quantize_rssi(
+                    path_loss.rssi_dbm(position.distance_to(scanner_position), shadowing),
+                );
+                self.controllers[i]
+                    .outbox
+                    .push_back(le_extended_advertising_report(*address, *sid, data, rssi));
+            }
+        }
+    }
+
+    /// Joins any controller waiting on an LE Periodic Advertising Create Sync
+    /// to the train it named, once that train is on air.
+    fn tick_periodic_sync_requests(&mut self) {
+        for i in 0..self.controllers.len() {
+            let Some(pending) = self.controllers[i].pending_pa_sync else {
+                continue;
+            };
+            let found = self.controllers.iter().enumerate().find_map(|(index, c)| {
+                if c.address != pending.address {
+                    return None;
+                }
+                c.ext_adv_sets
+                    .iter()
+                    .find(|s| {
+                        s.periodic_enabled && s.advertising_sid == pending.advertising_sid
+                    })
+                    .map(|s| (index, s.advertising_handle))
+            });
+            let Some((source, advertising_handle)) = found else {
+                // No such train yet. A real controller gives up after
+                // Sync_Timeout; nothing here does, so the request simply waits.
+                continue;
+            };
+            let sync_handle = self.alloc_handle();
+            self.controllers[i].pending_pa_sync = None;
+            self.controllers[i].pa_syncs.push(PaSync {
+                sync_handle,
+                source,
+                advertising_handle,
+            });
+            let (address, sid) = (pending.address, pending.advertising_sid);
+            self.controllers[i]
+                .outbox
+                .push_back(le_periodic_sync_established(sync_handle, sid, address));
+        }
+    }
+
+    /// Delivers the periodic train's contents to everyone synchronized to it:
+    /// the periodic advertising data the source set, and — when a BIG hangs
+    /// off that set — a BIGInfo report derived from the source's LE Create BIG.
+    fn tick_periodic_advertising(&mut self) {
+        let syncs: Vec<(usize, PaSync)> = self
+            .controllers
+            .iter()
+            .enumerate()
+            .flat_map(|(i, c)| c.pa_syncs.iter().map(move |s| (i, *s)))
+            .collect();
+        for (listener, sync) in syncs {
+            let source = &self.controllers[sync.source];
+            let Some(set) = source
+                .ext_adv_sets
+                .iter()
+                .find(|s| s.advertising_handle == sync.advertising_handle)
+            else {
+                continue;
+            };
+            if !set.periodic_enabled {
+                continue;
+            }
+            let data = set.periodic_data.clone();
+            let big_info = source
+                .big
+                .as_ref()
+                .filter(|b| b.advertising_handle == sync.advertising_handle)
+                .map(|b| le_big_info_report(sync.sync_handle, b));
+            if !data.is_empty() {
+                self.controllers[listener]
+                    .outbox
+                    .push_back(le_periodic_advertising_report(sync.sync_handle, &data));
+            }
+            if let Some(report) = big_info {
+                self.controllers[listener].outbox.push_back(report);
+            }
+        }
+    }
+
+    /// Creates a BIG on `from`: allocates one connection handle per BIS and
+    /// answers with LE Create BIG Complete, the only place those handles are
+    /// ever announced.
+    fn route_create_big(&mut self, from: usize, mut source: BigSource, num_bis: u8) {
+        source.bis_handles = (0..num_bis).map(|_| self.alloc_handle()).collect();
+        let handles = source.bis_handles.clone();
+        let big_handle = source.big_handle;
+        self.controllers[from].big = Some(source);
+        self.controllers[from]
+            .outbox
+            .push_back(le_create_big_complete(STATUS_SUCCESS, big_handle, &handles));
+    }
+
+    /// Tears down `from`'s BIG: the source's host gets LE Terminate BIG
+    /// Complete, and every receiver synchronized to it gets LE BIG Sync Lost
+    /// with Remote User Terminated Connection.
+    ///
+    /// This is the whole asymmetry of broadcast in one method. The source is
+    /// not told who was listening — it has no way to know — and the receivers
+    /// are not asked, they are simply informed, out of nowhere, by their own
+    /// controllers.
+    fn route_terminate_big(&mut self, from: usize, big_handle: u8) {
+        self.controllers[from].big = None;
+        self.controllers[from]
+            .outbox
+            .push_back(le_terminate_big_complete(big_handle, REASON_LOCAL_HOST));
+
+        for i in 0..self.controllers.len() {
+            let lost: Vec<u8> = self.controllers[i]
+                .big_sinks
+                .iter()
+                .filter(|s| s.source == from)
+                .map(|s| s.big_handle)
+                .collect();
+            self.controllers[i].big_sinks.retain(|s| s.source != from);
+            for handle in lost {
+                self.controllers[i]
+                    .outbox
+                    .push_back(le_big_sync_lost(handle, REASON_REMOTE_USER));
+            }
+        }
+    }
+
+    /// Joins `from` to the BIG on the periodic train it is synchronized to,
+    /// answering with LE BIG Sync Established.
+    fn route_big_create_sync(
+        &mut self,
+        from: usize,
+        big_handle: u8,
+        sync_handle: u16,
+        encryption: u8,
+        broadcast_code: [u8; 16],
+        indices: &[u8],
+    ) {
+        let sync = self.controllers[from]
+            .pa_syncs
+            .iter()
+            .find(|s| s.sync_handle == sync_handle)
+            .copied();
+        let source_big = sync.and_then(|s| {
+            self.controllers[s.source]
+                .big
+                .as_ref()
+                .filter(|b| b.advertising_handle == s.advertising_handle)
+                .map(|b| (s.source, b.clone()))
+        });
+        let Some((source, big)) = source_big else {
+            self.controllers[from]
+                .outbox
+                .push_back(le_big_sync_established(STATUS_COMMAND_DISALLOWED, big_handle, &[]));
+            return;
+        };
+        // Every requested index has to exist in the source's BIG, and an
+        // encrypted BIG has to be opened with the code it was created with.
+        // A receiver that gets either wrong hears nothing; saying so with a
+        // status is the difference between a stream that fails and one that
+        // silently stays quiet.
+        let indices_valid = !indices.is_empty()
+            && indices
+                .iter()
+                .all(|&index| index >= 1 && usize::from(index) <= big.bis_handles.len());
+        let code_valid =
+            encryption == big.encryption && (encryption == 0 || broadcast_code == big.broadcast_code);
+        if !indices_valid {
+            self.controllers[from]
+                .outbox
+                .push_back(le_big_sync_established(STATUS_INVALID_PARAMETERS, big_handle, &[]));
+            return;
+        }
+        if !code_valid {
+            self.controllers[from]
+                .outbox
+                .push_back(le_big_sync_established(STATUS_CONNECTION_FAILED, big_handle, &[]));
+            return;
+        }
+        let bis_handles: Vec<u16> = (0..indices.len()).map(|_| self.alloc_handle()).collect();
+        self.controllers[from].big_sinks.push(BigSink {
+            big_handle,
+            source,
+            indices: indices.to_vec(),
+            bis_handles: bis_handles.clone(),
+        });
+        self.controllers[from]
+            .outbox
+            .push_back(le_big_sync_established(
+                STATUS_SUCCESS,
+                big_handle,
+                &bis_handles,
+            ));
+    }
+
+    /// Fans one SDU written on a BIS out to every receiver synchronized to
+    /// that BIG, rewriting the handle to the one *that* receiver was given.
+    ///
+    /// Returns false if the handle is not one of this controller's BIS
+    /// handles, so the caller can fall back to connection-oriented routing.
+    fn route_bis_iso(&mut self, from: usize, handle: u16, data: &[u8]) -> bool {
+        let Some(slot) = self.controllers[from]
+            .big
+            .as_ref()
+            .and_then(|b| b.bis_handles.iter().position(|&h| h == handle))
+        else {
+            return false;
+        };
+        // The source's slot `n` is BIS index `n + 1`; a receiver may have
+        // joined any subset of the indices, so the delivery handle is looked
+        // up by index, not by position.
+        let bis_index = (slot + 1) as u8;
+        let deliveries: Vec<(usize, u16)> = self
+            .controllers
+            .iter()
+            .enumerate()
+            .flat_map(|(i, c)| {
+                c.big_sinks
+                    .iter()
+                    .filter(|s| s.source == from)
+                    .filter_map(move |s| {
+                        let position = s.indices.iter().position(|&index| index == bis_index)?;
+                        Some((i, *s.bis_handles.get(position)?))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        for (listener, listener_handle) in deliveries {
+            let mut packet = vec![h4_type::HCI_ISO_DATA];
+            packet.extend_from_slice(data);
+            rewrite_iso_handle(&mut packet[1..], listener_handle);
+            self.controllers[listener].outbox.push_back(packet);
+        }
+        true
     }
 
     /// The peer controller index for `from`'s connection on `handle`, if any.
@@ -1156,6 +1953,149 @@ fn le_advertising_report(
     event_packet(event::LE_META, &body)
 }
 
+// --- broadcast events ------------------------------------------------------
+
+/// LE Extended Advertising Report carrying one non-connectable report, which
+/// is the only shape a broadcast source advertises in.
+fn le_extended_advertising_report(
+    address: Address,
+    advertising_sid: u8,
+    data: &[u8],
+    rssi_dbm: i8,
+) -> Vec<u8> {
+    let header = ExtendedAdvertisingReportHeader {
+        // No event-type bits: not connectable, not scannable, not a legacy
+        // PDU, data complete.
+        event_type: U16::new(0),
+        address_type: 0x00, // public
+        address: addr_le(address),
+        primary_phy: adv_phy::LE_1M,
+        secondary_phy: adv_phy::LE_2M,
+        advertising_sid,
+        tx_power: 0x7F, // not available
+        rssi: rssi_dbm,
+        periodic_advertising_interval: U16::new(0),
+        direct_address_type: 0x00,
+        direct_address: [0; 6],
+        data_length: data.len() as u8,
+    };
+    let mut body = vec![ext_adv_subevent_code::LE_EXTENDED_ADVERTISING_REPORT];
+    body.extend_from_slice(&LeExtendedAdvertisingReportEvent::serialize(&[(
+        header, data,
+    )]));
+    event_packet(event::LE_META, &body)
+}
+
+/// LE Periodic Advertising Sync Established, the event that hands a receiver
+/// the sync handle everything else about a broadcast is addressed by.
+fn le_periodic_sync_established(sync_handle: u16, advertising_sid: u8, address: Address) -> Vec<u8> {
+    let body = LePeriodicAdvertisingSyncEstablishedEvent {
+        status: STATUS_SUCCESS,
+        sync_handle: U16::new(sync_handle),
+        advertising_sid,
+        advertiser_address_type: 0x00,
+        advertiser_address: addr_le(address),
+        advertiser_phy: adv_phy::LE_2M,
+        periodic_advertising_interval: U16::new(0),
+        advertiser_clock_accuracy: 0x00,
+    };
+    let mut packet_body = vec![ext_adv_subevent_code::LE_PERIODIC_ADVERTISING_SYNC_ESTABLISHED];
+    packet_body.extend_from_slice(body.as_bytes());
+    event_packet(event::LE_META, &packet_body)
+}
+
+/// LE Periodic Advertising Report carrying the whole train payload in one
+/// complete report — nothing here fragments.
+fn le_periodic_advertising_report(sync_handle: u16, data: &[u8]) -> Vec<u8> {
+    let mut body = vec![ext_adv_subevent_code::LE_PERIODIC_ADVERTISING_REPORT];
+    body.extend_from_slice(&LePeriodicAdvertisingReportEventHeader::serialize(
+        sync_handle,
+        0x7F, // TX power not available
+        0x7F, // RSSI not available
+        0xFF, // no CTE
+        0x00, // data status: complete
+        data,
+    ));
+    event_packet(event::LE_META, &body)
+}
+
+/// LE BIGInfo Advertising Report, derived from the source's own LE Create BIG.
+///
+/// Every field a receiver acts on — the BIS count and the encryption flag
+/// above all — is read back out of what the broadcaster's host asked for,
+/// never chosen here. The scheduling fields (`nse`, `bn`, `pto`, `irc`,
+/// `max_pdu`, `iso_interval`) *are* chosen here, because nothing schedules
+/// anything: they are plausible constants, not a plan the radio will follow.
+fn le_big_info_report(sync_handle: u16, big: &BigSource) -> Vec<u8> {
+    let report = LeBigInfoAdvertisingReportEvent {
+        sync_handle: U16::new(sync_handle),
+        num_bis: big.bis_handles.len() as u8,
+        nse: 3,
+        iso_interval: U16::new(8),
+        bn: 1,
+        pto: 0,
+        irc: 2,
+        max_pdu: U16::new(big.max_sdu),
+        sdu_interval: ExtU24::new(big.sdu_interval_us),
+        max_sdu: U16::new(big.max_sdu),
+        phy: big.phy,
+        framing: big.framing,
+        encryption: big.encryption,
+    };
+    let mut body = vec![big_subevent_code::LE_BIGINFO_ADVERTISING_REPORT];
+    body.extend_from_slice(report.as_bytes());
+    event_packet(event::LE_META, &body)
+}
+
+/// LE Create BIG Complete, which is the only announcement of the BIS
+/// connection handles a source may write SDUs on.
+fn le_create_big_complete(status: u8, big_handle: u8, handles: &[u16]) -> Vec<u8> {
+    let mut body = vec![big_subevent_code::LE_CREATE_BIG_COMPLETE];
+    body.extend_from_slice(&LeCreateBigCompleteEventHeader::serialize(
+        status, big_handle, 0x0186A0, 0x0124F8, adv_phy::LE_2M, 3, 1, 0, 2, 100, 8, handles,
+    ));
+    event_packet(event::LE_META, &body)
+}
+
+/// LE Terminate BIG Complete — the source's own confirmation, echoing the
+/// reason it gave.
+fn le_terminate_big_complete(big_handle: u8, reason: u8) -> Vec<u8> {
+    let body = LeTerminateBigCompleteEvent { big_handle, reason };
+    let mut packet_body = vec![big_subevent_code::LE_TERMINATE_BIG_COMPLETE];
+    packet_body.extend_from_slice(body.as_bytes());
+    event_packet(event::LE_META, &packet_body)
+}
+
+/// LE BIG Sync Established, carrying the receiver's own BIS handles.
+fn le_big_sync_established(status: u8, big_handle: u8, handles: &[u16]) -> Vec<u8> {
+    let mut body = vec![big_subevent_code::LE_BIG_SYNC_ESTABLISHED];
+    body.extend_from_slice(&LeBigSyncEstablishedEventHeader::serialize(
+        status, big_handle, 0x0124F8, 3, 1, 0, 2, 100, 8, handles,
+    ));
+    event_packet(event::LE_META, &body)
+}
+
+/// LE BIG Sync Lost — what a receiver is told when the stream ends without it
+/// asking. A receiver that left the BIG itself gets a Command Complete
+/// instead, and no event at all.
+fn le_big_sync_lost(big_handle: u8, reason: u8) -> Vec<u8> {
+    let body = LeBigSyncLostEvent { big_handle, reason };
+    let mut packet_body = vec![big_subevent_code::LE_BIG_SYNC_LOST];
+    packet_body.extend_from_slice(body.as_bytes());
+    event_packet(event::LE_META, &packet_body)
+}
+
+/// Replaces the connection handle in an HCI ISO packet body (handle+flags,
+/// then length, then payload), keeping the packet-boundary flags.
+fn rewrite_iso_handle(body: &mut [u8], handle: u16) {
+    if body.len() < 2 {
+        return;
+    }
+    let flags = u16::from_le_bytes([body[0], body[1]]) & 0xF000;
+    let value = (handle & 0x0FFF) | flags;
+    body[0..2].copy_from_slice(&value.to_le_bytes());
+}
+
 /// Rounds a received power to the signed whole dBm an HCI report carries.
 ///
 /// A controller reports RSSI as one byte, so a demo cannot show more
@@ -1215,13 +2155,14 @@ fn cs_channel_map() -> [u8; 10] {
 
 /// LE CS Procedure Enable Complete (Vol 4, Part E, Section 7.7.65.48).
 fn cs_procedure_enable_complete(
+    status: u8,
     handle: u16,
     config_id: u8,
     enabled: bool,
     tx_power_dbm: f64,
 ) -> Vec<u8> {
     let body = LeCsProcedureEnableCompleteBody {
-        status: STATUS_SUCCESS,
+        status,
         connection_handle: U16::new(handle),
         config_id,
         state: u8::from(enabled),
