@@ -932,7 +932,9 @@ const TEMPLATE = `
 
   <div class="col">
     <section class="panel">
-      <h2>The speaker</h2>
+      <h2>The speaker, as a device</h2>
+      <div id="sink-head"></div>
+      <div id="sink-script"></div>
       <div class="speaker-stage">
         <svg id="speakerSvg" viewBox="0 0 150 120" role="img" aria-label="speaker">
           <rect x="8" y="20" width="58" height="80" rx="8" fill="#57606a"/>
@@ -984,18 +986,13 @@ const TEMPLATE = `
       </p>
       <p class="hint" id="mode-hint" style="margin-top:0.5rem"></p>
       <div id="script-error" class="error"></div>
-    </section>
-
-    <section class="panel">
-      <h2>The sink, as a device</h2>
-      <div id="sink-head"></div>
-      <div id="sink-script"></div>
       <dl class="kv">
         <dt>connection</dt><dd id="dev-conn">—</dd>
         <dt>subscription</dt><dd id="dev-sub">—</dd>
       </dl>
       <div id="gatt"></div>
     </section>
+
   </div>
 
   <section id="setup" class="panel setup full">
