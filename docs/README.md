@@ -10,6 +10,7 @@ What each file is, and whether it describes the present.
 | `test-strategy.md` | What the tests here can and cannot prove; where the oracle gaps are. |
 | `sig-as-oracle.md` | What the Bluetooth SIG publishes, which of it a script can consume, and the licensing position. |
 | `bdd-evaluation.md` | Whether BDD is worth it: no as a runner, worth trying as an audited specification. |
+| `scripting-profile-apis.md` | Spec: profile APIs for scripts in Android's shape. 17 of 20 profiles have no script binding. |
 | `gaps.md` | What is missing or faked, and where each gap is already declared in code or UI. Re-derivable — it carries the commands. |
 
 ## Decision records — point-in-time by design, still useful
