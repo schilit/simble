@@ -30,7 +30,7 @@ import { createAboutBox } from "../common/about-box.js";
 /// reads this: an option mapped to a string is offered disabled, with that
 /// string as the reason, rather than hidden.
 export const SUPPORTS = { "in-page": true,
-  "websocket": "the HID host is not wired for netsim yet" };
+  "websocket": "the HID host is not wired for it yet" };
 
 
 // All four devices share one `WebLink`, and `WebLink` has `add_peripheral` and

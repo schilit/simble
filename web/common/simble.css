@@ -276,13 +276,18 @@ footer code { color: var(--good); }
 
 /* --- the controller bar, in the Devices shell chrome --------------------- */
 .controller-host { max-width: 72rem; margin: 0 auto; padding: 0.75rem 1.5rem 0; }
-.controller-bar { display: flex; align-items: center; gap: 0.9rem; flex-wrap: wrap;
+.controller-bar { display: flex; align-items: baseline; gap: 0.55rem 1rem; flex-wrap: wrap;
   background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
   padding: 0.55rem 0.9rem; font-size: 0.85rem; }
 .controller-label { font-size: 0.78rem; text-transform: uppercase;
   letter-spacing: 0.05em; color: var(--dim); font-weight: 600; }
-.controller-choice { display: flex; align-items: center; gap: 0.35rem; cursor: pointer; }
+/* Each choice may wrap, but never between the radio and its name: the
+   buttons stay on the first line and only the explanation moves down. */
+.controller-choice { display: flex; flex-wrap: wrap; align-items: baseline;
+  gap: 0.15rem 0.4rem; cursor: pointer; flex: 1 1 16rem; min-width: 0; }
+.controller-pick { display: inline-flex; align-items: center; gap: 0.35rem;
+  white-space: nowrap; }
 /* An option this domain cannot honour stays visible, with its reason. */
 .controller-choice.unusable { cursor: default; opacity: 0.65; }
-.controller-note { color: var(--dim); }
+.controller-note { color: var(--dim); min-width: 0; }
 .controller-help { margin-left: auto; font-size: 0.8rem; }

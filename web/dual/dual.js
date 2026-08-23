@@ -18,7 +18,7 @@ import { createAboutBox } from "../common/about-box.js";
 /// reads this: an option mapped to a string is offered disabled, with that
 /// string as the reason, rather than hidden.
 export const SUPPORTS = { "in-page": true,
-  "websocket": "both devices share one in-page link; this pair has no netsim path yet" };
+  "websocket": "both devices share one in-page link; this pair has no path here yet" };
 
 
 const STYLE_ID = "simble-generic-style";

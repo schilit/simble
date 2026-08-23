@@ -25,7 +25,7 @@ import { createAboutBox } from "../common/about-box.js";
 /// reads this: an option mapped to a string is offered disabled, with that
 /// string as the reason, rather than hidden.
 export const SUPPORTS = { "in-page": true,
-  "websocket": "the tag and locator need a radio that models distance; on netsim the radio is netsim's, and positions come from `netsim move`" };
+  "websocket": "the tag and locator need a radio that models distance; here the radio is netsim's own, and positions come from `netsim move`" };
 
 
 const TAG_ADDRESS = "CC:1E:57:00:00:0A";

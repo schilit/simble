@@ -25,7 +25,7 @@ import { createAboutBox } from "../common/about-box.js";
 /// reads this: an option mapped to a string is offered disabled, with that
 /// string as the reason, rather than hidden.
 export const SUPPORTS = { "in-page": true,
-  "websocket": "the phone and head unit hand frames straight to each other — no controller sits between them" };
+  "websocket": "the phone and head unit hand frames straight to each other — nothing sits between them" };
 
 
 // One timer for both endpoints. Chrome throttles a hidden tab hard enough

@@ -19,8 +19,11 @@ const STORE_KEY = "simble-backend";
 /// The controllers a domain may declare. Ids match the values the existing
 /// selector already writes, so a stored choice carries over.
 export const CONTROLLERS = [
-  { id: "in-page", label: "In browser", note: "built-in wasm controller" },
-  { id: "websocket", label: "netsim", note: "netsim / rootcanal over a WebSocket" },
+  // The bar is already labelled "Controller" and each option already carries
+  // its own name, so the notes say what is different about it and nothing
+  // that is already on screen.
+  { id: "in-page", label: "In browser", note: "wasm radio in this tab, no setup" },
+  { id: "websocket", label: "netsim", note: "rootcanal, over a WebSocket" },
 ];
 
 /// Reads the current choice. A stored value the caller cannot honour is not
@@ -85,10 +88,17 @@ export function createControllerBar({ supports, onChange }) {
       radio.disabled = !usable;
       radio.checked = c.id === selected;
 
+      // The radio and its name are one unit that never breaks; only the
+      // explanation is allowed to wrap, so the buttons always sit on the
+      // first line however long a reason gets.
+      const pick = document.createElement("span");
+      pick.className = "controller-pick";
+      const name = document.createElement("b");
+      name.textContent = c.label;
+
       const text = document.createElement("span");
-      text.innerHTML = `<b>${c.label}</b> <span class="controller-note">— ${
-        usable ? c.note : String(why)
-      }</span>`;
+      text.className = "controller-note";
+      text.textContent = `— ${usable ? c.note : String(why)}`;
 
       radio.addEventListener("change", () => {
         if (!radio.checked) return;
@@ -101,7 +111,8 @@ export function createControllerBar({ supports, onChange }) {
         onChange?.(c.id);
       });
 
-      wrap.append(radio, text);
+      pick.append(radio, name);
+      wrap.append(pick, text);
       el.insertBefore(wrap, help);
       inputs.push({ wrap });
     }
