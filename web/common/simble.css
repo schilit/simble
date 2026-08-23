@@ -259,14 +259,17 @@ footer code { color: var(--good); }
    folds. The stripe picks up the accent when open, so the chevron reads as a
    control rather than a stray glyph at the margin. */
 .about { background: var(--panel); border: 1px solid var(--border);
-  border-left: 3px solid var(--dim); border-radius: 8px; padding: 1rem; }
+  border-left: 3px solid var(--dim); border-radius: 8px;
+  padding: 0.85rem 1.1rem 0.9rem 1.25rem; }
 .about[open] { border-left-color: var(--accent); }
 .about > summary::marker { color: var(--dim); }
+/* The marker sits in its own space rather than crowding the left edge, and
+   the label is set off from it. */
 .about > summary { cursor: pointer; font-size: 0.82rem; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.05em; color: var(--dim);
-  list-style-position: outside; }
+  list-style-position: outside; padding-left: 0.4rem; }
 .about > summary:hover { color: var(--fg); }
-.about[open] > summary { margin-bottom: 0.5rem; }
+.about[open] > summary { margin-bottom: 0.85rem; }
 .about-body { font-size: 0.88rem; }
-.about-body p { margin: 0 0 0.5rem; }
+.about-body p { margin: 0 0 0.7rem; }
 .about-body p:last-child { margin-bottom: 0; }
