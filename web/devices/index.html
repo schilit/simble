@@ -8,16 +8,24 @@
 <link rel="stylesheet" href="../common/simble.css">
 <link rel="stylesheet" href="../common/nav.css">
 <style>
+  /* One band, not three. The nav already says SimBLE and highlights Devices,
+     and the browser tab title carries the active domain -- a heading here
+     repeated all of it and cost 76px before any content. */
   .domain-strip { display: flex; gap: 0.35rem; align-items: baseline; flex-wrap: wrap;
-    padding: 0.6rem 1.5rem 0; max-width: 72rem; margin: 0 auto; }
+    padding: 0.6rem 1.5rem 0; max-width: 72rem; margin: 0 auto;
+    border-bottom: 1px solid var(--line); }
+  .domain-tabs { display: flex; gap: 0.35rem; align-items: baseline; flex-wrap: wrap; }
   .domain-tab { padding: 0.4rem 0.85rem; border-radius: 7px 7px 0 0; text-decoration: none;
     color: var(--dim); font-weight: 600; font-size: 0.95rem; border: 1px solid transparent;
     border-bottom: none; }
   .domain-tab:hover { color: var(--fg); background: rgba(0,0,0,0.03); }
   .domain-tab[aria-current="page"] { color: var(--fg); background: var(--panel);
     border-color: var(--line); }
-  .domain-blurb { padding: 0.5rem 1.5rem 0; max-width: 72rem; margin: 0 auto;
-    color: var(--dim); font-size: 0.88rem; border-top: 1px solid var(--line); }
+  /* The sentence still earns its place -- it is the only thing that says what
+     a domain is before you read the panels -- but it rides the tab row. */
+  .domain-blurb { margin-left: auto; padding-bottom: 0.55rem; color: var(--dim);
+    font-size: 0.85rem; align-self: center; }
+  @media (max-width: 60rem) { .domain-blurb { display: none; } }
 </style>
 </head>
 <body>
@@ -37,13 +45,11 @@
   <a class="ext" href="../doc/">Docs</a>
   <a class="ext" href="https://github.com/schilit/simble">GitHub ↗</a>
 </nav>
-<header>
-  <h1>SimBLE Devices</h1>
-  <span class="sub">whole devices, each playing several protocol roles over one link</span>
-</header>
 
-<div class="domain-strip" id="tabs"></div>
-<div class="domain-blurb" id="blurb"></div>
+<div class="domain-strip">
+  <div class="domain-tabs" id="tabs"></div>
+  <span class="domain-blurb" id="blurb"></span>
+</div>
 
 <main id="stage"></main>
 
