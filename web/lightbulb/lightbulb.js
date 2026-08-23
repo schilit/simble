@@ -50,13 +50,13 @@ const STYLE = `
   input[type=color] { width: 3rem; height: 2rem; border: 1px solid var(--border);
     border-radius: 6px; background: var(--panel); cursor: pointer; }
   .rgb-readout { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
-    font-size: 0.85rem; }`;
+    font-size: var(--fs-body); }`;
 
 const ABOUT = `<p>A colour bulb and the client that drives it. The picker writes the colour
    <em>through the client, over GATT</em>, the way a phone app would; the page does not poke the
    value into the device's own database.</p>`;
 
-const MARKUP = `<div id="backend" class="full"></div>
+const MARKUP = `
 
   <section id="setup" class="panel setup full">
     <h2>netsim is not reachable</h2>

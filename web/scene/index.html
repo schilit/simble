@@ -9,7 +9,7 @@
 <link rel="stylesheet" href="../common/nav.css">
 <style>
   main { max-width: 82rem; margin: 0 auto; padding: 1rem 1.25rem 2rem; }
-  .intro { color: var(--dim); font-size: 0.9rem; margin: 0 0 1rem; max-width: 62rem; }
+  .intro { color: var(--dim); font-size: var(--fs-body); margin: 0 0 1rem; max-width: 62rem; }
 
   .two { display: grid; grid-template-columns: 22rem 1fr; gap: 1.1rem; align-items: start; }
   @media (max-width: 60rem) { .two { grid-template-columns: 1fr; } }
@@ -17,7 +17,7 @@
   /* Scene panel (left) */
   .scene-head { display: flex; align-items: baseline; justify-content: space-between; }
   .scene-head h2 { margin: 0; }
-  .scene-head .count { color: var(--dim); font-size: 0.78rem; }
+  .scene-head .count { color: var(--dim); font-size: var(--fs-meta); }
   .add-bar { display: flex; gap: 0.4rem; flex-wrap: wrap; margin: 0.7rem 0 0.9rem; }
   .dev-list { list-style: none; margin: 0; padding: 0; }
   .dev-item {
@@ -27,21 +27,21 @@
   }
   .dev-item:hover { border-color: var(--dim); }
   .dev-item.open { border-color: var(--accent); background: #eaeef2; }
-  .dev-item .role-dot { font-size: 0.8rem; line-height: 1; }
+  .dev-item .role-dot { font-size: var(--fs-label); line-height: 1; }
   .dev-item.peripheral .role-dot { color: var(--good); }
   .dev-item.scanner .role-dot { color: var(--warn); }
   .dev-item.central .role-dot { color: var(--accent); }
   .dev-item .meta { flex: 1; min-width: 0; }
-  .dev-item .role { font-weight: 600; font-size: 0.85rem; }
+  .dev-item .role { font-weight: 600; font-size: var(--fs-body); }
   .dev-item .role small { color: var(--dim); font-weight: 400; margin-left: 0.35rem; }
   .dev-item .addr { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
-    font-size: 0.74rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    font-size: var(--fs-meta); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dev-item .rm {
     background: transparent; border: 1px solid var(--border); color: var(--dim);
-    border-radius: 6px; padding: 0.05rem 0.45rem; font-size: 0.9rem; line-height: 1.2;
+    border-radius: 6px; padding: 0.05rem 0.45rem; font-size: var(--fs-body); line-height: 1.2;
   }
   .dev-item .rm:hover { border-color: var(--bad); color: var(--bad); }
-  .empty { color: var(--dim); font-size: 0.85rem; }
+  .empty { color: var(--dim); font-size: var(--fs-body); }
 
   /* Inspect panel (right) */
   #inspect { min-height: 20rem; }
@@ -50,47 +50,47 @@
     border-bottom: 1px solid var(--border); padding-bottom: 0.7rem; margin-bottom: 0.9rem;
   }
   #inspect .insp-head .role { font-weight: 700; }
-  #inspect .insp-head .kind { color: var(--dim); font-size: 0.8rem; }
+  #inspect .insp-head .kind { color: var(--dim); font-size: var(--fs-label); }
   #inspect .insp-head .addr { margin-left: auto; font-family: ui-monospace, Menlo, monospace;
-    color: var(--dim); font-size: 0.78rem; }
+    color: var(--dim); font-size: var(--fs-meta); }
   .peripheral-role { color: var(--good); }
   .scanner-role { color: var(--warn); }
   .central-role { color: var(--accent); }
-  h3.sub { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em;
+  h3.sub { font-size: var(--fs-meta); text-transform: uppercase; letter-spacing: 0.06em;
     color: var(--dim); margin: 1rem 0 0.5rem; }
   textarea.code { width: 100%; height: 15rem; }
-  .phase { font-size: 0.82rem; color: var(--dim); margin-bottom: 0.3rem; }
+  .phase { font-size: var(--fs-label); color: var(--dim); margin-bottom: 0.3rem; }
   .phase b { color: var(--accent); }
-  .chr-h { color: var(--dim); font-size: 0.72rem; margin-left: auto;
+  .chr-h { color: var(--dim); font-size: var(--fs-meta); margin-left: auto;
     font-family: ui-monospace, Menlo, monospace; }
 
   /* Scanner report rows (inspect view) */
   .rpt { border: 1px solid var(--border); border-radius: 8px; padding: 0.5rem 0.7rem;
     margin-bottom: 0.5rem; display: grid; grid-template-columns: 1fr auto; gap: 0.15rem 1rem; }
   .rpt.stale { opacity: 0.4; }
-  .rpt .name { font-weight: 600; font-size: 0.9rem; }
+  .rpt .name { font-weight: 600; font-size: var(--fs-body); }
   .rpt .name .anon { color: var(--dim); font-weight: 400; font-style: italic; }
-  .rpt .addr { font-family: ui-monospace, Menlo, monospace; color: var(--dim); font-size: 0.76rem; }
-  .rpt .db { text-align: right; font-family: ui-monospace, Menlo, monospace; color: var(--dim); font-size: 0.78rem; }
+  .rpt .addr { font-family: ui-monospace, Menlo, monospace; color: var(--dim); font-size: var(--fs-meta); }
+  .rpt .db { text-align: right; font-family: ui-monospace, Menlo, monospace; color: var(--dim); font-size: var(--fs-meta); }
   .rpt .chips { grid-column: 1 / -1; }
   .rpt .chip { display: inline-block; border: 1px solid var(--border); border-radius: 1rem;
-    padding: 0 0.5rem; margin: 0.2rem 0.3rem 0 0; font-size: 0.7rem; color: var(--accent); }
+    padding: 0 0.5rem; margin: 0.2rem 0.3rem 0 0; font-size: var(--fs-meta); color: var(--accent); }
 
   footer { max-width: 82rem; }
 
   /* netsim setup hint (websocket mode, no connection) */
   #setup { display: none; border-color: var(--warn); margin-bottom: 1rem; }
   #setup.visible { display: block; }
-  #setup h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em;
+  #setup h2 { font-size: var(--fs-body); text-transform: uppercase; letter-spacing: 0.06em;
     color: var(--warn); margin: 0 0 0.6rem; }
-  #setup p { margin: 0.5rem 0; font-size: 0.88rem; }
+  #setup p { margin: 0.5rem 0; font-size: var(--fs-body); }
   #setup pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-    padding: 0.6rem; overflow-x: auto; font-size: 0.8rem; }
+    padding: 0.6rem; overflow-x: auto; font-size: var(--fs-label); }
   #setup code { color: var(--good); }
   #setup a { color: var(--accent); }
 
   /* per-mode notes under the add bar (shown only in websocket mode) */
-  .mode-note { display: none; color: var(--dim); font-size: 0.76rem; margin: 0 0 0.7rem;
+  .mode-note { display: none; color: var(--dim); font-size: var(--fs-meta); margin: 0 0 0.7rem;
     line-height: 1.4; }
   .mode-note a { color: var(--accent); }
 </style>

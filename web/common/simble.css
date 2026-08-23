@@ -10,6 +10,20 @@
   --bg: #ffffff; --panel: #f6f8fa; --panel2: #eaeef2; --border: #d0d7de;
   --text: #1f2328; --dim: #656d76; --accent: #0969da; --good: #1a7f37;
   --bad: #cf222e; --warn: #9a6700; --heart: #cf222e;
+
+  /* Type scale. Sizes had drifted to about twenty values -- 0.68 through
+     1.15rem plus a stray 11.5px -- with several separated by 0.02rem, which
+     is 0.32px: too small to read as a deliberate difference, but enough that
+     things meant to match never quite did. Six steps, chosen by role, so
+     "what size is this" has an answer that is not a measurement. */
+  --fs-display: 4rem;   /* the one big live readout on a page (Health's heart) */
+  --fs-hero:  1.5rem;   /* standalone page h1 */
+  --fs-title: 1.15rem;  /* section h1 */
+  --fs-lead:  0.95rem;  /* nav and domain tabs */
+  --fs-body:  0.85rem;  /* prose, buttons, inputs, selects */
+  --fs-label: 0.8rem;   /* uppercase section labels, hints */
+  --fs-meta:  0.72rem;  /* uuids, chips, badges, footnotes */
+  --fs-code:  0.8rem;   /* code and log blocks */
 }
 * { box-sizing: border-box; }
 body {
@@ -22,11 +36,11 @@ header {
   display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap;
   padding: 1rem 1.5rem; border-bottom: 1px solid var(--border);
 }
-header h1 { font-size: 1.15rem; margin: 0; }
-header .sub { color: var(--dim); font-size: 0.85rem; }
-header a { color: var(--accent); text-decoration: none; font-size: 0.85rem; }
+header h1 { font-size: var(--fs-title); margin: 0; }
+header .sub { color: var(--dim); font-size: var(--fs-body); }
+header a { color: var(--accent); text-decoration: none; font-size: var(--fs-body); }
 .pill {
-  font-size: 0.75rem; padding: 0.1rem 0.6rem; border-radius: 1rem;
+  font-size: var(--fs-meta); padding: 0.1rem 0.6rem; border-radius: 1rem;
   border: 1px solid var(--border); color: var(--dim); white-space: nowrap;
 }
 .pill.ok { color: var(--good); border-color: var(--good); }
@@ -37,13 +51,13 @@ header a { color: var(--accent); text-decoration: none; font-size: 0.85rem; }
   background: var(--panel); border: 1px solid var(--border);
   border-radius: 8px; padding: 1rem;
 }
-.panel h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em;
+.panel h2 { font-size: var(--fs-label); text-transform: uppercase; letter-spacing: 0.06em;
   color: var(--dim); margin: 0 0 0.75rem; }
 
 /* Buttons + rows */
 button, .btn {
   background: var(--panel2); color: var(--text); border: 1px solid var(--border);
-  border-radius: 6px; padding: 0.35rem 0.9rem; font-size: 0.85rem;
+  border-radius: 6px; padding: 0.35rem 0.9rem; font-size: var(--fs-body);
   cursor: pointer; text-decoration: none; display: inline-block;
 }
 button:hover, .btn:hover { border-color: var(--dim); }
@@ -51,18 +65,18 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 button:disabled { opacity: 0.5; cursor: default; }
 select {
   background: var(--panel2); color: var(--text); border: 1px solid var(--border);
-  border-radius: 6px; padding: 0.35rem 0.6rem; font-size: 0.85rem; cursor: pointer;
+  border-radius: 6px; padding: 0.35rem 0.6rem; font-size: var(--fs-body); cursor: pointer;
 }
 input[type=text], input[type=number] {
   background: var(--bg); color: var(--text); border: 1px solid var(--border);
-  border-radius: 6px; padding: 0.3rem 0.5rem; font-size: 0.85rem;
+  border-radius: 6px; padding: 0.3rem 0.5rem; font-size: var(--fs-body);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 .row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-top: 0.6rem; }
-.hint { color: var(--dim); font-size: 0.8rem; }
+.hint { color: var(--dim); font-size: var(--fs-label); }
 .error {
   color: var(--bad); font-family: ui-monospace, Menlo, monospace;
-  font-size: 0.8rem; white-space: pre-wrap; margin-top: 0.5rem;
+  font-size: var(--fs-code); white-space: pre-wrap; margin-top: 0.5rem;
 }
 
 /* Editor / code */
@@ -108,7 +122,7 @@ pre.code, .mono {
 .setup.visible { display: block; }
 .setup pre {
   background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-  padding: 0.6rem; overflow-x: auto; font-size: 0.8rem;
+  padding: 0.6rem; overflow-x: auto; font-size: var(--fs-code);
 }
 .setup code { color: var(--good); }
 .setup a { color: var(--accent); }
@@ -117,18 +131,18 @@ pre.code, .mono {
 .suggest { margin-top: 0.5rem; }
 .suggest .chip {
   display: inline-block; border: 1px solid var(--border); border-radius: 1rem;
-  padding: 0.15rem 0.7rem; margin: 0.2rem 0.3rem 0 0; font-size: 0.78rem;
+  padding: 0.15rem 0.7rem; margin: 0.2rem 0.3rem 0 0; font-size: var(--fs-meta);
   cursor: pointer; background: var(--panel2); color: var(--text);
 }
 .suggest .chip:hover { border-color: var(--accent); }
 .suggest .chip.active { border-color: var(--accent); color: var(--accent); }
-#req-echo { margin-top: 0.45rem; font-size: 0.8rem; color: var(--dim); }
+#req-echo { margin-top: 0.45rem; font-size: var(--fs-label); color: var(--dim); }
 #req-echo b { color: var(--text); font-weight: 500; }
 details { margin-top: 0.75rem; }
-details summary { cursor: pointer; color: var(--dim); font-size: 0.85rem; }
+details summary { cursor: pointer; color: var(--dim); font-size: var(--fs-body); }
 details pre {
   max-height: 18rem; overflow: auto; background: var(--bg); border: 1px solid var(--border);
-  border-radius: 6px; padding: 0.6rem; font-size: 11.5px; white-space: pre-wrap;
+  border-radius: 6px; padding: 0.6rem; font-size: var(--fs-code); white-space: pre-wrap;
 }
 
 /* ---------------------------------------------------------------------------
@@ -155,14 +169,14 @@ details pre {
 .dev-head.accent-good .dev-name { color: var(--good); }
 .dev-head.accent-accent .dev-name { color: var(--accent); }
 .dev-head.accent-warn .dev-name { color: var(--warn); }
-.dev-head .dev-kind { color: var(--dim); font-size: 0.78rem; }
-.dev-head .dev-state { color: var(--dim); font-size: 0.78rem; }
+.dev-head .dev-kind { color: var(--dim); font-size: var(--fs-meta); }
+.dev-head .dev-state { color: var(--dim); font-size: var(--fs-meta); }
 .dev-head .dev-state.ok { color: var(--good); }
 .dev-head .dev-state.bad { color: var(--bad); }
 .dev-head .dev-state.warn { color: var(--warn); }
 .dev-head .dev-icon {
   border: 1px solid var(--border); background: transparent; border-radius: 6px;
-  cursor: pointer; font-size: 0.85rem; line-height: 1; padding: 0.18rem 0.42rem;
+  cursor: pointer; font-size: var(--fs-body); line-height: 1; padding: 0.18rem 0.42rem;
   color: var(--dim);
 }
 .dev-head .dev-icon:hover:not(:disabled) { color: var(--text); border-color: var(--text); }
@@ -170,10 +184,10 @@ details pre {
 .dev-head .dev-icon:disabled { opacity: 0.4; cursor: not-allowed; }
 /* Why a device cannot be stopped on its own. Visible, not only a tooltip:
    the limitation is part of what these pages are explaining. */
-.dev-head .dev-why { color: var(--dim); font-size: 0.72rem; font-style: italic; }
+.dev-head .dev-why { color: var(--dim); font-size: var(--fs-meta); font-style: italic; }
 .dev-head .dev-addr {
   margin-left: auto; font-family: ui-monospace, Menlo, monospace;
-  color: var(--dim); font-size: 0.76rem;
+  color: var(--dim); font-size: var(--fs-meta);
 }
 .dev-head .dev-addr.none { font-style: italic; font-family: inherit; }
 .dev-script { margin: 0 0 0.8rem; }
@@ -188,13 +202,13 @@ details pre {
 
 /* Generic GATT viewer */
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 0.15rem 0.9rem;
-  font-size: 0.85rem; margin-bottom: 0.75rem; }
+  font-size: var(--fs-body); margin-bottom: 0.75rem; }
 .kv dt { color: var(--dim); } .kv dd { margin: 0; }
 .svc { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.7rem;
   overflow: hidden; }
-.svc-head { background: var(--panel2); padding: 0.4rem 0.7rem; font-size: 0.82rem; }
+.svc-head { background: var(--panel2); padding: 0.4rem 0.7rem; font-size: var(--fs-body); }
 .svc-head .u { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
-  font-size: 0.76rem; margin-left: 0.4rem; }
+  font-size: var(--fs-meta); margin-left: 0.4rem; }
 .chr { padding: 0.5rem 0.7rem; border-top: 1px solid var(--border); }
 .chr.pulse { animation: pulse 0.9s ease-out; }
 @keyframes pulse {
@@ -203,19 +217,19 @@ details pre {
 }
 .chr-top { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
 .chr-name { font-weight: 500; }
-.chr-uuid { font-family: ui-monospace, Menlo, monospace; color: var(--dim); font-size: 0.75rem; }
+.chr-uuid { font-family: ui-monospace, Menlo, monospace; color: var(--dim); font-size: var(--fs-meta); }
 .prop {
   display: inline-block; border: 1px solid var(--border); border-radius: 4px;
-  padding: 0 0.3rem; font-size: 0.68rem; color: var(--dim);
+  padding: 0 0.3rem; font-size: var(--fs-meta); color: var(--dim);
   font-family: ui-monospace, Menlo, monospace;
 }
 .prop.sub { color: var(--good); border-color: var(--good); }
-.chr-val { margin-top: 0.25rem; font-size: 0.9rem; }
+.chr-val { margin-top: 0.25rem; font-size: var(--fs-body); }
 .chr-val .decoded { font-weight: 600; }
 .chr-val .raw { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
-  font-size: 0.76rem; margin-left: 0.4rem; }
-.sub-note { color: var(--good); font-size: 0.72rem; margin-left: 0.4rem; }
-.viewer-empty { color: var(--dim); font-size: 0.85rem; }
+  font-size: var(--fs-meta); margin-left: 0.4rem; }
+.sub-note { color: var(--good); font-size: var(--fs-meta); margin-left: 0.4rem; }
+.viewer-empty { color: var(--dim); font-size: var(--fs-body); }
 
 /* The client half of the shared widget (common/gatt-view.js): a discovered
    tree, nRF-Connect flavoured. The handle and the operation buttons appear
@@ -223,18 +237,18 @@ details pre {
    subscribe; a server holding its own database can do none of those to
    itself. */
 .gatt-view.client .chr-h {
-  color: var(--dim); font-size: 0.72rem; margin-left: auto;
+  color: var(--dim); font-size: var(--fs-meta); margin-left: auto;
   font-family: ui-monospace, Menlo, monospace;
 }
 .gatt-view .chr-actions { margin-top: 0.35rem; display: flex; gap: 0.35rem; flex-wrap: wrap; }
 .gatt-view .chr-actions button {
   background: var(--panel2); color: var(--text); border: 1px solid var(--border);
-  border-radius: 5px; padding: 0.12rem 0.5rem; font-size: 0.74rem; cursor: pointer;
+  border-radius: 5px; padding: 0.12rem 0.5rem; font-size: var(--fs-meta); cursor: pointer;
 }
 .gatt-view .chr-actions button:hover { border-color: var(--accent); }
 .gatt-view .chr-actions button.on { color: var(--good); border-color: var(--good); }
 
-footer { color: var(--dim); font-size: 0.78rem; padding: 0 1.5rem 1.5rem;
+footer { color: var(--dim); font-size: var(--fs-meta); padding: 0 1.5rem 1.5rem;
   max-width: 75rem; margin: 0 auto; }
 footer code { color: var(--good); }
 
@@ -252,41 +266,41 @@ footer code { color: var(--good); }
 .domain > .full { grid-column: 1 / -1; }
 @media (max-width: 60rem) { .domain { grid-template-columns: 1fr; } }
 
-/* --- the "What this page is doing" box -----------------------------------
+/* --- the "About this page" box -----------------------------------
    Every domain opens with one, foldable. See common/about-box.js. */
 /* The same card as .panel -- it sits among them, so it should not look like
    a different kind of object -- with a left edge marking it as the one that
    folds. The stripe picks up the accent when open, so the chevron reads as a
    control rather than a stray glyph at the margin. */
-.about { align-self: start; background: var(--panel); border: 1px solid var(--border);
+.about { align-self: start; margin: 0; background: var(--panel); border: 1px solid var(--border);
   border-left: 3px solid var(--dim); border-radius: 8px;
   padding: 0.85rem 1.1rem 0.9rem 1.25rem; }
 .about[open] { border-left-color: var(--accent); }
 .about > summary::marker { color: var(--dim); }
 /* The marker sits in its own space rather than crowding the left edge, and
    the label is set off from it. */
-.about > summary { cursor: pointer; font-size: 0.82rem; font-weight: 600;
+.about > summary { cursor: pointer; font-size: var(--fs-label); font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.05em; color: var(--dim);
   list-style-position: outside; padding-left: 0.4rem; }
 .about > summary:hover { color: var(--fg); }
 .about[open] > summary { margin-bottom: 0.85rem; }
-.about-body { font-size: 0.88rem; }
+.about-body { font-size: var(--fs-body); }
 .about-body p { margin: 0 0 0.7rem; }
 .about-body p:last-child { margin-bottom: 0; }
 
 /* --- the controller bar, in the Devices shell chrome --------------------- */
-.controller-host { max-width: 72rem; margin: 0 auto; padding: 0.75rem 1.5rem 0; }
+.controller-host { max-width: 72rem; margin: 0 auto; padding: 1.25rem 1.5rem 0; }
 .controller-bar { background: var(--panel); border: 1px solid var(--border);
-  border-radius: 8px; padding: 0.55rem 0.9rem; font-size: 0.85rem; }
+  border-radius: 8px; padding: 0.55rem 0.9rem; font-size: var(--fs-body); }
 /* Row one is identical on every domain, so switching tabs does not reshape
    it; anything domain-specific is the sentence below. */
 .controller-row { display: flex; align-items: center; gap: 1.1rem; flex-wrap: wrap; }
-.controller-why { margin: 0.4rem 0 0; color: var(--dim); font-size: 0.82rem; }
-.controller-label { font-size: 0.78rem; text-transform: uppercase;
+.controller-why { margin: 0.4rem 0 0; color: var(--dim); font-size: var(--fs-label); }
+.controller-label { font-size: var(--fs-label); text-transform: uppercase;
   letter-spacing: 0.05em; color: var(--dim); font-weight: 600; }
 .controller-choice { display: inline-flex; align-items: center; cursor: pointer; }
 .controller-pick { display: inline-flex; align-items: center; gap: 0.35rem;
   white-space: nowrap; }
 /* An option this domain cannot honour stays visible, with its reason. */
 .controller-choice.unusable { cursor: default; opacity: 0.65; }
-.controller-help { margin-left: auto; font-size: 0.8rem; }
+.controller-help { margin-left: auto; font-size: var(--fs-label); }

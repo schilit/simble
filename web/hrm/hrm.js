@@ -53,7 +53,7 @@ const STYLE = `
      characteristic's value and not a fixed loop. */
   .heart-box { text-align: center; padding: 0.5rem 0 0.75rem; }
   .heart {
-    display: inline-block; font-size: 4rem; color: var(--heart);
+    display: inline-block; font-size: var(--fs-display); color: var(--heart);
     transform-origin: center; animation: beat 0.83s ease-in-out infinite;
   }
   .heart.flat { animation: none; opacity: 0.3; }
@@ -64,14 +64,14 @@ const STYLE = `
     36% { transform: scale(1.12); }
     50% { transform: scale(1); }
   }
-  .bpm { font-size: 1.8rem; font-weight: 600; }
-  .bpm small { color: var(--dim); font-size: 0.9rem; font-weight: 400; }`;
+  .bpm { font-size: var(--fs-hero); font-weight: 600; }
+  .bpm small { color: var(--dim); font-size: var(--fs-body); font-weight: 400; }`;
 
 const ABOUT = `<p>A heart-rate monitor and the client listening to it, both defined by scripts. The heart
    beats at the rate the <em>client received</em> over a GATT subscription, not at the value the
    monitor holds — what you see crossed the link.</p>`;
 
-const MARKUP = `<div id="backend" class="full"></div>
+const MARKUP = `
 
   <section class="panel">
     <div id="monitor-head"></div>

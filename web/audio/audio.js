@@ -806,20 +806,20 @@ function injectStyles() {
   .audio-page .drop.over { border-color: var(--good); background: rgba(26,127,55,0.06); }
   .audio-page .drop input { display: block; margin: 0.7rem auto 0; }
   .audio-page .readout { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
-    font-size: 0.85rem; margin-top: 0.6rem; }
+    font-size: var(--fs-body); margin-top: 0.6rem; }
   .audio-page .readout b { color: var(--text); }
   .audio-page .bar { height: 8px; background: var(--panel2); border-radius: 4px;
     overflow: hidden; margin-top: 0.7rem; }
   .audio-page .bar > div { height: 100%; width: 0; background: var(--good);
     transition: width .1s linear; }
-  .audio-page .field { display: block; margin-top: 0.9rem; font-size: 0.85rem; color: var(--dim); }
+  .audio-page .field { display: block; margin-top: 0.9rem; font-size: var(--fs-body); color: var(--dim); }
   .audio-page input[type=text] { font-family: ui-monospace, Menlo, monospace;
     padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: 6px; width: 14rem; }
   .audio-page #sink-pick { max-width: 100%; }
 
   .audio-page .stages { list-style: none; padding: 0; margin: 0.2rem 0 0; }
   .audio-page .stages li { padding: 0.32rem 0 0.32rem 1.5rem; position: relative;
-    color: var(--dim); font-size: 0.9rem; }
+    color: var(--dim); font-size: var(--fs-body); }
   .audio-page .stages li::before { content: "○"; position: absolute; left: 0.25rem; }
   .audio-page .stages li.done { color: var(--text); }
   .audio-page .stages li.done::before { content: "●"; color: var(--good); }
@@ -842,8 +842,8 @@ function injectStyles() {
   .audio-page input[type=range] { width: 13rem; }
   .audio-page .ops { display: flex; gap: 0.4rem; flex-wrap: wrap; justify-content: center;
     margin-top: 0.8rem; }
-  .audio-page .ops button { font-family: ui-monospace, Menlo, monospace; font-size: 0.8rem; }
-  .audio-page .warn-line { color: var(--warn); font-size: 0.8rem; margin-top: 0.5rem; }
+  .audio-page .ops button { font-family: ui-monospace, Menlo, monospace; font-size: var(--fs-label); }
+  .audio-page .warn-line { color: var(--warn); font-size: var(--fs-label); margin-top: 0.5rem; }
   `;
   document.head.appendChild(style);
 }
@@ -856,7 +856,6 @@ const ABOUT = `<p>Both halves of an LE Audio stream, on one page. Pick an audio 
 
 const TEMPLATE = `
 <div class="audio-page domain two-up">
-  <div id="backend" class="full"></div>
 
   <section class="panel">
       <div id="source-head"></div>

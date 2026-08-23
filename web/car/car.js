@@ -49,7 +49,7 @@ const NO_ADDRESS =
 let wasmReady = null;
 
 const STYLE = `
-.car h3 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em;
+.car h3 { font-size: var(--fs-label); text-transform: uppercase; letter-spacing: 0.05em;
   color: var(--dim); margin: 1rem 0 0.4rem; font-weight: 600; }
 .car h3:first-of-type { margin-top: 0.2rem; }
 
@@ -62,7 +62,7 @@ const STYLE = `
 .screen-ring { fill: #46d17a; }
 
 .ctl { display: flex; gap: 0.45rem; align-items: center; flex-wrap: wrap; margin-top: 0.5rem; }
-.ctl label { font-size: 0.78rem; color: var(--dim); min-width: 5.2rem; }
+.ctl label { font-size: var(--fs-meta); color: var(--dim); min-width: 5.2rem; }
 .car input[type=range] { flex: 1 1 7rem; min-width: 6rem; }
 .car input[type=text] { flex: 1 1 8rem; min-width: 6rem; }
 .val { font: 0.78rem ui-monospace, Menlo, monospace; color: var(--text); min-width: 1.6rem;
@@ -84,7 +84,7 @@ const STYLE = `
 .tape .hf > span:nth-child(1) { color: var(--accent); }
 .tape .ag > span:nth-child(3) { color: var(--good); grid-column: 3; }
 .tape .hf > span:nth-child(3), .tape .ag > span:nth-child(1) { color: transparent; }
-.tape .bytes { color: var(--dim); font-size: 10.5px; padding-left: 0.4rem; white-space: pre-wrap;
+.tape .bytes { color: var(--dim); font-size: var(--fs-code); padding-left: 0.4rem; white-space: pre-wrap;
   word-break: break-all; }
 .tape .unsolicited > span:nth-child(3) { color: #9a6700; }
 .tape-empty { color: var(--dim); font-style: italic; }
@@ -92,7 +92,7 @@ const STYLE = `
 /* The stack step list, in the shape the Audio Source page uses. */
 .stages { list-style: none; padding: 0; margin: 0.2rem 0 0; }
 .stages li { padding: 0.4rem 0 0.4rem 1.6rem; position: relative; color: var(--dim);
-  font-size: 0.88rem; border-top: 1px solid var(--border); }
+  font-size: var(--fs-body); border-top: 1px solid var(--border); }
 .stages li:first-child { border-top: none; }
 .stages li::before { content: "○"; position: absolute; left: 0.3rem; }
 .stages li.done { color: var(--text); }
@@ -100,7 +100,7 @@ const STYLE = `
 .stages li.active { color: var(--text); font-weight: 600; }
 .stages li.active::before { content: "◐"; color: var(--accent); }
 .stages li.failed::before { content: "✕"; color: var(--bad); }
-.stages .detail { display: block; font-weight: 400; color: var(--dim); font-size: 0.78rem;
+.stages .detail { display: block; font-weight: 400; color: var(--dim); font-size: var(--fs-meta);
   margin-top: 0.15rem; font-family: ui-monospace, Menlo, monospace; }
 
 .layers { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; margin: 0.7rem 0 0;
@@ -112,9 +112,9 @@ const STYLE = `
 .layers b { color: var(--dim); font-weight: 400; }
 
 /* Indicator mirror. */
-.inds { width: 100%; border-collapse: collapse; font-size: 0.8rem;
+.inds { width: 100%; border-collapse: collapse; font-size: var(--fs-label);
   font-family: ui-monospace, Menlo, monospace; margin-top: 0.3rem; }
-.inds th { text-align: left; font-weight: 500; color: var(--dim); font-size: 0.72rem;
+.inds th { text-align: left; font-weight: 500; color: var(--dim); font-size: var(--fs-meta);
   text-transform: uppercase; letter-spacing: 0.04em; padding-bottom: 0.2rem; }
 .inds td { padding: 0.12rem 0.3rem 0.12rem 0; border-top: 1px solid var(--border); }
 .inds td.n { color: var(--dim); }
@@ -126,13 +126,13 @@ const STYLE = `
 .role { border: 1px solid var(--border); border-radius: 8px; padding: 0.7rem 0.8rem;
   background: var(--bg); }
 .role.gap { border-style: dashed; }
-.role .tag { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em;
+.role .tag { font-size: var(--fs-meta); text-transform: uppercase; letter-spacing: 0.06em;
   border: 1px solid var(--border); border-radius: 1rem; padding: 0.05rem 0.5rem;
   color: var(--dim); float: right; }
 .role.built .tag { color: var(--good); border-color: var(--good); }
 .role.gap .tag { color: var(--warn); border-color: var(--warn); }
-.role h4 { margin: 0 0 0.35rem; font-size: 0.9rem; }
-.role p { margin: 0; font-size: 0.8rem; color: var(--dim); line-height: 1.45; }
+.role h4 { margin: 0 0 0.35rem; font-size: var(--fs-body); }
+.role p { margin: 0; font-size: var(--fs-label); color: var(--dim); line-height: 1.45; }
 .role code { color: var(--text); }
 `;
 

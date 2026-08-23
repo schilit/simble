@@ -9,14 +9,14 @@
 <link rel="stylesheet" href="../common/nav.css">
 <style>
   main { max-width: 60rem; margin: 0 auto; padding: 1rem 1.25rem 2.5rem; }
-  .intro { color: var(--dim); font-size: 0.95rem; line-height: 1.6; margin: 0.4rem 0 1.1rem; max-width: 52rem; }
+  .intro { color: var(--dim); font-size: var(--fs-lead); line-height: 1.6; margin: 0.4rem 0 1.1rem; max-width: 52rem; }
   .intro strong { color: var(--text); }
   .intro code { color: var(--good); background: var(--panel); padding: 0.05rem 0.3rem; border-radius: 4px; font-size: 0.85em; }
   .toolbar { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.7rem; }
-  label.ex { color: var(--dim); font-size: 0.85rem; }
+  label.ex { color: var(--dim); font-size: var(--fs-body); }
   select, button {
     background: #eaeef2; color: var(--text); border: 1px solid var(--border);
-    border-radius: 6px; padding: 0.35rem 0.8rem; font-size: 0.85rem; cursor: pointer;
+    border-radius: 6px; padding: 0.35rem 0.8rem; font-size: var(--fs-body); cursor: pointer;
   }
   button.primary { background: #0969da; border-color: #0969da; color: #fff; font-weight: 600; }
   button:hover, select:hover { border-color: var(--dim); }
@@ -28,32 +28,32 @@
   .result { margin-top: 0.9rem; border-radius: 8px; border: 1px solid var(--border);
     padding: 0.9rem 1rem; background: var(--panel); display: none; }
   .result.show { display: block; }
-  .result .head { font-size: 1.05rem; font-weight: 700; display: flex; align-items: center; gap: 0.5rem; }
+  .result .head { font-size: var(--fs-title); font-weight: 700; display: flex; align-items: center; gap: 0.5rem; }
   .result.pass { border-color: var(--good); }
   .result.pass .head { color: var(--good); }
   .result.fail { border-color: var(--bad); }
   .result.fail .head { color: var(--bad); }
   .result .msg { margin-top: 0.5rem; font-family: ui-monospace, Menlo, monospace;
-    font-size: 0.82rem; color: var(--text); white-space: pre-wrap; }
-  .result .took { color: var(--dim); font-size: 0.8rem; font-weight: 400; }
-  h2.sub { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim);
+    font-size: var(--fs-label); color: var(--text); white-space: pre-wrap; }
+  .result .took { color: var(--dim); font-size: var(--fs-label); font-weight: 400; }
+  h2.sub { font-size: var(--fs-meta); text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim);
     margin: 1.6rem 0 0.5rem; }
-  .aside { color: var(--dim); font-size: 0.88rem; line-height: 1.6; }
+  .aside { color: var(--dim); font-size: var(--fs-body); line-height: 1.6; }
   .aside code { color: var(--good); }
-  .lead { margin: 1.6rem 0 0.6rem; font-size: 0.92rem; }
+  .lead { margin: 1.6rem 0 0.6rem; font-size: var(--fs-body); }
   .lead strong { color: var(--text); }
   .worlds { display: grid; grid-template-columns: 1fr 1fr; gap: 0.7rem; }
   @media (max-width: 42rem) { .worlds { grid-template-columns: 1fr; } }
   .world { border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem 0.85rem; background: var(--panel); }
-  .world .wlabel { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim); margin: 0 0 0.4rem; }
-  .world p { margin: 0 0 0.5rem; font-size: 0.85rem; }
+  .world .wlabel { font-size: var(--fs-meta); text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim); margin: 0 0 0.4rem; }
+  .world p { margin: 0 0 0.5rem; font-size: var(--fs-body); }
   .world p:last-child { margin-bottom: 0; }
   .world pre { margin: 0; background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-    padding: 0.45rem 0.6rem; overflow-x: auto; font-size: 0.78rem;
+    padding: 0.45rem 0.6rem; overflow-x: auto; font-size: var(--fs-meta);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .world pre code { color: var(--good); }
   .world .runs-ci { color: var(--good); font-weight: 600; }
-  footer { color: var(--dim); font-size: 0.78rem; padding: 1.4rem 1.25rem 0; max-width: 60rem; margin: 0 auto; }
+  footer { color: var(--dim); font-size: var(--fs-meta); padding: 1.4rem 1.25rem 0; max-width: 60rem; margin: 0 auto; }
 </style>
 </head>
 <body>
@@ -75,8 +75,8 @@
 </nav>
 
 <header class="sitenav" style="border-bottom:none;background:transparent;padding-top:0.9rem">
-  <h1 style="font-size:1.2rem;margin:0">Testing</h1>
-  <span style="color:var(--dim);font-size:0.85rem">a script is a device — and a test</span>
+  <h1 style="font-size: var(--fs-title);margin:0">Testing</h1>
+  <span style="color:var(--dim);font-size: var(--fs-body)">a script is a device — and a test</span>
 </header>
 
 <main>

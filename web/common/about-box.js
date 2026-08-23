@@ -1,6 +1,6 @@
 // Copyright 2026 Bill Schilit — SPDX-License-Identifier: Apache-2.0
 //
-// "What this page is doing" — the one box every domain opens with.
+// "About this page" — the one box every domain opens with.
 //
 // Descriptions had grown unevenly: Generic carried an intro paragraph,
 // Ranging a whole panel headed "What this page is doing", and the other five
@@ -33,7 +33,7 @@ export function createAboutBox(html) {
   box.open = open;
 
   const summary = document.createElement("summary");
-  summary.textContent = "What this page is doing";
+  summary.textContent = "About this page";
   const body = document.createElement("div");
   body.className = "about-body";
   body.innerHTML = html;

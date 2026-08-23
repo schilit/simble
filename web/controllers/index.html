@@ -9,28 +9,28 @@
 <link rel="stylesheet" href="../common/nav.css">
 <style>
   main { max-width: 75rem; margin: 0 auto; padding: 1.5rem; }
-  h1 { font-size: 1.6rem; margin: 0 0 0.35rem; }
-  .lede { color: var(--dim); font-size: 0.95rem; max-width: 55rem; margin: 0 0 1.5rem; }
+  h1 { font-size: var(--fs-hero); margin: 0 0 0.35rem; }
+  .lede { color: var(--dim); font-size: var(--fs-lead); max-width: 55rem; margin: 0 0 1.5rem; }
   .lede code { color: var(--good); }
 
   section.tier { margin-bottom: 1.5rem; }
   section.tier > h2 {
-    font-size: 1.1rem; margin: 0 0 0.15rem; color: var(--text);
+    font-size: var(--fs-title); margin: 0 0 0.15rem; color: var(--text);
     text-transform: none; letter-spacing: normal;
   }
   section.tier .tag {
-    display: inline-block; font-size: 0.66rem; text-transform: uppercase;
+    display: inline-block; font-size: var(--fs-meta); text-transform: uppercase;
     letter-spacing: 0.05em; color: var(--good); border: 1px solid var(--border);
     border-radius: 1rem; padding: 0 0.5rem; margin-left: 0.5rem; vertical-align: middle;
   }
   section.tier .tier-sub {
-    color: var(--dim); font-size: 0.82rem; margin: 0 0 0.9rem;
+    color: var(--dim); font-size: var(--fs-label); margin: 0 0 0.9rem;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
   section.tier p { margin: 0 0 0.7rem; }
   .panel { margin-bottom: 1rem; }
 
-  .lbl { display: block; font-size: 0.72rem; text-transform: uppercase;
+  .lbl { display: block; font-size: var(--fs-meta); text-transform: uppercase;
     letter-spacing: 0.06em; color: var(--dim); margin: 0.9rem 0 0.35rem; }
   .lbl:first-child { margin-top: 0; }
 
@@ -40,7 +40,7 @@
 
   pre.run {
     background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-    padding: 0.6rem 0.75rem; overflow-x: auto; font-size: 0.82rem; margin: 0.35rem 0 0;
+    padding: 0.6rem 0.75rem; overflow-x: auto; font-size: var(--fs-label); margin: 0.35rem 0 0;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
   pre.run code { color: var(--good); }
@@ -49,7 +49,7 @@
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
   .tablewrap { overflow-x: auto; margin: 0.5rem 0 0; }
-  table.cmp { border-collapse: collapse; width: 100%; font-size: 0.85rem; min-width: 44rem; }
+  table.cmp { border-collapse: collapse; width: 100%; font-size: var(--fs-body); min-width: 44rem; }
   table.cmp th, table.cmp td {
     border: 1px solid var(--border); padding: 0.5rem 0.7rem; text-align: left;
     vertical-align: top;
@@ -61,7 +61,7 @@
   table.cmp td .part { color: var(--warn); }
 
   .callout { border-left: 3px solid var(--accent); padding: 0.15rem 0 0.15rem 0.8rem;
-    color: var(--dim); font-size: 0.85rem; margin: 0.6rem 0 0; }
+    color: var(--dim); font-size: var(--fs-body); margin: 0.6rem 0 0; }
   .callout code { color: var(--good); }
 </style>
 </head>
@@ -99,7 +99,7 @@
   <!-- Comparison -->
   <section class="tier">
     <h2>At a glance</h2>
-    <p style="color:var(--dim);font-size:0.88rem;margin:0 0 0.7rem;max-width:56rem">
+    <p style="color:var(--dim);font-size: var(--fs-body);margin:0 0 0.7rem;max-width:56rem">
       SimBLE compiles both <strong>natively</strong> (the Rust crate — tests, CLIs, real hardware) and to
       <strong>WebAssembly</strong> (these demo pages). The built-in <code class="inl">sim::Link</code> runs
       in both worlds — natively under <code class="inl">cargo test</code> and the

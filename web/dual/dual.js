@@ -24,16 +24,16 @@ export const SUPPORTS = { "in-page": true,
 const STYLE_ID = "simble-generic-style";
 
 const STYLE = `main { max-width: 78rem; margin: 0 auto; padding: 1rem 1.25rem 2rem; }
-  .intro { color: var(--dim); font-size: 0.9rem; margin: 0 0 1rem; max-width: 60rem; }
+  .intro { color: var(--dim); font-size: var(--fs-body); margin: 0 0 1rem; max-width: 60rem; }
   .device { border: 1px solid var(--border); border-radius: 10px; background: var(--panel); overflow: hidden; }
   .device > header {
     display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
     padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--border); background: #eaeef2;
   }
   .device > header .role { font-weight: 700; }
-  .device > header .kind { color: var(--dim); font-size: 0.8rem; }
+  .device > header .kind { color: var(--dim); font-size: var(--fs-label); }
   .device > header .addr { margin-left: auto; font-family: ui-monospace, Menlo, monospace;
-    color: var(--dim); font-size: 0.78rem; }
+    color: var(--dim); font-size: var(--fs-meta); }
   .device .body { padding: 0.8rem 0.9rem; }
   .server .role { color: var(--good); }
   .client .role { color: var(--accent); }
@@ -43,10 +43,10 @@ const STYLE = `main { max-width: 78rem; margin: 0 auto; padding: 1rem 1.25rem 2r
     font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
   }
   .row { display: flex; gap: 0.5rem; align-items: center; margin: 0.55rem 0; flex-wrap: wrap; }
-  .hint { color: var(--dim); font-size: 0.8rem; }
-  .phase { font-size: 0.82rem; color: var(--dim); }
+  .hint { color: var(--dim); font-size: var(--fs-label); }
+  .phase { font-size: var(--fs-label); color: var(--dim); }
   .phase b { color: var(--accent); }
-  h2.sub { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em;
+  h2.sub { font-size: var(--fs-meta); text-transform: uppercase; letter-spacing: 0.06em;
     color: var(--dim); margin: 0.9rem 0 0.5rem; }
   /* Client (discovered) GATT — nRF-Connect-flavoured tree */
   .svc { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.6rem; overflow: hidden; }
@@ -55,7 +55,7 @@ const STYLE = `main { max-width: 78rem; margin: 0 auto; padding: 1rem 1.25rem 2r
 .device.server header .dot.on { background-color: var(--good); }
 .device.client header .dot.on { background-color: var(--accent); }
 .device header .icon { border: 1px solid var(--border); background: transparent; border-radius: 6px;
-  cursor: pointer; font-size: 0.85rem; line-height: 1; padding: 0.18rem 0.42rem; color: var(--dim);
+  cursor: pointer; font-size: var(--fs-body); line-height: 1; padding: 0.18rem 0.42rem; color: var(--dim);
   margin-left: 0.3rem; }
 .device header .icon:hover { color: var(--fg); border-color: var(--fg); }
 .device header .icon[aria-pressed="true"] { color: var(--fg); border-color: var(--fg); }
@@ -65,29 +65,29 @@ const STYLE = `main { max-width: 78rem; margin: 0 auto; padding: 1rem 1.25rem 2r
 #client-log { margin-top: 0.4rem; max-height: 6rem; overflow-y: auto;
   font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--dim); }
 #client-log .bad { color: var(--bad, #b00); }
-.svc-head { background: #eaeef2; padding: 0.4rem 0.7rem; font-size: 0.85rem; font-weight: 500; }
-  .svc-head .u { font-family: ui-monospace, Menlo, monospace; color: var(--dim); font-size: 0.76rem; margin-left: 0.4rem; }
+.svc-head { background: #eaeef2; padding: 0.4rem 0.7rem; font-size: var(--fs-body); font-weight: 500; }
+  .svc-head .u { font-family: ui-monospace, Menlo, monospace; color: var(--dim); font-size: var(--fs-meta); margin-left: 0.4rem; }
   .chr { padding: 0.45rem 0.7rem; border-top: 1px solid var(--border); }
   .chr-top { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; }
   .chr-name { font-weight: 500; }
-  .chr-uuid { font-family: ui-monospace, Menlo, monospace; color: var(--dim); font-size: 0.75rem; }
-  .chr-h { color: var(--dim); font-size: 0.72rem; margin-left: auto; font-family: ui-monospace, Menlo, monospace; }
+  .chr-uuid { font-family: ui-monospace, Menlo, monospace; color: var(--dim); font-size: var(--fs-meta); }
+  .chr-h { color: var(--dim); font-size: var(--fs-meta); margin-left: auto; font-family: ui-monospace, Menlo, monospace; }
   .prop { display: inline-block; border: 1px solid var(--border); border-radius: 4px; padding: 0 0.3rem;
-    font-size: 0.66rem; color: var(--dim); font-family: ui-monospace, Menlo, monospace; }
+    font-size: var(--fs-meta); color: var(--dim); font-family: ui-monospace, Menlo, monospace; }
   .prop.n, .prop.i { color: var(--good); border-color: var(--good); }
-  .chr-val { margin-top: 0.2rem; font-size: 0.85rem; }
+  .chr-val { margin-top: 0.2rem; font-size: var(--fs-body); }
   .chr-val .decoded { font-weight: 600; }
   .chr-val .raw { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
-    font-size: 0.76rem; margin-left: 0.4rem; }
+    font-size: var(--fs-meta); margin-left: 0.4rem; }
   .chr-actions { margin-top: 0.35rem; display: flex; gap: 0.35rem; flex-wrap: wrap; }
   .chr-actions button {
     background: #eaeef2; color: var(--text); border: 1px solid var(--border); border-radius: 5px;
-    padding: 0.12rem 0.5rem; font-size: 0.74rem; cursor: pointer;
+    padding: 0.12rem 0.5rem; font-size: var(--fs-meta); cursor: pointer;
   }
   .chr-actions button:hover { border-color: var(--accent); }
   .chr-actions button.on { color: var(--good); border-color: var(--good); }
-  .empty { color: var(--dim); font-size: 0.85rem; }
-  footer { color: var(--dim); font-size: 0.78rem; padding: 1.25rem 1.25rem 0; max-width: 78rem; margin: 0 auto; }`;
+  .empty { color: var(--dim); font-size: var(--fs-body); }
+  footer { color: var(--dim); font-size: var(--fs-meta); padding: 1.25rem 1.25rem 0; max-width: 78rem; margin: 0 auto; }`;
 
 const ABOUT = `<p>This page runs <strong>two real SimBLE devices</strong> in the same tab, sharing one in-process
     <a href="../controllers/">in-browser controller</a> — no netsim. On the left, a <strong class="role" style="color:var(--good)">Server</strong>

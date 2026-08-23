@@ -12,19 +12,19 @@
     gap: 1.25rem; padding: 1.25rem 1.5rem; max-width: 82rem; margin: 0 auto; }
   @media (max-width: 62rem) { main { grid-template-columns: 1fr; } }
   .group { margin-bottom: 1rem; }
-  .group > h3 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em;
+  .group > h3 { font-size: var(--fs-meta); text-transform: uppercase; letter-spacing: 0.06em;
     color: var(--accent); margin: 0.6rem 0 0.4rem; }
   .method { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 0.5rem;
     overflow: hidden; }
-  .method > summary { cursor: pointer; padding: 0.5rem 0.7rem; font-size: 0.88rem;
+  .method > summary { cursor: pointer; padding: 0.5rem 0.7rem; font-size: var(--fs-body);
     display: flex; align-items: baseline; gap: 0.5rem; list-style: none; }
   .method > summary::-webkit-details-marker { display: none; }
   .method > summary .sig { font-family: ui-monospace, Menlo, monospace; font-weight: 600; }
-  .method > summary .d { color: var(--dim); font-size: 0.78rem; }
+  .method > summary .d { color: var(--dim); font-size: var(--fs-meta); }
   .method[open] > summary { border-bottom: 1px solid var(--border); background: #eaeef2; }
   .method-body { padding: 0.6rem 0.7rem; }
   .field { display: grid; grid-template-columns: 8rem 1fr; gap: 0.4rem 0.6rem;
-    align-items: center; margin-bottom: 0.4rem; font-size: 0.82rem; }
+    align-items: center; margin-bottom: 0.4rem; font-size: var(--fs-label); }
   .field > label { color: var(--dim); }
   .field .flags { display: flex; flex-wrap: wrap; gap: 0.1rem 0.7rem; }
   .field .flags label { display: inline-flex; align-items: center; gap: 0.25rem;
@@ -32,13 +32,13 @@
   .field input[type=text], .field input[type=number], .field select { width: 100%; }
   .custom-uuid { margin-top: 0.3rem; }
   .exec-row { display: flex; align-items: center; gap: 0.6rem; margin-top: 0.5rem; }
-  .preview { font-family: ui-monospace, Menlo, monospace; font-size: 0.76rem;
+  .preview { font-family: ui-monospace, Menlo, monospace; font-size: var(--fs-meta);
     color: var(--good); background: var(--bg); border: 1px solid var(--border);
     border-radius: 6px; padding: 0.35rem 0.5rem; overflow-x: auto; white-space: pre;
     flex: 1; }
-  .needs-device { color: var(--warn); font-size: 0.75rem; }
+  .needs-device { color: var(--warn); font-size: var(--fs-meta); }
   .log { background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
-    padding: 0.6rem; font-size: 0.78rem; max-height: 22rem; overflow: auto;
+    padding: 0.6rem; font-size: var(--fs-meta); max-height: 22rem; overflow: auto;
     font-family: ui-monospace, Menlo, monospace; }
   .log .entry { margin-bottom: 0.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.4rem; }
   .log .rhai { color: var(--good); white-space: pre-wrap; }

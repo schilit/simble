@@ -216,7 +216,7 @@ const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) =>
 // ===========================================================================
 const STYLE_ID = "simble-hid-style";
 const STYLES = `
-  .hid .typebox { width: 100%; font-size: 0.95rem; padding: 0.5rem 0.6rem;
+  .hid .typebox { width: 100%; font-size: var(--fs-lead); padding: 0.5rem 0.6rem;
     border: 1px solid var(--border); border-radius: 6px; background: var(--bg);
     color: var(--text); font-family: ui-monospace, Menlo, monospace; }
   .hid .typebox:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
@@ -228,7 +228,7 @@ const STYLES = `
   .hid .key { flex: 0 0 auto; min-width: 1.9rem; height: 1.9rem; padding: 0 0.35rem;
     display: flex; align-items: center; justify-content: center;
     border: 1px solid var(--border); border-radius: 5px; background: var(--panel2);
-    font-size: 0.75rem; font-family: ui-monospace, Menlo, monospace; cursor: pointer;
+    font-size: var(--fs-meta); font-family: ui-monospace, Menlo, monospace; cursor: pointer;
     transition: background 0.06s, color 0.06s, border-color 0.06s; }
   .hid .key:hover { border-color: var(--dim); }
   .hid .key.wide1 { min-width: 3.1rem; } .hid .key.wide2 { min-width: 4.4rem; }
@@ -240,17 +240,17 @@ const STYLES = `
   .hid .pad { margin-top: 0.5rem; }
   .hid .pad-surface { height: 8.5rem; border: 1px dashed var(--border); border-radius: 8px;
     background: var(--panel2); display: flex; align-items: center; justify-content: center;
-    color: var(--dim); font-size: 0.8rem; cursor: crosshair; touch-action: none;
+    color: var(--dim); font-size: var(--fs-label); cursor: crosshair; touch-action: none;
     user-select: none; text-align: center; padding: 0 1rem; }
   .hid .pad-surface.active { border-style: solid; border-color: var(--accent); }
   .hid .pad-buttons { display: flex; gap: 4px; margin-top: 4px; }
-  .hid .pad-buttons button { flex: 1; font-size: 0.75rem; }
+  .hid .pad-buttons button { flex: 1; font-size: var(--fs-meta); }
   .hid .pad-buttons button.down { background: var(--accent); border-color: var(--accent);
     color: #fff; }
 
   .hid .wire { margin-top: 0.8rem; padding: 0.5rem 0.65rem; border-radius: 6px;
     border: 1px solid var(--border); background: var(--bg);
-    font-family: ui-monospace, Menlo, monospace; font-size: 0.78rem; }
+    font-family: ui-monospace, Menlo, monospace; font-size: var(--fs-meta); }
   .hid .wire .lbl { color: var(--dim); }
   .hid .wire .bytes { letter-spacing: 0.06em; }
   .hid .wire .bytes b { color: var(--accent); font-weight: 600; }
@@ -261,9 +261,9 @@ const STYLES = `
     border-radius: 10px; background: #24292f; padding: 8px; }
   .hid .screen { position: relative; height: 12.5rem; border-radius: 4px; overflow: hidden;
     background: #0d1117; color: #c9d1d9; font-family: ui-monospace, Menlo, monospace; }
-  .hid .screen .titlebar { background: #161b22; color: #8b949e; font-size: 0.7rem;
+  .hid .screen .titlebar { background: #161b22; color: #8b949e; font-size: var(--fs-meta);
     padding: 3px 8px; border-bottom: 1px solid #30363d; }
-  .hid .screen .doc { padding: 0.5rem 0.6rem; font-size: 0.82rem; line-height: 1.5;
+  .hid .screen .doc { padding: 0.5rem 0.6rem; font-size: var(--fs-label); line-height: 1.5;
     white-space: pre-wrap; word-break: break-word; height: calc(100% - 1.4rem);
     overflow: hidden; }
   .hid .caret { display: inline-block; width: 0.5em; border-bottom: 2px solid #58a6ff;
@@ -279,20 +279,20 @@ const STYLES = `
 
   .hid .hostkeys { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 0.8rem;
     min-height: 1.9rem; align-items: center; }
-  .hid .hostkeys .empty { color: var(--dim); font-size: 0.8rem; }
-  .hid .chipkey { font-family: ui-monospace, Menlo, monospace; font-size: 0.75rem;
+  .hid .hostkeys .empty { color: var(--dim); font-size: var(--fs-label); }
+  .hid .chipkey { font-family: ui-monospace, Menlo, monospace; font-size: var(--fs-meta);
     padding: 0.2rem 0.45rem; border-radius: 5px; border: 1px solid var(--accent);
     background: var(--accent); color: #fff; }
   .hid .chipkey .u { opacity: 0.7; margin-left: 0.35rem; }
   .hid .btnlights { display: flex; gap: 0.5rem; margin-top: 0.5rem; align-items: center;
-    font-size: 0.78rem; color: var(--dim); }
+    font-size: var(--fs-meta); color: var(--dim); }
   .hid .lamp { display: inline-flex; align-items: center; gap: 0.3rem; }
   .hid .lamp i { width: 0.7rem; height: 0.7rem; border-radius: 50%;
     border: 1px solid var(--border); background: var(--panel2); font-style: normal; }
   .hid .lamp.on i { background: var(--accent); border-color: var(--accent); }
 
   .hid .decode { width: 100%; border-collapse: collapse; margin-top: 0.6rem;
-    font-family: ui-monospace, Menlo, monospace; font-size: 0.76rem; }
+    font-family: ui-monospace, Menlo, monospace; font-size: var(--fs-meta); }
   .hid .decode th { text-align: left; color: var(--dim); font-weight: 600;
     border-bottom: 1px solid var(--border); padding: 0.25rem 0.4rem; }
   .hid .decode td { padding: 0.22rem 0.4rem; border-bottom: 1px solid var(--panel2);
@@ -301,7 +301,7 @@ const STYLES = `
   .hid .decode tr.fresh td { background: rgba(9, 105, 218, 0.08); }
   .hid .decode .none { color: var(--dim); }
 
-  .hid .steps { list-style: none; padding: 0; margin: 0.5rem 0 0; font-size: 0.82rem;
+  .hid .steps { list-style: none; padding: 0; margin: 0.5rem 0 0; font-size: var(--fs-label);
     color: var(--dim); }
   .hid .steps li { display: flex; gap: 0.5rem; align-items: baseline; padding: 0.15rem 0; }
   .hid .steps li .tick { width: 1rem; color: var(--dim); }
@@ -309,10 +309,10 @@ const STYLES = `
   .hid .steps li.done .tick { color: var(--good); }
 
   .hid details.raw-map { margin-top: 0.7rem; }
-  .hid details.raw-map pre { font-size: 0.72rem; white-space: pre-wrap; word-break: break-all;
+  .hid details.raw-map pre { font-size: var(--fs-meta); white-space: pre-wrap; word-break: break-all;
     background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
     padding: 0.5rem; margin: 0.4rem 0 0; }
-  .hid .prose p { font-size: 0.88rem; line-height: 1.6; }
+  .hid .prose p { font-size: var(--fs-body); line-height: 1.6; }
 `;
 
 const ABOUT = `<p>

@@ -18,12 +18,12 @@ function injectStyles() {
       padding: 0.5rem 0.9rem; margin: 0 0 0.9rem;
       border: 1px solid var(--border, #d0d7de); border-radius: 8px;
       background: var(--panel, #f6f8fa);
-      font-size: 0.85rem; color: var(--text, #1f2328);
+      font-size: var(--fs-body); color: var(--text, #1f2328);
     }
     .backend .backend-label { color: var(--dim, #656d76); font-weight: 600; }
     .backend label { display: inline-flex; align-items: center; gap: 0.35rem; cursor: pointer; }
     .backend label .hint { color: var(--dim, #656d76); font-size: 0.8em; }
-    .backend a.backend-help { margin-left: auto; color: var(--accent, #0969da); text-decoration: none; font-size: 0.82rem; }
+    .backend a.backend-help { margin-left: auto; color: var(--accent, #0969da); text-decoration: none; font-size: var(--fs-label); }
     .backend a.backend-help:hover { text-decoration: underline; }
   `;
   document.head.appendChild(style);

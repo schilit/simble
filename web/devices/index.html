@@ -16,7 +16,7 @@
     border-bottom: 1px solid var(--line); }
   .domain-tabs { display: flex; gap: 0.35rem; align-items: baseline; flex-wrap: wrap; }
   .domain-tab { padding: 0.4rem 0.85rem; border-radius: 7px 7px 0 0; text-decoration: none;
-    color: var(--dim); font-weight: 600; font-size: 0.95rem; border: 1px solid transparent;
+    color: var(--dim); font-weight: 600; font-size: var(--fs-lead); border: 1px solid transparent;
     border-bottom: none; }
   .domain-tab:hover { color: var(--fg); background: rgba(0,0,0,0.03); }
   .domain-tab[aria-current="page"] { color: var(--fg); background: var(--panel);
@@ -24,7 +24,7 @@
   /* The sentence still earns its place -- it is the only thing that says what
      a domain is before you read the panels -- but it rides the tab row. */
   .domain-blurb { margin-left: auto; padding-bottom: 0.55rem; color: var(--dim);
-    font-size: 0.85rem; align-self: center; }
+    font-size: var(--fs-body); align-self: center; }
   @media (max-width: 60rem) { .domain-blurb { display: none; } }
 </style>
 </head>
