@@ -35,12 +35,14 @@ So tests here divide by what they can disagree with:
    Recomputing over only the lines above the `#[cfg(test)]` marker drops files
    sharply: `device/car_kit.rs` 79%→71%, `packets/ext_adv.rs` 81%→76%,
    `device/big_receiver.rs` 90%→**78.5%**.
-2. **`tests/mod.rs` re-runs 35 of the 44 integration files as a second binary.**
-   369 test functions execute twice. There are **1 044 distinct** test
-   functions; a headline of ~1 400 is ~26% double-counting.
-3. **The nine files it omits include the foreign-oracle ones** —
-   `bumble_vectors_test`, `sbc_interop_test`, `adts_interop_test`. The
-   duplication actively favours the self-checking tests.
+2. ~~**`tests/mod.rs` re-runs 35 of the integration files as a second
+   binary.**~~ *Fixed — see "Duplicated tests" below.* It re-ran 376 test
+   functions, ~25% of a 1 528 headline. `tests/mod.rs` is gone and the headline
+   is now 1 130, which equals the number of distinct test functions.
+3. ~~**The files it omits include the foreign-oracle ones**~~ — same fix. The
+   double-counting had favoured the self-checking tests over
+   `bumble_vectors_test`, `sbc_interop_test` and `adts_interop_test`; it no
+   longer exists to favour anything.
 
 ---
 
@@ -111,17 +113,68 @@ once.
 
 ---
 
-## Duplicated tests
+## Duplicated tests — resolved
 
-**24 pairs**, inline `#[cfg(test)]` ↔ `tests/`: aics ×11, vocs ×5, bap ×4, at
-×2, rfcomm ×2. All 24 have differing bodies, and in each of the three real
-drifts **the inline copy is the weaker one** — e.g.
-`test_volume_offset_out_of_range_is_rejected` asserts on `MIN_VOLUME_OFFSET - 1`
-inline (derived from the constant under test, so a wrong constant still passes)
-against the literal `-256` in `tests/`.
+There were **24 pairs** sharing a name across inline `#[cfg(test)]` ↔ `tests/`:
+aics ×11, vocs ×5, bap ×4, at ×2, rfcomm ×2. All 24 had differing bodies, and
+wherever they had actually drifted **the inline copy was the weaker one**. The
+clearest case: `test_volume_offset_out_of_range_is_rejected` asserted on
+`MIN_VOLUME_OFFSET - 1` inline — derived from the very constant under test, so
+a wrong `MIN_VOLUME_OFFSET` still passes — against the literal `-256` in
+`tests/`.
 
-Recommendation: delete the inline copy of each pair, and either delete
-`tests/mod.rs` or make it the only way integration tests run.
+**22 of the 24 inline copies are now deleted**; the `tests/` version survives in
+every case, because in every case it was a superset. Four pairs had genuinely
+drifted, all in the same direction:
+
+| Pair | What only `tests/` had |
+|---|---|
+| `aics::test_mute_when_mute_disabled_is_rejected` | mute and change-counter unchanged after the reject |
+| `aics::test_set_manual_gain_mode_when_manual_only_is_rejected` | gain mode unchanged after the reject |
+| `vocs::test_set_volume_offset_requires_fresh_change_counter_each_time` | counter reached 2 |
+| `bap::test_broadcast_audio_announcement_round_trip` | encoded length is 3 |
+
+One pair needed a **merge** rather than a pick:
+`vocs::test_volume_offset_out_of_range_is_rejected`. `tests/` had the strong
+literal bounds but had dropped the inline copy's "a rejected write does not
+advance the change counter" assertion; that assertion moved into the `tests/`
+body. No assertion was lost in the de-duplication.
+
+The remaining 2 pairs are `classic/rfcomm.rs`'s
+`test_multiplexer_startup_handshake` and
+`test_data_delivered_immediately_after_dlc_opens`, deferred while that file is
+under other work. They are the same shape — resolve them the same way.
+
+Not a pair, despite the shared name: `test_unsupported_opcode_is_rejected`
+exists inline in `aics.rs`, `vocs.rs` and `ascs.rs`, and in `tests/vcp_test.rs`.
+Four different services, four different subjects — all four stay.
+
+### `tests/mod.rs` is deleted
+
+Cargo already compiles every `tests/*.rs` as its own test binary. `tests/mod.rs`
+declared 35 of them as modules a second time, so cargo built *it* as a 52nd
+test binary too and those 35 files' **376** test functions ran twice per `cargo
+test`. It had no reason to exist beyond `tests/` looking like a module
+directory: nothing in `Cargo.toml` or `.github/workflows/ci.yml` referenced it,
+and its history is only `mod` lines accreting since the initial commit. Worse,
+the 16 files it left out were disproportionately the foreign-oracle ones
+(`bumble_vectors_test`, `sbc_interop_test`, `adts_interop_test`), so the
+double-counting inflated precisely the self-checking tests this document warns
+about.
+
+The suite headline therefore **drops from 1 528 to 1 130**, and that is the
+point — the two numbers now mean the same thing:
+
+| | before | after |
+|---|---|---|
+| lib (inline `#[cfg(test)]`) | 641 | 619 |
+| `tests/*.rs`, once each | 510 | 510 |
+| `tests/mod.rs` second run | 376 | — |
+| doc-test | 1 | 1 |
+| **`cargo test` reports** | **1 528** | **1 130** |
+| **distinct test functions** | 1 152 | 1 130 |
+
+(`cargo test` without `--all-features`; `--features lc3` adds 7 more.)
 
 ---
 

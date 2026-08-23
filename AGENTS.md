@@ -62,9 +62,16 @@ Keep near-zero. Currently: `serde`, `serde_json`, `thiserror`, `zerocopy`,
 ## Testing
 
 - Integration tests in `tests/*.rs`, against the public API only.
-- Each test file is declared in `tests/mod.rs`.
+- Do **not** create a `tests/mod.rs`. Cargo compiles every `tests/*.rs` as its
+  own test binary already; declaring them as modules builds a second binary
+  that re-runs them all. One existed and was deleted for exactly that reason —
+  see `docs/test-strategy.md`.
 - Each file starts with a module doc comment describing what it covers
   functionally.
+- A test belongs in exactly one place. Inline `#[cfg(test)]` is for private
+  internals; anything reachable through the public API goes in `tests/`. Do not
+  keep a copy in both — the copies drift, and the inline one has historically
+  been the weaker.
 
 ## Verification loop (every change must pass)
 
@@ -94,8 +101,8 @@ similarity-rs ./src --skip-test      # install: cargo install similarity-rs
 This repo is often worked by several agents at once:
 
 - Stay strictly within your assigned files.
-- Module declarations (`mod.rs`, `lib.rs`, `tests/mod.rs`) are wired by the
-  coordinator, not by task agents.
+- Module declarations (`mod.rs`, `lib.rs`) are wired by the coordinator, not by
+  task agents. `tests/*.rs` needs no wiring at all.
 - Expect transiently broken full-crate builds from concurrent work; verify
   with targeted `cargo build --lib` / `cargo test --test <name>` instead of
   full-crate commands.

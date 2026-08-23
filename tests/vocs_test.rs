@@ -78,6 +78,8 @@ fn test_volume_offset_out_of_range_is_rejected() {
         vocs.write_control_point(&mut db, &set_volume_offset_pdu(0, 256)),
         Err(error_code::VALUE_OUT_OF_RANGE)
     );
+    // A rejected write must not advance the change counter.
+    assert_eq!(vocs.volume_offset_state().change_counter, 0);
 }
 
 #[test]
