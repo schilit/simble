@@ -56,6 +56,11 @@ let dragging = false;
 /** Builds the UI into `root` and starts the scene. */
 export async function mount(root) {
   container = root;
+  // The page was already written for two columns -- the tag and the locator
+  // side by side, the prose spanning both -- but nothing supplied the grid,
+  // so every section ran full width. `.domain.two-up` is that grid, shared
+  // with the other domains rather than a sixth private copy.
+  root.classList.add("domain", "two-up");
   styleEl = document.createElement("style");
   styleEl.textContent = STYLE;
   document.head.appendChild(styleEl);
@@ -79,7 +84,11 @@ export function unmount() {
   if (scene) { try { scene.free(); } catch (_) { /* already gone */ } scene = null; }
   for (const head of Object.values(heads)) head.destroy();
   if (styleEl) { styleEl.remove(); styleEl = null; }
-  if (container) { container.innerHTML = ""; container = null; }
+  if (container) {
+    container.classList.remove("domain", "two-up");
+    container.innerHTML = "";
+    container = null;
+  }
   ui = {};
   heads = {};
   history = [];
@@ -123,7 +132,7 @@ function step() {
 // --- markup ----------------------------------------------------------------
 
 const MARKUP = `
-<section class="panel rg-span">
+<section class="panel full">
   <h2>What this page is doing</h2>
   <p class="rg-prose">
     Two simulated devices share one radio: a <b>tag</b> advertising the
@@ -228,7 +237,7 @@ const MARKUP = `
   </p>
 </section>
 
-<section class="panel rg-span">
+<section class="panel full">
   <h2>Why the tag has to send its half back</h2>
   <div class="rg-charts">
     <div>
@@ -259,7 +268,7 @@ const MARKUP = `
   </div>
 </section>
 
-<section class="panel rg-span">
+<section class="panel full">
   <h2>The protocol underneath</h2>
   <dl class="kv rg-link">
     <dt>locator</dt><dd id="rg-phase-label">—</dd>
@@ -292,7 +301,6 @@ const MARKUP = `
 // --- styles ----------------------------------------------------------------
 
 const STYLE = `
-.rg-span { grid-column: 1 / -1; }
 .rg-prose { font-size: 0.88rem; margin: 0 0 0.7rem; max-width: 62rem; }
 .rg-prose:last-child { margin-bottom: 0; }
 #rg-plan { width: 100%; height: auto; background: var(--bg);

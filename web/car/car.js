@@ -41,10 +41,6 @@ const NO_ADDRESS =
 let wasmReady = null;
 
 const STYLE = `
-.car { display: grid; gap: 1.1rem; padding: 1.1rem 1.25rem; max-width: 84rem; margin: 0 auto;
-  grid-template-columns: minmax(15rem, 0.85fr) minmax(20rem, 1.3fr) minmax(15rem, 0.95fr); }
-@media (max-width: 68rem) { .car { grid-template-columns: 1fr; } }
-.car .wide { grid-column: 1 / -1; }
 .car h3 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em;
   color: var(--dim); margin: 1rem 0 0.4rem; font-weight: 600; }
 .car h3:first-of-type { margin-top: 0.2rem; }
@@ -133,7 +129,7 @@ const STYLE = `
 `;
 
 const MARKUP = `
-<div class="car">
+<div class="car domain two-up">
 
   <!-- ============ the phone: Audio Gateway ============ -->
   <section class="panel">
@@ -187,24 +183,6 @@ const MARKUP = `
       <code>+CIEV: &lt;index&gt;,&lt;value&gt;</code> — and the index is nothing but the
       indicator's position in the <code>+CIND=?</code> list, which is why that order
       is the whole meaning of the notification.
-    </p>
-  </section>
-
-  <!-- ============ the AT dialogue ============ -->
-  <section class="panel dialogue">
-    <h2>The wire — AT over RFCOMM</h2>
-    <div class="ctl" style="margin-top:0;margin-bottom:0.5rem">
-      <span class="hint" id="car-link">starting…</span>
-      <span class="spacer" style="flex:1"></span>
-      <button id="car-bytes">bytes</button>
-      <button id="car-clear">clear</button>
-    </div>
-    <div class="tape" id="car-tape"><div class="tape-empty">waiting for the link…</div></div>
-    <p class="hint" style="margin-top:0.7rem">
-      Left is the head unit, right is the phone. These are the bytes
-      <code>HfProtocol</code> and <code>AgProtocol</code> actually wrote into the
-      RFCOMM data link connection — commands are <code>\\r</code>-terminated, responses
-      are wrapped in <code>\\r\\n</code>. Turn on <b>bytes</b> to see each line's hex.
     </p>
   </section>
 
@@ -264,8 +242,26 @@ const MARKUP = `
     </p>
   </section>
 
+  <!-- ============ the AT dialogue ============ -->
+  <section class="panel dialogue full">
+    <h2>The wire — AT over RFCOMM</h2>
+    <div class="ctl" style="margin-top:0;margin-bottom:0.5rem">
+      <span class="hint" id="car-link">starting…</span>
+      <span class="spacer" style="flex:1"></span>
+      <button id="car-bytes">bytes</button>
+      <button id="car-clear">clear</button>
+    </div>
+    <div class="tape" id="car-tape"><div class="tape-empty">waiting for the link…</div></div>
+    <p class="hint" style="margin-top:0.7rem">
+      Left is the head unit, right is the phone. These are the bytes
+      <code>HfProtocol</code> and <code>AgProtocol</code> actually wrote into the
+      RFCOMM data link connection — commands are <code>\\r</code>-terminated, responses
+      are wrapped in <code>\\r\\n</code>. Turn on <b>bytes</b> to see each line's hex.
+    </p>
+  </section>
+
   <!-- ============ the stack ============ -->
-  <section class="panel wide">
+  <section class="panel full">
     <h2>The stack underneath</h2>
     <ul class="stages" id="car-steps"></ul>
     <div class="layers">
@@ -286,7 +282,7 @@ const MARKUP = `
   </section>
 
   <!-- ============ the other roles ============ -->
-  <section class="panel wide">
+  <section class="panel full">
     <h2>The rest of the head unit</h2>
     <p class="hint" style="margin-top:0">
       One head unit, one link, several profile roles at the same time. Only the first
