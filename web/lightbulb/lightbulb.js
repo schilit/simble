@@ -18,7 +18,7 @@
 // one -- android::BluetoothGatt, as the Generic domain does -- but the point
 // here is the bulb, so the picker writes the device's own database directly.)
 
-import init, { WebPeripheral, WebLink } from "../pkg/simble.js";
+import init, { WebPeripheral, WebLink, WebScriptedCentral, catalog_script } from "../pkg/simble.js";
 import { createGattView } from "../common/gatt-view.js";
 import { createDeviceHeader } from "../common/device-header.js";
 import { attachHighlightedEditor } from "../common/highlight.js";
@@ -45,10 +45,19 @@ const STYLE = `
   .rgb-readout { font-family: ui-monospace, Menlo, monospace; color: var(--dim);
     font-size: 0.85rem; }`;
 
-const MARKUP = `<div id="backend" class="full" style="grid-column:1/-1"></div>
+const MARKUP = `<div id="backend" class="full"></div>
+
+  <section id="setup" class="panel setup full">
+    <h2>netsim is not reachable</h2>
+    <p>Could not reach netsim at <code>localhost:7681</code> — is <code>netsimd</code> running with
+       its WebSocket frontend enabled? Start it with:</p>
+    <pre><code>netsimd --logtostderr --no-shutdown --ws-port 7681</code></pre>
+  </section>
+
   <section class="panel">
-    <h2>The light</h2>
-    <div class="bulb-stage">
+    <div id="bulb-head"></div>
+    <div id="bulb-script"></div>
+<div class="bulb-stage">
       <svg id="bulbSvg" viewBox="0 0 120 170" role="img" aria-label="color bulb">
         <g>
           <path id="glass" d="M60 10 C25 10 8 38 20 68 C26 84 40 92 42 112 L78 112 C80 92 94 84 100 68 C112 38 95 10 60 10 Z" fill="#33ccff"/>
@@ -66,49 +75,39 @@ const MARKUP = `<div id="backend" class="full" style="grid-column:1/-1"></div>
       </div>
       <div class="swatches" id="swatches"></div>
     </div>
-    <p class="hint" style="margin-top:1rem">
-      The bulb color is a writable <code>[R, G, B]</code> characteristic on a custom 128-bit service
-      (Magic-Blue-style). The picker writes the value into the device's live GATT database via the
-      host <code>set_value</code> path — the same one the script's <code>update_value</code> uses — so
-      you see the bulb change here <strong>and</strong> any connected central is notified of the new
-      color. (The script is the peripheral, and the page supplies the "write" a phone app would
-      send. To send a <em>real</em> one, script a central with <code>android::BluetoothGatt</code> —
-      the <a href="../devices/#generic">Generic</a> domain does.)
-    </p>
-    <p class="hint" id="mode-hint" style="margin-top:0.5rem"></p>
-    <div id="script-error" class="error"></div>
-  </section>
-
-  <section class="panel">
-    <h2>Live device</h2>
-    <div id="device-head"></div>
-    <div id="device-script"></div>
     <dl class="kv">
       <dt>connection</dt><dd id="dev-conn">—</dd>
       <dt>subscription</dt><dd id="dev-sub">—</dd>
     </dl>
-    <div id="gatt"></div>
+    <h2 class="sub">Its GATT database (server view)</h2>
+    <div id="bulb-gatt"></div>
+    <p class="hint" id="mode-hint"></p>
+    <div id="script-error" class="error"></div>
+    <p class="hint">The colour is a writable <code>[R, G, B]</code> characteristic on a custom
+       128-bit service. The picker no longer pokes it host-side: the write goes through the client
+       beside it, over GATT, the way a phone app's would.</p>
   </section>
 
-  <section id="setup" class="panel setup" style="grid-column:1/-1">
-    <h2>netsim is not reachable</h2>
-    <p>Could not reach netsim at <code>localhost:7681</code> — is <code>netsimd</code> running with its
-       WebSocket frontend enabled? This page is served from the cloud, but the Bluetooth scene runs
-       <strong>on your machine</strong>: the wasm build of SimBLE in this tab connects to a local
-       <code>netsimd</code> over <code>ws://localhost:7681</code>. Start it with:</p>
-    <pre><code>netsimd --logtostderr --no-shutdown --ws-port 7681</code></pre>
-    <p class="hint">Needs the canary-channel emulator. The bulb still works offline — the color you
-       pick is written into the in-browser device; connect netsim to expose it on the scene and notify a
-       real central.</p>
+  <section class="panel">
+    <div id="client-head"></div>
+    <div id="client-script"></div>
+    <h2 class="sub">Discovered services (client view)</h2>
+    <div id="client-gatt"></div>
+    <div id="client-log" class="hint"></div>
   </section>`;
 
 const IN_PAGE_ADDR = "CC:1E:57:00:00:05";
+const CLIENT_ADDR = "CC:1E:57:00:00:15";
+const CLIENT_NETSIM = "CC:1E:57:00:00:15";
 const WS_URL =
   "ws://localhost:7681/v1/websocket/bt?name=web-lightbulb&address=CC:1E:57:00:00:05";
 
 // Custom 128-bit UUIDs (Magic-Blue-style). The characteristic value is 3 bytes
 // [R, G, B]. Simble renders 128-bit UUIDs lowercase-dashed, which is what
 // status_json reports and what uuid::of parses — so this string round-trips.
+const CLIENT_WS_URL =
+  `ws://localhost:7681/v1/websocket/bt?name=web-bulb-client&address=${CLIENT_NETSIM}`;
+
 const COLOR_SERVICE = "f0ff0001-1234-5678-90ab-cdef01234567";
 const COLOR_CHAR = "f0ff0002-1234-5678-90ab-cdef01234567";
 
@@ -148,8 +147,14 @@ const PRESETS = ["#ff3355", "#ff9933", "#ffee33", "#33dd66", "#33ccff", "#7755ff
 let root = null;
 const $ = (id) => root.querySelector(`#${id}`);
 let setupPanel, picker;
-let head = null; // the shared device header
-let gatt = null; // the shared GATT view
+let head = null;        // the bulb's device header
+let gatt = null;        // the bulb's GATT view (server side)
+let clientHead = null;  // the client's device header
+let clientGatt = null;  // what the client discovered
+let clientIndex = -1;   // scripted central index within the in-page link
+let clientDev = null;   // WebScriptedCentral, netsim backend only
+let bulbScript = "";
+let clientScript = "";
 
 let mode = "in-page"; // "in-page" (a wasm WebLink in this tab) | "websocket" (netsim)
 let peripheral = null; // WebPeripheral, WebSocket backend only
@@ -164,14 +169,19 @@ function showScriptError(m) { $("script-error").textContent = m ? String(m) : ""
 
 function createPeripheral(script) {
   if (peripheral) { try { peripheral.free(); } catch (_) { /* gone */ } }
+  if (clientDev) { try { clientDev.free(); } catch (_) { /* gone */ } }
   peripheral = new WebPeripheral(WS_URL, script);
+  // Each device owns its own netsim socket -- its own controller -- so the
+  // pair meets over the real ether rather than a shared in-page link.
+  clientDev = new WebScriptedCentral(CLIENT_WS_URL, clientScript);
+  clientDev.set_target(IN_PAGE_ADDR);
   runStart = performance.now();
 }
 
 /// The script the device is built from. Read-only on this page: authoring is
 /// the Playground's job, and what the pen is for here is showing that the bulb
 /// really is a scripted peripheral rather than a picture of one.
-const scriptText = () => DEFAULT_SCRIPT;
+const scriptText = () => bulbScript;
 
 // In-page backend: host the bulb on a wasm WebLink in this tab — no netsim.
 // A WebLink has no "remove peripheral", so re-running rebuilds the whole link
@@ -182,15 +192,24 @@ function buildInPage(script) {
   let idx;
   try { idx = next.add_peripheral(IN_PAGE_ADDR, script); }
   catch (e) { try { next.free(); } catch (_) { /* gone */ } throw e; }
+  let cidx;
+  try {
+    cidx = next.add_scripted_central(CLIENT_ADDR, clientScript);
+    // The catalog's clients name EXAMPLE_PEER_ADDRESS; this page allocates
+    // its own addresses, and topology beats script.
+    next.scripted_central_set_target(cidx, IN_PAGE_ADDR);
+  } catch (e) { try { next.free(); } catch (_) { /* gone */ } throw e; }
   if (link) { try { link.free(); } catch (_) { /* gone */ } }
   link = next;
   linkIndex = idx;
+  clientIndex = cidx;
   runStart = performance.now();
 }
 
 function teardownDevices() {
   if (peripheral) { try { peripheral.free(); } catch (_) { /* gone */ } peripheral = null; }
-  if (link) { try { link.free(); } catch (_) { /* gone */ } link = null; linkIndex = -1; }
+  if (clientDev) { try { clientDev.free(); } catch (_) { /* gone */ } clientDev = null; }
+  if (link) { try { link.free(); } catch (_) { /* gone */ } link = null; linkIndex = -1; clientIndex = -1; }
 }
 
 /// Puts the bulb on the air. In both backends this device is the only one its
@@ -247,10 +266,13 @@ function applyBulb(r, g, b) {
 function writeColor(r, g, b) {
   const bytes = new Uint8Array([clamp(r), clamp(g), clamp(b)]);
   try {
+    // Through the client, over GATT. This used to poke the value straight
+    // into the device's own database because central-role scripting did not
+    // exist; it does now, so the write crosses the link like a phone's would.
     if (mode === "in-page") {
-      if (link && linkIndex >= 0) link.peripheral_set_value(linkIndex, COLOR_CHAR, bytes);
-    } else if (peripheral) {
-      peripheral.set_value(COLOR_CHAR, bytes);
+      if (link && clientIndex >= 0) link.scripted_central_write(clientIndex, COLOR_CHAR, bytes);
+    } else if (clientDev) {
+      clientDev.write(COLOR_CHAR, bytes, true);
     }
   } catch (e) {
     showScriptError(e);
@@ -285,6 +307,17 @@ function render(status) {
   if (status.last_error) showScriptError(`tick error: ${status.last_error}`);
 }
 
+/// The client's half of the view. Shared by both backends: what differs is
+/// where the status came from, not what it means.
+function renderClient(status, failure) {
+  if (!clientHead) return;
+  clientHead.setState(!!status.connected,
+    failure ? `assert failed: ${failure}`
+            : status.connected ? "connected to the bulb" : "connecting…",
+    failure ? "bad" : status.connected ? "ok" : "");
+  clientGatt?.update(status);
+}
+
 function loop() {
   if (stopped) return; // Stop pressed: stay torn down until Run
   if (mode === "in-page") {
@@ -298,9 +331,11 @@ function loop() {
       if (json) {
         const status = JSON.parse(json);
         head.setState(true, status.connected
-          ? "in browser · central connected" : "in browser · advertising", "ok");
+          ? "in browser · client connected" : "in browser · advertising", "ok");
         render(status);
       }
+      renderClient(JSON.parse(link.central_status_json(clientIndex) || "{}"),
+                   link.scripted_central_failure(clientIndex));
     } catch (e) { showScriptError(e); }
     return;
   }
@@ -311,6 +346,12 @@ function loop() {
       try { createPeripheral(scriptText()); } catch (e) { showScriptError(e); }
     }
     return;
+  }
+  if (clientDev) {
+    try {
+      renderClient(JSON.parse(clientDev.tick((performance.now() - runStart) / 1000) || "{}"),
+                   clientDev.failure());
+    } catch (e) { showScriptError(e); }
   }
   const state = peripheral.ready_state();
   if (state === 3) {
@@ -352,6 +393,12 @@ export async function mount(container) {
   root.classList.add("domain", "two-up");
   root.innerHTML = MARKUP;
 
+  // Both halves come from the shared catalog -- the same definitions MCP's
+  // `example` tool and the scene loader read -- rather than a copy living in
+  // this page.
+  bulbScript = catalog_script("color_bulb");
+  clientScript = catalog_script("bulb_client");
+
   setupPanel = $("setup");
   picker = $("picker");
 
@@ -362,7 +409,7 @@ export async function mount(container) {
     address: IN_PAGE_ADDR,
     dotMeans: "the bulb is on the air and advertising",
     script: {
-      text: DEFAULT_SCRIPT,
+      text: bulbScript,
       editable: false,
       highlight: attachHighlightedEditor,
       note: "<strong>Read-only here.</strong> This is the device: a writable <code>[R, G, B]</code> " +
@@ -373,8 +420,8 @@ export async function mount(container) {
     // controller hosts, so stopping it stops nothing else.
     run: { running: true, onRun: run, onStop: stop },
   });
-  $("device-head").append(head.el);
-  $("device-script").append(head.panel);
+  $("bulb-head").append(head.el);
+  $("bulb-script").append(head.panel);
 
   // The colour characteristic is this page's own invention, so its decoder
   // lives here rather than in the shared viewer -- that is the seam the widget
@@ -387,7 +434,21 @@ export async function mount(container) {
       return `RGB ${r},${g},${b}`;
     },
   });
-  $("gatt").append(gatt.el);
+  $("bulb-gatt").append(gatt.el);
+
+  clientHead = createDeviceHeader({
+    name: "Bulb Client", kind: "central · Rhai script", accent: "accent",
+    address: mode === "in-page" ? CLIENT_ADDR : CLIENT_NETSIM,
+    dotMeans: "the client is connected to the bulb",
+    script: { text: clientScript, editable: false,
+      note: "<strong>Read-only here.</strong> The catalog's <code>bulb_client</code>." },
+    run: { running: false, disabled: true,
+           reason: "the pair shares one controller — the bulb's toggle drives both" },
+  });
+  $("client-head").append(clientHead.el);
+  $("client-script").append(clientHead.panel);
+  clientGatt = createGattView({ mode: "client", empty: "Connecting…" });
+  $("client-gatt").append(clientGatt.el);
 
   // swatches
   const sw = $("swatches");
@@ -470,9 +531,14 @@ export function unmount() {
   peripheral = null;
   link = null;
   linkIndex = -1;
+  try { clientDev?.free(); } catch (_) { /* already gone */ }
+  clientDev = null;
+  clientIndex = -1;
   gatt?.destroy();
+  clientGatt?.destroy();
   head?.destroy();
-  gatt = head = null;
+  clientHead?.destroy();
+  gatt = head = clientGatt = clientHead = null;
   document.getElementById(STYLE_ID)?.remove();
   // Clear our own markup rather than relying on the host to do it: the
   // standalone page has no shell to tidy up after us.

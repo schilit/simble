@@ -770,6 +770,34 @@ server.advertise_connectable(false); // a real beacon is broadcast-only
 "#,
     },
     DeviceExample {
+        name: "color_bulb",
+        summary: "Colour bulb: a writable [R, G, B] characteristic on a custom 128-bit service",
+        script: r#"// SimBLE Color Bulb — a Magic-Blue-style RGB light.
+// A writable [R, G, B] color characteristic on a custom 128-bit service. The
+// page's color picker writes this value (host glue), and a connected central
+// is notified. No tick() needed — the color is driven by writes, not by time.
+let server = android::BluetoothGattServer("web-lightbulb");
+
+let svc = android::BluetoothGattService(
+    uuid::of("f0ff0001-1234-5678-90ab-cdef01234567"),
+    android::SERVICE_TYPE_PRIMARY,
+);
+let color = android::BluetoothGattCharacteristic(
+    uuid::of("f0ff0002-1234-5678-90ab-cdef01234567"),
+    android::PROPERTY_READ | android::PROPERTY_WRITE
+        | android::PROPERTY_WRITE_NO_RESPONSE | android::PROPERTY_NOTIFY,
+    android::PERMISSION_READ | android::PERMISSION_WRITE,
+);
+color.set_value([0x33, 0xCC, 0xFF]); // a cool cyan to start
+let cccd = android::BluetoothGattDescriptor(
+    uuid::CLIENT_CHARACTERISTIC_CONFIGURATION,
+    android::PERMISSION_READ | android::PERMISSION_WRITE,
+);
+color.add_descriptor(cccd);
+svc.add_characteristic(color);
+server.add_service(svc);"#,
+    },
+    DeviceExample {
         name: "thermostat",
         summary: "Settable device: custom 128-bit writable setpoint + convergence physics",
         script: r#"// Thermostat: the SIG has no thermostat service, so like real BLE
@@ -864,6 +892,29 @@ fn on_characteristic_changed(client, uuid, value) {
     assert(value.len() >= 2, "measurement carries flags and a rate");
     assert(value[1] > 30 && value[1] < 220, "a plausible heart rate");
     client.emit("bpm", value[1]);
+}
+"#,
+    },
+    ClientExample {
+        name: "bulb_client",
+        summary: "Colour-bulb client: connect, read and subscribe, then write colours over GATT",
+        peer: "color_bulb",
+        script: r#"// The client half of the colour bulb, and the reason the page no longer
+// needs to cheat: writing the colour used to be a host-side poke into the
+// device's own database, because central-role scripting did not exist. Now
+// the write crosses GATT like a phone app's would.
+let client = android::BluetoothGatt("Bulb Client");
+client.connect("AA:BB:CC:00:00:01");
+
+fn on_services_discovered(client) {
+    // Read once so the client shows the colour it found, then let the page
+    // drive writes through it.
+    client.read(uuid::of("f0ff0002-1234-5678-90ab-cdef01234567"));
+    client.subscribe(uuid::of("f0ff0002-1234-5678-90ab-cdef01234567"));
+}
+
+fn on_characteristic_changed(client, uuid, value) {
+    assert(value.len() == 3, "a colour is three bytes");
 }
 "#,
     },

@@ -3711,6 +3711,29 @@ mod web {
             self.central.failure().map(str::to_string)
         }
 
+        /// Queues a read of `uuid`, as the in-page `scripted_central_read`
+        /// does. A page drives the script rather than replacing it: the
+        /// request joins the same outbox the script's own calls use.
+        pub fn read(&mut self, uuid: &str) -> Result<(), JsValue> {
+            let uuid: crate::types::Uuid = uuid.parse().map_err(|_| JsValue::from_str("bad UUID"))?;
+            self.central.read(uuid);
+            Ok(())
+        }
+
+        /// Queues a write of `value` to `uuid`.
+        pub fn write(&mut self, uuid: &str, value: Vec<u8>, with_response: bool) -> Result<(), JsValue> {
+            let uuid: crate::types::Uuid = uuid.parse().map_err(|_| JsValue::from_str("bad UUID"))?;
+            self.central.write(uuid, value, with_response);
+            Ok(())
+        }
+
+        /// Queues enabling or disabling notifications on `uuid`.
+        pub fn subscribe(&mut self, uuid: &str, enable: bool) -> Result<(), JsValue> {
+            let uuid: crate::types::Uuid = uuid.parse().map_err(|_| JsValue::from_str("bad UUID"))?;
+            self.central.subscribe(uuid, enable);
+            Ok(())
+        }
+
         /// Messages the script emitted since the last call.
         pub fn emitted(&mut self) -> js_sys::Array {
             let out = js_sys::Array::new();
