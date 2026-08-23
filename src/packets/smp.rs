@@ -193,4 +193,77 @@ mod tests {
         let (parsed, _) = SmpPairingPacket::parse(bytes).expect("Valid SMP parse");
         assert_eq!(parsed.io_capability, io_capability::NO_INPUT_NO_OUTPUT);
     }
+
+    /// SMP pairing PDUs are byte-packed with no length or endianness fields.
+    /// `Preq`/`Pres` are fed verbatim into the confirm-value calculation, so a
+    /// struct that gained padding would corrupt pairing rather than fail loudly.
+    #[test]
+    fn test_wire_layout_has_no_padding() {
+        assert_eq!(core::mem::size_of::<SmpPairingPacket>(), 7);
+        assert_eq!(core::mem::align_of::<SmpPairingPacket>(), 1);
+        assert_eq!(core::mem::size_of::<SmpPairingFailed>(), 2);
+        assert_eq!(core::mem::align_of::<SmpPairingFailed>(), 1);
+    }
+
+    /// Exact on-the-wire bytes, Core Spec Vol 3, Part H, Figure 3.1.
+    #[test]
+    fn test_exact_wire_bytes_round_trip() {
+        // Pairing Request: NoInputNoOutput, no OOB, bonding + Secure Connections,
+        // 16-byte max key, ENC|ID|SIGN distributed both ways.
+        let wire = [0x01, 0x03, 0x00, 0x09, 0x10, 0x07, 0x07];
+        let (req, rest) = SmpPairingPacket::parse(&wire).expect("pairing request");
+        assert_eq!(req.opcode, opcode::PAIRING_REQUEST);
+        assert_eq!(req.io_capability, io_capability::NO_INPUT_NO_OUTPUT);
+        assert_eq!(req.oob_data_flag, 0x00);
+        assert_eq!(req.auth_req, auth_req::BONDING | auth_req::SC);
+        assert_eq!(req.max_encryption_key_size, 16);
+        assert_eq!(req.initiator_key_distribution, 0x07);
+        assert_eq!(req.responder_key_distribution, 0x07);
+        assert!(rest.is_empty());
+        assert_eq!(req.as_bytes(), &wire);
+
+        // The response built from those parameters differs only in opcode.
+        let resp = SmpPairingPacket::new_response(
+            io_capability::NO_INPUT_NO_OUTPUT,
+            auth_req::BONDING | auth_req::SC,
+            0x07,
+            0x07,
+        );
+        assert_eq!(resp.as_bytes(), &[0x02, 0x03, 0x00, 0x09, 0x10, 0x07, 0x07]);
+
+        // Pairing Failed: Confirm Value Failed.
+        let failed = SmpPairingFailed::new(error_code::CONFIRM_VALUE_FAILED);
+        assert_eq!(failed.as_bytes(), &[0x05, 0x04]);
+        let (parsed, rest) = SmpPairingFailed::parse(failed.as_bytes()).expect("pairing failed");
+        assert_eq!(parsed.reason, error_code::CONFIRM_VALUE_FAILED);
+        assert!(rest.is_empty());
+    }
+
+    /// Truncated PDUs are rejected, and `SmpPairingFailed` refuses a PDU that
+    /// is long enough but carries a different opcode.
+    #[test]
+    fn test_rejects_truncated_and_mismatched_pdus() {
+        assert!(SmpPairingPacket::parse(&[]).is_none());
+        assert!(SmpPairingPacket::parse(&[0x01, 0x03, 0x00, 0x09, 0x10, 0x07]).is_none());
+        assert!(SmpPairingFailed::parse(&[0x05]).is_none());
+
+        // A Pairing Confirm is not a Pairing Failed.
+        assert!(SmpPairingFailed::parse(&[opcode::PAIRING_CONFIRM, 0x04]).is_none());
+
+        // Trailing bytes beyond the fixed struct are returned, not consumed.
+        let (_, rest) =
+            SmpPairingPacket::parse(&[0x01, 0x03, 0x00, 0x09, 0x10, 0x07, 0x07, 0xAA]).unwrap();
+        assert_eq!(rest, &[0xAA]);
+    }
+
+    /// `SmpPairingPacket` deliberately does not filter on opcode, because it
+    /// backs both Pairing Request (0x01) and Pairing Response (0x02). Callers
+    /// dispatch on the opcode byte before calling it. Pinned so that anyone
+    /// adding an opcode check here notices the shared use first.
+    #[test]
+    fn test_pairing_packet_parse_does_not_filter_opcode() {
+        let (parsed, _) = SmpPairingPacket::parse(&[0x02, 0x03, 0x00, 0x09, 0x10, 0x07, 0x07])
+            .expect("pairing response parses too");
+        assert_eq!(parsed.opcode, opcode::PAIRING_RESPONSE);
+    }
 }

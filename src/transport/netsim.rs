@@ -26,6 +26,83 @@ use super::ws::{
 use crate::types::SimbleError;
 use std::io::{ErrorKind, Read, Write};
 use std::net::TcpStream;
+use zerocopy::{
+    FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned,
+    byteorder::big_endian::{U32, U64},
+};
+
+/// btsnoop file header: the identification pattern, then the format version
+/// and datalink type.
+///
+/// Every multi-byte field in btsnoop is **big-endian**, unlike the
+/// little-endian HCI structures everywhere else in this crate. Writing these
+/// fields little-endian yields a file that tools reject or, worse, misread —
+/// so the byte order is pinned by test rather than left to inspection.
+#[repr(C)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
+)]
+struct BtsnoopFileHeader {
+    /// Always `b"btsnoop\0"`.
+    identification: [u8; 8],
+    /// Format version number; 1 is the only version in use.
+    version: U32,
+    /// Datalink type; 1002 is HCI UART (H4).
+    datalink: U32,
+}
+
+impl BtsnoopFileHeader {
+    /// Datalink type for HCI UART (H4) — the framing this transport carries.
+    const DATALINK_H4: u32 = 1002;
+
+    /// Builds the fixed 16-byte header written once at the start of a trace.
+    fn new() -> Self {
+        Self {
+            identification: *b"btsnoop\0",
+            version: U32::new(1),
+            datalink: U32::new(Self::DATALINK_H4),
+        }
+    }
+}
+
+/// btsnoop per-packet record header, immediately followed by the packet bytes.
+/// Big-endian throughout, like [`BtsnoopFileHeader`].
+#[repr(C)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
+)]
+struct BtsnoopRecordHeader {
+    /// Length of the original packet.
+    original_length: U32,
+    /// Length actually captured; equal to `original_length` (never truncated).
+    included_length: U32,
+    /// Per-packet flags; see [`Self::FLAG_RECEIVED`].
+    flags: U32,
+    /// Packets dropped since the previous record; always 0 here.
+    cumulative_drops: U32,
+    /// Capture timestamp, microseconds since year 0.
+    timestamp_micros: U64,
+}
+
+impl BtsnoopRecordHeader {
+    /// btsnoop timestamps are microseconds since year 0; this constant is the
+    /// Unix epoch on that scale (what Wireshark expects).
+    const UNIX_EPOCH_OFFSET: u64 = 0x00DC_DDB3_0F2F_8000;
+    /// Flags bit 0: set when the packet travelled controller→host.
+    const FLAG_RECEIVED: u32 = 0x01;
+
+    /// Builds a record header for a packet of `len` bytes captured at
+    /// `micros` (already offset to the btsnoop epoch).
+    fn new(len: u32, received: bool, micros: u64) -> Self {
+        Self {
+            original_length: U32::new(len),
+            included_length: U32::new(len),
+            flags: U32::new(if received { Self::FLAG_RECEIVED } else { 0 }),
+            cumulative_drops: U32::new(0),
+            timestamp_micros: U64::new(micros),
+        }
+    }
+}
 
 /// A `ws://host:port/path` URL, split into the pieces the handshake needs.
 struct WsUrl {
@@ -184,9 +261,7 @@ impl<S: Read + Write> NetsimTransport<S> {
     /// btsnoop format (datalink 1002, HCI UART/H4) — the format Wireshark
     /// and `tshark` read natively. The header is written immediately.
     pub fn set_trace(&mut self, mut file: std::fs::File) -> std::io::Result<()> {
-        file.write_all(b"btsnoop\0")?;
-        file.write_all(&1u32.to_be_bytes())?; // version
-        file.write_all(&1002u32.to_be_bytes())?; // datalink: HCI UART (H4)
+        file.write_all(BtsnoopFileHeader::new().as_bytes())?;
         self.trace = Some(file);
         Ok(())
     }
@@ -198,21 +273,14 @@ impl<S: Read + Write> NetsimTransport<S> {
         let Some(file) = self.trace.as_mut() else {
             return;
         };
-        // btsnoop timestamps are microseconds since year 0; this constant
-        // is the Unix epoch in that scale (what Wireshark expects).
-        const UNIX_EPOCH_OFFSET: u64 = 0x00DC_DDB3_0F2F_8000;
         let micros = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_micros() as u64)
             .unwrap_or(0)
-            + UNIX_EPOCH_OFFSET;
-        let len = packet.len() as u32;
-        let mut record = Vec::with_capacity(24 + packet.len());
-        record.extend_from_slice(&len.to_be_bytes());
-        record.extend_from_slice(&len.to_be_bytes());
-        record.extend_from_slice(&u32::from(received).to_be_bytes());
-        record.extend_from_slice(&0u32.to_be_bytes()); // cumulative drops
-        record.extend_from_slice(&micros.to_be_bytes());
+            + BtsnoopRecordHeader::UNIX_EPOCH_OFFSET;
+        let header = BtsnoopRecordHeader::new(packet.len() as u32, received, micros);
+        let mut record = Vec::with_capacity(size_of::<BtsnoopRecordHeader>() + packet.len());
+        record.extend_from_slice(header.as_bytes());
         record.extend_from_slice(packet);
         let _ = file.write_all(&record);
         let _ = file.flush();
@@ -518,5 +586,138 @@ mod tests {
         };
         let mut transport = NetsimTransport::new(stream);
         assert!(transport.pump(&super::super::HciChannel::new()).is_err());
+    }
+
+    /// btsnoop headers are fixed-size and densely packed; a struct that gained
+    /// padding would shift every field and produce an unreadable trace.
+    #[test]
+    fn test_btsnoop_header_layout_has_no_padding() {
+        assert_eq!(size_of::<BtsnoopFileHeader>(), 16);
+        assert_eq!(align_of::<BtsnoopFileHeader>(), 1);
+        assert_eq!(size_of::<BtsnoopRecordHeader>(), 24);
+        assert_eq!(align_of::<BtsnoopRecordHeader>(), 1);
+    }
+
+    /// The file header is exactly the 16 bytes every btsnoop reader looks for.
+    /// Datalink 1002 is 0x000003EA: big-endian it ends `03 EA`, little-endian
+    /// it would start `EA 03`, so this assertion alone catches a flipped
+    /// byte order.
+    #[test]
+    fn test_btsnoop_file_header_is_big_endian() {
+        assert_eq!(
+            BtsnoopFileHeader::new().as_bytes(),
+            &[
+                b'b', b't', b's', b'n', b'o', b'o', b'p', 0x00, // identification
+                0x00, 0x00, 0x00, 0x01, // version 1, big-endian
+                0x00, 0x00, 0x03, 0xEA, // datalink 1002 (H4), big-endian
+            ]
+        );
+
+        let parsed = BtsnoopFileHeader::read_from_bytes(BtsnoopFileHeader::new().as_bytes())
+            .expect("file header round-trips");
+        assert_eq!(&parsed.identification, b"btsnoop\0");
+        assert_eq!(parsed.version.get(), 1);
+        assert_eq!(parsed.datalink.get(), BtsnoopFileHeader::DATALINK_H4);
+    }
+
+    /// Record headers are big-endian too. The values here are chosen so that
+    /// every field reads differently under the wrong byte order.
+    #[test]
+    fn test_btsnoop_record_header_is_big_endian() {
+        // len 0x01020304, received, timestamp 0x0102030405060708.
+        let header = BtsnoopRecordHeader::new(0x0102_0304, true, 0x0102_0304_0506_0708);
+        assert_eq!(
+            header.as_bytes(),
+            &[
+                0x01, 0x02, 0x03, 0x04, // original length
+                0x01, 0x02, 0x03, 0x04, // included length (never truncated)
+                0x00, 0x00, 0x00, 0x01, // flags: received
+                0x00, 0x00, 0x00, 0x00, // cumulative drops
+                0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, // timestamp
+            ]
+        );
+
+        // Host→controller clears the direction bit; nothing else changes.
+        let sent = BtsnoopRecordHeader::new(0x0102_0304, false, 0x0102_0304_0506_0708);
+        assert_eq!(sent.flags.get(), 0);
+        assert_eq!(&sent.as_bytes()[..8], &header.as_bytes()[..8]);
+        assert_eq!(&sent.as_bytes()[12..], &header.as_bytes()[12..]);
+
+        let parsed =
+            BtsnoopRecordHeader::read_from_bytes(header.as_bytes()).expect("record round-trips");
+        assert_eq!(parsed.original_length.get(), 0x0102_0304);
+        assert_eq!(parsed.included_length.get(), 0x0102_0304);
+        assert_eq!(parsed.flags.get(), BtsnoopRecordHeader::FLAG_RECEIVED);
+        assert_eq!(parsed.cumulative_drops.get(), 0);
+        assert_eq!(parsed.timestamp_micros.get(), 0x0102_0304_0506_0708);
+    }
+
+    /// The Unix-epoch offset is what makes timestamps land in the present day
+    /// rather than in year 0; a wrong constant yields a trace Wireshark opens
+    /// but dates absurdly. Check it converts back to a plausible year.
+    #[test]
+    fn test_btsnoop_epoch_offset_maps_unix_time_to_year_2026() {
+        // 2026-01-01T00:00:00Z in Unix microseconds.
+        const UNIX_2026: u64 = 1_767_225_600 * 1_000_000;
+        let btsnoop = UNIX_2026 + BtsnoopRecordHeader::UNIX_EPOCH_OFFSET;
+        // Years since year 0, using the mean Gregorian year (365.2425 days).
+        let years = btsnoop as f64 / (365.2425 * 86_400.0 * 1e6);
+        assert!(
+            (2025.9..2026.1).contains(&years),
+            "epoch offset should place Unix 2026 in btsnoop year 2026, got {years}"
+        );
+    }
+
+    /// End-to-end: a traced `pump` must produce a file that is the 16-byte
+    /// btsnoop header followed by one well-formed record per packet, in both
+    /// directions, with the packet bytes carried verbatim.
+    #[test]
+    fn test_traced_pump_writes_a_readable_btsnoop_file() {
+        let evt = [h4_type::HCI_EVENT, 0x0E, 0x04, 0x01, 0x03, 0x0C, 0x00];
+        let cmd = [h4_type::HCI_COMMAND, 0x03, 0x0C, 0x00];
+
+        let path = std::env::temp_dir().join(format!(
+            "simble-btsnoop-{}-{:?}.log",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let file = std::fs::File::create(&path).expect("create trace file");
+
+        let stream = DuplexMock {
+            inbound: Cursor::new(enc(OPCODE_BINARY, &evt, None)),
+            outbound: Vec::new(),
+        };
+        let mut transport = NetsimTransport::new(stream);
+        transport.set_trace(file).expect("write btsnoop header");
+
+        let channel = super::super::HciChannel::new();
+        channel.send_command(&cmd[1..]).unwrap();
+        transport.pump(&channel).unwrap();
+        drop(transport);
+
+        let trace = std::fs::read(&path).expect("read trace back");
+        let _ = std::fs::remove_file(&path);
+
+        // File header, then two records: the command out, the event in.
+        let (file_header, mut rest) = trace.split_at(size_of::<BtsnoopFileHeader>());
+        assert_eq!(file_header, BtsnoopFileHeader::new().as_bytes());
+
+        for (expected_packet, expected_received) in [(&cmd[..], false), (&evt[..], true)] {
+            let (header_bytes, body) = rest.split_at(size_of::<BtsnoopRecordHeader>());
+            let header = BtsnoopRecordHeader::read_from_bytes(header_bytes).expect("record header");
+            let len = header.original_length.get() as usize;
+            assert_eq!(len, expected_packet.len());
+            assert_eq!(header.included_length.get() as usize, len);
+            assert_eq!(
+                header.flags.get() == BtsnoopRecordHeader::FLAG_RECEIVED,
+                expected_received
+            );
+            assert_eq!(header.cumulative_drops.get(), 0);
+            // A live timestamp must at least be past the Unix epoch offset.
+            assert!(header.timestamp_micros.get() > BtsnoopRecordHeader::UNIX_EPOCH_OFFSET);
+            assert_eq!(&body[..len], expected_packet, "packet bytes are verbatim");
+            rest = &body[len..];
+        }
+        assert!(rest.is_empty(), "no trailing bytes after the last record");
     }
 }

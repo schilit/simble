@@ -37,7 +37,7 @@ use crate::packets::hci_events::{
 // this module's public surface for the browser bindings and existing callers.
 pub use crate::gap::advertising::{build_adv_payload, build_adv_payload_with_extras};
 use crate::l2cap::{AclReassembler, HciAclHeader, L2capHeader};
-use crate::packets::att::opcode as att_op;
+use crate::packets::att::{AttExchangeMtuRsp, AttHandleValueHeader, opcode as att_op};
 use crate::scripting::bindings::{dynamic_to_bytes, runtime_error};
 use crate::scripting::{ScriptGattServer, ScriptedCentral, new_engine};
 use crate::types::{Address, AddressType, SimbleError, Uuid};
@@ -1477,21 +1477,27 @@ impl CentralDevice {
         let is_error = op == att_op::ERROR_RSP;
 
         // Notifications can arrive at any time, independent of the request FSM.
-        if op == att_op::HANDLE_VALUE_NTF && att.len() >= 3 {
-            let value_handle = u16::from_le_bytes([att[1], att[2]]);
-            self.values.insert(value_handle, att[3..].to_vec());
+        // The typed header splits handle from value, so the value slice cannot
+        // drift out of step with the offset the handle was read from.
+        if op == att_op::HANDLE_VALUE_NTF
+            && let Some((header, value)) = AttHandleValueHeader::parse(att)
+        {
+            let value_handle = header.handle.get();
+            self.values.insert(value_handle, value.to_vec());
             // Decoded here rather than by polling `values`: consecutive input
             // reports overwrite each other in that map, and a HID host that
             // missed one would lose a keystroke or a click edge.
-            self.hid.on_notification(value_handle, &att[3..]);
+            self.hid.on_notification(value_handle, value);
             return;
         }
 
         match self.phase {
             CentralPhase::ExchangingMtu => {
-                if op == att_op::EXCHANGE_MTU_RSP && att.len() >= 3 {
-                    let server_mtu = u16::from_le_bytes([att[1], att[2]]);
-                    self.client.on_exchange_mtu_response(server_mtu, 517);
+                if op == att_op::EXCHANGE_MTU_RSP
+                    && let Some((rsp, _)) = AttExchangeMtuRsp::parse(att)
+                {
+                    self.client
+                        .on_exchange_mtu_response(rsp.server_rx_mtu.get(), 517);
                 }
                 self.phase = CentralPhase::DiscoveringServices;
                 let req = self.client.create_discover_services_request(0x0001, 0xFFFF);
@@ -2283,7 +2289,7 @@ mod scene_tests {
             .unwrap();
         let status = scene.peripheral_status_json(index).unwrap();
         // The registrars write to the database; check there, not in status.
-        let handles: Vec<u16> = [0x2BC9, 0x2BC4, 0x2BC6, 0x2B70]
+        let handles: Vec<u16> = [0x2BC9, 0x2BC4, 0x2BC6, 0x2C15]
             .iter()
             .map(|&uuid| {
                 let SceneRole::Peripheral(p) = &scene.devices[index].role else {
