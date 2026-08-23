@@ -4,6 +4,7 @@
 //! Zero-copy Bluetooth packet structures and serializers.
 
 pub mod att;
+pub mod big;
 pub mod ext_adv;
 pub mod hci;
 pub mod hci_events;
@@ -17,6 +18,12 @@ pub use att::{
     AttHandleValueHeader, AttPdu, AttPrepareWriteReqHeader, AttReadBlobReq,
     AttReadByGroupTypeReqHeader, AttReadByTypeReqHeader, AttReadReq, AttWriteReqHeader,
     error_code as att_error_code, opcode as att_opcode,
+};
+pub use big::{
+    LeBigCreateSyncHeader, LeBigInfoAdvertisingReportEvent, LeBigSyncEstablishedEventHeader,
+    LeBigSyncLostEvent, LeBigTerminateSync, LeBigTerminateSyncResponse, LeCreateBig,
+    LeCreateBigCompleteEventHeader, LeTerminateBig, LeTerminateBigCompleteEvent, big_encryption,
+    big_framing, big_opcode, big_packing, big_subevent_code,
 };
 pub use ext_adv::{
     AdvSetError, AdvertisingEnableEntry, AdvertisingSet, AdvertisingSets,

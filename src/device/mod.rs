@@ -10,6 +10,8 @@ pub mod car_kit;
 pub mod central;
 pub mod classic_host;
 pub mod channel_sounding;
+pub mod big_broadcaster;
+pub mod big_receiver;
 pub mod cis_central;
 pub mod hid_host;
 pub mod host;
@@ -24,6 +26,8 @@ pub use classic_host::{
     ClassicHost, ProtocolHandler, RfcommHandler, RfcommPort, SdpHandler, SharedRfcommPort,
 };
 pub use channel_sounding::{CsInitiator, CsReflector, CsState};
+pub use big_broadcaster::{BigBroadcaster, BroadcastConfig, BroadcastState};
+pub use big_receiver::{BigReceiver, FoundBroadcast, ReceiverConfig, ReceiverState};
 pub use cis_central::{CisCentral, CisConfig, CisState};
 pub use hid_host::{HidEvent, HidHost, HidKind, HidPlan};
 pub use host::LeHost;

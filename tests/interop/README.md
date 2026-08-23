@@ -55,3 +55,34 @@ not its own encoder's output.
 The address is the page's built-in sink. Expect its SDU counter to climb at
 ~100/s (10 ms SDUs) and the audio to play at the device's live volume — this
 is the interesting direction, a *foreign* source feeding simble's sink.
+
+## `auracast_source.py` and `auracast_sink.py`
+
+The two directions of **Auracast** — LE Audio *broadcast*, a BIG carrying LC3
+on Broadcast Isochronous Streams with no connection anywhere in the picture.
+Both scripts rebuild the simble example they need with `--features lc3` first,
+so neither can pass on a binary that was broadcasting filler.
+
+```bash
+.venv/bin/python tests/interop/auracast_source.py   # bumble source -> simble sink
+.venv/bin/python tests/interop/auracast_sink.py     # simble source -> bumble sink
+```
+
+`auracast_source.py` runs Bumble's own `auracast transmit` app and points
+simble's `auracast_sink` example at it: simble scans, syncs to Bumble's
+periodic advertising train, parses Bumble's BASE, joins the BIG and decodes.
+The sink's exit status is the verdict — non-zero if no SDUs arrived.
+
+`auracast_sink.py` is the mirror, and the direction that finds encoder bugs:
+simble builds the extended advertisement, the BASE and the BIG, and Bumble's
+`auracast receive` has to make sense of all of it. It checks three things —
+that Bumble echoed back the codec configuration simble published, that its own
+packet counter moved, and that the decoded PCM is 440 Hz on the left and 554 Hz
+on the right. The last one is the point: a stream that merely arrives proves
+the transport, but the *right tone in the right channel* proves the per-BIS
+Audio Channel Allocation in simble's BASE was understood by a foreign stack.
+
+Both directions pass today. What is not covered: **encrypted** broadcasts.
+`broadcast_code` is plumbed through `LE Create BIG` and `LE BIG Create Sync`
+and the receiver refuses an encrypted source it has no code for, but no
+interop run has exercised it.

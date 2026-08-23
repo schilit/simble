@@ -5,11 +5,11 @@ into wasm — the browser demo pages where a scripted LE Audio sink receives
 isochronous SDUs and the page plays them. Not a general-purpose codec for
 library users, not on any hot path, not security-critical. It must build for
 `wasm32-unknown-unknown` and stay small, because it ships inside a demo
-bundle that is already ~3.7 MB. Decoding is the priority; encoding is a
-nice-to-have.
+bundle that is already ~3.7 MB. The demo needs decoding for a sink and
+encoding for a source.
 
-**Recommendation: use `lc3-codec` (pure Rust), decoder only, behind an
-optional cargo feature.** It builds for wasm cleanly and costs ~80 KB. See
+**Decision: `lc3-codec` (pure Rust) is used behind the optional `lc3`
+feature.** SimBLE wraps its mono encoder and decoder for the web demo. See
 the caveats before relying on it for anything but demos.
 
 ---
@@ -120,11 +120,10 @@ sends LC3.
 
 ## Recommendation
 
-1. **Adopt `lc3-codec`, decoder only, behind an optional feature** (e.g.
-   `lc3 = ["dep:lc3-codec"]`), enabled for the wasm demo build. 80 KB on a
-   3.7 MB bundle is ~2%, which is affordable, and the demos gain the ability
-   to decode real LC3 frames. Add the encoder later only if a demo needs to
-   *source* audio to a phone; it roughly doubles the cost (+131 KB total).
+1. **Use `lc3-codec` behind the optional `lc3` feature**, enabled for the
+   wasm demo build. SimBLE wraps both the encoder and decoder: the source
+   page sends LC3 and the sink page plays received LC3. The combined wasm
+   cost measured here was ~132 KB.
 2. **Document what it is.** Wherever the demos mention LC3, say the codec is
    a community pure-Rust implementation validated against its author's
    golden outputs, not against SIG conformance vectors. Given how much of

@@ -28,6 +28,9 @@ pub mod ad_type {
     pub const SERVICE_DATA_16BIT: u8 = 0x16;
     /// Appearance (0x19).
     pub const APPEARANCE: u8 = 0x19;
+    /// Broadcast Name (0x30) — the UTF-8 name an Auracast source publishes so
+    /// a scanner can list broadcasts before syncing to any of them.
+    pub const BROADCAST_NAME: u8 = 0x30;
     /// Manufacturer Specific Data (0xFF).
     pub const MANUFACTURER_SPECIFIC_DATA: u8 = 0xFF;
 }
@@ -238,9 +241,65 @@ pub fn build_adv_payload_with_extras(
     Ok(bytes)
 }
 
+/// Walks an advertising payload's AD structures, yielding `(type, value)` for
+/// each. Stops at the first malformed or zero-length structure rather than
+/// guessing — a truncated tail is exactly what a controller's "data status:
+/// incomplete" report leaves behind, and reading past it invents fields.
+pub fn ad_structures(data: &[u8]) -> impl Iterator<Item = (u8, &[u8])> {
+    let mut offset = 0usize;
+    std::iter::from_fn(move || {
+        let &length = data.get(offset)?;
+        if length == 0 {
+            return None;
+        }
+        let ad_type = *data.get(offset + 1)?;
+        let value = data.get(offset + 2..offset + 1 + usize::from(length))?;
+        offset += 1 + usize::from(length);
+        Some((ad_type, value))
+    })
+}
+
+/// The payload of the first 16-bit Service Data structure for `uuid`, if the
+/// advertising data carries one.
+pub fn service_data_16(data: &[u8], uuid: u16) -> Option<&[u8]> {
+    ad_structures(data).find_map(|(ad_type, value)| {
+        if ad_type != self::ad_type::SERVICE_DATA_16BIT || value.len() < 2 {
+            return None;
+        }
+        (u16::from_le_bytes([value[0], value[1]]) == uuid).then_some(&value[2..])
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_ad_structures_round_trip_the_builder() {
+        let bytes = AdvertisingData::new()
+            .with_flags(flags::LE_GENERAL_DISCOVERABLE)
+            .with_name("Simble")
+            .with_service_data_16(0x1852, &[0xEF, 0xCD, 0xAB])
+            .to_bytes();
+        let parsed: Vec<_> = ad_structures(&bytes).collect();
+        assert_eq!(parsed[0], (ad_type::FLAGS, &[0x02][..]));
+        assert_eq!(parsed[1], (ad_type::COMPLETE_LOCAL_NAME, &b"Simble"[..]));
+        assert_eq!(
+            service_data_16(&bytes, 0x1852),
+            Some(&[0xEF, 0xCD, 0xAB][..])
+        );
+        assert_eq!(service_data_16(&bytes, 0x1851), None);
+    }
+
+    #[test]
+    fn test_a_truncated_structure_ends_the_walk() {
+        // Length 5 with only 2 value bytes present: the fragment a controller
+        // hands over when it reports incomplete data.
+        let truncated = [0x02, 0x01, 0x06, 0x05, 0x16, 0x51, 0x18];
+        let parsed: Vec<_> = ad_structures(&truncated).collect();
+        assert_eq!(parsed.len(), 1, "the flags structure, and nothing after it");
+        assert_eq!(service_data_16(&truncated, 0x1851), None);
+    }
 
     #[test]
     fn test_advertising_data_builder() {

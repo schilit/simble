@@ -26,6 +26,9 @@ pub mod event_code {
     pub const ENCRYPTION_CHANGE: u8 = 0x08;
     /// Command Complete.
     pub const COMMAND_COMPLETE: u8 = 0x0E;
+    /// Command Status — a command the controller accepted but has not yet
+    /// finished (LE Create BIG and LE BIG Create Sync both answer this way).
+    pub const COMMAND_STATUS: u8 = 0x0F;
     /// LE Meta (the subevent code selects the LE event).
     pub const LE_META: u8 = 0x3E;
 }

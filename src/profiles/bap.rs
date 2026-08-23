@@ -18,10 +18,17 @@
 pub mod bap_uuid {
     use crate::types::Uuid;
 
+    /// Basic Audio Announcement Service UUID, 16-bit form — what actually goes
+    /// on the wire inside an AD Service Data structure.
+    pub const BASIC_AUDIO_ANNOUNCEMENT_UUID16: u16 = 0x1851;
+    /// Broadcast Audio Announcement Service UUID, 16-bit form.
+    pub const BROADCAST_AUDIO_ANNOUNCEMENT_UUID16: u16 = 0x1852;
     /// Basic Audio Announcement Service UUID.
-    pub const BASIC_AUDIO_ANNOUNCEMENT_SERVICE: Uuid = Uuid::Uuid16(0x1851);
+    pub const BASIC_AUDIO_ANNOUNCEMENT_SERVICE: Uuid =
+        Uuid::Uuid16(BASIC_AUDIO_ANNOUNCEMENT_UUID16);
     /// Broadcast Audio Announcement Service UUID.
-    pub const BROADCAST_AUDIO_ANNOUNCEMENT_SERVICE: Uuid = Uuid::Uuid16(0x1852);
+    pub const BROADCAST_AUDIO_ANNOUNCEMENT_SERVICE: Uuid =
+        Uuid::Uuid16(BROADCAST_AUDIO_ANNOUNCEMENT_UUID16);
 }
 
 /// Coding Format 0x06 (LC3), Company ID 0x0000, Vendor Codec ID 0x0000 — HCI `Coding_Format`

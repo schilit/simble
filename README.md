@@ -9,7 +9,7 @@ code, behaves the same way every run, and can misbehave on command when that's w
 needs.
 
 Inspired by [Bumble](https://github.com/google/bumble) and
-[NimBLE](https://github.com/apache/mynewt-nimble), SimBLE embeds
+[NimBLE](https://github.com/apache/mynewt-nimble), SimBLE supports scripting with
 [Rhai](https://rhai.rs) for device definitions and tests.
 SimBLE is written in pure Rust and works with
 [netsim](https://android.googlesource.com/platform/tools/netsim), the Android emulator's
@@ -50,8 +50,8 @@ Whichever surface you choose, you can also:
 - **Exercise LE protocol layers.** SimBLE implements HCI, L2CAP, ATT/GATT, and SMP pairing
   (Legacy and Secure Connections). The Classic (BR/EDR) protocols —
   SDP, RFCOMM, HFP, A2DP/AVDTP, AVRCP, HID — are implemented and tested as libraries, but
-  are not yet on the air; see [the peripheral assessment](docs/android-peripherals.md) for
-  what is *reachable* versus *library-only*.
+  are not yet scriptable; see [the peripheral assessment](docs/android-peripherals.md) for
+  what is *scriptable* versus *library-only*.
 - **Reach real hardware when you want it.** With a USB Bluetooth dongle, a SimBLE device
   advertises over real RF and your actual phone can scan, connect, and pair with it.
 
@@ -207,8 +207,8 @@ Bumble** — the control plane (PACS, ASCS, volume control), CIS establishment a
 implemented, and the [Audio page](https://schilit.github.io/simble/audio/) streams a file
 over a real CIS end to end; a phone as the source is untested. **Classic (BR/EDR) profiles** — A2DP, AVRCP, HFP,
 HID, SDP, RFCOMM — are implemented and well tested as libraries, but are not yet on the
-air. [`docs/android-peripherals.md`](docs/android-peripherals.md) tracks exactly what is
-reachable versus library-only.
+scriptable. [`docs/android-peripherals.md`](docs/android-peripherals.md) tracks exactly what is
+scriptable versus library-only.
 
 ---
 

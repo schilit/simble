@@ -16,6 +16,13 @@
 //! so a requested sync is treated as immediately achieved: the simulated Delegator
 //! reports `SynchronizedToPa` / the requested BIS bits as soon as an Add/Modify Source
 //! operation asks for them.
+//!
+//! That fake is now avoidable, at least against netsim: [`crate::device::BigReceiver`]
+//! does the real thing — periodic advertising sync, BASE and BIGInfo, LE BIG Create Sync,
+//! ISO data path — and has been checked against Bumble in both directions
+//! (`tests/interop/auracast_*.py`). Nothing here calls it yet; wiring the Delegator's
+//! Add Source operation to an actual sync, and reporting the state it really reaches,
+//! is the work this comment is still standing in for.
 
 use crate::att::error_code as att_error_code;
 use crate::gatt::database::AttributeHandler;
