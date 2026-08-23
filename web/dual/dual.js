@@ -1,5 +1,5 @@
-// SimBLE Server + Client dual view. Two real devices share one in-page wasm
-// Link, and **both are scripts**: a peripheral (android::BluetoothGattServer)
+// SimBLE Server + Client dual view. A peripheral and a central, and **both are
+// scripts**: android::BluetoothGattServer
 // on the left, a central (android::BluetoothGatt) on the right. The left panel
 // renders the server's own database; the right renders what the client
 // discovered — the nRF-Connect flow.
@@ -8,7 +8,8 @@
 // central-role scripting did not exist. It does now, so the panel is an
 // editor like the other one and the two halves are the same kind of thing.
 
-import init, { WebLink, catalog_script } from "../pkg/simble.js";
+import init, { WebLink, WebPeripheral, WebScriptedCentral, catalog_script } from "../pkg/simble.js";
+import { currentController } from "../common/controller-bar.js";
 import { createDeviceHeader } from "../common/device-header.js";
 import { createGattView, promptForBytes } from "../common/gatt-view.js";
 import { renderGatt, nameFor, propChips, escapeHtml, decodeValue } from "../common/viewer.js";
@@ -17,8 +18,14 @@ import { createAboutBox } from "../common/about-box.js";
 /// Which controllers this domain can run on. The shell's controller bar
 /// reads this: an option mapped to a string is offered disabled, with that
 /// string as the reason, rather than hidden.
-export const SUPPORTS = { "in-page": true,
-  "websocket": "both devices share one in-page link; this pair has no path here yet" };
+///
+/// netsim used to be refused here on the grounds that "both devices share one
+/// in-page link". That was a fact about one backend, not about the pair: over
+/// netsim each half gets its own engine on its own socket -- its own
+/// controller, as two separate machines would have -- exactly as Health and
+/// Home already do. The server is a `WebPeripheral`, the client a
+/// `WebScriptedCentral`, and they meet over rootcanal instead of in this tab.
+export const SUPPORTS = { "in-page": true, "websocket": true };
 
 
 const STYLE_ID = "simble-generic-style";
@@ -89,14 +96,24 @@ const STYLE = `main { max-width: 78rem; margin: 0 auto; padding: 1rem 1.25rem 2r
   .empty { color: var(--dim); font-size: var(--fs-body); }
   footer { color: var(--dim); font-size: var(--fs-meta); padding: 1.25rem 1.25rem 0; max-width: 78rem; margin: 0 auto; }`;
 
-const ABOUT = `<p>This page runs <strong>two real SimBLE devices</strong> in the same tab, sharing one in-process
-    <a href="../controllers/">in-browser controller</a> — no netsim. On the left, a <strong class="role" style="color:var(--good)">Server</strong>
+const ABOUT = `<p>This page runs <strong>a peripheral and a central</strong>, each defined
+    by its own Rhai script. On the
+    <a href="../controllers/">in-browser controller</a> they share one in-process link; on
+    <strong>netsim</strong> each gets its own socket, so the pair meets over rootcanal the way two
+    separate machines would. On the left, a <strong class="role" style="color:var(--good)">Server</strong>
     (peripheral) defined by an editable Rhai script. On the right, a <strong style="color:var(--accent)">Client</strong>
-    (central) defined by another one — <code>android::BluetoothGatt</code>, Android's client API — that connects,
-    discovers its GATT, and reacts in callbacks the way nRF Connect shows a connected device. What looks like
-    "a device and a UI" is really a peripheral and a central talking to each other, and both halves are editable.</p>`;
+    (central) using <code>android::BluetoothGatt</code>, Android's client API — it connects, discovers
+    the server's GATT, and reacts in callbacks the way nRF Connect shows a connected device. What looks
+    like "a device and its UI" is two devices talking, and both halves are editable.</p>`;
 
-const MARKUP = `  <section class="panel">
+const MARKUP = `  <section id="setup" class="panel setup full">
+    <h2>netsim is not reachable</h2>
+    <p>Could not reach netsim at <code>localhost:7681</code> — is <code>netsimd</code> running with
+       its WebSocket frontend enabled? Start it with:</p>
+    <pre><code>netsimd --logtostderr --no-shutdown --ws-port 7681</code></pre>
+  </section>
+
+  <section class="panel">
     <div id="server-head"></div>
     <div id="server-script"></div>
     <h2 class="sub">Its GATT database (server view)</h2>
@@ -112,13 +129,34 @@ const MARKUP = `  <section class="panel">
   </section>`;
 
 const $ = (id) => document.getElementById(id);
+// In-page addresses. The catalog's central examples connect to
+// EXAMPLE_PEER_ADDRESS, and a test in catalog.rs asserts they all do, so
+// gatt_walker's own `connect(...)` already names the server below.
 const SERVER_ADDR = "AA:BB:CC:00:00:01";
 const CLIENT_ADDR = "AA:BB:CC:00:00:02";
+
+// netsim addresses. Every domain shares one rootcanal, so these have to be
+// this page's alone: Health holds :02/:12, Home :05/:15, Media :07/:08/:09,
+// Ranging :0A/:0B, the scanner demo :01 and :11/:12/:13.
+const SERVER_NETSIM = "CC:1E:57:00:00:0C";
+const CLIENT_NETSIM = "CC:1E:57:00:00:1C";
+const WS = (node, address) =>
+  `ws://localhost:7681/v1/websocket/bt?name=${encodeURIComponent(node)}&address=${address}`;
+
+// netsim does not synthesize a disconnect when a WebSocket drops: the device
+// entry lingers, and a socket that re-registers under the same name a moment
+// later can be attached to the stale one — the page looks connected while the
+// device's tx count never leaves zero. So a dropped pair is never reopened
+// immediately; it waits out this backoff first.
+const RECONNECT_MS = 3000;
 
 // The client, as a script. Every call below exists -- this is the same
 // android::BluetoothGatt surface the MCP add_central tool and the interop
 // tests use, not an illustration.
-let link = null;
+let mode = "in-page";     // "in-page" (one wasm WebLink) | "websocket" (netsim)
+let link = null;          // in-page backend: both devices on one link
+let serverDev = null;     // netsim backend: WebPeripheral, its own socket
+let clientDev = null;     // netsim backend: WebScriptedCentral, its own socket
 let serverIndex = 0;
 let clientIndex = 1;
 let t0 = performance.now();
@@ -126,8 +164,19 @@ const prevValues = new Map();
 /// The last failure already written to the log, so it is not repeated.
 let reportedFailure = null;
 
+// netsim bookkeeping: the last status each engine reported (the pump ticks
+// faster than the page renders), whether the sockets have ever been open —
+// which separates "netsim is not installed" from "netsim dropped us" — and
+// when the last reconnection was attempted.
+let serverStatus = null, clientStatus = null;
+let openedOnce = false;
+let unreachable = false;  // a socket closed without ever opening: netsimd is not there
+let restarting = false;   // a deliberate rebuild, waiting out the backoff
+let lastAttempt = 0;
+
 let serverHead = null, clientHead = null;
 let serverGatt = null, clientGatt = null;
+let setupPanel = null;
 
 let running = false;
 
@@ -141,6 +190,23 @@ function setRunning(on) {
 }
 
 function startDevices() {
+  // Over netsim, closing a socket and opening one under the same name in the
+  // same breath is how ghosts are made: netsim does not synthesize a
+  // disconnect, so the new socket can be attached to the entry the old one
+  // left behind — the page looks connected while that device's tx count sits
+  // at zero. Measured on this page: Apply rebuilding the pair in place left
+  // two `web-generic-client` entries in `netsim devices`, one of them dead.
+  // So a rebuild that has sockets to close hands the reopening to the loop's
+  // backoff rather than racing it. Nothing to close means nothing to race.
+  if (mode !== "in-page" && (serverDev || clientDev)) {
+    release();
+    restarting = true;
+    lastAttempt = performance.now();
+    setRunning(true);
+    serverHead?.setState(false, waiting());
+    clientHead?.setState(false, waiting());
+    return;
+  }
   try {
     build(serverHead.textarea.value, clientHead.textarea.value);
     setRunning(true);
@@ -150,12 +216,27 @@ function startDevices() {
   }
 }
 
-/// Stopping frees the link, so both devices genuinely leave the air rather
+/// Frees whichever backend is live. Not optional bookkeeping on netsim: a
+/// device whose socket is dropped without a disconnect lingers as a ghost at
+/// the same address, and the next socket under that name can attach to it.
+function release() {
+  for (const engine of [link, serverDev, clientDev]) {
+    if (engine) { try { engine.free(); } catch (_) { /* already gone */ } }
+  }
+  link = serverDev = clientDev = null;
+  clientIndex = -1;
+  serverStatus = clientStatus = null;
+}
+
+/// Stopping frees both engines, so the devices genuinely leave the air rather
 /// than merely being hidden.
 function stopDevices() {
-  try { link?.free(); } catch (_) { /* already gone */ }
-  link = null;
+  release();
+  openedOnce = false;
+  unreachable = false;
+  restarting = false;
   setRunning(false);
+  setupPanel?.classList.remove("visible");
   serverHead?.setState(false, "stopped");
   clientGatt?.update({ services: [] });
 }
@@ -174,22 +255,42 @@ function logClient(text, bad) {
 }
 
 function build(serverScript, clientScript) {
-  if (link) { try { link.free(); } catch (_) { /* gone */ } }
-  link = new WebLink();
-  serverIndex = link.add_peripheral(SERVER_ADDR, serverScript);
+  release();
+  restarting = false;
   reportedFailure = null;
   t0 = performance.now();
+  lastAttempt = performance.now();
   prevValues.clear();
   $("client-log").innerHTML = "";
-  // A client script error belongs beside the client's editor, not in the
-  // server's status line: the message has to name the panel to fix. The
-  // server still runs, so a broken client script leaves a working device to
-  // reconnect to once it is fixed.
-  try {
-    clientIndex = link.add_scripted_central(CLIENT_ADDR, clientScript);
-  } catch (e) {
-    clientIndex = -1;
-    logClient(String(e), true);
+  if (mode === "in-page") {
+    link = new WebLink();
+    serverIndex = link.add_peripheral(SERVER_ADDR, serverScript);
+    // A client script error belongs beside the client's editor, not in the
+    // server's status line: the message has to name the panel to fix. The
+    // server still runs, so a broken client script leaves a working device to
+    // reconnect to once it is fixed.
+    try {
+      clientIndex = link.add_scripted_central(CLIENT_ADDR, clientScript);
+    } catch (e) {
+      clientIndex = -1;
+      logClient(String(e), true);
+    }
+  } else {
+    // Two engines, two sockets, two controllers. Nothing in this tab carries
+    // a packet between them — netsim does, which is the point of running here
+    // at all: an Android emulator on the same rootcanal can connect to this
+    // server, and the in-page link has no way to offer that.
+    serverDev = new WebPeripheral(WS("web-generic-server", SERVER_NETSIM), serverScript);
+    try {
+      clientDev = new WebScriptedCentral(WS("web-generic-client", CLIENT_NETSIM), clientScript);
+      // gatt_walker connects to EXAMPLE_PEER_ADDRESS, the in-page convention;
+      // on netsim the server is at an address this page allocated, and
+      // topology beats script.
+      clientDev.set_target(SERVER_NETSIM);
+    } catch (e) {
+      clientDev = null;
+      logClient(String(e), true);
+    }
   }
   clientGatt?.update({ services: [] });
 }
@@ -206,36 +307,133 @@ function renderClient(status) {
   clientGatt?.update(status);
 }
 
-/// Advances the link. Separate from `loop`, and much more often, because an
+/// The server's half of the view. Shared by both backends: what differs is
+/// where the status came from, not what it means.
+function renderServer(status) {
+  renderGatt($("server-gatt"), status, prevValues);
+  serverHead?.setName(status.name);
+  serverHead?.setState(true,
+    status.connected ? "on air · client connected" : "on air · advertising", "ok");
+}
+
+/// Whatever the client script said, and its verdict — from whichever engine
+/// is hosting it.
+function drainClient() {
+  const emitted = mode === "in-page"
+    ? link.scripted_central_emitted(clientIndex)
+    : clientDev.emitted();
+  for (const message of emitted) {
+    const { event, payload } = JSON.parse(message);
+    logClient(event === "log" ? String(payload) : `${event}: ${JSON.stringify(payload)}`);
+  }
+  // Sticky, so a failed assertion is reported once and stays readable
+  // rather than being redrawn every 100 ms.
+  const failure = mode === "in-page"
+    ? link.scripted_central_failure(clientIndex)
+    : clientDev.failure();
+  if (failure && failure !== reportedFailure) {
+    reportedFailure = failure;
+    logClient(failure, true);
+  }
+}
+
+/// Advances the devices. Separate from `loop`, and much more often, because an
 /// ATT request and its response cross on successive ticks: at the rendering
 /// rate the client visibly crawls through a two-service database, and the
 /// cost of a tick is nothing beside the cost of re-rendering two panels.
+///
+/// On netsim a tick is also the socket's pump, so the statuses it returns are
+/// stashed for `loop` rather than the engines being ticked twice.
 function pump() {
-  if (!link) return;
-  link.tick((performance.now() - t0) / 1000);
+  if (!running) return;
+  const t = (performance.now() - t0) / 1000;
+  if (mode === "in-page") {
+    link?.tick(t);
+    return;
+  }
+  try {
+    if (serverDev?.ready_state() === 1) serverStatus = serverDev.tick(t);
+    if (clientDev?.ready_state() === 1) clientStatus = clientDev.tick(t);
+  } catch (e) {
+    // A throwing engine is a dead engine. Hand it to the loop's backoff
+    // rather than repeating the same failure fifty times a second.
+    console.error("netsim tick:", e);
+    release();
+    lastAttempt = performance.now();
+  }
 }
 
 function loop() {
+  if (!running) return;
+  if (mode === "in-page") loopInPage();
+  else loopNetsim();
+}
+
+function loopInPage() {
   if (!link) return;
   try {
-    const server = JSON.parse(link.peripheral_status_json(serverIndex));
-    renderGatt($("server-gatt"), server, prevValues);
+    renderServer(JSON.parse(link.peripheral_status_json(serverIndex)));
   } catch (e) { console.error("server render:", e); }
   if (clientIndex < 0) return;
   try {
-    for (const message of link.scripted_central_emitted(clientIndex)) {
-      const { event, payload } = JSON.parse(message);
-      logClient(event === "log" ? String(payload) : `${event}: ${JSON.stringify(payload)}`);
+    drainClient();
+    renderClient(JSON.parse(link.central_status_json(clientIndex)));
+  } catch (e) { console.error("client render:", e); }
+}
+
+/// What the server's status line says while there is no live pair: which of
+/// the three ways to have no socket this is.
+function waiting() {
+  if (restarting) return "restarting…";
+  if (unreachable) return "netsim not reachable — retrying…";
+  return openedOnce ? "connection lost — reconnecting…" : "connecting to localhost:7681…";
+}
+
+/// The netsim backend's turn of the loop: mind the two sockets, then render
+/// whatever the pump last got out of them.
+function loopNetsim() {
+  const now = performance.now();
+  if (!serverDev || !clientDev) {
+    serverHead?.setState(false, waiting(), unreachable ? "bad" : "");
+    if (now - lastAttempt >= RECONNECT_MS) {
+      try { build(serverHead.textarea.value, clientHead.textarea.value); }
+      catch (e) { serverHead?.setState(false, String(e).slice(0, 60), "bad"); }
     }
-    // Sticky, so a failed assertion is reported once and stays readable
-    // rather than being redrawn every 100 ms.
-    const failure = link.scripted_central_failure(clientIndex);
-    if (failure && failure !== reportedFailure) {
-      reportedFailure = failure;
-      logClient(failure, true);
+    return;
+  }
+  // 0 connecting, 1 open, 2 closing, 3 closed. The pair is treated as one
+  // scene: if either socket has gone, both are rebuilt, so the client never
+  // sits hunting for a server that is no longer on the air.
+  const states = [serverDev.ready_state(), clientDev.ready_state()];
+  if (states.includes(3) || states.includes(2)) {
+    // A socket that closed without ever opening means netsimd is not there:
+    // that is a setup problem with an answer, not a device fault, so the
+    // standard panel says how to fix it. A socket that opened and then went
+    // is netsim restarting, which the backoff rides out.
+    if (!openedOnce) {
+      unreachable = true;
+      setupPanel?.classList.add("visible");
     }
-    const client = JSON.parse(link.central_status_json(clientIndex));
-    renderClient(client);
+    serverHead?.setState(false, waiting(), "bad");
+    clientHead?.setState(false, "disconnected");
+    release();
+    lastAttempt = now;
+    return;
+  }
+  if (states.includes(0)) {
+    serverHead?.setState(false, waiting());
+    return;
+  }
+  openedOnce = true;
+  unreachable = false;
+  restarting = false;
+  setupPanel?.classList.remove("visible");
+  try {
+    if (serverStatus) renderServer(JSON.parse(serverStatus));
+  } catch (e) { console.error("server render:", e); }
+  try {
+    drainClient();
+    if (clientStatus) renderClient(JSON.parse(clientStatus));
   } catch (e) { console.error("client render:", e); }
 }
 
@@ -267,18 +465,27 @@ export async function mount(root) {
   serverScript = catalog_script("smart_lock");
   clientScript = catalog_script("gatt_walker");
 
+  // The controller is the shell's choice, read once per mount: switching it
+  // remounts the domain rather than mutating a running one.
+  mode = currentController();
+  setupPanel = $("setup");
+  openedOnce = false;
+  unreachable = false;
+  restarting = false;
+
   // Both devices carry the same header every other domain uses: name, kind,
   // an address, a pen for the script and one run/stop. Generic was the last
   // page still drawing its own, from before the component existed.
   serverHead = createDeviceHeader({
     name: "Server", kind: "peripheral", accent: "good",
-    address: SERVER_ADDR,
+    address: mode === "in-page" ? SERVER_ADDR : SERVER_NETSIM,
     dotMeans: "the server is on the air",
     script: { text: serverScript, editable: true, open: true,
       note: "Edit and apply — the client rediscovers whatever you build.",
       onApply: () => startDevices() },
-    // One in-page link hosts both, so a stop takes the pair with it. Saying
-    // so beats a button that quietly does more than it claims.
+    // Both backends start and stop the pair together — one in-page link, or
+    // one pair of sockets. Saying so beats a button that quietly does more
+    // than it claims.
     run: { running: false,
            onRun: () => startDevices(),
            onStop: () => stopDevices() },
@@ -288,13 +495,15 @@ export async function mount(root) {
 
   clientHead = createDeviceHeader({
     name: "Client", kind: "central", accent: "accent",
-    address: CLIENT_ADDR,
+    address: mode === "in-page" ? CLIENT_ADDR : CLIENT_NETSIM,
     dotMeans: "the client is connected to the server",
     script: { text: clientScript, editable: true,
-      note: "A real central script — <code>android::BluetoothGatt</code>.",
+      note: "The central script this page is running — <code>android::BluetoothGatt</code>.",
       onApply: () => startDevices() },
     run: { running: false, disabled: true,
-           reason: "one in-page link — the pair starts and stops together" },
+           reason: mode === "in-page"
+             ? "one in-page link — the pair starts and stops together"
+             : "the server's toggle drives the pair" },
   });
   $("client-head").append(clientHead.el);
   $("client-script").append(clientHead.panel);
@@ -304,21 +513,31 @@ export async function mount(root) {
 
   // The client's tree drives real operations: each button issues the call
   // through the scripted central, joining the same queue its script uses.
+  // Which engine hosts that central is the backend's business, not the
+  // button's.
   clientGatt = createGattView({
     mode: "client", empty: "Connecting…",
-    onRead: (uuid) => {
-      link?.scripted_central_read(clientIndex, uuid);
-      logClient(`client.read(${uuid})`);
+    // The view hands back the characteristic it drew, not a UUID string --
+    // which is also what says whether it is already subscribed, so the bell
+    // is a toggle rather than a one-way switch.
+    onRead: (c) => {
+      if (mode === "in-page") link?.scripted_central_read(clientIndex, c.uuid);
+      else clientDev?.read(c.uuid);
+      logClient(`client.read(${c.uuid})`);
     },
-    onSubscribe: (uuid, enable) => {
-      link?.scripted_central_subscribe(clientIndex, uuid, enable);
-      logClient(`client.${enable ? "subscribe" : "unsubscribe"}(${uuid})`);
+    onSubscribe: (c) => {
+      const enable = !c.subscribed;
+      if (mode === "in-page") link?.scripted_central_subscribe(clientIndex, c.uuid, enable);
+      else clientDev?.subscribe(c.uuid, enable);
+      logClient(`client.${enable ? "subscribe" : "unsubscribe"}(${c.uuid})`);
     },
-    onWrite: (uuid) => {
+    onWrite: (c) => {
       const bytes = promptForBytes();
       if (!bytes) return;
-      link?.scripted_central_write(clientIndex, uuid, new Uint8Array(bytes));
-      logClient(`client.write(${uuid}, [${bytes.map((b) => "0x" + b.toString(16).padStart(2, "0")).join(", ")}])`);
+      if (mode === "in-page") link?.scripted_central_write(clientIndex, c.uuid, bytes);
+      else clientDev?.write(c.uuid, bytes, true);
+      const hex = Array.from(bytes, (b) => "0x" + b.toString(16).padStart(2, "0")).join(", ");
+      logClient(`client.write(${c.uuid}, [${hex}])`);
     },
   });
   $("client-gatt").append(clientGatt.el);
@@ -329,7 +548,9 @@ export async function mount(root) {
 }
 
 /// Releases everything this domain owns: the shell hosts one domain at a
-/// time, so a timer or a live link left behind here is a leak.
+/// time, so a timer or a live engine left behind here is a leak — and on
+/// netsim a socket dropped without a disconnect leaves a ghost device at the
+/// same address for the next mount to collide with.
 export function unmount() {
   if (timer !== null) {
     clearInterval(timer);
@@ -339,8 +560,12 @@ export function unmount() {
     clearInterval(ticker);
     ticker = null;
   }
-  try { link?.free(); } catch (_) { /* already gone */ }
-  link = null;
+  running = false;
+  release();
+  openedOnce = false;
+  unreachable = false;
+  restarting = false;
+  setupPanel = null;
   serverGatt?.destroy();
   clientGatt?.destroy();
   serverHead?.destroy();

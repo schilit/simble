@@ -8,6 +8,7 @@
 
 import init, { WebScanner, WebAdvertiser, WebLink } from "../pkg/simble.js";
 import { createControllerBar } from "../common/controller-bar.js";
+import { escapeHtml } from "../common/viewer-format.js";
 
 const SCANNER_ADDR = "CC:1E:57:00:00:01";
 const wsUrl = (node, addr) =>
@@ -156,8 +157,7 @@ function merge(report) {
   devices.set(report.address, merged);
 }
 
-const escapeHtml = (s) =>
-  String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
 
 function deviceHtml(d) {
   const name = d.name ? escapeHtml(d.name) : '<span class="anon">(no name)</span>';

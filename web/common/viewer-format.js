@@ -11,8 +11,14 @@
 // `decode` callback, and a page with its own characteristic keeps the knowledge
 // of it in the page.
 
+// Escapes quotes as well as angle brackets, because callers interpolate into
+// ATTRIBUTE positions (`value="${escapeHtml(x)}"`), not just text nodes. The
+// three-replace version this replaced left `"` alone, so a device name
+// carrying one broke out of the attribute it was written into. Four copies of
+// this function existed and only one of them got that right.
 export const escapeHtml = (s) =>
-  String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  String(s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
 // Assigned-number -> friendly-name table. Keys are the uppercase 16-bit hex
 // forms Simble emits (uuid.to_string()).

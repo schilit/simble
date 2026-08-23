@@ -15,10 +15,10 @@
 // services -> characteristics -> value view is enough for this demo.
 
 import init, { WebLink } from "../pkg/simble.js";
+import { escapeHtml } from "../common/viewer-format.js";
 
 const $ = (id) => document.getElementById(id);
-const escapeHtml = (s) =>
-  String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
 
 // --- addresses --------------------------------------------------------------
 // Random per-device addresses keep two tabs from colliding on the same address.

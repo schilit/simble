@@ -25,6 +25,7 @@
 import init, { WebLink } from "../pkg/simble.js";
 import { createDeviceHeader } from "../common/device-header.js";
 import { createAboutBox } from "../common/about-box.js";
+import { escapeHtml } from "../common/viewer-format.js";
 
 /// Which controllers this domain can run on. The shell's controller bar
 /// reads this: an option mapped to a string is offered disabled, with that
@@ -208,8 +209,7 @@ for (const row of LAYOUT) for (const k of row) BY_CODE.set(k.code, k);
 const isModifier = (usage) => usage >= 0xe0 && usage <= 0xe7;
 const modifierBit = (usage) => 1 << (usage - 0xe0);
 
-const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) =>
-  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
 
 // ===========================================================================
 //  Markup and styles
