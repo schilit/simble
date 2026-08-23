@@ -7,6 +7,6 @@ pub mod database;
 pub mod sig_names;
 
 pub use database::{
-    Attribute, AttributePermissions, CharacteristicProperties, GattDatabase, desc_uuid,
-    service_uuid,
+    Attribute, AttributePermissions, CharacteristicDecl, CharacteristicProperties, GattDatabase,
+    desc_uuid, service_uuid,
 };

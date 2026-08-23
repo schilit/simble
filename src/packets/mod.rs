@@ -14,10 +14,13 @@ pub mod l2cap_signaling;
 pub mod smp;
 
 pub use att::{
-    AttErrorRsp, AttExchangeMtuReq, AttExchangeMtuRsp, AttExecuteWriteReq, AttFindInformationReq,
-    AttHandleValueHeader, AttPdu, AttPrepareWriteReqHeader, AttReadBlobReq,
-    AttReadByGroupTypeReqHeader, AttReadByTypeReqHeader, AttReadReq, AttWriteReqHeader,
-    error_code as att_error_code, opcode as att_opcode,
+    AttDataListIter, AttErrorRsp, AttExchangeMtuReq, AttExchangeMtuRsp, AttExecuteWriteReq,
+    AttFindByTypeValueReqHeader, AttFindInformationItemHeader, AttFindInformationReq,
+    AttFindInformationRspHeader, AttHandleValueHeader, AttHandlesInformation, AttPdu,
+    AttPrepareWriteReqHeader, AttPrepareWriteRspHeader, AttReadBlobReq,
+    AttReadByGroupTypeItemHeader, AttReadByGroupTypeReqHeader, AttReadByGroupTypeRspHeader,
+    AttReadByTypeItemHeader, AttReadByTypeReqHeader, AttReadByTypeRspHeader, AttReadReq,
+    AttWriteReqHeader, error_code as att_error_code, opcode as att_opcode,
 };
 pub use big::{
     LeBigCreateSyncHeader, LeBigInfoAdvertisingReportEvent, LeBigSyncEstablishedEventHeader,

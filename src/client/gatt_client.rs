@@ -3,12 +3,14 @@
 
 //! Zero-copy GATT Client protocol engine for service and characteristic discovery.
 
-use zerocopy::IntoBytes;
+use zerocopy::{FromBytes, IntoBytes};
 
 use crate::att::{
-    AttErrorRsp, AttExchangeMtuReq, AttReadBlobReq, AttReadByTypeReqHeader, AttReadReq,
+    AttErrorRsp, AttExchangeMtuReq, AttReadBlobReq, AttReadByGroupTypeRspHeader,
+    AttReadByTypeItemHeader, AttReadByTypeReqHeader, AttReadByTypeRspHeader, AttReadReq,
     AttWriteReqHeader, opcode,
 };
+use crate::gatt::CharacteristicDecl;
 use crate::l2cap::{L2capHeader, cid};
 use crate::types::{Address, SimbleError, Uuid};
 
@@ -111,30 +113,29 @@ impl GattClient {
 
     /// Processes a Read By Group Type Response containing primary services.
     pub fn on_discover_services_response(&mut self, payload: &[u8]) -> Result<(), SimbleError> {
-        if payload.is_empty() || payload[0] != opcode::READ_BY_GROUP_TYPE_RSP {
+        let Some((header, attribute_data_list)) = AttReadByGroupTypeRspHeader::parse(payload)
+        else {
             return Err(SimbleError::PacketParseError(
                 "Invalid ReadByGroupType response".into(),
             ));
-        }
+        };
 
-        let item_len = payload[1] as usize;
-        if item_len < 4 {
+        // Each entry is a handle range plus the service UUID, so anything
+        // shorter than the range itself cannot be walked.
+        let Some(items) = header.items(attribute_data_list) else {
             return Err(SimbleError::PacketParseError(
                 "Invalid item length in service rsp".into(),
             ));
-        }
+        };
 
-        let items_data = &payload[2..];
-        for chunk in items_data.chunks_exact(item_len) {
-            let start = u16::from_le_bytes([chunk[0], chunk[1]]);
-            let end = u16::from_le_bytes([chunk[2], chunk[3]]);
-            let Some(uuid) = Uuid::from_bytes(&chunk[4..]) else {
+        for (entry, uuid_bytes) in items {
+            let Some(uuid) = Uuid::from_bytes(uuid_bytes) else {
                 continue;
             };
 
             self.services.push(DiscoveredService {
-                start_handle: start,
-                end_handle: end,
+                start_handle: entry.attribute_handle.get(),
+                end_handle: entry.end_group_handle.get(),
                 uuid,
                 characteristics: Vec::new(),
             });
@@ -158,18 +159,24 @@ impl GattClient {
         service_uuid: Uuid,
         payload: &[u8],
     ) -> Result<(), SimbleError> {
-        if payload.is_empty() || payload[0] != opcode::READ_BY_TYPE_RSP {
+        let Some((header, attribute_data_list)) = AttReadByTypeRspHeader::parse(payload) else {
             return Err(SimbleError::PacketParseError(
                 "Invalid ReadByType response".into(),
             ));
-        }
+        };
 
-        let item_len = payload[1] as usize;
-        if item_len < 5 {
+        // A characteristic declaration value is properties (1) + value handle
+        // (2) + UUID, so an entry below the declaration handle plus those
+        // three octets is not a characteristic list at all.
+        let min_item_len = size_of::<AttReadByTypeItemHeader>() + size_of::<CharacteristicDecl>();
+        if usize::from(header.length) < min_item_len {
             return Err(SimbleError::PacketParseError(
                 "Invalid item length in char rsp".into(),
             ));
         }
+        let items = header
+            .items(attribute_data_list)
+            .expect("length checked above");
 
         let service = self
             .services
@@ -177,19 +184,19 @@ impl GattClient {
             .find(|s| s.uuid == service_uuid)
             .ok_or_else(|| SimbleError::Gatt(format!("Service {service_uuid} not discovered")))?;
 
-        let items_data = &payload[2..];
-        for chunk in items_data.chunks_exact(item_len) {
-            let decl_handle = u16::from_le_bytes([chunk[0], chunk[1]]);
-            let props = chunk[2];
-            let val_handle = u16::from_le_bytes([chunk[3], chunk[4]]);
-            let Some(uuid) = Uuid::from_bytes(&chunk[5..]) else {
+        for (entry, value) in items {
+            // The declaration's own value: properties, value handle, UUID.
+            let Ok((decl, uuid_bytes)) = CharacteristicDecl::ref_from_prefix(value) else {
+                continue;
+            };
+            let Some(uuid) = Uuid::from_bytes(uuid_bytes) else {
                 continue;
             };
 
             service.characteristics.push(DiscoveredCharacteristic {
-                declaration_handle: decl_handle,
-                value_handle: val_handle,
-                properties: props,
+                declaration_handle: entry.attribute_handle.get(),
+                value_handle: decl.value_handle.get(),
+                properties: decl.properties,
                 uuid,
                 descriptors: Vec::new(),
             });
@@ -292,5 +299,42 @@ mod tests {
             Uuid::from_u16(0x2A37)
         );
         assert_eq!(client.services[0].characteristics[0].value_handle, 3);
+    }
+
+    /// A one-octet ATT PDU used to **panic the process**.
+    ///
+    /// Both discovery handlers guarded with `payload.is_empty()`, which only
+    /// proves length >= 1, and then indexed `payload[1]` for the item length.
+    /// A peer sending a bare `[0x11]` or `[0x09]` therefore crashed a simble
+    /// central mid-discovery with an index-out-of-bounds -- reachable from the
+    /// wire, since `central.rs` and `ranging_scene.rs` dispatch on `att[0]`
+    /// and hand the payload straight in. Any buggy or hostile remote device
+    /// could do it.
+    ///
+    /// The typed headers need two octets to parse, so a truncated PDU is now
+    /// a parse error. This test exists because that is a remote crash, and a
+    /// remote crash deserves a test that fails loudly if the guard regresses.
+    #[test]
+    fn truncated_discovery_responses_are_rejected_not_panicked() {
+        for pdu in [
+            vec![opcode::READ_BY_GROUP_TYPE_RSP],
+            vec![opcode::READ_BY_TYPE_RSP],
+        ] {
+            let addr = Address::from_be_bytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+            let mut client = GattClient::new(0x0001, addr);
+            let result = if pdu[0] == opcode::READ_BY_GROUP_TYPE_RSP {
+                client.on_discover_services_response(&pdu)
+            } else {
+                client.on_discover_characteristics_response(Uuid::from_u16(0x180D), &pdu)
+            };
+            assert!(
+                result.is_err(),
+                "a 1-octet {pdu:02X?} must be a parse error, not a panic",
+            );
+        }
+        // And the empty PDU, which the original guard did handle.
+        let addr = Address::from_be_bytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+        let mut client = GattClient::new(0x0001, addr);
+        assert!(client.on_discover_services_response(&[]).is_err());
     }
 }

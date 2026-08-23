@@ -6,6 +6,9 @@
 use crate::att::error_code;
 use crate::types::Uuid;
 use std::collections::BTreeMap;
+use zerocopy::{
+    FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned, byteorder::little_endian::U16,
+};
 
 /// Standard GATT UUIDs for declarations and descriptors.
 pub mod service_uuid {
@@ -25,6 +28,33 @@ pub mod desc_uuid {
     pub const CLIENT_CHARACTERISTIC_CONFIGURATION: u16 = 0x2902;
     /// Characteristic User Description descriptor (0x2901).
     pub const CHARACTERISTIC_USER_DESCRIPTION: u16 = 0x2901;
+}
+
+/// Fixed part of a Characteristic Declaration's *value* (Core Spec Vol 3,
+/// Part G, Section 3.3.1): the properties bitmask and the handle of the value
+/// attribute, followed by the characteristic's own 2- or 16-byte UUID.
+///
+/// This is the value carried by a 0x2803 attribute, which is what a Read By
+/// Type Response returns during characteristic discovery.
+#[repr(C)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
+)]
+pub struct CharacteristicDecl {
+    /// Characteristic properties bitmask (see [`CharacteristicProperties`]).
+    pub properties: u8,
+    /// Handle of the attribute holding the characteristic's value.
+    pub value_handle: U16,
+}
+
+impl CharacteristicDecl {
+    /// Builds a declaration value prefix for the given properties and handle.
+    pub fn new(properties: u8, value_handle: u16) -> Self {
+        Self {
+            properties,
+            value_handle: U16::from_bytes(value_handle.to_le_bytes()),
+        }
+    }
 }
 
 /// Bitmask for characteristic properties.
@@ -273,9 +303,9 @@ impl GattDatabase {
 
         // 1. Characteristic Declaration Attribute (0x2803)
         // Value = [properties (1B), value_handle (2B), uuid (2B or 16B)]
-        let mut decl_val = Vec::with_capacity(3 + 16);
-        decl_val.push(properties.0);
-        decl_val.extend_from_slice(&val_handle.to_le_bytes());
+        let decl = CharacteristicDecl::new(properties.0, val_handle);
+        let mut decl_val = Vec::with_capacity(size_of_val(&decl) + 16);
+        decl_val.extend_from_slice(decl.as_bytes());
         match uuid {
             Uuid::Uuid16(u) => decl_val.extend_from_slice(&u.to_le_bytes()),
             Uuid::Uuid128(u) => decl_val.extend_from_slice(&u),

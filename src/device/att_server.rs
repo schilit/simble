@@ -5,7 +5,11 @@
 
 use zerocopy::IntoBytes;
 
-use crate::att::{AttErrorRsp, AttExchangeMtuRsp, AttPdu, error_code, opcode};
+use crate::att::{
+    AttErrorRsp, AttExchangeMtuRsp, AttFindInformationItemHeader, AttFindInformationRspHeader,
+    AttPdu, AttPrepareWriteRspHeader, AttReadByGroupTypeItemHeader, AttReadByGroupTypeRspHeader,
+    AttReadByTypeItemHeader, AttReadByTypeRspHeader, error_code, opcode,
+};
 use crate::device::VirtualDevice;
 use crate::device::connection::PrepareWriteChunk;
 use crate::types::{SimbleError, Uuid};
@@ -58,16 +62,23 @@ impl VirtualDevice {
                     )));
                 }
 
-                let mut resp = Vec::new();
-                resp.push(opcode::FIND_INFORMATION_RSP);
-                let format = if info[0].1.len() == 2 { 0x01 } else { 0x02 };
-                resp.push(format);
+                let format = if info[0].1.len() == 2 {
+                    AttFindInformationRspHeader::FORMAT_UUID16
+                } else {
+                    AttFindInformationRspHeader::FORMAT_UUID128
+                };
+                let header = AttFindInformationRspHeader::new(format);
+                let mut resp = header.as_bytes().to_vec();
 
+                // One response carries one entry format, so a UUID of the
+                // other width is skipped rather than mixed in.
+                let entry = size_of::<AttFindInformationItemHeader>();
                 for (handle, uuid) in info {
-                    if (format == 0x01 && uuid.len() == 2) || (format == 0x02 && uuid.len() == 16) {
-                        resp.extend_from_slice(&handle.to_le_bytes());
-                        resp.extend_from_slice(&uuid.to_att_bytes());
+                    if header.item_len() != Some(entry + uuid.len()) {
+                        continue;
                     }
+                    resp.extend_from_slice(AttFindInformationItemHeader::new(handle).as_bytes());
+                    resp.extend_from_slice(&uuid.to_att_bytes());
                 }
 
                 Ok(Some(resp))
@@ -146,10 +157,10 @@ impl VirtualDevice {
                     });
                 }
 
-                let mut resp = Vec::with_capacity(5 + part_value.len());
-                resp.push(opcode::PREPARE_WRITE_RSP);
-                resp.extend_from_slice(&handle.to_le_bytes());
-                resp.extend_from_slice(&offset.to_le_bytes());
+                // The response echoes the request verbatim (3.4.6.2).
+                let echo = AttPrepareWriteRspHeader::new(handle, offset);
+                let mut resp = Vec::with_capacity(size_of_val(&echo) + part_value.len());
+                resp.extend_from_slice(echo.as_bytes());
                 resp.extend_from_slice(part_value);
                 Ok(Some(resp))
             }
@@ -214,16 +225,18 @@ impl VirtualDevice {
                 // it saw. Emitting both under one length header makes the
                 // client slice a 128-bit UUID into phantom 16-bit services.
                 let value_len = matches[0].1.len();
-                let mut resp = Vec::new();
-                resp.push(opcode::READ_BY_GROUP_TYPE_RSP);
-                resp.push((4 + value_len) as u8);
+                let mut resp = AttReadByGroupTypeRspHeader::new(value_len)
+                    .as_bytes()
+                    .to_vec();
 
                 for (handle, value) in matches {
                     if value.len() != value_len {
                         break;
                     }
-                    resp.extend_from_slice(&handle.to_le_bytes());
-                    resp.extend_from_slice(&self.gatt_db.group_end_handle(handle).to_le_bytes());
+                    let end = self.gatt_db.group_end_handle(handle);
+                    resp.extend_from_slice(
+                        AttReadByGroupTypeItemHeader::new(handle, end).as_bytes(),
+                    );
                     resp.extend_from_slice(value);
                 }
 
@@ -262,21 +275,39 @@ impl VirtualDevice {
                 // a 128-bit UUID is longer than a 16-bit one, so the list
                 // stops at the first entry of a different size.
                 let value_len = matches[0].1.len();
-                let mut resp = Vec::new();
-                resp.push(opcode::READ_BY_TYPE_RSP);
-                resp.push((2 + value_len) as u8);
+                let mut resp = AttReadByTypeRspHeader::new(value_len).as_bytes().to_vec();
 
                 for (handle, value) in matches {
                     if value.len() != value_len {
                         break;
                     }
-                    resp.extend_from_slice(&handle.to_le_bytes());
+                    resp.extend_from_slice(AttReadByTypeItemHeader::new(handle).as_bytes());
                     resp.extend_from_slice(value);
                 }
 
                 Ok(Some(resp))
             }
-            _ => Ok(Some(att_error(
+            // Everything else is either a response (a server never receives
+            // one), a request this server does not implement, or an opcode the
+            // parser did not recognize. Listed out rather than caught by `_`
+            // so that a newly parsed PDU has to be classified here on purpose.
+            AttPdu::ErrorRsp(_)
+            | AttPdu::ExchangeMtuRsp(_)
+            | AttPdu::FindInformationRsp { .. }
+            | AttPdu::FindByTypeValueReq { .. }
+            | AttPdu::FindByTypeValueRsp(_)
+            | AttPdu::ReadByTypeRsp { .. }
+            | AttPdu::ReadRsp(_)
+            | AttPdu::ReadBlobRsp(_)
+            | AttPdu::ReadMultipleReq(_)
+            | AttPdu::ReadMultipleRsp(_)
+            | AttPdu::ReadByGroupTypeRsp { .. }
+            | AttPdu::WriteRsp
+            | AttPdu::PrepareWriteRsp { .. }
+            | AttPdu::ExecuteWriteRsp
+            | AttPdu::HandleValueNotify { .. }
+            | AttPdu::HandleValueInd { .. }
+            | AttPdu::Unknown { .. } => Ok(Some(att_error(
                 att_pdu[0],
                 0x0000,
                 error_code::REQUEST_NOT_SUPPORTED,

@@ -35,12 +35,14 @@
 //!   one.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use zerocopy::IntoBytes;
 
 use crate::client::gatt_client::{DiscoveredDescriptor, DiscoveredService, GattClient};
 use crate::device::host::{acl_packets, command, init_commands};
 use crate::l2cap::{AclReassembler, HciAclHeader, L2capHeader};
 use crate::packets::HciEvent;
 use crate::packets::att::opcode as att_op;
+use crate::packets::{AttFindInformationReq, AttFindInformationRspHeader};
 use crate::transport::h4_type;
 use crate::types::{Address, Uuid};
 
@@ -863,21 +865,19 @@ impl LeCentral {
     /// the characteristic they belong to (Vol 3, Part F, Section 3.4.3.2:
     /// format 0x01 is 16-bit UUIDs, 0x02 is 128-bit).
     fn record_descriptors(&mut self, uuid: Uuid, att: &[u8]) {
-        let Some(&format) = att.get(1) else { return };
-        let uuid_len = match format {
-            0x01 => 2usize,
-            0x02 => 16usize,
-            _ => return,
+        let Some((header, information_data)) = AttFindInformationRspHeader::parse(att) else {
+            return;
         };
-        let item = 2 + uuid_len;
+        let Some(items) = header.items(information_data) else {
+            return;
+        };
         let mut found = Vec::new();
-        for chunk in att[2..].chunks_exact(item) {
-            let handle = u16::from_le_bytes([chunk[0], chunk[1]]);
-            let Some(descriptor_uuid) = Uuid::from_bytes(&chunk[2..]) else {
+        for (entry, uuid_bytes) in items {
+            let Some(descriptor_uuid) = Uuid::from_bytes(uuid_bytes) else {
                 continue;
             };
             found.push(DiscoveredDescriptor {
-                handle,
+                handle: entry.attribute_handle.get(),
                 uuid: descriptor_uuid,
             });
         }
@@ -955,11 +955,8 @@ enum Started {
 /// Find Information Request over a handle range (Vol 3, Part F, 3.4.3.1) —
 /// how a client learns where a characteristic's descriptors are.
 fn find_information_request(start: u16, end: u16) -> Vec<u8> {
-    let mut pdu = Vec::with_capacity(5);
-    pdu.push(att_op::FIND_INFORMATION_REQ);
-    pdu.extend_from_slice(&start.to_le_bytes());
-    pdu.extend_from_slice(&end.to_le_bytes());
-    L2capHeader::serialize(crate::l2cap::cid::ATT, &pdu)
+    let request = AttFindInformationReq::new(start, end);
+    L2capHeader::serialize(crate::l2cap::cid::ATT, request.as_bytes())
 }
 
 /// The opcode of the last command [`init_commands`] issues — the completion
