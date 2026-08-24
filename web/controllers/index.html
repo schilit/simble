@@ -89,8 +89,9 @@
     A SimBLE host stack produces and consumes <strong>HCI</strong> — the Host Controller Interface.
     Everything above HCI (GAP, GATT, ATT, L2CAP, SMP) is SimBLE. Everything <em>below</em> it — the
     Link Layer, the physical channel, timing, encryption, the radio — is the job of a
-    <strong>controller</strong>. SimBLE keeps its own footprint below HCI deliberately small: a single
-    tiny built-in controller, <code class="inl">sim::Link</code>, that needs no setup. Every heavier
+    <strong>controller</strong>. SimBLE ships just one controller of its own, and it is deliberately
+    tiny: it runs in-process — natively, and inside the browser tab showing this page — and needs no
+    install, no daemon, and no radio. Every heavier
     rung is a controller you plug in underneath — from a software controller to a real USB radio —
     forming a <strong>ladder</strong> that trades weight for fidelity. Pick the lowest rung that
     still answers your question.
@@ -101,7 +102,7 @@
     <h2>At a glance</h2>
     <p style="color:var(--dim);font-size: var(--fs-body);margin:0 0 0.7rem;max-width:56rem">
       SimBLE compiles both <strong>natively</strong> (the Rust crate — tests, CLIs, real hardware) and to
-      <strong>WebAssembly</strong> (these demo pages). The built-in <code class="inl">sim::Link</code> runs
+      <strong>WebAssembly</strong> (these demo pages). The built-in controller runs
       in both worlds — natively under <code class="inl">cargo test</code> and the
       <code class="inl">simble</code> CLI, and in-process in a browser tab. The heavier rungs are
       external processes a browser reaches over WebSocket (<code class="inl">rootcanal-ws</code>,
@@ -295,7 +296,7 @@
 
       <span class="lbl">Build &amp; run</span>
       <p>Natively, open the dongle with <code class="inl">UsbTransport</code> in place of a WebSocket
-        transport — the rest of SimBLE sees the same H4 flow. To reach it from a browser page, run the
+        transport — the rest of SimBLE sees the same HCI packet stream. To reach it from a browser page, run the
         bridge and point the page's WebSocket backend at it:</p>
       <pre class="run"><code>simble --usb            # first dongle, ws://127.0.0.1:7681
 simble --usb 0a12:0001  # a specific vendor:product</code></pre>

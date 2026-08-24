@@ -34,7 +34,10 @@ pages work against your local daemon.
 
 ## Building and serving locally
 
-The wasm artifacts (`web/pkg/`) are not committed; build them with:
+The wasm artifacts (`web/pkg/`) are not committed; build them for
+`wasm32-unknown-unknown` — Rust's `arch-vendor-os` target name, where the two
+`unknown`s just mean no vendor and no host OS, because the code runs in a
+browser sandbox rather than on an operating system:
 
 ```bash
 rustup target add wasm32-unknown-unknown
@@ -52,10 +55,15 @@ transitive dependency of the scripting engine.)
 Then serve this directory — ES modules don't load from `file://`:
 
 ```bash
-cd web && python3 -m http.server 8000
+python3 web/serve.py 8000
 ```
 
 and open <http://localhost:8000/scanner/> and <http://localhost:8000/hrm/>.
+
+Use `serve.py` rather than `python3 -m http.server`: it sends `no-store`, so an
+edited module actually reloads instead of Chrome silently re-running the
+cached copy. It also serves `/catalog/` from the repository root, which the
+pages expect.
 
 ## Deployment
 
