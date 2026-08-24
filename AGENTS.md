@@ -72,6 +72,19 @@ Keep near-zero. Currently: `serde`, `serde_json`, `thiserror`, `zerocopy`,
   internals; anything reachable through the public API goes in `tests/`. Do not
   keep a copy in both — the copies drift, and the inline one has historically
   been the weaker.
+- Unit tests live in a **sibling file**, not inline. `foo.rs` ends with
+
+  ```rust
+  #[cfg(test)]
+  #[path = "foo_tests.rs"]
+  mod tests;
+  ```
+
+  and the bodies go in `foo_tests.rs` next to it. They are still compiled as
+  part of the module, so `super::*` and private access work unchanged. Name it
+  `<module>_tests.rs`, or `<module>_<modname>.rs` when a file has more than one
+  test module. Keeping them inline makes `cargo llvm-cov` count test bodies as
+  production lines — see `docs/test-strategy.md`.
 
 ## Verification loop (every change must pass)
 

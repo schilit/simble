@@ -31,10 +31,11 @@ So tests here divide by what they can disagree with:
 
 **89.86% line / 88.35% function** (`cargo llvm-cov`, at `9df1253`). Corrections:
 
-1. **Inline `#[cfg(test)]` bodies count as covered production lines.**
-   Recomputing over only the lines above the `#[cfg(test)]` marker drops files
-   sharply: `device/car_kit.rs` 79%→71%, `packets/ext_adv.rs` 81%→76%,
-   `device/big_receiver.rs` 90%→**78.5%**.
+1. ~~**Inline `#[cfg(test)]` bodies count as covered production lines.**~~
+   *Measured, and fixed for the ten largest offenders — see "Test bodies moved
+   out of the implementation files" below.* The distortion was real but not
+   uniformly in the direction assumed, and the earlier hand-estimate
+   over-corrected.
 2. ~~**`tests/mod.rs` re-runs 35 of the integration files as a second
    binary.**~~ *Fixed — see "Duplicated tests" below.* It re-ran 376 test
    functions, ~25% of a 1 528 headline. `tests/mod.rs` is gone and the headline
@@ -43,6 +44,69 @@ So tests here divide by what they can disagree with:
    double-counting had favoured the self-checking tests over
    `bumble_vectors_test`, `sbc_interop_test` and `adts_interop_test`; it no
    longer exists to favour anything.
+
+---
+
+## Test bodies moved out of the implementation files
+
+The ten largest inline `#[cfg(test)]` blocks now live in sibling files —
+`sim.rs` keeps `#[cfg(test)] #[path = "sim_tests.rs"] mod tests;` and nothing
+else. The tests are still compiled as part of the module, so private access is
+unchanged; what changes is that `cargo llvm-cov` now attributes their lines to
+`*_tests.rs` instead of to the production file. **9 175 lines of test body
+stopped being counted as production code.** Same 1 323 tests, same names, same
+module paths.
+
+Line coverage, before (test bodies inline) and after (attributed separately):
+
+| File | before | after | production lines |
+|---|---|---|---|
+| `transport/usb.rs` | 68.42% | **45.82%** | 299 |
+| `device/big_receiver.rs` | 91.13% | **83.38%** | 337 |
+| `mcp.rs` | 91.81% | 86.15% | 1 170 |
+| `device/car_kit.rs` | 90.17% | 86.81% | 940 |
+| `transport/wasm_ws.rs` | 92.16% | 88.27% | 1 970 |
+| `controller/sim.rs` | 93.99% | 90.05% | 2 823 |
+| `classic/rfcomm.rs` | 95.34% | 92.93% | 735 |
+| `device/channel_sounding.rs` | 96.91% | 93.50% | 277 |
+| `audio/sbc.rs` | 97.14% | 96.19% | 525 |
+| `packets/att.rs` | 97.09% | **99.28%** | 276 |
+
+Three things to take from this table.
+
+**`transport/usb.rs` is the real finding: 45.82%, not the ~68% it displayed.**
+332 lines of `MockEndpoints`-driven test were carrying it. It is now the
+worst-covered transport by a wide margin, and it is the one transport with no
+loopback test — `transport/ws.rs` has RFC 6455 vectors and a real bridge test,
+`netsim` has the scripts, USB has a mock that agrees with itself.
+
+**`packets/att.rs` went *up*.** The inline block does not only inflate; for a
+small production file with assertion-heavy tests it *deflates*, because the
+`_ => panic!("Expected ReadBlobReq")` arm of every `match` assertion is a line
+that never executes while the test passes. Fifteen such arms in `att_tests.rs`
+were being charged against `att.rs`. Any file whose tests assert by matching
+pays this, and the payment is invisible until the bodies are separated.
+
+**The earlier hand-estimate over-corrected**, and this is why: recomputing "over
+only the lines above the `#[cfg(test)]` marker" assumes every line below it was
+covered, which the panic arms disprove. It predicted `device/big_receiver.rs`
+90%→78.5%; the measured drop is 91.13%→83.38%. Estimate the direction by hand
+if you like, never the magnitude.
+
+`packets/ext_adv.rs` (80.63%) still has its tests inline and is still
+overstated; the old 81%→76% guess for it remains a guess.
+
+Whole-crate figures, at this commit, `cargo llvm-cov --lib --tests`:
+
+| | line | function |
+|---|---|---|
+| as reported (test files now their own rows) | 90.37% | 88.45% |
+| **excluding the 12 moved test files** | **89.03%** | **87.26%** |
+
+The moved test files themselves measure 99.20% — the missing 0.8% is exactly
+the never-taken failure arms described above. **89.03% is the honest number for
+the ten files that were fixed; the crate figure is still overstated by every
+file that still has its tests inline.**
 
 ---
 
