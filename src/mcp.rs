@@ -40,7 +40,7 @@
 use crate::devices::catalog::{self, EXAMPLES};
 use crate::gatt::sig_names;
 use crate::transport::netsim::{self, NetsimScene};
-use crate::transport::usb::{UsbScene, parse_vid_pid};
+use crate::transport::usb::{UsbScene, UsbSelector, list_bluetooth_dongles};
 use crate::transport::wasm_ws::{SceneEngine, lint_script, run_test_script};
 use crate::types::Address;
 use serde_json::{Value, json};
@@ -508,6 +508,42 @@ impl Server {
         }
     }
 
+    /// The dongles plugged in right now, named every way `device:` accepts.
+    ///
+    /// An agent cannot choose without a list, and two dongles of one model
+    /// share a `vid:pid` — so `run_on("usb")` prints this whether it
+    /// succeeded or not. Enumeration only reads descriptors: nothing is
+    /// opened or claimed, so this is safe with no dongle plugged in and with
+    /// a dongle another process is already using.
+    fn dongle_listing() -> String {
+        match list_bluetooth_dongles() {
+            Err(e) => format!("(could not enumerate USB devices: {e})"),
+            Ok(d) if d.is_empty() => "No Bluetooth-class USB dongle is plugged in. \
+                 (A Mac's built-in controller is PCIe-attached and never appears here.)"
+                .to_string(),
+            Ok(dongles) => {
+                let lines: Vec<String> = dongles
+                    .iter()
+                    .map(|d| {
+                        format!(
+                            "  {} — select it as \"#{}\", \"{}\" (bus/address) or \
+                             \"{}\" (bus.port, survives a re-plug)",
+                            d.describe(),
+                            d.index,
+                            d.address_selector(),
+                            d.port_selector()
+                        )
+                    })
+                    .collect();
+                format!(
+                    "Dongles plugged in ({}):\n{}",
+                    dongles.len(),
+                    lines.join("\n")
+                )
+            }
+        }
+    }
+
     fn tool_run_on(&mut self, id: Option<Value>, target: &str, device: Option<&str>) -> Value {
         match target {
             "self" => {
@@ -547,24 +583,27 @@ impl Server {
             // add_peripheral, exactly as netsim defers its connection.
             "usb" => {
                 let selected = match device {
-                    Some(spec) => match parse_vid_pid(spec) {
-                        Ok(pair) => Some(pair),
+                    Some(spec) => match UsbSelector::parse(spec) {
+                        Ok(selector) => selector,
                         // Reworded rather than passed through: the transport's
                         // "Transport Error:" prefix is noise to an agent that
-                        // asked about an argument.
+                        // asked about an argument. The listing goes with it,
+                        // because the next thing the agent needs is the set of
+                        // names that would have worked.
                         Err(_) => {
                             return tool_text(
                                 id,
                                 &format!(
-                                    "invalid device selector {spec:?} — expected hex \
-                                     vid:pid, e.g. \"0a12:0001\" (lsusb / system_profiler \
-                                     SPUSBDataType lists them)"
+                                    "invalid device selector {spec:?} — expected \"#0\" \
+                                     (index), \"0a12:0001\" (vid:pid), \"02/4\" \
+                                     (bus/address), or \"02.1\" (bus.port).\n{}",
+                                    Self::dongle_listing()
                                 ),
                                 true,
                             );
                         }
                     },
-                    None => None,
+                    None => UsbSelector::First,
                 };
                 let scene = UsbScene::new(selected);
                 let selector = scene.selector();
@@ -580,7 +619,8 @@ impl Server {
                          holds ONE device, advertising on real RF for real phones to find. \
                          Scan and connect from the phone (simble-side scan/connect/read/\
                          write/assert are self-mode only); use status here to watch the \
-                         peripheral side. Pass device:\"vid:pid\" to pick a specific dongle."
+                         peripheral side.\n{}",
+                        Self::dongle_listing()
                     ),
                     false,
                 )
@@ -1357,7 +1397,13 @@ fn tools_list() -> Value {
                 "type": "object",
                 "properties": {
                     "target": { "type": "string", "enum": ["self", "netsim", "usb"] },
-                    "device": { "type": "string", "description": "usb only: dongle selector as hex \"vid:pid\", e.g. \"0a12:0001\"." },
+                    "device": { "type": "string", "description": "usb only: which dongle. \
+                        \"#0\" picks by index in the list run_on prints; \"0a12:0001\" is a hex \
+                        vid:pid and works only when exactly one device carries it (two dongles \
+                        of the same model share one, and the call errors rather than guessing); \
+                        \"02/4\" is bus/address; \"02.1\" is a bus.port path, the only form that \
+                        still names the same dongle after a re-plug. Omit to take the first \
+                        Bluetooth-class dongle found." },
                 },
                 "required": ["target"],
             },

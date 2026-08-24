@@ -128,17 +128,63 @@ pub fn acl_packets(handle: u16, l2cap: &[u8]) -> Vec<Vec<u8>> {
     packets
 }
 
+/// `Event_Mask` with every bit the Core Spec defines — 0..=61 — and the two
+/// reserved bits clear.
+///
+/// **Not `0xFF` × 8.** Bits 62-63 of `Event_Mask` are reserved (Vol 4, Part
+/// E, Section 7.3.1), and a CSR8510 answers a mask with reserved bits set
+/// with `0x12`, Invalid HCI Command Parameters. The command "succeeds" as far
+/// as anything downstream can see — no error propagates — so the mask is
+/// simply never applied and no LE Meta Event ever arrives, which reads as a
+/// dead radio. Simble's own controller does not enforce masks at all, which
+/// is why the all-ones value survived until real hardware saw it.
+pub const EVENT_MASK_ALL: [u8; 8] = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x3F];
+
+/// `LE_Event_Mask` opened as wide as Simble's own controller and rootcanal
+/// understand: every LE subevent, including the extended-advertising, CIS and
+/// ranging ones Simble depends on.
+///
+/// Reserved bits are set here, which real controllers reject — see
+/// [`LE_EVENT_MASK_CORE_4_0`] and [`init_commands_with_masks`]. The bits a
+/// controller accepts depend on its spec version, so unlike `Event_Mask`
+/// there is no single value that is both maximal and universally legal.
+pub const LE_EVENT_MASK_ALL: [u8; 8] = [0xFF; 8];
+
+/// `LE_Event_Mask` as a Bluetooth 4.0 controller defines it: bits 0..=4 —
+/// LE Connection Complete, Advertising Report, Connection Update Complete,
+/// Read Remote Features Complete, and Long Term Key Request (Vol 4, Part E,
+/// Section 7.8.1). Everything above bit 4 was added later and a 4.0 part
+/// rejects the whole command with `0x12` for asking.
+///
+/// This is what to send to a dongle whose HCI version you do not know: the
+/// five subevents here are all a connectable LE peripheral or a scanning
+/// central actually needs.
+pub const LE_EVENT_MASK_CORE_4_0: [u8; 8] = [0x1F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+
 /// The controller bring-up every host does first. The post-Reset default
 /// event mask excludes LE Meta Events (Vol 4, Part E, Section 7.3.1, bit
 /// 61), so both masks must be opened before any advertising report or
 /// connection event can arrive.
 pub fn init_commands() -> Vec<Vec<u8>> {
+    init_commands_with_masks(&EVENT_MASK_ALL, &LE_EVENT_MASK_ALL)
+}
+
+/// [`init_commands`] with the two event masks chosen by the caller, because
+/// how wide they may be opened is a property of the controller on the other
+/// end and not of the host.
+///
+/// Pass [`LE_EVENT_MASK_CORE_4_0`] for a real dongle of unknown vintage; the
+/// default [`LE_EVENT_MASK_ALL`] asks for subevents a 4.0 part has never
+/// heard of and is refused outright.
+pub fn init_commands_with_masks(event_mask: &[u8; 8], le_event_mask: &[u8; 8]) -> Vec<Vec<u8>> {
     vec![
         command(opcode::RESET, &[]),
-        command(opcode::SET_EVENT_MASK, &[0xFF; 8]),
-        command(opcode::LE_SET_EVENT_MASK, &[0xFF; 8]),
+        command(opcode::SET_EVENT_MASK, event_mask),
+        command(opcode::LE_SET_EVENT_MASK, le_event_mask),
         // Declare CIS host support, or the controller disallows LE Create CIS
-        // and no isochronous stream can ever be opened to this device.
+        // and no isochronous stream can ever be opened to this device. A
+        // pre-5.2 controller answers this with 0x01, Unknown HCI Command,
+        // which is harmless: no ISO stream was ever going to work there.
         command(
             opcode::LE_SET_HOST_FEATURE,
             &[le_host_feature::CONNECTED_ISOCHRONOUS_STREAM, 0x01],
@@ -151,6 +197,11 @@ pub fn init_commands() -> Vec<Vec<u8>> {
 #[derive(Debug, Default)]
 pub struct LeHost {
     reassembler: AclReassembler,
+    /// The `LE_Event_Mask` to ask this host's controller for, or `None` for
+    /// [`LE_EVENT_MASK_ALL`]. Not a constant because it is a fact about the
+    /// controller, not about the host — see
+    /// [`set_le_event_mask`](Self::set_le_event_mask).
+    le_event_mask: Option<[u8; 8]>,
     connection: Option<(u16, Address)>,
     /// The established isochronous stream's handle, once a CIS is up. ISO
     /// SDUs are addressed to this handle, never to the ACL handle.
@@ -161,6 +212,24 @@ impl LeHost {
     /// Creates a host with no connection.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Narrows the `LE_Event_Mask` this host's bring-up asks for.
+    ///
+    /// The default [`LE_EVENT_MASK_ALL`] sets bits no controller older than
+    /// the spec that defined them knows, and such a controller rejects the
+    /// whole command with `0x12`. Nothing propagates: the mask is simply
+    /// never applied, no LE Meta Event ever arrives, and the device looks
+    /// like it has no radio. Pass [`LE_EVENT_MASK_CORE_4_0`] when the
+    /// controller is a real dongle of unknown vintage — its five subevents
+    /// are everything a connectable peripheral needs.
+    pub fn set_le_event_mask(&mut self, mask: [u8; 8]) {
+        self.le_event_mask = Some(mask);
+    }
+
+    /// The `LE_Event_Mask` bring-up will ask for.
+    pub fn le_event_mask(&self) -> [u8; 8] {
+        self.le_event_mask.unwrap_or(LE_EVENT_MASK_ALL)
     }
 
     /// The current connection as `(handle, peer address)`, if any.
@@ -189,7 +258,7 @@ impl LeHost {
         device: &VirtualDevice,
         service_uuids: &[u16],
     ) -> Result<Vec<Vec<u8>>, SimbleError> {
-        let mut commands = init_commands();
+        let mut commands = init_commands_with_masks(&EVENT_MASK_ALL, &self.le_event_mask());
 
         // 100ms interval, public own address, all channels, no filter.
         let advertising_type = if device.connectable {

@@ -35,6 +35,7 @@
 //! synchronous, non-blocking `pump` design with no async runtime.
 
 use crate::transport::h4_type;
+use crate::transport::hci_adapter::CommandCredits;
 use crate::types::SimbleError;
 use nusb::MaybeFuture;
 use nusb::transfer::{
@@ -143,6 +144,370 @@ pub fn parse_vid_pid(spec: &str) -> Result<(u16, u16), SimbleError> {
         u16::from_str_radix(vid, 16).map_err(|_| err())?,
         u16::from_str_radix(pid, 16).map_err(|_| err())?,
     ))
+}
+
+// --- Choosing one dongle out of several -------------------------------------
+
+/// One USB device presenting a Bluetooth HCI controller, as
+/// [`list_bluetooth_dongles`] found it. Everything here comes from the device
+/// descriptor and the platform's enumeration — nothing is opened, so listing
+/// works even for a dongle another process holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsbDongle {
+    /// Position in [`list_bluetooth_dongles`]'s order, which is sorted by
+    /// bus then address so it is the same for every caller in a session.
+    pub index: usize,
+    /// Platform bus identifier (`"02"` on macOS, `"001"` on Linux).
+    pub bus_id: String,
+    /// Address assigned to the device on that bus at enumeration time. Fresh
+    /// on every re-plug — see [`UsbSelector`] on what that costs.
+    pub device_address: u8,
+    /// Hub port numbers from the root hub down to this device. Together with
+    /// `bus_id` this names a *physical socket*, and unlike `device_address`
+    /// nusb documents it as stable across re-plugs and reboots.
+    pub port_chain: Vec<u8>,
+    /// `idVendor`.
+    pub vendor_id: u16,
+    /// `idProduct`.
+    pub product_id: u16,
+    /// `iManufacturer`, when the dongle publishes one.
+    pub manufacturer: Option<String>,
+    /// `iProduct`, when the dongle publishes one.
+    pub product: Option<String>,
+    /// `iSerialNumber`, when the dongle publishes one. Absent on the cheap
+    /// CSR clones, which is why serial numbers cannot be the selector.
+    pub serial_number: Option<String>,
+}
+
+impl UsbDongle {
+    /// The `bus/address` selector naming exactly this device right now.
+    pub fn address_selector(&self) -> String {
+        format!("{}/{}", self.bus_id, self.device_address)
+    }
+
+    /// The `bus.port.port` selector naming the socket this device is in.
+    pub fn port_selector(&self) -> String {
+        let ports: Vec<String> = self.port_chain.iter().map(u8::to_string).collect();
+        format!("{}.{}", self.bus_id, ports.join("."))
+    }
+
+    /// One line for a chooser: every way to name it, and what it says it is.
+    pub fn describe(&self) -> String {
+        let name = match (&self.manufacturer, &self.product) {
+            (Some(m), Some(p)) => format!("{m} {p}"),
+            (None, Some(p)) => p.clone(),
+            (Some(m), None) => m.clone(),
+            (None, None) => "unnamed".to_string(),
+        };
+        format!(
+            "#{} {:04x}:{:04x} at {} (port {}) — {}",
+            self.index,
+            self.vendor_id,
+            self.product_id,
+            self.address_selector(),
+            self.port_selector(),
+            name
+        )
+    }
+}
+
+/// How a caller names *which* dongle to open.
+///
+/// Two dongles of the same model are the case this exists for: they share a
+/// vendor and product ID, and the CSR8510 clones publish no serial number, so
+/// nothing in the descriptors tells them apart. Only the platform's
+/// enumeration does. The four forms trade precision against how long the name
+/// stays true:
+///
+/// | form | example | precise | survives a re-plug |
+/// |---|---|---|---|
+/// | [`First`](Self::First) | *(no argument)* | no | n/a |
+/// | [`VidPid`](Self::VidPid) | `0a12:0001` | only when unique | yes |
+/// | [`Index`](Self::Index) | `#1` | yes, within a session | no — order can change |
+/// | [`BusAddress`](Self::BusAddress) | `02/4` | yes | no — a new address is assigned |
+/// | [`BusPort`](Self::BusPort) | `02.1` | yes | **yes, in the same socket** |
+///
+/// `VidPid` is deliberately *not* "the first one that matches": that is the
+/// bug this type exists to fix. With two dongles plugged in, `0a12:0001` is an
+/// error that lists the candidates by their `bus/addr` and `bus.port` names,
+/// so the next attempt can be exact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UsbSelector {
+    /// The first Bluetooth-class device found. Fine with one dongle, a coin
+    /// flip with two.
+    First,
+    /// A vendor/product ID pair, which must match exactly one device. Also
+    /// the only form that reaches a dongle hiding behind a vendor-specific
+    /// class code, since such a device is in no Bluetooth-class listing.
+    VidPid(u16, u16),
+    /// A position in [`list_bluetooth_dongles`]'s order.
+    Index(usize),
+    /// A bus and the address the device currently holds on it — what `lsusb`
+    /// prints as `Bus 002 Device 004`.
+    BusAddress {
+        /// Platform bus identifier, compared numerically when both sides are
+        /// numbers so `2` finds `"002"`.
+        bus_id: String,
+        /// Address on that bus.
+        device_address: u8,
+    },
+    /// A bus and a hub port path: the physical socket, whatever is in it.
+    BusPort {
+        /// Platform bus identifier, compared the same way as in
+        /// [`BusAddress`](Self::BusAddress).
+        bus_id: String,
+        /// Port numbers from the root hub down.
+        port_chain: Vec<u8>,
+    },
+}
+
+/// Bus identifiers are strings because Windows' are not numbers, but Linux
+/// zero-pads (`"001"`) where a human types `1`. Compare as numbers when both
+/// sides are numbers, and as text otherwise.
+fn bus_id_matches(spec: &str, actual: &str) -> bool {
+    match (spec.parse::<u32>(), actual.parse::<u32>()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => spec.eq_ignore_ascii_case(actual),
+    }
+}
+
+impl UsbSelector {
+    /// Parses the string form. The separator decides which form it is, so no
+    /// prefix keyword is needed and the old `vid:pid` spelling still means
+    /// what it did:
+    ///
+    /// - `#N` — index into [`list_bluetooth_dongles`] (`#` required, so a
+    ///   bare number is never silently an index).
+    /// - `vid:pid` — hex pair, e.g. `0a12:0001`.
+    /// - `bus/address` — decimal address, e.g. `02/4`.
+    /// - `bus.port[.port…]` — hub port path, e.g. `02.1` or `2.4.1`.
+    pub fn parse(spec: &str) -> Result<Self, SimbleError> {
+        let spec = spec.trim();
+        let invalid = |why: &str| {
+            SimbleError::Transport(format!(
+                "invalid dongle selector {spec:?}: {why} (expected \"#0\" for an index, \
+                 \"0a12:0001\" for vid:pid, \"02/4\" for bus/address, or \"02.1\" for a \
+                 bus.port path)"
+            ))
+        };
+        if spec.is_empty() {
+            return Err(invalid("empty"));
+        }
+        if let Some(n) = spec.strip_prefix('#') {
+            return n
+                .parse::<usize>()
+                .map(UsbSelector::Index)
+                .map_err(|_| invalid("index is not a number"));
+        }
+        if spec.contains(':') {
+            let (vid, pid) = parse_vid_pid(spec)?;
+            return Ok(UsbSelector::VidPid(vid, pid));
+        }
+        if let Some((bus_id, address)) = spec.split_once('/') {
+            let device_address = address
+                .parse::<u8>()
+                .map_err(|_| invalid("device address is not a number in 0..=255"))?;
+            return Ok(UsbSelector::BusAddress {
+                bus_id: bus_id.to_string(),
+                device_address,
+            });
+        }
+        if let Some((bus_id, ports)) = spec.split_once('.') {
+            let port_chain = ports
+                .split('.')
+                .map(|p| p.parse::<u8>())
+                .collect::<Result<Vec<u8>, _>>()
+                .map_err(|_| invalid("a port number is not a number in 0..=255"))?;
+            return Ok(UsbSelector::BusPort {
+                bus_id: bus_id.to_string(),
+                port_chain,
+            });
+        }
+        Err(invalid("no separator"))
+    }
+
+    /// How this selector reads back to whoever supplied it.
+    pub fn describe(&self) -> String {
+        match self {
+            UsbSelector::First => "the first Bluetooth-class dongle found".to_string(),
+            UsbSelector::VidPid(vid, pid) => format!("{vid:04x}:{pid:04x}"),
+            UsbSelector::Index(n) => format!("#{n}"),
+            UsbSelector::BusAddress {
+                bus_id,
+                device_address,
+            } => format!("{bus_id}/{device_address}"),
+            UsbSelector::BusPort { bus_id, port_chain } => {
+                let ports: Vec<String> = port_chain.iter().map(u8::to_string).collect();
+                format!("{bus_id}.{}", ports.join("."))
+            }
+        }
+    }
+}
+
+/// The Bluetooth-class devices currently enumerated, in a stable order
+/// (sorted by bus, then address) so `#0` and `#1` mean the same thing to
+/// every caller in a session.
+///
+/// A caller cannot choose without a list — `run_on("usb")` and every
+/// hardware test start here. Nothing is opened, so this succeeds for dongles
+/// already claimed by another process or by the OS Bluetooth stack; whether
+/// one can actually be *used* is only learned by opening it.
+pub fn list_bluetooth_dongles() -> Result<Vec<UsbDongle>, SimbleError> {
+    let infos = list_usb_devices()?;
+    let all: Vec<UsbDongle> = infos.iter().map(dongle_from_info).collect();
+    Ok(bluetooth_order(&infos, &all)
+        .into_iter()
+        .enumerate()
+        .map(|(index, position)| UsbDongle {
+            index,
+            ..all[position].clone()
+        })
+        .collect())
+}
+
+/// Positions in `infos` of the Bluetooth-class devices, in the stable order
+/// [`list_bluetooth_dongles`] publishes: bus, then address.
+fn bluetooth_order(infos: &[nusb::DeviceInfo], all: &[UsbDongle]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..infos.len())
+        .filter(|&i| is_bluetooth_device(&infos[i]))
+        .collect();
+    order.sort_by_key(|&i| sort_key(&all[i].bus_id, all[i].device_address));
+    order
+}
+
+/// Everything the descriptors say about one device. `index` is filled in by
+/// [`list_bluetooth_dongles`], which is what defines the numbering.
+fn dongle_from_info(d: &nusb::DeviceInfo) -> UsbDongle {
+    UsbDongle {
+        index: 0,
+        bus_id: d.bus_id().to_string(),
+        device_address: d.device_address(),
+        port_chain: d.port_chain().to_vec(),
+        vendor_id: d.vendor_id(),
+        product_id: d.product_id(),
+        manufacturer: d.manufacturer_string().map(str::to_string),
+        product: d.product_string().map(str::to_string),
+        serial_number: d.serial_number().map(str::to_string),
+    }
+}
+
+/// Picks the one device `selector` names out of `all` — every enumerated
+/// device, in enumeration order — with `bluetooth` giving the positions of
+/// the Bluetooth-class ones in [`list_bluetooth_dongles`] order. Returns a
+/// position in `all`.
+///
+/// Split from [`UsbTransport::open_selected`] so every rule below is testable
+/// on a machine with no dongle in it. The rule that matters: a selector
+/// matching several devices is an **error naming the candidates**, never the
+/// first of them. Two dongles of one model share a vid:pid, so "first match
+/// wins" silently opens whichever the OS happened to enumerate first — the
+/// two runs of a device-to-device test then land on the same radio and the
+/// failure looks like RF.
+fn resolve_selection(
+    selector: &UsbSelector,
+    all: &[UsbDongle],
+    bluetooth: &[usize],
+) -> Result<usize, SimbleError> {
+    // How a candidate reads in an error message: its index when it is a
+    // Bluetooth-class device, and always both location forms.
+    let name = |position: usize| {
+        let d = &all[position];
+        let index = bluetooth
+            .iter()
+            .position(|&p| p == position)
+            .map(|i| format!("#{i} "))
+            .unwrap_or_default();
+        format!(
+            "{index}{:04x}:{:04x} at {} (port {})",
+            d.vendor_id,
+            d.product_id,
+            d.address_selector(),
+            d.port_selector()
+        )
+    };
+    let listing = |positions: &[usize]| {
+        positions
+            .iter()
+            .map(|&p| name(p))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let unique = |positions: Vec<usize>, what: String| match positions.len() {
+        1 => Ok(positions[0]),
+        0 => Err(SimbleError::Transport(format!(
+            "no USB device matches {what}"
+        ))),
+        n => Err(SimbleError::Transport(format!(
+            "{what} matches {n} USB devices — name one exactly: {}",
+            listing(&positions)
+        ))),
+    };
+
+    match selector {
+        UsbSelector::First => bluetooth.first().copied().ok_or_else(|| {
+            SimbleError::Transport(
+                "no Bluetooth-class USB device found (class E0/01/01 at device or interface level)"
+                    .to_string(),
+            )
+        }),
+        UsbSelector::Index(n) => bluetooth.get(*n).copied().ok_or_else(|| {
+            SimbleError::Transport(if bluetooth.is_empty() {
+                format!("no Bluetooth-class USB device found, so there is no #{n}")
+            } else {
+                format!(
+                    "no dongle #{n}: {} Bluetooth-class dongle(s) are plugged in — {}",
+                    bluetooth.len(),
+                    listing(bluetooth)
+                )
+            })
+        }),
+        UsbSelector::VidPid(vid, pid) => unique(
+            (0..all.len())
+                .filter(|&i| all[i].vendor_id == *vid && all[i].product_id == *pid)
+                .collect(),
+            format!("{vid:04x}:{pid:04x}"),
+        ),
+        UsbSelector::BusAddress {
+            bus_id,
+            device_address,
+        } => unique(
+            (0..all.len())
+                .filter(|&i| {
+                    bus_id_matches(bus_id, &all[i].bus_id)
+                        && all[i].device_address == *device_address
+                })
+                .collect(),
+            format!("bus {bus_id} address {device_address}"),
+        ),
+        UsbSelector::BusPort { bus_id, port_chain } => unique(
+            (0..all.len())
+                .filter(|&i| {
+                    bus_id_matches(bus_id, &all[i].bus_id) && all[i].port_chain == *port_chain
+                })
+                .collect(),
+            format!("bus {bus_id} port {}", selector.describe()),
+        ),
+    }
+}
+
+/// Orders a bus id numerically when it is a number (so `"2"` sorts before
+/// `"10"`, which text order gets wrong), falling back to text.
+fn sort_key(bus_id: &str, device_address: u8) -> (u32, String, u8) {
+    (
+        bus_id.parse::<u32>().unwrap_or(u32::MAX),
+        bus_id.to_string(),
+        device_address,
+    )
+}
+
+/// Whether a `DeviceInfo` is a Bluetooth HCI controller, at either
+/// descriptor level (see [`is_bluetooth_hci`]).
+fn is_bluetooth_device(d: &nusb::DeviceInfo) -> bool {
+    let interfaces: Vec<_> = d
+        .interfaces()
+        .map(|i| (i.class(), i.subclass(), i.protocol()))
+        .collect();
+    is_bluetooth_hci((d.class(), d.subclass(), d.protocol()), &interfaces)
 }
 
 /// IN transfers must request a nonzero multiple of the endpoint's max packet
@@ -285,6 +650,49 @@ impl UsbEndpoints for NusbEndpoints {
     }
 }
 
+/// How long a freshly opened dongle is drained of traffic that predates this
+/// session, and how long of silence ends the drain early. A dongle that was
+/// never opened before is silent from the first poll, so this costs
+/// [`STALE_QUIET`] and not [`STALE_BUDGET`] in the normal case.
+const STALE_BUDGET: Duration = Duration::from_millis(100);
+const STALE_QUIET: Duration = Duration::from_millis(20);
+
+/// Throws away whatever the controller had queued before this session began.
+///
+/// A dongle does not forget when the host lets go of it. Events its previous
+/// owner asked for and never collected sit in the controller's buffer and are
+/// delivered to the *next* program to claim the interface, ahead of anything
+/// that program asked for. The result is a host that reads someone else's
+/// answers as its own: a `Read_BD_ADDR` completion from the last session
+/// arrives before this session's `Reset` has even been answered, so the host
+/// believes bring-up finished while the controller is still in reset.
+///
+/// This is invisible on a first open and invisible in simulation, where no
+/// controller outlives its host. It shows up the moment one program opens the
+/// same dongle twice — which is exactly what a suite of hardware tests does.
+///
+/// Called before any command goes out, so nothing legitimate can be discarded
+/// by definition: the host has asked for nothing yet.
+fn discard_stale_traffic(endpoints: &mut impl UsbEndpoints) -> Result<(), SimbleError> {
+    let start = std::time::Instant::now();
+    let mut last_seen = start;
+    while start.elapsed() < STALE_BUDGET {
+        let mut saw_any = false;
+        while endpoints.try_recv_event()?.is_some() {
+            saw_any = true;
+        }
+        while endpoints.try_recv_acl()?.is_some() {
+            saw_any = true;
+        }
+        if saw_any {
+            last_seen = std::time::Instant::now();
+        } else if last_seen.elapsed() >= STALE_QUIET {
+            break;
+        }
+    }
+    Ok(())
+}
+
 /// Bidirectional HCI transport to a physical USB Bluetooth dongle, exposing
 /// the same [`pump`](Self::pump) contract as `RootcanalTransport` and
 /// `NetsimTransport` so callers can swap a simulated controller for real
@@ -292,41 +700,46 @@ impl UsbEndpoints for NusbEndpoints {
 pub struct UsbTransport {
     endpoints: Box<dyn UsbEndpoints>,
     acl_reassembler: AclInReassembler,
+    /// The controller's command budget. Real dongles drop commands sent past
+    /// it without complaining — see [`CommandCredits`].
+    credits: CommandCredits,
+    /// Whether `credits` gates outbound commands. See
+    /// [`set_command_flow_control`](Self::set_command_flow_control).
+    flow_control: bool,
 }
 
 impl UsbTransport {
     /// Opens the first USB device whose descriptors identify it as a
     /// Bluetooth HCI controller (Wireless Controller / RF / Bluetooth class).
+    ///
+    /// "First" is [`list_bluetooth_dongles`] order, so it is at least
+    /// repeatable — but with two dongles plugged in it is still a guess.
+    /// [`open_selected`](Self::open_selected) is how you say which one.
     pub fn open_first() -> Result<Self, SimbleError> {
-        let info = list_usb_devices()?
-            .into_iter()
-            .find(|d| {
-                let interfaces: Vec<_> = d
-                    .interfaces()
-                    .map(|i| (i.class(), i.subclass(), i.protocol()))
-                    .collect();
-                is_bluetooth_hci((d.class(), d.subclass(), d.protocol()), &interfaces)
-            })
-            .ok_or_else(|| {
-                SimbleError::Transport(
-                    "no Bluetooth-class USB device found (class E0/01/01 at device or interface level)"
-                        .to_string(),
-                )
-            })?;
-        Self::open_device(&info)
+        Self::open_selected(&UsbSelector::First)
     }
 
     /// Opens the USB device with the given vendor/product ID, for dongles
     /// that hide behind vendor-specific class codes (see also
     /// [`parse_vid_pid`] for the `"vid:pid"` string form).
+    ///
+    /// **Errors if more than one device carries that pair**, listing them —
+    /// two dongles of the same model are indistinguishable by ID, and
+    /// quietly taking the first is how a two-radio test ends up talking to
+    /// one radio twice.
     pub fn open(vid: u16, pid: u16) -> Result<Self, SimbleError> {
-        let info = list_usb_devices()?
-            .into_iter()
-            .find(|d| d.vendor_id() == vid && d.product_id() == pid)
-            .ok_or_else(|| {
-                SimbleError::Transport(format!("USB device {vid:04x}:{pid:04x} not found"))
-            })?;
-        Self::open_device(&info)
+        Self::open_selected(&UsbSelector::VidPid(vid, pid))
+    }
+
+    /// Opens the one dongle `selector` names, or fails saying what else it
+    /// could have meant. See [`UsbSelector`] for the forms and their
+    /// trade-offs.
+    pub fn open_selected(selector: &UsbSelector) -> Result<Self, SimbleError> {
+        let infos = list_usb_devices()?;
+        let all: Vec<UsbDongle> = infos.iter().map(dongle_from_info).collect();
+        let bluetooth = bluetooth_order(&infos, &all);
+        let chosen = resolve_selection(selector, &all, &bluetooth)?;
+        Self::open_device(&infos[chosen])
     }
 
     fn open_device(info: &nusb::DeviceInfo) -> Result<Self, SimbleError> {
@@ -394,31 +807,94 @@ impl UsbTransport {
         let claim = |what: &str, e: nusb::Error| {
             SimbleError::Transport(format!("claiming {what} endpoint failed: {e}"))
         };
-        let event_in = interface
+        let mut event_in = interface
             .endpoint::<Interrupt, In>(addresses.event_in)
             .map_err(|e| claim("interrupt IN", e))?;
-        let acl_in = interface
+        let mut acl_in = interface
             .endpoint::<Bulk, In>(addresses.acl_in)
             .map_err(|e| claim("bulk IN", e))?;
-        let acl_out = interface
+        let mut acl_out = interface
             .endpoint::<Bulk, Out>(addresses.acl_out)
             .map_err(|e| claim("bulk OUT", e))?;
 
-        Ok(Self::with_endpoints(Box::new(NusbEndpoints {
+        // Clear each endpoint's halt before the first transfer, which also
+        // resets the data toggle on both ends.
+        //
+        // This is not defensive tidying — without it the *second* open of a
+        // dongle in one session is deaf. A USB endpoint's DATA0/DATA1 toggle
+        // is state the device keeps; the host resets its own to DATA0 on
+        // claiming, and the dongle, never having been told anything happened,
+        // carries on from wherever the previous session left it. Half the
+        // time the two disagree and every event the controller sends is
+        // dropped by the host controller as a retransmission. The symptom is
+        // a dongle that enumerates, claims, and accepts commands, and answers
+        // exactly nothing — with no error anywhere, because at the USB level
+        // nothing went wrong. Two dongles being opened and closed by
+        // successive tests is what makes this reachable at all; a demo that
+        // opens one dongle once never sees it.
+        //
+        // Safe on a healthy endpoint: CLEAR_FEATURE(ENDPOINT_HALT) on an
+        // unhalted endpoint is defined as a no-op (USB 2.0, Section 9.4.1).
+        // Must happen before any transfer is submitted, which is why it is
+        // here and not in `NusbEndpoints`.
+        let unhalt = |what: &str, e: nusb::Error| {
+            SimbleError::Transport(format!(
+                "clearing the halt on the {what} endpoint of {vid:04x}:{pid:04x} failed: {e}"
+            ))
+        };
+        event_in
+            .clear_halt()
+            .wait()
+            .map_err(|e| unhalt("interrupt IN", e))?;
+        acl_in
+            .clear_halt()
+            .wait()
+            .map_err(|e| unhalt("bulk IN", e))?;
+        acl_out
+            .clear_halt()
+            .wait()
+            .map_err(|e| unhalt("bulk OUT", e))?;
+
+        let mut endpoints = NusbEndpoints {
             interface,
             event_in,
             acl_in,
             acl_out,
             event_transfer_len,
             acl_transfer_len,
-        })))
+        };
+        discard_stale_traffic(&mut endpoints)?;
+        Ok(Self::with_endpoints(Box::new(endpoints)))
     }
 
     fn with_endpoints(endpoints: Box<dyn UsbEndpoints>) -> Self {
         Self {
             endpoints,
             acl_reassembler: AclInReassembler::default(),
+            credits: CommandCredits::new(),
+            flow_control: true,
         }
+    }
+
+    /// The controller's remaining command budget and how many commands are
+    /// waiting on it — for a caller that wants to report "the dongle stopped
+    /// answering" rather than hang. See [`CommandCredits`].
+    pub fn command_backlog(&self) -> (u8, usize) {
+        (self.credits.credits(), self.credits.queued())
+    }
+
+    /// Turns HCI command flow control off, restoring the pre-[`CommandCredits`]
+    /// behaviour: commands go out the instant they are queued, budget or no
+    /// budget.
+    ///
+    /// **This is a bug switch, and it exists to be demonstrated.** A dongle
+    /// does not reject commands past its budget, it discards them, so nothing
+    /// in a log says what went wrong. The only way to show the difference is
+    /// to run the same burst both ways against the same silicon, which is
+    /// what `tests/usb_hardware_test.rs` does. No production caller should
+    /// touch this.
+    pub fn set_command_flow_control(&mut self, enabled: bool) {
+        self.flow_control = enabled;
     }
 
     /// Moves packets in both directions between the dongle and `channel`,
@@ -428,12 +904,20 @@ impl UsbTransport {
     /// to bulk OUT; then polls the interrupt and bulk IN endpoints without
     /// blocking, restores the H4 type byte (reassembling fragmented ACL
     /// packets), and hands complete packets to `channel`.
+    ///
+    /// **Commands leave under the controller's own flow control**
+    /// ([`CommandCredits`]), which is the one place this differs from the
+    /// simulated transports. A dongle grants one credit at a time and
+    /// silently drops anything sent past its budget, so a command drained
+    /// from `channel` may sit here for several pumps before it goes out. ACL
+    /// data is not affected — it has its own buffer accounting.
     pub fn pump(&mut self, channel: &super::HciChannel) -> Result<(), SimbleError> {
         while let Some(packet) = channel.poll_host_packet() {
             let Some((&packet_type, payload)) = packet.split_first() else {
                 return Err(SimbleError::Transport("empty H4 packet".to_string()));
             };
             match packet_type {
+                h4_type::HCI_COMMAND if self.flow_control => self.credits.queue(payload.to_vec()),
                 h4_type::HCI_COMMAND => self.endpoints.send_command(payload)?,
                 h4_type::HCI_ACL_DATA => self.endpoints.send_acl(payload)?,
                 // SCO/ISO would need interface 1's isochronous endpoints,
@@ -445,19 +929,33 @@ impl UsbTransport {
                 }
             }
         }
+        self.send_permitted_commands()?;
 
         while let Some(event) = self.endpoints.try_recv_event()? {
+            // Before the event is handed on, not after: the credit it carries
+            // is what releases the next command in the same pump.
+            self.credits.observe_event(&event);
             let mut packet = Vec::with_capacity(1 + event.len());
             packet.push(h4_type::HCI_EVENT);
             packet.extend_from_slice(&event);
             channel.receive_from_controller(packet)?;
         }
+        self.send_permitted_commands()?;
 
         while let Some(chunk) = self.endpoints.try_recv_acl()? {
             self.acl_reassembler.feed(&chunk);
             while let Some(packet) = self.acl_reassembler.next_packet() {
                 channel.receive_from_controller(packet)?;
             }
+        }
+        Ok(())
+    }
+
+    /// Sends as many queued commands as the controller's current budget
+    /// allows.
+    fn send_permitted_commands(&mut self) -> Result<(), SimbleError> {
+        while let Some(command) = self.credits.next_to_send() {
+            self.endpoints.send_command(&command)?;
         }
         Ok(())
     }
@@ -481,16 +979,16 @@ impl UsbTransport {
 /// this backend works (and is testable) on a machine with no dongle plugged
 /// in; the "is one plugged in" failure surfaces where it means something.
 pub struct UsbScene {
-    /// The `vid:pid` to open, or `None` to take the first Bluetooth-class
-    /// device found.
-    device: Option<(u16, u16)>,
+    /// Which dongle to open, in any of [`UsbSelector`]'s forms.
+    device: UsbSelector,
     scene: crate::transport::live_scene::LiveScene<UsbTransport>,
 }
 
 impl UsbScene {
-    /// Creates an empty dongle-backed scene. `device` is the `vid:pid` pair
-    /// from [`parse_vid_pid`], or `None` to auto-detect.
-    pub fn new(device: Option<(u16, u16)>) -> Self {
+    /// Creates an empty dongle-backed scene. `device` says which dongle;
+    /// [`UsbSelector::First`] auto-detects, which is only unambiguous when
+    /// exactly one is plugged in.
+    pub fn new(device: UsbSelector) -> Self {
         Self {
             device,
             scene: crate::transport::live_scene::LiveScene::new(),
@@ -500,10 +998,7 @@ impl UsbScene {
     /// How the dongle will be chosen, for reporting back to whoever selected
     /// this backend before anything has been opened.
     pub fn selector(&self) -> String {
-        match self.device {
-            Some((vid, pid)) => format!("{vid:04x}:{pid:04x}"),
-            None => "the first Bluetooth-class dongle found".to_string(),
-        }
+        self.device.describe()
     }
 
     /// Runs `script` and puts the resulting peripheral on the dongle, opening
@@ -522,13 +1017,17 @@ impl UsbScene {
                     .to_string(),
             );
         }
-        let device = self.device;
-        self.scene.add_peripheral(address, script, |_peripheral| {
-            match device {
-                Some((vid, pid)) => UsbTransport::open(vid, pid),
-                None => UsbTransport::open_first(),
-            }
-            .map_err(|e| {
+        let device = self.device.clone();
+        self.scene.add_peripheral(address, script, |peripheral| {
+            // A dongle's vintage is unknown and usually old — the CSR8510
+            // clones everyone has are 4.0 parts. The default LE_Event_Mask
+            // sets bits such a controller does not define, and it rejects the
+            // whole command with 0x12 rather than masking off what it does not
+            // know. The failure is silent from the host's side: no LE Meta
+            // Event ever arrives, so the peripheral advertises into the void
+            // and never learns anyone connected.
+            peripheral.set_le_event_mask(crate::device::host::LE_EVENT_MASK_CORE_4_0);
+            UsbTransport::open_selected(&device).map_err(|e| {
                 format!(
                     "{e} — is a Bluetooth dongle plugged in and free? \
                      (the OS Bluetooth stack usually claims the built-in adapter)"

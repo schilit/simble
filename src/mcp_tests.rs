@@ -892,6 +892,50 @@ fn test_run_on_usb_rejects_a_malformed_device_selector() {
     assert!(s.live.is_none(), "no backend selected on a bad selector");
 }
 
+/// `run_on("usb")` answers with the dongles that are plugged in, and every
+/// name each answers to.
+///
+/// An agent cannot choose without a list, and until it has one its only move
+/// is a `vid:pid` — which, with two dongles of one model, names both and is
+/// refused. Whatever this machine has plugged in, the answer must say so:
+/// enumeration reads descriptors only, so it is as safe with none as with two.
+#[test]
+fn test_run_on_usb_lists_the_dongles_that_are_plugged_in() {
+    let mut s = Server::default();
+    let response = call(&mut s, "run_on", json!({"target": "usb"}));
+    assert_eq!(response["result"]["isError"], false, "{response}");
+    let text = response["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("Dongles plugged in")
+            || text.contains("No Bluetooth-class USB dongle is plugged in")
+            || text.contains("could not enumerate"),
+        "run_on(usb) must report what is plugged in: {text}"
+    );
+}
+
+/// Every selector form reaches the backend, and reads back as it was given.
+/// The forms are not interchangeable — an index is not a bus, and `vid:pid`
+/// alone is refused when two dongles carry it — so an agent that names one
+/// must see the same name echoed rather than a normalised guess.
+#[test]
+fn test_run_on_usb_accepts_every_selector_form() {
+    for (spec, expected) in [
+        ("#1", "#1"),
+        ("0a12:0001", "0a12:0001"),
+        ("02/4", "02/4"),
+        ("02.3.4", "02.3.4"),
+    ] {
+        let mut s = Server::default();
+        let response = call(&mut s, "run_on", json!({"target": "usb", "device": spec}));
+        assert_eq!(response["result"]["isError"], false, "{spec}: {response}");
+        let text = response["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains(&format!("usb ({expected})")),
+            "{spec} should read back as {expected}: {text}"
+        );
+    }
+}
+
 #[test]
 fn test_usb_add_peripheral_without_a_dongle_reports_it_as_a_device_error() {
     // A vid:pid that cannot exist, so the outcome is the same whether or

@@ -9,18 +9,30 @@
 //! REQUIRES HARDWARE — this example cannot run (or be tested) without a USB
 //! Bluetooth dongle plugged in. Note that macOS's built-in Broadcom
 //! controller is not USB-accessible; a separate dongle is required. Run with
-//! no arguments to probe for the first Bluetooth-class device, or pass an
-//! explicit `vid:pid` (hex, e.g. `0a12:0001`):
+//! no arguments to take the first Bluetooth-class device, or name one in any
+//! of [`UsbSelector`]'s forms — `cargo run --example usb_list` prints every
+//! name each plugged-in dongle answers to:
 //!
 //! ```sh
-//! cargo run --example usb_hrm [-- vid:pid]
+//! cargo run --example usb_hrm                 # the first one found
+//! cargo run --example usb_hrm -- "#1"         # by index
+//! cargo run --example usb_hrm -- 0a12:0001    # by vid:pid, if unique
+//! cargo run --example usb_hrm -- 02/4         # by bus/address
+//! cargo run --example usb_hrm -- 02.3.4       # by the socket it is in
 //! ```
 
-use simble::transport::{HciChannel, UsbTransport, h4_type, usb::parse_vid_pid};
+use simble::device::host::{EVENT_MASK_ALL, LE_EVENT_MASK_CORE_4_0};
+use simble::transport::usb::UsbSelector;
+use simble::transport::{HciChannel, UsbTransport, h4_type};
 
-/// Builds one HCI command packet. It is *queued*, not sent: a real
-/// controller grants the host a command budget and ignores anything beyond
-/// it, so `main` releases these one at a time (see `credits`).
+/// Builds one HCI command packet.
+///
+/// The packet is *queued*, not sent. A real controller grants the host a
+/// command budget and silently discards anything past it — this dongle
+/// answered `Reset` and dropped the six commands written behind it. Honouring
+/// that budget is the transport's job now
+/// ([`CommandCredits`](simble::transport::CommandCredits)), so this example
+/// queues everything at once and lets `pump` release it.
 fn cmd(opcode: [u8; 2], params: &[u8]) -> Vec<u8> {
     let mut c = vec![opcode[0], opcode[1], params.len() as u8];
     c.extend_from_slice(params);
@@ -78,14 +90,14 @@ fn bd_addr(le_bytes: &[u8]) -> String {
 }
 
 fn main() {
-    let mut transport = match std::env::args().nth(1) {
-        Some(spec) => {
-            let (vid, pid) = parse_vid_pid(&spec).expect("vid:pid argument");
-            UsbTransport::open(vid, pid)
-        }
-        None => UsbTransport::open_first(),
-    }
-    .unwrap_or_else(|e| {
+    let selector = match std::env::args().nth(1) {
+        Some(spec) => UsbSelector::parse(&spec).unwrap_or_else(|e| {
+            eprintln!("{e}");
+            std::process::exit(2);
+        }),
+        None => UsbSelector::First,
+    };
+    let mut transport = UsbTransport::open_selected(&selector).unwrap_or_else(|e| {
         eprintln!("Failed to open a USB Bluetooth dongle: {e}");
         eprintln!();
         eprintln!("Checklist:");
@@ -93,86 +105,69 @@ fn main() {
         eprintln!("    controller is PCIe-attached and NOT usable here.)");
         eprintln!("  - macOS: the dongle must not be claimed by the OS Bluetooth stack.");
         eprintln!("  - Linux: usbfs permissions are needed (udev rule, or run with sudo).");
-        eprintln!("  - Vendor-specific dongles may need explicit selection: pass vid:pid.");
+        eprintln!("  - With two dongles of one model plugged in, a vid:pid names both and");
+        eprintln!("    is refused rather than guessed at. `cargo run --example usb_list`");
+        eprintln!("    prints a name that reaches exactly one of them.");
         std::process::exit(1);
     });
     let channel = HciChannel::new();
 
-    let mut pending: std::collections::VecDeque<Vec<u8>> = std::collections::VecDeque::new();
-    pending.push_back(cmd([0x03, 0x0C], &[])); // Reset
-    // The post-Reset default event mask excludes LE Meta Events (Core Spec
-    // Vol 4 Part E 7.3.1, bit 61) - unmask before anything LE can be seen.
-    //
-    // Not 0xFF x8. Bits 62-63 of Event_Mask are reserved, and this CSR8510
-    // answers a mask with reserved bits set with 0x12, Invalid HCI Command
-    // Parameters -- so the LE unmask silently did not happen and no LE Meta
-    // Event would ever have arrived. simble's own controller accepts any
-    // mask, which is why the all-ones value survived until real hardware saw
-    // it. Bits 0..=61, little-endian on the wire:
-    pending.push_back(cmd(
-        [0x01, 0x0C],
-        &[0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x3F],
-    )); // Set Event Mask
-    // Likewise LE_Event_Mask (7.8.1): a 4.0 controller defines bits 0..=4
-    // (Connection Complete, Advertising Report, Connection Update Complete,
-    // Read Remote Features Complete, Long Term Key Request) and rejects the
-    // rest.
-    pending.push_back(cmd(
-        [0x01, 0x20],
-        &[0x1F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
-    )); // LE Set Event Mask
-    pending.push_back(cmd([0x09, 0x10], &[])); // Read BD_ADDR
-
-    // LE Set Advertising Parameters: interval 100ms both bounds, ADV_IND,
-    // public own address, all channels, no filter.
-    pending.push_back(cmd(
-        [0x06, 0x20],
-        &[
-            0xA0, 0x00, 0xA0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07,
-            0x00,
-        ],
-    ));
-    // LE Set Advertising Data: Flags (LE General Discoverable, no BR/EDR),
-    // Complete List of 16-bit Service UUIDs (0x180D Heart Rate), Complete
-    // Local Name "Simble HRM".
+    // The advertising data payload: Flags (LE General Discoverable, no
+    // BR/EDR), Complete List of 16-bit Service UUIDs (0x180D Heart Rate),
+    // Complete Local Name "Simble HRM".
     let mut ad = vec![0x02, 0x01, 0x06];
     ad.extend_from_slice(&[0x03, 0x03, 0x0D, 0x18]);
     ad.push(1 + b"Simble HRM".len() as u8);
     ad.push(0x09);
     ad.extend_from_slice(b"Simble HRM");
+    // LE Set Advertising Data's parameter is fixed-length: a length byte then
+    // 31 bytes of data, zero-padded.
     let mut ad_param = vec![ad.len() as u8];
     ad_param.extend_from_slice(&ad);
     ad_param.resize(32, 0x00);
-    pending.push_back(cmd([0x08, 0x20], &ad_param));
-    pending.push_back(cmd([0x0A, 0x20], &[0x01])); // LE Set Advertising Enable
 
-    // A controller tells the host how many command packets it may have
-    // outstanding, in every Command Complete and Command Status. Ignoring
-    // that budget is invisible against simble's own controller, which answers
-    // instantly and never drops anything -- and fatal against real hardware:
-    // this dongle answered Reset and silently discarded the six commands sent
-    // behind it. Start at one, spend on send, refill from the answer.
-    let mut credits: u8 = 1;
+    let pending: Vec<Vec<u8>> = vec![
+        cmd([0x03, 0x0C], &[]), // Reset
+        // The post-Reset default event mask excludes LE Meta Events (Core
+        // Spec Vol 4 Part E 7.3.1, bit 61) - unmask before anything LE can be
+        // seen.
+        //
+        // Both masks come from the library and neither is 0xFF x8: bits 62-63
+        // of Event_Mask are reserved, and a 4.0 controller's LE_Event_Mask
+        // stops at bit 4. Setting a bit the controller does not define gets
+        // the whole command rejected with 0x12, Invalid HCI Command
+        // Parameters - which nothing downstream sees, so the mask simply
+        // never applies and no LE Meta Event ever arrives. See
+        // `host::EVENT_MASK_ALL` and `host::LE_EVENT_MASK_CORE_4_0`.
+        cmd([0x01, 0x0C], &EVENT_MASK_ALL), // Set Event Mask
+        cmd([0x01, 0x20], &LE_EVENT_MASK_CORE_4_0), // LE Set Event Mask
+        cmd([0x09, 0x10], &[]),             // Read BD_ADDR
+        // LE Set Advertising Parameters: interval 100ms both bounds, ADV_IND,
+        // public own address, all channels, no filter.
+        cmd(
+            [0x06, 0x20],
+            &[
+                0xA0, 0x00, 0xA0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07,
+                0x00,
+            ],
+        ),
+        cmd([0x08, 0x20], &ad_param), // LE Set Advertising Data
+        cmd([0x0A, 0x20], &[0x01]),   // LE Set Advertising Enable
+    ];
+
+    // All seven go into the channel at once and the transport paces them.
+    // Writing all seven to the dongle instead would have it answer the first
+    // and discard the other six, with no error and nothing in any log.
+    for command in pending {
+        channel.send_command(&command).expect("queue command");
+    }
+
     println!("Advertising as \"Simble HRM\" - scan with nRF Connect. Ctrl-C to stop.");
     loop {
-        while credits > 0 {
-            let Some(next) = pending.pop_front() else {
-                break;
-            };
-            channel.send_command(&next).expect("queue command");
-            credits -= 1;
-        }
         transport.pump(&channel).expect("pump");
         while let Some(p) = channel.poll_controller_packet() {
             match p[0] {
                 h4_type::HCI_EVENT => {
-                    // Num_HCI_Command_Packets: byte 3 of a Command Complete,
-                    // byte 4 of a Command Status.
-                    match p[1] {
-                        0x0E if p.len() >= 4 => credits = p[3],
-                        0x0F if p.len() >= 5 => credits = p[4],
-                        _ => {}
-                    }
                     // Read BD_ADDR's Command Complete carries the address.
                     if p[1] == 0x0E && p.len() >= 13 && p[4..6] == [0x09, 0x10] {
                         println!("controller BD_ADDR: {}", bd_addr(&p[7..13]));

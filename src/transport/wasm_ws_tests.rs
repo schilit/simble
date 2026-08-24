@@ -25,7 +25,12 @@ fn test_scanner_start_queues_reset_masks_params_enable() {
     let opcodes: Vec<u16> = commands.iter().map(|c| opcode_of(c)).collect();
     assert_eq!(opcodes, vec![0x0C03, 0x0C01, 0x2001, 0x200B, 0x200C]);
     // Both event masks fully open (LE Meta Events are masked by default).
-    assert_eq!(&commands[1][4..12], &[0xFF; 8]);
+    // Event_Mask stops at bit 61: 62-63 are reserved and setting them gets
+    // the whole command rejected by real hardware.
+    assert_eq!(
+        &commands[1][4..12],
+        &crate::device::host::EVENT_MASK_ALL[..]
+    );
     assert_eq!(&commands[2][4..12], &[0xFF; 8]);
     // Active scanning (scan-type byte 0x01) so advertisers' scan-response
     // data (names) is solicited via SCAN_REQ, not just passively observed.

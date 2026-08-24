@@ -40,7 +40,7 @@ use zerocopy::IntoBytes;
 use crate::client::gatt_client::{
     DiscoveredCharacteristic, DiscoveredDescriptor, DiscoveredService, GattClient,
 };
-use crate::device::host::{acl_packets, command, init_commands};
+use crate::device::host::{acl_packets, command, init_commands, init_commands_with_masks};
 use crate::l2cap::{AclReassembler, HciAclHeader, L2capHeader};
 use crate::packets::HciEvent;
 use crate::packets::att::opcode as att_op;
@@ -253,6 +253,10 @@ pub struct LeCentral {
     /// real one. (The same field, dropped from LE Connection Complete, broke
     /// every pairing attempt against Android; see `docs/HANDOFF-2026-08-22.md`.)
     peer_address_type: Option<u8>,
+    /// The `LE_Event_Mask` to ask the controller for, or `None` for
+    /// `host::LE_EVENT_MASK_ALL` — see
+    /// [`set_le_event_mask`](Self::set_le_event_mask).
+    le_event_mask: Option<[u8; 8]>,
 }
 
 impl LeCentral {
@@ -269,6 +273,7 @@ impl LeCentral {
             subscribed: BTreeSet::new(),
             events: Vec::new(),
             peer_address_type: None,
+            le_event_mask: None,
         }
     }
 
@@ -302,7 +307,22 @@ impl LeCentral {
         self.client = GattClient::new(0, target);
         self.peer_address_type = address_type;
         self.phase = CentralPhase::Initializing;
-        init_commands()
+        init_commands_with_masks(
+            &crate::device::host::EVENT_MASK_ALL,
+            &self
+                .le_event_mask
+                .unwrap_or(crate::device::host::LE_EVENT_MASK_ALL),
+        )
+    }
+
+    /// Narrows the `LE_Event_Mask` this central's bring-up asks for — see
+    /// [`LeHost::set_le_event_mask`](crate::device::host::LeHost::set_le_event_mask).
+    /// A central needs this more than a peripheral does: with the mask
+    /// refused, `LE Advertising Report` never arrives, so the scan that
+    /// [`connect`](Self::connect) does to learn the peer's address type never
+    /// finishes and the connection is never attempted.
+    pub fn set_le_event_mask(&mut self, mask: [u8; 8]) {
+        self.le_event_mask = Some(mask);
     }
 
     /// Passive scanning, wide open: 10 ms window in a 10 ms interval, no
@@ -677,6 +697,24 @@ impl LeCentral {
         out
     }
 
+    /// Leaves bring-up: connect straight away if the peer's address type is
+    /// already known, otherwise scan until an advertisement reveals it.
+    fn finish_initializing(&mut self, out: &mut Vec<Vec<u8>>) {
+        match self.peer_address_type {
+            Some(_) => {
+                self.phase = CentralPhase::Connecting;
+                out.push(command(
+                    LE_CREATE_CONNECTION,
+                    &self.create_connection_params(),
+                ));
+            }
+            None => {
+                self.phase = CentralPhase::Scanning;
+                out.extend(Self::scan_commands());
+            }
+        }
+    }
+
     fn on_event(&mut self, packet: &[u8], out: &mut Vec<Vec<u8>>) {
         let Some(event) = HciEvent::parse_h4(packet) else {
             return;
@@ -689,19 +727,28 @@ impl LeCentral {
                 if self.phase == CentralPhase::Initializing
                     && header.command_opcode.get() == last_init_opcode() =>
             {
-                match self.peer_address_type {
-                    Some(_) => {
-                        self.phase = CentralPhase::Connecting;
-                        out.push(command(
-                            LE_CREATE_CONNECTION,
-                            &self.create_connection_params(),
-                        ));
-                    }
-                    None => {
-                        self.phase = CentralPhase::Scanning;
-                        out.extend(Self::scan_commands());
-                    }
-                }
+                self.finish_initializing(out);
+            }
+            // ...or when it is *refused*. The last init command is
+            // `LE_Set_Host_Feature`, which arrived in Bluetooth 5.2, and a
+            // controller that has never heard of an opcode answers with a
+            // **Command Status** carrying 0x01, Unknown HCI Command — not a
+            // Command Complete (Vol 4, Part E, Section 7.7.15). Waiting only
+            // for the Complete leaves a 4.0 dongle's central stuck in
+            // bring-up forever, with no error and no event: measured on a
+            // CSR8510, which answers opcode 0x2074 with `0F 04 01 01 74 20`.
+            // Simble's own controller and rootcanal both implement the
+            // command, so nothing in simulation ever takes this path.
+            //
+            // Being refused is a fine outcome here — the command only
+            // declares CIS support, and a controller that does not know it
+            // was never going to carry an isochronous stream.
+            HciEvent::Other { code, parameters }
+                if self.phase == CentralPhase::Initializing
+                    && code == crate::packets::hci_events::event_code::COMMAND_STATUS
+                    && parameters.get(2..4) == Some(&last_init_opcode().to_le_bytes()[..]) =>
+            {
+                self.finish_initializing(out);
             }
             // The advertisement is where the peer's address type comes from.
             HciEvent::Other { code, parameters }
@@ -1131,6 +1178,61 @@ mod tests {
         // H4 type, opcode(2), parameter length, then 25 parameter bytes.
         assert_eq!(out[0][1..3], LE_CREATE_CONNECTION);
         assert_eq!(out[0][3], 25, "LE Create Connection is 25 parameter bytes");
+    }
+
+    /// Bring-up ends when the last init command is *answered*, and "refused"
+    /// is an answer.
+    ///
+    /// That command is `LE_Set_Host_Feature`, which arrived in Bluetooth 5.2.
+    /// A controller that does not know an opcode replies with a **Command
+    /// Status** carrying 0x01, Unknown HCI Command — not a Command Complete
+    /// (Vol 4, Part E, Section 7.7.15). Waiting only for the Complete leaves
+    /// the central in `Initializing` forever, with no error raised anywhere,
+    /// so a scripted client against a real 4.0 dongle simply never connects.
+    ///
+    /// Measured, not inferred: a CSR8510 answers opcode 0x2074 with
+    /// `0F 04 01 01 74 20`. Simble's own controller and rootcanal both
+    /// implement the command, so no simulated test reaches this path.
+    #[test]
+    fn an_unknown_last_init_command_still_finishes_bring_up() {
+        let mut central = LeCentral::new();
+        let target: Address = "AA:BB:CC:00:00:01".parse().unwrap();
+        central.connect_with_type(target, 0x00);
+        assert_eq!(central.phase(), CentralPhase::Initializing);
+
+        // Command Status: status 0x01 (Unknown HCI Command), one credit,
+        // then the opcode it refers to.
+        let opcode = last_init_opcode().to_le_bytes();
+        let refusal = vec![
+            h4_type::HCI_EVENT,
+            0x0F,
+            0x04,
+            0x01,
+            0x01,
+            opcode[0],
+            opcode[1],
+        ];
+        let out = central.on_packet(&refusal);
+
+        assert_eq!(central.phase(), CentralPhase::Connecting);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0][1..3], LE_CREATE_CONNECTION);
+    }
+
+    /// A Command Status for some *other* command is not the end of bring-up.
+    /// The refusal has to name the command being waited for, or an unrelated
+    /// event would let LE Create Connection out before the event masks are
+    /// open — the very thing the wait exists to prevent.
+    #[test]
+    fn a_command_status_for_another_opcode_does_not_end_bring_up() {
+        let mut central = LeCentral::new();
+        let target: Address = "AA:BB:CC:00:00:01".parse().unwrap();
+        central.connect_with_type(target, 0x00);
+
+        let out = central.on_packet(&[h4_type::HCI_EVENT, 0x0F, 0x04, 0x01, 0x01, 0x03, 0x0C]);
+
+        assert!(out.is_empty());
+        assert_eq!(central.phase(), CentralPhase::Initializing);
     }
 
     #[test]

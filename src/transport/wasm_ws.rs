@@ -1147,6 +1147,21 @@ impl ScriptedPeripheral {
     /// `device.address`/`address_type` — so the scene must overwrite them
     /// with the address it actually advertises (public, per the advertising
     /// parameters in [`Self::queue_start`]), or pairing against a real
+    /// Narrows the `LE_Event_Mask` this peripheral's bring-up asks its
+    /// controller for — see
+    /// [`LeHost::set_le_event_mask`](crate::device::host::LeHost::set_le_event_mask).
+    ///
+    /// Only a real controller cares. Simble's own controller and rootcanal
+    /// accept any mask, so a dongle-backed scene is the only caller.
+    pub fn set_le_event_mask(&mut self, mask: [u8; 8]) {
+        self.host.set_le_event_mask(mask);
+    }
+
+    /// Stamps the device's on-air identity. The script engine allocates a
+    /// per-session placeholder address, but SMP pairing computes with
+    /// `device.address`/`address_type` — so the scene must overwrite them
+    /// with the address it actually advertises (public, per the advertising
+    /// parameters in [`Self::queue_start`]), or pairing against a real
     /// stack fails its confirm/DHKey check.
     pub fn set_identity(&mut self, address: Address) {
         self.primary().with_server(|s| {

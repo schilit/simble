@@ -41,6 +41,14 @@ them, which need a live `netsimd`, and which run against Bumble alone.
 | `netsim_smoke`, `netsim_two_devices` | a running `netsimd` |
 | `classic_discoverable` | `netsimd` plus an Android emulator to page it |
 | `usb_hrm` | a real USB Bluetooth dongle |
+| `usb_list` | nothing — it says what dongles are plugged in, and names each |
+
+With two dongles of the same model plugged in, a `vid:pid` names **both** and
+is refused rather than guessed at. `usb_list` prints every selector each one
+answers to: `#0` (index), `0a12:0001` (vid:pid), `02/4` (bus/address), and
+`02.3.4` (the socket it is in — the only form that survives a re-plug).
+`tests/usb_hardware_test.rs` takes two of them, as `SIMBLE_USB_A` and
+`SIMBLE_USB_B`, and runs simble against itself over real RF.
 
 ## Choosing a controller
 

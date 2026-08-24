@@ -23,7 +23,7 @@ pub mod wasm_ws;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod ws;
 
-pub use hci_adapter::{HciChannel, h4_type};
+pub use hci_adapter::{CommandCredits, HciChannel, h4_type};
 
 /// The contract every live HCI transport already meets by convention
 /// (rootcanal, netsim, usb): move packets both ways between the wire and

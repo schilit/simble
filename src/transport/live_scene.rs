@@ -54,11 +54,15 @@ impl<T: HciTransport> LiveScene<T> {
         &mut self,
         address: crate::types::Address,
         script: &str,
-        connect: impl FnOnce(&ScriptedPeripheral) -> Result<T, String>,
+        connect: impl FnOnce(&mut ScriptedPeripheral) -> Result<T, String>,
     ) -> Result<usize, String> {
         let mut peripheral = ScriptedPeripheral::run_script(script)?;
         peripheral.set_identity(address);
-        let transport = connect(&peripheral)?;
+        // `&mut`, not `&`: a backend may have to *configure* the peripheral
+        // for the controller it just opened, not merely read it. The USB
+        // backend narrows the LE event mask here, because the dongle it
+        // found rejects the default one and says so only to itself.
+        let transport = connect(&mut peripheral)?;
         let index = self.devices.len();
         self.devices.push(LiveDevice {
             peripheral: Box::new(peripheral),

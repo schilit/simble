@@ -1563,7 +1563,10 @@ impl ClassicHost {
 
         vec![
             command(opcode::RESET, &[]),
-            command(opcode::SET_EVENT_MASK, &[0xFF; 8]),
+            // Bits 0..=61, not 0xFF x8: bits 62-63 are reserved and a real
+            // controller rejects the whole command for setting them (see
+            // `host::EVENT_MASK_ALL`).
+            command(opcode::SET_EVENT_MASK, &crate::device::host::EVENT_MASK_ALL),
             command(opcode::WRITE_LOCAL_NAME, &name_param),
             command(opcode::WRITE_CLASS_OF_DEVICE, &self.class_of_device),
             command(opcode::WRITE_SIMPLE_PAIRING_MODE, &[0x01]),
