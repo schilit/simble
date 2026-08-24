@@ -139,12 +139,68 @@ the test that says what it is.
 **Not covered:** pairing and encryption (Bumble accepts the link unpaired);
 the **source** direction, since only the sink is exercised here — simble's
 `A2dpSource` has never met a foreign sink; AVRCP, so nothing sends a
-transport key; SDP, because Bumble finds the AVDTP PSM from the profile
+transport key on *this* link (`avrcp_peer.py` covers AVRCP on its own); SDP, because Bumble finds the AVDTP PSM from the profile
 rather than by searching simble's Audio Sink record (the record is published
 and goes unread); and codec fallback — the sink advertises every SBC
 capability, so Bumble never has to negotiate down and the reject path is
 unreached over the air. `tests/a2dp_scene_test.rs` covers that one in
 simulation.
+
+## `avrcp_peer.py`
+
+The **AVRCP** direction, and the only one here that runs **both roles**.
+`examples/avrcp_remote.rs` is either end depending on `AVRCP_ROLE`, so one
+script covers both.
+
+```bash
+cargo build --example avrcp_remote
+.venv/bin/python tests/interop/avrcp_peer.py            # both phases
+.venv/bin/python tests/interop/avrcp_peer.py --phase 1  # bumble CT -> simble TG
+.venv/bin/python tests/interop/avrcp_peer.py --phase 2  # simble CT -> bumble TG
+```
+
+**Phase 1** — Bumble's controller pages simble's target and drives its media
+player. Every assertion is made on *Bumble's* side, out of objects Bumble
+parsed from simble's bytes: the event list from `get_supported_events()`, the
+213 000 ms track length and `PlayStatus.PLAYING` from its
+`SongAndPlayStatus`, the title and artist from `get_element_attributes()`, and
+— the one that ties the two together — the `PlaybackStatusChanged` its
+`monitor_playback_status()` yields as **PAUSED** after it sends a PASS THROUGH
+PAUSE. The simble side asserts the mirror fact, that AV/C operation IDs it
+never constructed arrived, and its exit status is the other half of the
+verdict.
+
+**Phase 2** — simble's controller pages a Bumble AVRCP *target* and sets its
+volume. The fact asserted is foreign state: `delegate.volume` on the Bumble
+side has to become 0x53. Nothing in the simble process can write that field.
+
+`tests/avrcp_foreign_bytes_test.rs` pins the thirteen AVCTP SDUs Bumble sent
+in a passing run, so `cargo test` re-checks the AV/C framing, the AVCTP
+headers and both directions of the PDU layer with no netsim in sight.
+
+**What this does *not* cover, and why:**
+
+- **Fragmentation.** Bumble's `avrcp.Protocol.send_avrcp_response` and its
+  `avctp.Protocol.send_message` both carry a literal `# TODO: fragmentation`,
+  and its controller never sends `RequestContinuingResponse`. So a
+  spec-correct fragmented response from simble would be dropped on Bumble's
+  floor, and Bumble can never produce one to feed simble. The metadata here
+  is deliberately kept inside one AV/C frame.
+  `tests/avrcp_continuation_test.rs` covers the fragmented path in simulation
+  — including the bug this work found: *neither* side modelled it, and the
+  silent half was the **receive** path, where the controller reassembled
+  fragments it had no way to ask for and a metadata read simply never
+  answered.
+- **Most of the target surface, in phase 2.** Bumble's AVRCP target
+  implements exactly three commands — GetCapabilities, SetAbsoluteVolume and
+  RegisterNotification — and answers everything else
+  REJECTED(INVALID_PARAMETER). Simble's `GetPlayStatus` and
+  `GetElementAttributes` therefore have no oracle in that direction. Phase 1
+  covers them the other way round.
+- **The browsing channel** (PSM 0x001B), which simble does not wire at all.
+- **Pairing and encryption** — Bumble accepts the link unpaired.
+- **SDP.** Both ends publish an AVRCP record and neither reads the other's:
+  the AVCTP PSM is fixed by the profile, so nothing has to search for it.
 
 ## `lea_source.py`
 

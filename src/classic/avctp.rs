@@ -25,9 +25,9 @@ use crate::packets::l2cap_signaling::ConnectionRequestHeader;
 use crate::types::SimbleError;
 
 /// Well-known PSM for the AVCTP control channel (Bluetooth Assigned Numbers).
-pub(crate) const AVCTP_PSM: u16 = 0x0017;
+pub const AVCTP_PSM: u16 = 0x0017;
 /// Well-known PSM for the AVCTP browsing channel (Bluetooth Assigned Numbers).
-pub(crate) const AVCTP_BROWSING_PSM: u16 = 0x001B;
+pub const AVCTP_BROWSING_PSM: u16 = 0x001B;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PacketType {
@@ -298,6 +298,17 @@ impl Protocol {
             assembler: MessageAssembler::new(),
             registered_pids: Vec::new(),
         }
+    }
+
+    /// Adopts the MTU the L2CAP channel actually negotiated.
+    ///
+    /// A [`Protocol`] is built before its channel exists — a profile queues
+    /// its first command while the connection request is still in flight — so
+    /// the MTU it started with is a guess. Correcting it once the channel
+    /// opens is the difference between fragmenting at the peer's limit and
+    /// fragmenting at ours.
+    pub fn set_peer_mtu(&mut self, peer_mtu: u16) {
+        self.peer_mtu = peer_mtu;
     }
 
     /// Declares `pid` as served locally, so incoming commands for it are

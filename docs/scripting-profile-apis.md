@@ -193,12 +193,13 @@ handshake (with a new host-gated `ConnectionPending` state, because answering
 a page is the host's decision), but it was never the missing layer.
 
 **What is left for the profile bindings** is now genuinely the binding work.
-The `ProtocolHandler` half is done for two of the four: `device::a2dp`
-(`A2dpSource`/`A2dpSink`) and `device::classic_hid`
-(`ClassicHidHost`/`ClassicHidDevice`) are registered handlers with scenes
-(`SpeakerScene`, `KeyboardScene`) and tests through the simulated BR/EDR
-link. AVRCP and HFP still have protocol implementations in `classic/*` and
-no handler.
+The `ProtocolHandler` half is done for three of the four: `device::a2dp`
+(`A2dpSource`/`A2dpSink`), `device::classic_hid`
+(`ClassicHidHost`/`ClassicHidDevice`) and `device::avrcp`
+(`AvrcpController`/`AvrcpTarget`) are registered handlers with scenes
+(`SpeakerScene`, `KeyboardScene`, `RemoteControlScene`/`MediaPlayerScene`) and
+tests through the simulated BR/EDR link. HFP still has a protocol
+implementation in `classic/hfp.rs` and no handler.
 
 `ProtocolHandler` gained what those two needed: `psms()` so one handler can
 claim Control **and** Interrupt, `on_channel_data(HandlerChannel, ..)` so a
@@ -218,9 +219,34 @@ nothing yet to bind.
 | simble | Rust type | Android proxy |
 |---|---|---|
 | A2DP source / sink | `device::a2dp::A2dpSource` / `A2dpSink` | `BluetoothA2dp` / `BluetoothA2dpSink` |
-| AVRCP controller | — (`classic/avrcp.rs`, no handler) | `BluetoothAvrcpController` |
+| AVRCP controller | `device::avrcp::AvrcpController` | `BluetoothAvrcpController` — see the note below |
+| AVRCP target | `device::avrcp::AvrcpTarget` | — (no proxy; see below) |
 | HFP AG / HF | — (`classic/hfp.rs`, no handler) | `BluetoothHeadset` / `BluetoothHeadsetClient` |
 | Classic HID host / device | `device::classic_hid::ClassicHidHost` / `ClassicHidDevice` | `BluetoothHidHost` / `BluetoothHidDevice` |
+
+**AVRCP is where the correspondence is thinnest, and rule 5 applies twice.**
+
+`BluetoothAvrcpController` is the closest Android has to `AvrcpController`,
+and it is not close. It is the proxy for Android acting as an AVRCP
+*controller* — Android in car-kit mode, paired with a phone that holds the
+player — which is the same role `AvrcpController` plays. But it is
+**deprecated** and its public surface is two methods,
+`getConnectedDevices()` and `getConnectionState()`. There is no
+`play()`, no `pause()`, no `getPlayStatus()`: on Android those live behind
+`MediaController` / `MediaSession`, which is a **media framework** API, not a
+Bluetooth one, and the AVRCP transport underneath it is not addressable from
+an app at all. So a binding named `BluetoothAvrcpController` that exposed
+`play` and `pause` would be inventing exactly the plausible-looking API rule 5
+forbids. Two honest options when the binding is written: keep Android's name
+and expose only what Android exposes, putting the transport keys on a
+`MediaController`-shaped companion; or say in the doc comment that the name is
+borrowed for the *role* and the methods have no Android counterpart.
+
+`AvrcpTarget` has **no Android proxy at all**. Android is the target whenever
+it is the phone streaming A2DP, but it reaches that role through
+`MediaSession` — a media API that happens to be published over Bluetooth by
+the system — and there is no `BluetoothAvrcpTarget` to mirror. The cell is
+empty rather than filled with a guess.
 
 One name needs care, and `src/scripting/hid.rs`'s module doc is the long
 version: **`BluetoothHidHost` is not Classic-only.** Android's proxy spans

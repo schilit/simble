@@ -67,23 +67,23 @@ pub const PLAYBACK_POSITION_UNAVAILABLE: u32 = 0xFFFF_FFFF;
 /// AVRCP PDU IDs (AVRCP spec 4.5, Table 4.5).
 pub mod pdu_id {
     /// `GET_CAPABILITIES` PDU ID (AVRCP spec 4.5, Table 4.5).
-    pub(crate) const GET_CAPABILITIES: u8 = 0x10;
+    pub const GET_CAPABILITIES: u8 = 0x10;
     /// `LIST_PLAYER_APPLICATION_SETTING_ATTRIBUTES` PDU ID (AVRCP spec 4.5, Table 4.5).
-    pub(crate) const LIST_PLAYER_APPLICATION_SETTING_ATTRIBUTES: u8 = 0x11;
+    pub const LIST_PLAYER_APPLICATION_SETTING_ATTRIBUTES: u8 = 0x11;
     /// `LIST_PLAYER_APPLICATION_SETTING_VALUES` PDU ID (AVRCP spec 4.5, Table 4.5).
-    pub(crate) const LIST_PLAYER_APPLICATION_SETTING_VALUES: u8 = 0x12;
+    pub const LIST_PLAYER_APPLICATION_SETTING_VALUES: u8 = 0x12;
     /// `GET_CURRENT_PLAYER_APPLICATION_SETTING_VALUE` PDU ID (AVRCP spec 4.5, Table 4.5).
-    pub(crate) const GET_CURRENT_PLAYER_APPLICATION_SETTING_VALUE: u8 = 0x13;
+    pub const GET_CURRENT_PLAYER_APPLICATION_SETTING_VALUE: u8 = 0x13;
     /// `SET_PLAYER_APPLICATION_SETTING_VALUE` PDU ID (AVRCP spec 4.5, Table 4.5).
-    pub(crate) const SET_PLAYER_APPLICATION_SETTING_VALUE: u8 = 0x14;
+    pub const SET_PLAYER_APPLICATION_SETTING_VALUE: u8 = 0x14;
     /// `GET_PLAYER_APPLICATION_SETTING_ATTRIBUTE_TEXT` PDU ID (AVRCP spec 4.5, Table 4.5).
-    pub(crate) const GET_PLAYER_APPLICATION_SETTING_ATTRIBUTE_TEXT: u8 = 0x15;
+    pub const GET_PLAYER_APPLICATION_SETTING_ATTRIBUTE_TEXT: u8 = 0x15;
     /// `GET_PLAYER_APPLICATION_SETTING_VALUE_TEXT` PDU ID (AVRCP spec 4.5, Table 4.5).
-    pub(crate) const GET_PLAYER_APPLICATION_SETTING_VALUE_TEXT: u8 = 0x16;
+    pub const GET_PLAYER_APPLICATION_SETTING_VALUE_TEXT: u8 = 0x16;
     /// `INFORM_DISPLAYABLE_CHARACTER_SET` PDU ID (AVRCP spec 4.5, Table 4.5).
-    pub(crate) const INFORM_DISPLAYABLE_CHARACTER_SET: u8 = 0x17;
+    pub const INFORM_DISPLAYABLE_CHARACTER_SET: u8 = 0x17;
     /// `INFORM_BATTERY_STATUS_OF_CT` PDU ID (AVRCP spec 4.5, Table 4.5).
-    pub(crate) const INFORM_BATTERY_STATUS_OF_CT: u8 = 0x18;
+    pub const INFORM_BATTERY_STATUS_OF_CT: u8 = 0x18;
     /// `GET_ELEMENT_ATTRIBUTES` PDU ID (AVRCP spec 4.5, Table 4.5).
     pub const GET_ELEMENT_ATTRIBUTES: u8 = 0x20;
     /// `GET_PLAY_STATUS` PDU ID (AVRCP spec 4.5, Table 4.5).
@@ -95,25 +95,25 @@ pub mod pdu_id {
     /// `ABORT_CONTINUING_RESPONSE` PDU ID (AVRCP spec 4.5, Table 4.5).
     pub const ABORT_CONTINUING_RESPONSE: u8 = 0x41;
     /// `SET_ABSOLUTE_VOLUME` PDU ID (AVRCP spec 4.5, Table 4.5).
-    pub(crate) const SET_ABSOLUTE_VOLUME: u8 = 0x50;
+    pub const SET_ABSOLUTE_VOLUME: u8 = 0x50;
     /// `SET_ADDRESSED_PLAYER` PDU ID (AVRCP spec 4.5, Table 4.5).
-    pub(crate) const SET_ADDRESSED_PLAYER: u8 = 0x60;
+    pub const SET_ADDRESSED_PLAYER: u8 = 0x60;
     /// `SET_BROWSED_PLAYER` PDU ID (AVRCP spec 4.5, Table 4.5).
-    pub(crate) const SET_BROWSED_PLAYER: u8 = 0x70;
+    pub const SET_BROWSED_PLAYER: u8 = 0x70;
     /// `GET_FOLDER_ITEMS` PDU ID (AVRCP spec 4.5, Table 4.5).
-    pub(crate) const GET_FOLDER_ITEMS: u8 = 0x71;
+    pub const GET_FOLDER_ITEMS: u8 = 0x71;
     /// `CHANGE_PATH` PDU ID (AVRCP spec 4.5, Table 4.5).
-    pub(crate) const CHANGE_PATH: u8 = 0x72;
+    pub const CHANGE_PATH: u8 = 0x72;
     /// `GET_ITEM_ATTRIBUTES` PDU ID (AVRCP spec 4.5, Table 4.5).
-    pub(crate) const GET_ITEM_ATTRIBUTES: u8 = 0x73;
+    pub const GET_ITEM_ATTRIBUTES: u8 = 0x73;
     /// `PLAY_ITEM` PDU ID (AVRCP spec 4.5, Table 4.5).
-    pub(crate) const PLAY_ITEM: u8 = 0x74;
+    pub const PLAY_ITEM: u8 = 0x74;
     /// `GET_TOTAL_NUMBER_OF_ITEMS` PDU ID (AVRCP spec 4.5, Table 4.5).
-    pub(crate) const GET_TOTAL_NUMBER_OF_ITEMS: u8 = 0x75;
+    pub const GET_TOTAL_NUMBER_OF_ITEMS: u8 = 0x75;
     /// `SEARCH` PDU ID (AVRCP spec 4.5, Table 4.5).
-    pub(crate) const SEARCH: u8 = 0x80;
+    pub const SEARCH: u8 = 0x80;
     /// `ADD_TO_NOW_PLAYING` PDU ID (AVRCP spec 4.5, Table 4.5).
-    pub(crate) const ADD_TO_NOW_PLAYING: u8 = 0x90;
+    pub const ADD_TO_NOW_PLAYING: u8 = 0x90;
 }
 
 /// GetCapabilities capability IDs (AVRCP spec 6.4.1).
@@ -157,9 +157,9 @@ pub mod event_id {
 /// Status codes for REJECTED responses (AVRCP spec 6.15.3, Table 6.49).
 pub mod status_code {
     /// `INVALID_COMMAND` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
-    pub(crate) const INVALID_COMMAND: u8 = 0x00;
+    pub const INVALID_COMMAND: u8 = 0x00;
     /// `INVALID_PARAMETER` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
-    pub(crate) const INVALID_PARAMETER: u8 = 0x01;
+    pub const INVALID_PARAMETER: u8 = 0x01;
     /// `PARAMETER_CONTENT_ERROR` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
     pub const PARAMETER_CONTENT_ERROR: u8 = 0x02;
     /// `INTERNAL_ERROR` REJECTED status code (AVRCP spec 6.15.3, Table 6.49).
@@ -1034,6 +1034,20 @@ pub enum Command {
     },
     /// `GetPlayStatus` command PDU (AVRCP spec 6).
     GetPlayStatus,
+    /// `RequestContinuingResponse` command PDU (AVRCP spec 6.8.1): "send me
+    /// the next fragment of the response to `continuing_pdu_id`".
+    RequestContinuingResponse {
+        /// The PDU ID of the *original* command whose response is being
+        /// continued — not this command's own 0x40.
+        continuing_pdu_id: u8,
+    },
+    /// `AbortContinuingResponse` command PDU (AVRCP spec 6.8.2): "throw away
+    /// the rest of the response to `continuing_pdu_id`, I have stopped
+    /// listening".
+    AbortContinuingResponse {
+        /// The PDU ID of the original command whose response is abandoned.
+        continuing_pdu_id: u8,
+    },
     /// `RegisterNotification` command PDU (AVRCP spec 6).
     RegisterNotification {
         /// Event id.
@@ -1147,6 +1161,8 @@ impl Command {
             Command::InformBatteryStatusOfCt { .. } => id::INFORM_BATTERY_STATUS_OF_CT,
             Command::GetElementAttributes { .. } => id::GET_ELEMENT_ATTRIBUTES,
             Command::GetPlayStatus => id::GET_PLAY_STATUS,
+            Command::RequestContinuingResponse { .. } => id::REQUEST_CONTINUING_RESPONSE,
+            Command::AbortContinuingResponse { .. } => id::ABORT_CONTINUING_RESPONSE,
             Command::RegisterNotification { .. } => id::REGISTER_NOTIFICATION,
             Command::SetAbsoluteVolume { .. } => id::SET_ABSOLUTE_VOLUME,
             Command::SetAddressedPlayer { .. } => id::SET_ADDRESSED_PLAYER,
@@ -1191,6 +1207,10 @@ impl Command {
                 }
             }
             Command::InformBatteryStatusOfCt { battery_status } => out.push(*battery_status),
+            Command::RequestContinuingResponse { continuing_pdu_id }
+            | Command::AbortContinuingResponse { continuing_pdu_id } => {
+                out.push(*continuing_pdu_id);
+            }
             Command::GetElementAttributes {
                 identifier,
                 attribute_ids,
@@ -1317,6 +1337,12 @@ impl Command {
                 attribute_ids: read_u32_list(&mut r)?,
             }),
             id::GET_PLAY_STATUS => Some(Command::GetPlayStatus),
+            id::REQUEST_CONTINUING_RESPONSE => Some(Command::RequestContinuingResponse {
+                continuing_pdu_id: r.u8()?,
+            }),
+            id::ABORT_CONTINUING_RESPONSE => Some(Command::AbortContinuingResponse {
+                continuing_pdu_id: r.u8()?,
+            }),
             id::REGISTER_NOTIFICATION => Some(Command::RegisterNotification {
                 event_id: r.u8()?,
                 playback_interval: r.u32()?,
@@ -1426,6 +1452,10 @@ pub enum Response {
         /// Play status.
         play_status: u8,
     },
+    /// `AbortContinuingResponse` response PDU (AVRCP spec 6.8.2): the target
+    /// confirms it has dropped the rest of a fragmented response. Carries no
+    /// parameters — the ACCEPTED response code is the whole answer.
+    AbortContinuingResponse,
     /// `RegisterNotification` response PDU (AVRCP spec 6).
     RegisterNotification {
         /// Event.
@@ -1533,6 +1563,7 @@ impl Response {
             Response::InformBatteryStatusOfCt => id::INFORM_BATTERY_STATUS_OF_CT,
             Response::GetElementAttributes { .. } => id::GET_ELEMENT_ATTRIBUTES,
             Response::GetPlayStatus { .. } => id::GET_PLAY_STATUS,
+            Response::AbortContinuingResponse => id::ABORT_CONTINUING_RESPONSE,
             Response::RegisterNotification { .. } => id::REGISTER_NOTIFICATION,
             Response::SetAbsoluteVolume { .. } => id::SET_ABSOLUTE_VOLUME,
             Response::SetAddressedPlayer { .. } => id::SET_ADDRESSED_PLAYER,
@@ -1553,7 +1584,8 @@ impl Response {
         match self {
             Response::SetPlayerApplicationSettingValue
             | Response::InformDisplayableCharacterSet
-            | Response::InformBatteryStatusOfCt => {}
+            | Response::InformBatteryStatusOfCt
+            | Response::AbortContinuingResponse => {}
             Response::GetCapabilities { capabilities } => {
                 out.push(capabilities.capability_id());
                 match capabilities {
@@ -1702,6 +1734,7 @@ impl Response {
             }
             id::INFORM_DISPLAYABLE_CHARACTER_SET => Some(Response::InformDisplayableCharacterSet),
             id::INFORM_BATTERY_STATUS_OF_CT => Some(Response::InformBatteryStatusOfCt),
+            id::ABORT_CONTINUING_RESPONSE => Some(Response::AbortContinuingResponse),
             id::GET_ELEMENT_ATTRIBUTES => Some(Response::GetElementAttributes {
                 attributes: read_media_attribute_list(&mut r)?,
             }),
@@ -1830,7 +1863,7 @@ pub enum Event {
 
 impl Event {
     /// The notification event ID (see [`event_id`]) for this event.
-    pub(crate) fn event_id(&self) -> u8 {
+    pub fn event_id(&self) -> u8 {
         match self {
             Event::PlaybackStatusChanged { .. } => event_id::PLAYBACK_STATUS_CHANGED,
             Event::TrackChanged { .. } => event_id::TRACK_CHANGED,
@@ -1926,9 +1959,13 @@ const PDU_END: u8 = 0b11;
 
 /// Serializes one AVRCP PDU (header + parameters), splitting the parameters
 /// into start/continue/end packets when they exceed `max_parameter_size`
-/// (AVRCP spec 6.3.1; the peer pulls continuations with
-/// RequestContinuingResponse, which Simble's send path does not model, so
-/// production sends use a single packet).
+/// (AVRCP spec 6.3.1).
+///
+/// Only the **first** packet is sent when the response is built; the peer
+/// pulls each of the rest with a `RequestContinuingResponse` command, which
+/// [`Protocol`] answers from the fragments it held back. Fragmenting without
+/// that machinery would be worse than not fragmenting at all: the controller
+/// would sit on a START packet waiting for a CONTINUE that never comes.
 pub fn write_pdu(pdu_id: u8, parameters: &[u8], max_parameter_size: usize) -> Vec<Vec<u8>> {
     let max_parameter_size = max_parameter_size.max(1);
     let chunks: Vec<&[u8]> = if parameters.is_empty() {
@@ -1967,6 +2004,15 @@ impl PduAssembler {
     /// Creates an empty assembler with no PDU in progress.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Whether a fragmented PDU is part-assembled and waiting for more.
+    ///
+    /// [`Self::on_pdu`] returns `None` both for "not finished" and for "that
+    /// packet was rubbish and I threw everything away"; a controller deciding
+    /// whether to ask for a continuation must tell those apart.
+    pub fn in_progress(&self) -> bool {
+        self.pdu_id.is_some()
     }
 
     /// Discards any partially reassembled PDU.
@@ -2145,6 +2191,38 @@ enum Pending {
     },
 }
 
+/// The tail of a response too big for one AV/C frame, held until the
+/// controller asks for it (AVRCP spec 6.8.1).
+///
+/// A target that sent every fragment unprompted would overrun a controller
+/// that is only permitted one outstanding transaction per label; a target
+/// that sent only the first and kept nothing would leave the controller
+/// waiting forever. Both are failures nothing on the wire distinguishes from
+/// a slow peer, which is why the fragments live here rather than being
+/// regenerated on demand from state that may have moved on.
+#[derive(Debug, Clone)]
+struct Continuation {
+    /// The PDU ID of the response being fragmented — the *original* command's
+    /// (0x20 for GetElementAttributes), never 0x40.
+    pdu_id: u8,
+    /// The AV/C response code every fragment carries, fixed by the first.
+    response_code: ResponseCode,
+    /// Fragments not yet sent, in order, each a complete AVRCP PDU.
+    remaining: std::collections::VecDeque<Vec<u8>>,
+}
+
+/// L2CAP/AVCTP/AV/C overhead in front of an AVRCP PDU's parameters: 3 bytes
+/// of AVCTP single-packet header (header byte plus the 16-bit PID), 3 bytes
+/// of AV/C frame header (ctype-or-response, subunit, opcode), 3 bytes of
+/// vendor company ID, and the 4-byte AVRCP PDU header.
+const AVRCP_PDU_OVERHEAD: usize = 3 + 3 + 3 + 4;
+
+/// The largest AV/C frame AVRCP permits on the control channel (AVRCP spec
+/// 4.4.1), which is also the L2CAP MTU an AVRCP control channel must accept.
+/// A target that fragmented at a larger size would produce frames a
+/// conforming controller is entitled to drop.
+const AVRCP_MAXIMUM_FRAME_SIZE: usize = 512;
+
 /// The AVRCP state machine for one connection, covering both roles. Target
 /// behavior is driven by the public media-player state fields; controller
 /// behavior by the command builder methods. Synchronous: [`Protocol::receive`]
@@ -2183,14 +2261,34 @@ pub struct Protocol {
     pub key_event_response: ResponseCode,
 
     avctp: avctp::Protocol,
-    command_assembler: PduAssembler,
-    command_state: Option<(u8, CommandType)>,
-    response_assembler: PduAssembler,
-    response_state: Option<(u8, ResponseCode)>,
+    /// The negotiated L2CAP MTU, kept here as well as in `avctp` because the
+    /// AVRCP layer — not the transport — decides where a response is cut.
+    peer_mtu: u16,
+    /// Part-assembled inbound commands, **keyed by transaction label**, with
+    /// the AV/C command type the first fragment carried.
+    ///
+    /// One assembler for the whole connection was wrong: AVRCP transactions
+    /// interleave. A CHANGED notification is unsolicited by definition and
+    /// arrives on its own label, so a single assembler would discard a
+    /// half-read metadata response the moment the track changed — the exact
+    /// pair of things that happen together. The label is 4 bits, so this map
+    /// holds at most sixteen entries however badly a peer behaves.
+    command_assemblers: HashMap<u8, (CommandType, PduAssembler)>,
+    /// Part-assembled inbound responses; see [`Self::command_assemblers`].
+    response_assemblers: HashMap<u8, (ResponseCode, PduAssembler)>,
     pending: HashMap<u8, Pending>,
     next_transaction: u8,
     /// Registered notification listeners: event ID -> transaction label.
     notification_listeners: HashMap<u8, u8>,
+    /// The unsent tail of a fragmented response, as the target role.
+    /// At most one is outstanding: AVRCP 6.8.1 gives the continuation
+    /// command only a PDU ID to name it by, so a second fragmented response
+    /// in flight would be unaddressable.
+    continuation: Option<Continuation>,
+    /// Fragmented responses this end continued automatically as the
+    /// controller role, counted so a test can prove the round-trip happened
+    /// rather than inferring it from a payload that arrived whole.
+    continuations_requested: u32,
 }
 
 impl Protocol {
@@ -2214,14 +2312,81 @@ impl Protocol {
             element_attributes: Vec::new(),
             key_event_response: ResponseCode::Accepted,
             avctp,
-            command_assembler: PduAssembler::new(),
-            command_state: None,
-            response_assembler: PduAssembler::new(),
-            response_state: None,
+            peer_mtu,
+            command_assemblers: HashMap::new(),
+            response_assemblers: HashMap::new(),
             pending: HashMap::new(),
             next_transaction: 0,
             notification_listeners: HashMap::new(),
+            continuation: None,
+            continuations_requested: 0,
         }
+    }
+
+    /// Sets the current track's length in milliseconds, served in
+    /// `GetPlayStatus` and in the PLAYING_TIME media attribute.
+    pub fn set_song_length(&mut self, milliseconds: u32) {
+        self.song_length = milliseconds;
+    }
+
+    /// The current track's length in milliseconds.
+    pub fn song_length(&self) -> u32 {
+        self.song_length
+    }
+
+    /// Sets how far into the track playback has got, in milliseconds.
+    pub fn set_song_position(&mut self, milliseconds: u32) {
+        self.song_position = milliseconds;
+    }
+
+    /// How far into the track playback has got, in milliseconds.
+    pub fn song_position(&self) -> u32 {
+        self.song_position
+    }
+
+    /// Sets the UID served in TrackChanged notifications;
+    /// [`NO_TRACK_UID`] means nothing is selected.
+    pub fn set_current_track_uid(&mut self, uid: u64) {
+        self.current_track_uid = uid;
+    }
+
+    /// The UID of the track being played.
+    pub fn current_track_uid(&self) -> u64 {
+        self.current_track_uid
+    }
+
+    /// Adopts the MTU the L2CAP control channel negotiated; see
+    /// [`avctp::Protocol::set_peer_mtu`].
+    pub fn set_peer_mtu(&mut self, peer_mtu: u16) {
+        self.peer_mtu = peer_mtu;
+        self.avctp.set_peer_mtu(peer_mtu);
+    }
+
+    /// The largest AVRCP parameter block that fits in one AV/C frame on this
+    /// connection. Anything longer is fragmented and pulled across with
+    /// `RequestContinuingResponse`.
+    pub fn maximum_parameter_size(&self) -> usize {
+        usize::from(self.peer_mtu)
+            .min(AVRCP_MAXIMUM_FRAME_SIZE)
+            .saturating_sub(AVRCP_PDU_OVERHEAD)
+            .max(1)
+    }
+
+    /// How many `RequestContinuingResponse` commands this end has sent to
+    /// pull the tail of a fragmented response.
+    ///
+    /// Zero after a `GetElementAttributes` that returned real metadata means
+    /// the answer arrived in one packet — which is a *fact about the peer's
+    /// track*, not proof that continuation works. A test that wants to prove
+    /// it must make the answer too big first.
+    pub fn continuations_requested(&self) -> u32 {
+        self.continuations_requested
+    }
+
+    /// Whether the target role is holding back the tail of a response,
+    /// waiting for the controller to ask for it.
+    pub fn has_pending_continuation(&self) -> bool {
+        self.continuation.is_some()
     }
 
     // -- Controller (CT) command builders -----------------------------------
@@ -2264,7 +2429,12 @@ impl Protocol {
     }
 
     /// Sends any AVRCP command PDU with the given AV/C command type.
-    pub(crate) fn send_avrcp_command(
+    ///
+    /// The named builders below cover the commands a controller sends in
+    /// normal operation; this is the way to send one they do not, including
+    /// the continuation commands of AVRCP 6.8, which [`Self::receive`] issues
+    /// on its own but a test may want to send by hand.
+    pub fn send_avrcp_command(
         &mut self,
         ctype: CommandType,
         command: &Command,
@@ -2509,7 +2679,7 @@ impl Protocol {
                     transaction_label,
                     pid: _,
                     payload,
-                } => self.on_response(transaction_label, &payload, &mut events),
+                } => self.on_response(transaction_label, &payload, &mut outgoing, &mut events),
                 AvctpEvent::InvalidPid {
                     transaction_label,
                     pid,
@@ -2523,6 +2693,8 @@ impl Protocol {
         (outgoing, events)
     }
 
+    /// Sends one AVRCP response, fragmenting it if the parameters do not fit
+    /// in an AV/C frame and holding the tail for `RequestContinuingResponse`.
     fn avrcp_response(
         &mut self,
         transaction_label: u8,
@@ -2530,9 +2702,42 @@ impl Protocol {
         pdu_id: u8,
         parameters: &[u8],
     ) -> Vec<Vec<u8>> {
-        let mut pdu = vec![pdu_id, PDU_SINGLE];
-        pdu.extend_from_slice(&(parameters.len() as u16).to_be_bytes());
-        pdu.extend_from_slice(parameters);
+        let mut fragments = write_pdu(pdu_id, parameters, self.maximum_parameter_size());
+        let first = if fragments.len() > 1 {
+            let rest = fragments.split_off(1);
+            self.continuation = Some(Continuation {
+                pdu_id,
+                response_code,
+                remaining: rest.into(),
+            });
+            fragments.remove(0)
+        } else {
+            // A *new* answer to the same PDU supersedes any tail the peer
+            // never collected, and only that: a CHANGED notification landing
+            // between a START fragment and the controller's continuation
+            // request must not throw the rest of the metadata away.
+            if self
+                .continuation
+                .as_ref()
+                .is_some_and(|c| c.pdu_id == pdu_id)
+            {
+                self.continuation = None;
+            }
+            fragments
+                .pop()
+                .unwrap_or_else(|| vec![pdu_id, PDU_SINGLE, 0, 0])
+        };
+        self.wrap_response_pdu(transaction_label, response_code, first)
+    }
+
+    /// Wraps one already-framed AVRCP PDU in an AV/C vendor-dependent
+    /// response and hands it to AVCTP.
+    fn wrap_response_pdu(
+        &mut self,
+        transaction_label: u8,
+        response_code: ResponseCode,
+        pdu: Vec<u8>,
+    ) -> Vec<Vec<u8>> {
         let frame = ResponseFrame::vendor_dependent(
             response_code,
             avc::subunit_type::PANEL,
@@ -2600,20 +2805,31 @@ impl Protocol {
             {
                 return;
             }
-            match self.command_state {
-                Some((label, ctype)) if label != transaction_label || ctype != command.ctype => {
-                    // A different PDU interleaved mid-reassembly.
-                    self.command_assembler.reset();
-                    self.command_state = None;
-                    return;
-                }
-                _ => self.command_state = Some((transaction_label, command.ctype)),
+            let entry = self
+                .command_assemblers
+                .entry(transaction_label)
+                .or_insert_with(|| (command.ctype, PduAssembler::new()));
+            if entry.0 != command.ctype {
+                // The *same* transaction changing command type mid-message is
+                // a peer that has lost track of its own conversation; drop
+                // what was assembled rather than splicing two commands.
+                self.command_assemblers.remove(&transaction_label);
+                return;
             }
-            if let Some((pdu_id, parameters)) = self.command_assembler.on_pdu(&vendor.data) {
-                let Some((label, ctype)) = self.command_state.take() else {
-                    return;
-                };
-                self.dispatch_command(label, ctype, pdu_id, &parameters, outgoing, events);
+            let complete = entry.1.on_pdu(&vendor.data);
+            let ctype = entry.0;
+            if !entry.1.in_progress() {
+                self.command_assemblers.remove(&transaction_label);
+            }
+            if let Some((pdu_id, parameters)) = complete {
+                self.dispatch_command(
+                    transaction_label,
+                    ctype,
+                    pdu_id,
+                    &parameters,
+                    outgoing,
+                    events,
+                );
             }
             return;
         }
@@ -2670,6 +2886,34 @@ impl Protocol {
             return;
         };
         match command {
+            Command::RequestContinuingResponse { continuing_pdu_id } => {
+                outgoing.extend(self.continue_response(transaction_label, continuing_pdu_id));
+            }
+            Command::AbortContinuingResponse { continuing_pdu_id } => {
+                let held = self
+                    .continuation
+                    .as_ref()
+                    .is_some_and(|c| c.pdu_id == continuing_pdu_id);
+                if held {
+                    self.continuation = None;
+                    outgoing.extend(self.avrcp_response(
+                        transaction_label,
+                        ResponseCode::Accepted,
+                        pdu_id::ABORT_CONTINUING_RESPONSE,
+                        &[],
+                    ));
+                } else {
+                    // Nothing to abort. AVRCP 6.8.2 makes this an error
+                    // rather than a no-op, because a controller aborting a
+                    // response the target never held has lost track of the
+                    // conversation and needs to know.
+                    outgoing.extend(self.rejected_response(
+                        transaction_label,
+                        pdu_id::ABORT_CONTINUING_RESPONSE,
+                        status_code::INVALID_PARAMETER,
+                    ));
+                }
+            }
             Command::GetCapabilities { capability_id } => {
                 let response = match capability_id {
                     capability_id::EVENTS_SUPPORTED => Some(Response::GetCapabilities {
@@ -2817,6 +3061,42 @@ impl Protocol {
         }
     }
 
+    /// Answers a `RequestContinuingResponse` with the next held fragment.
+    ///
+    /// The reply carries the **original** PDU ID and the original response
+    /// code, not this command's 0x40 and not a fresh code: a controller
+    /// reassembles by PDU ID, and a fragment labelled 0x40 would be a
+    /// different PDU as far as its assembler is concerned.
+    fn continue_response(&mut self, transaction_label: u8, continuing_pdu_id: u8) -> Vec<Vec<u8>> {
+        let Some(continuation) = self.continuation.as_mut() else {
+            return self.rejected_response(
+                transaction_label,
+                pdu_id::REQUEST_CONTINUING_RESPONSE,
+                status_code::INVALID_PARAMETER,
+            );
+        };
+        if continuation.pdu_id != continuing_pdu_id {
+            return self.rejected_response(
+                transaction_label,
+                pdu_id::REQUEST_CONTINUING_RESPONSE,
+                status_code::INVALID_PARAMETER,
+            );
+        }
+        let Some(fragment) = continuation.remaining.pop_front() else {
+            self.continuation = None;
+            return self.rejected_response(
+                transaction_label,
+                pdu_id::REQUEST_CONTINUING_RESPONSE,
+                status_code::INVALID_PARAMETER,
+            );
+        };
+        let response_code = continuation.response_code;
+        if continuation.remaining.is_empty() {
+            self.continuation = None;
+        }
+        self.wrap_response_pdu(transaction_label, response_code, fragment)
+    }
+
     fn stable_response(&mut self, transaction_label: u8, response: &Response) -> Vec<Vec<u8>> {
         self.avrcp_response(
             transaction_label,
@@ -2883,7 +3163,13 @@ impl Protocol {
         events.push(AvrcpEvent::NotificationRegistered { event_id });
     }
 
-    fn on_response(&mut self, transaction_label: u8, payload: &[u8], events: &mut Vec<AvrcpEvent>) {
+    fn on_response(
+        &mut self,
+        transaction_label: u8,
+        payload: &[u8],
+        outgoing: &mut Vec<Vec<u8>>,
+        events: &mut Vec<AvrcpEvent>,
+    ) {
         let Some(Frame::Response(response)) = Frame::parse(payload) else {
             return;
         };
@@ -2916,21 +3202,79 @@ impl Protocol {
             {
                 return;
             }
-            match self.response_state {
-                Some((label, code)) if label != transaction_label || code != response.response => {
-                    self.response_assembler.reset();
-                    self.response_state = None;
-                    return;
-                }
-                _ => self.response_state = Some((transaction_label, response.response)),
+            let entry = self
+                .response_assemblers
+                .entry(transaction_label)
+                .or_insert_with(|| (response.response, PduAssembler::new()));
+            if entry.0 != response.response {
+                self.response_assemblers.remove(&transaction_label);
+                return;
             }
-            if let Some((pdu_id, parameters)) = self.response_assembler.on_pdu(&vendor.data) {
-                let Some((label, code)) = self.response_state.take() else {
-                    return;
+            // Read the fragment header *before* feeding the assembler: it is
+            // the only thing that says whether more is coming, and the
+            // assembler consumes it.
+            let fragment = vendor
+                .data
+                .first()
+                .copied()
+                .zip(vendor.data.get(1).map(|byte| byte & 3));
+            let complete = entry.1.on_pdu(&vendor.data);
+            let code = entry.0;
+            let still_assembling = entry.1.in_progress();
+            if !still_assembling {
+                self.response_assemblers.remove(&transaction_label);
+            }
+            if let Some((pdu_id, parameters)) = complete {
+                self.dispatch_response(transaction_label, code, pdu_id, &parameters, events);
+                return;
+            }
+            // The assembler kept the fragment and wants more. AVRCP 6.8.1
+            // makes that the *controller's* job to ask for: a target that
+            // pushed the rest unprompted would be the one violating the
+            // spec, so waiting here means waiting forever. This is the whole
+            // of the send-path gap `docs/gaps.md` §2 recorded — and it fails
+            // silently, as a metadata query that never answers.
+            if let Some((fragment_pdu_id, packet_type)) = fragment
+                && matches!(packet_type, PDU_START | PDU_CONTINUE)
+                && still_assembling
+                && self.pending.contains_key(&transaction_label)
+            {
+                self.continuations_requested += 1;
+                let request = Command::RequestContinuingResponse {
+                    continuing_pdu_id: fragment_pdu_id,
                 };
-                self.dispatch_response(label, code, pdu_id, &parameters, events);
+                outgoing.extend(self.send_command_on_label(
+                    transaction_label,
+                    CommandType::Control,
+                    &request,
+                ));
             }
         }
+    }
+
+    /// Builds a command on an *existing* transaction label rather than
+    /// allocating a new one.
+    ///
+    /// `RequestContinuingResponse` is the only caller and needs it: the
+    /// fragments it pulls are part of the transaction already in flight, and
+    /// this end's own response assembler drops any fragment whose label does
+    /// not match the one it started with.
+    fn send_command_on_label(
+        &mut self,
+        transaction_label: u8,
+        ctype: CommandType,
+        command: &Command,
+    ) -> Vec<Vec<u8>> {
+        let pdus = write_pdu(command.pdu_id(), &command.to_parameters(), usize::MAX);
+        let frame = CommandFrame::vendor_dependent(
+            ctype,
+            avc::subunit_type::PANEL,
+            0,
+            BLUETOOTH_SIG_COMPANY_ID,
+            pdus.into_iter().next().unwrap_or_default(),
+        );
+        self.avctp
+            .send_command(transaction_label, AVRCP_PID, &frame.to_bytes())
     }
 
     fn dispatch_response(

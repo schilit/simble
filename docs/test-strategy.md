@@ -117,7 +117,7 @@ Ranked by traffic. This list is the most useful output of the analysis.
 | Module | Size | Note |
 |---|---|---|
 | `profiles/ras.rs`, `cs/*`, `device/channel_sounding.rs`, `ranging_scene.rs` | ~3 200 lines | Neither Bumble nor Zephyr implements RAS. The UUIDs were caught only by reading the SIG registry. The *physics* has no reference either — the path-loss test inverts simble's own model. |
-| `classic/avrcp.rs` + `avctp.rs` + `avc.rs` | 4 339 | Zero inline tests. Bumble implements AVRCP; nothing points at it. |
+| ~~`classic/avrcp.rs` + `avctp.rs` + `avc.rs`~~ | 4 339 | ~~Zero inline tests. Bumble implements AVRCP; nothing points at it.~~ **Corrected, then closed.** The *inline* half was true and the conclusion was not: `tests/avrcp_test.rs` is 1 287 lines, so AVRCP was never untested — it was **unreachable and unwitnessed**. Both are now fixed: `device/avrcp.rs` makes both roles scene devices, and `tests/interop/avrcp_peer.py` runs Bumble's AVRCP against simble's in *both* directions, live. `tests/avrcp_foreign_bytes_test.rs` pins the octets. |
 | `classic/avdtp.rs` | 2 207 | Zero inline tests. The media it carries is oracle-checked; the signalling that sets it up is not. |
 | `classic/sdp.rs` | 1 438 | Round-trip only. Bumble has an SDP client. |
 | `smp/pairing.rs` | 1 136 | Primitives have Core-spec vectors; the session protocol has none. |

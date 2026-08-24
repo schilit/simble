@@ -5,6 +5,7 @@
 
 pub mod a2dp;
 pub(crate) mod att_server;
+pub mod avrcp;
 pub mod big_broadcaster;
 pub mod big_receiver;
 pub(crate) mod bond_store;
@@ -18,6 +19,7 @@ pub(crate) mod connection;
 pub mod hid_host;
 pub mod host;
 pub mod keyboard_scene;
+pub mod media_scene;
 pub(crate) mod observer;
 pub mod profile_scene;
 pub mod ranging_scene;
@@ -25,6 +27,7 @@ pub mod speaker_scene;
 pub(crate) mod virtual_device;
 
 pub use a2dp::{A2dpSink, A2dpSource, SourcePhase};
+pub use avrcp::{AvrcpController, AvrcpTarget, RemoteMediaPlayer, Track};
 pub use big_broadcaster::{BigBroadcaster, BroadcastConfig, BroadcastState};
 pub use big_receiver::{BigReceiver, FoundBroadcast, ReceiverConfig, ReceiverState};
 pub use bond_store::{BondSecurity, BondStore, MemoryBondStore};
@@ -42,6 +45,7 @@ pub use connection::{ConnectionRole, ConnectionState, PrepareWriteChunk};
 pub use hid_host::{HidEvent, HidHost, HidKind, HidPlan};
 pub use host::LeHost;
 pub use keyboard_scene::KeyboardScene;
+pub use media_scene::{MediaPlayerScene, RemoteControlScene};
 pub use observer::{AttServerObserver, SubscriptionReason};
 pub use profile_scene::{DeviceSpec, LinkPhase as ClassicLinkPhase, ProfileScene};
 pub use ranging_scene::RangingScene;
