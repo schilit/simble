@@ -17,7 +17,9 @@
 
 use simble::devices::catalog::{CENTRAL_EXAMPLES, EXAMPLES};
 use simble::transport::wasm_ws::{SceneEngine, run_test_script};
-use simble::types::Address;
+
+mod common;
+use common::address;
 
 /// The error a script author sees, with the `Runtime error:` framing rhai adds.
 fn failure(script: &str) -> String {
@@ -121,7 +123,7 @@ fn a_loaded_device_is_the_scenes_peripheral() {
     let mut scene = SceneEngine::new();
     let index = scene
         .add_peripheral(
-            Address::from_be_bytes([0xAA, 0xBB, 0xCC, 0x00, 0x00, 0x01]),
+            address(0x01),
             // `advance` forwards the scene's clock into the loaded entry's own
             // `fn tick`, which would otherwise have been dropped with the
             // scope it was compiled in.

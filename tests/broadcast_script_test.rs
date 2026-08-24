@@ -36,13 +36,9 @@
 use simble::controller::sim::Link;
 use simble::device::big_receiver::{BigReceiver, ReceiverConfig, ReceiverState};
 use simble::transport::wasm_ws::{SceneEngine, ScriptedPeripheral};
-use simble::types::Address;
 
-fn address(last: u8) -> Address {
-    format!("AA:BB:CC:00:00:{last:02X}")
-        .parse()
-        .expect("a valid address")
-}
+mod common;
+use common::address;
 
 // ---------------------------------------------------------------------------
 // android::BluetoothLeBroadcast

@@ -36,8 +36,10 @@ use simble::device::big_broadcaster::{BigBroadcaster, BroadcastConfig, Broadcast
 use simble::device::big_receiver::{BigReceiver, ReceiverConfig, ReceiverState};
 use simble::packets::big::big_encryption;
 use simble::transport::HciChannel;
-use simble::types::Address;
 use std::sync::Arc;
+
+mod common;
+use common::{Scene, address, command_complete};
 
 /// A source and any number of sinks on one simulated medium.
 struct BroadcastScene {
@@ -81,37 +83,6 @@ impl BroadcastScene {
         self.sinks.len() - 1
     }
 
-    /// Advances the whole scene: every host consumes what its controller
-    /// produced and answers, then the medium routes.
-    fn tick(&mut self) {
-        while let Some(packet) = self.source_channel.poll_controller_packet() {
-            for reply in self.source.on_packet(&packet) {
-                self.source_channel
-                    .inject_host_packet(reply)
-                    .expect("queued");
-            }
-        }
-        for sink in &mut self.sinks {
-            while let Some(packet) = sink.channel.poll_controller_packet() {
-                for reply in sink.receiver.on_packet(&packet) {
-                    sink.channel.inject_host_packet(reply).expect("queued");
-                }
-            }
-        }
-        self.link.tick();
-    }
-
-    /// Ticks until `done` holds, or gives up after `ticks`.
-    fn run_until(&mut self, ticks: usize, done: impl Fn(&Self) -> bool) -> bool {
-        for _ in 0..ticks {
-            self.tick();
-            if done(self) {
-                return true;
-            }
-        }
-        false
-    }
-
     /// Ticks until the source is streaming and every sink is receiving.
     fn run_until_streaming(&mut self, ticks: usize) -> bool {
         self.run_until(ticks, |scene| {
@@ -148,11 +119,26 @@ impl BroadcastScene {
     }
 }
 
-/// A distinct public address per device in the scene.
-fn address(last: u8) -> Address {
-    format!("AA:BB:CC:00:00:{last:02X}")
-        .parse()
-        .expect("a valid address")
+impl Scene for BroadcastScene {
+    /// Every host consumes what its controller produced and answers, then the
+    /// medium routes.
+    fn tick(&mut self) {
+        while let Some(packet) = self.source_channel.poll_controller_packet() {
+            for reply in self.source.on_packet(&packet) {
+                self.source_channel
+                    .inject_host_packet(reply)
+                    .expect("queued");
+            }
+        }
+        for sink in &mut self.sinks {
+            while let Some(packet) = sink.channel.poll_controller_packet() {
+                for reply in sink.receiver.on_packet(&packet) {
+                    sink.channel.inject_host_packet(reply).expect("queued");
+                }
+            }
+        }
+        self.link.tick();
+    }
 }
 
 /// A source configuration a receiver can be pointed at by Broadcast_ID.
@@ -494,9 +480,7 @@ fn creating_a_big_before_the_periodic_train_is_refused() {
                 if is_periodic_enable {
                     // Answer it ourselves with success, so the broadcaster
                     // goes on to LE Create BIG believing the train is up.
-                    let mut complete = vec![0x04, 0x0E, 0x04, 0x01];
-                    complete.extend_from_slice(&reply[1..3]);
-                    complete.push(0x00);
+                    let complete = command_complete([reply[1], reply[2]], &[0x00]);
                     channel.receive_from_controller(complete).expect("queued");
                     continue;
                 }

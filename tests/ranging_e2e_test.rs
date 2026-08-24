@@ -39,6 +39,9 @@ use simble::transport::HciChannel;
 use simble::types::Address;
 use std::sync::Arc;
 
+mod common;
+use common::{Scene, address};
+
 /// The ATT MTU the notification capacity is taken from, so the Ranging Data
 /// really is segmented rather than fitting in one write. `MTU - 3` is the
 /// value capacity of a notification.
@@ -105,6 +108,13 @@ impl CsScene {
         }
     }
 
+    /// Sends a raw command on the initiator's channel.
+    fn send_from_initiator(&self, packet: &[u8]) {
+        let _ = self.initiator_channel.send_command(packet);
+    }
+}
+
+impl Scene for CsScene {
     /// Advances the scene one step.
     fn tick(&mut self) {
         while let Some(packet) = self.initiator_channel.poll_controller_packet() {
@@ -140,7 +150,9 @@ impl CsScene {
 
         self.link.tick();
     }
+}
 
+impl CsScene {
     /// Ticks until the connection is up, then starts the initiator's ladder.
     fn connect_and_start(&mut self) {
         for _ in 0..10 {
@@ -158,34 +170,18 @@ impl CsScene {
         panic!("the two devices never connected");
     }
 
-    /// Ticks until `done` holds, or gives up after `ticks`.
-    fn run_until(&mut self, ticks: usize, done: impl Fn(&Self) -> bool) -> bool {
-        for _ in 0..ticks {
-            self.tick();
-            if done(self) {
-                return true;
-            }
-        }
-        false
-    }
-
     /// Ticks until an estimate exists.
     fn run_until_measured(&mut self, ticks: usize) -> bool {
         self.run_until(ticks, |scene| scene.initiator.estimate().is_some())
     }
-
-    /// Sends a raw command on the initiator's channel.
-    fn send_from_initiator(&self, packet: &[u8]) {
-        let _ = self.initiator_channel.send_command(packet);
-    }
 }
 
 fn initiator_address() -> Address {
-    "AA:BB:CC:00:00:01".parse().expect("a valid address")
+    address(0x01)
 }
 
 fn reflector_address() -> Address {
-    "AA:BB:CC:00:00:02".parse().expect("a valid address")
+    address(0x02)
 }
 
 /// LE Create Connection's 25 parameter bytes, without the H4 type byte.

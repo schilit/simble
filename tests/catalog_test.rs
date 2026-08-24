@@ -21,11 +21,9 @@
 
 use simble::devices::catalog::{CENTRAL_EXAMPLES, EXAMPLES};
 use simble::transport::wasm_ws::{SceneEngine, run_test_script};
-use simble::types::Address;
 
-fn address(last: u8) -> Address {
-    Address::from_be_bytes([0xAA, 0xBB, 0xCC, 0x00, 0x00, last])
-}
+mod common;
+use common::address;
 
 /// Every peripheral in the catalog builds a device and survives being run.
 ///

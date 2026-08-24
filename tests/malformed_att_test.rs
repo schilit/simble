@@ -29,6 +29,9 @@ use simble::packets::att::AttPdu;
 use simble::types::Address;
 use zerocopy::IntoBytes;
 
+mod common;
+use common::{address, command_complete};
+
 /// Every ATT opcode, at every truncation a peer could send. `AttPdu::parse`
 /// must return, whatever it returns.
 #[test]
@@ -97,7 +100,7 @@ const CONNECTION_HANDLE: u16 = 0x0040;
 /// `central.rs`'s own unit tests drive it.
 fn connected_central() -> LeCentral {
     let mut central = LeCentral::new();
-    let target: Address = "AA:BB:CC:00:00:01".parse().expect("a valid address");
+    let target: Address = address(0x01);
     central.connect_with_type(target, 0x00);
     // Answer every command it asks for with success until it stops asking.
     let mut pending = central.pump();
@@ -115,13 +118,6 @@ fn connected_central() -> LeCentral {
     }
     central.on_packet(&connection_complete(target));
     central
-}
-
-fn command_complete(opcode: [u8; 2], params: &[u8]) -> Vec<u8> {
-    let mut packet = vec![0x04, 0x0E, (3 + params.len()) as u8, 0x01];
-    packet.extend_from_slice(&opcode);
-    packet.extend_from_slice(params);
-    packet
 }
 
 /// LE Connection Complete, status 0x00, as a central.

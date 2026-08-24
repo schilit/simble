@@ -19,12 +19,15 @@ use simble::devices::catalog;
 use simble::transport::wasm_ws::SceneEngine;
 use simble::types::Address;
 
+mod common;
+use common::address;
+
 fn peripheral_address() -> Address {
-    "AA:BB:CC:00:00:01".parse().unwrap()
+    address(0x01)
 }
 
 fn central_address() -> Address {
-    "AA:BB:CC:00:00:99".parse().unwrap()
+    address(0x99)
 }
 
 /// Runs a peripheral and a scripted HID host together, returning the scene and

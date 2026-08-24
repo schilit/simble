@@ -15,6 +15,9 @@ use std::net::TcpListener;
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod common;
+use common::command_complete;
+
 #[test]
 fn client_and_server_bridge_hci_over_websocket() {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
@@ -39,7 +42,7 @@ fn client_and_server_bridge_hci_over_websocket() {
             }
             if let Some(host_pkt) = channel.poll_host_packet() {
                 // host_pkt is H4: [0x01, opcode_lo, opcode_hi, plen, ...].
-                let cmd_complete = vec![0x04, 0x0E, 0x04, 0x01, host_pkt[1], host_pkt[2], 0x00];
+                let cmd_complete = command_complete([host_pkt[1], host_pkt[2]], &[0x00]);
                 channel.receive_from_controller(cmd_complete).unwrap();
             }
             thread::sleep(Duration::from_millis(2));
