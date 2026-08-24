@@ -15,19 +15,25 @@ one can actually prove.
 
 ## Which controller do you need?
 
+**No hardware at all** is the right answer for protocol logic and for CI: the
+built-in simulated controller is deterministic, and real RF is not. Everything
+below is for when you need a real peer, or a feature the simulator cannot
+prove by itself.
+
 Work down until a row covers what you want to test; each tier includes
-everything above it. **Tested** means someone has run SimBLE against that part
-and the hardware tests pass — anything else is an expectation, however
+everything above it. **Tested** means someone has run SimBLE against that
+board and the hardware tests pass — anything else is an expectation, however
 reasonable.
 
-| Part | BT | Adds | Tested with SimBLE |
-|---|---|---|---|
-| Built-in simulated controller | — | Everything deterministic; the right choice for CI | ✅ every test in the suite |
-| **CSR8510 A10** (`0a12:0001`) — the cheap grey dongle, under $10 from any general retailer; not a distributor part | 4.0 | Real RF, real timing, a real peer: advertising, scanning, connections, GATT | ✅ `tests/usb_hardware_test.rs` — two of them link and discover over the air |
-| **nRF52840 dongle** — Nordic `NRF52840-DONGLE` / PCA10059, + Zephyr `hci_usb` ([Arrow](https://www.arrow.com/en/products/nrf52840-dongle/nordic-semiconductor), [DigiKey](https://www.digikey.com/en/products/detail/nordic-semiconductor-asa/NRF52840-DONGLE/9491124), [Mouser](https://www.mouser.com/ProductDetail/Nordic-Semiconductor/nRF52840-Dongle?qs=gTYE2QTfZfTbdrOaMHWEZg%3D%3D)) | 5.4 | Extended advertising, periodic advertising, **LE Audio broadcast (BIG)**, 2M + Coded PHY, LE Extended Create Connection | ✅ flashed and verified against `Read_Local_Supported_Commands` |
-| **Seeed XIAO nRF52840** — `102010448` ([DigiKey](https://www.digikey.com/en/products/detail/seeed-technology-co-ltd/102010448/16652893), [Seeed](https://www.seeedstudio.com/Seeed-XIAO-BLE-nRF52840-p-5201.html)) | 5.x | Same as the dongle above — same silicon, different board | ⚠️ untested; expected to work with the same firmware |
-| **Realtek RTL8761B / RTL8852BE** — most "5.x" dongles sold today | 5.1–5.3 | Real RF; extended advertising varies by firmware | ⚠️ untested |
-| **nRF54L15** — `NRF54L15-DK` ([Arrow](https://www.arrow.com/en/products/nrf54l15-dk/nordic-semiconductor.html), [Newark](https://www.newark.com/new-products/embedded-computers-education-maker-boards/nordic-nrf54l15-dk)), or [makerdiary Connect Kit](https://makerdiary.com/products/nrf54l15-connectkit) direct | 6.0 | **Channel Sounding** (distance ranging) | ❌ untested, **and cannot work today** — no USB HCI; needs an HCI-over-UART transport first |
+| Silicon | Boards you can buy | BT | Adds | Tested |
+|---|---|---|---|---|
+| **CSR8510 A10** | A commodity part with no single SKU — sold under dozens of brand names as a "Bluetooth 4.0 USB adapter", `0a12:0001`, under $10. Seeed's [CSR4.0 USB Dongle](https://www.seeedstudio.com/Bluetooth-CSR4-0-USB-Dongle-p-1320.html) documents the same chip (now discontinued there); [US Converters](https://www.usconverters.com/usb-bluetooth-4-ble-low-energy-dongle) sells an equivalent. Search the chip name, not a part number | 4.0 | Real RF, real timing, a real peer: advertising, scanning, connections, GATT | ✅ two of them link and discover over the air (`tests/usb_hardware_test.rs`) |
+| **Realtek RTL8761B / RTL8852BE** | Most "5.x" dongles sold today, many brand names | 5.1–5.3 | Real RF; extended advertising varies by firmware | ⚠️ untested |
+| **Nordic nRF52840** | **Dongle** — `NRF52840-DONGLE` / PCA10059 ([Arrow](https://www.arrow.com/en/products/nrf52840-dongle/nordic-semiconductor), [DigiKey](https://www.digikey.com/en/products/detail/nordic-semiconductor-asa/NRF52840-DONGLE/9491124), [Mouser](https://www.mouser.com/ProductDetail/Nordic-Semiconductor/nRF52840-Dongle?qs=gTYE2QTfZfTbdrOaMHWEZg%3D%3D))<br>**XIAO** — Seeed `102010448` ([DigiKey](https://www.digikey.com/en/products/detail/seeed-technology-co-ltd/102010448/16652893), [Seeed](https://www.seeedstudio.com/Seeed-XIAO-BLE-nRF52840-p-5201.html)) | 5.4 | Extended advertising, periodic advertising, **LE Audio broadcast (BIG)**, 2M + Coded PHY, LE Extended Create Connection | ✅ **dongle** tested, flashed with Zephyr `hci_usb`<br>⚠️ **XIAO** untested — same silicon, expected to work |
+| **Nordic nRF54L15** | **DK** ([Arrow](https://www.arrow.com/en/products/nrf54l15-dk/nordic-semiconductor.html), [Newark](https://www.newark.com/new-products/embedded-computers-education-maker-boards/nordic-nrf54l15-dk))<br>**makerdiary Connect Kit** ([direct](https://makerdiary.com/products/nrf54l15-connectkit))<br>**Nordic Tag** — two antennas | 6.0 | **Channel Sounding** (distance ranging) | ❌ **cannot work today** — no USB HCI; needs an HCI-over-UART transport first |
+
+Neither nRF board is a plug-in-and-go dongle: both need firmware flashed
+before they are Bluetooth controllers at all.
 
 One thing to know before spending anything: **BIG and Channel Sounding cannot
 be checked against software.** Bumble implements no BIG, and Rootcanal answers
