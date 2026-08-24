@@ -40,6 +40,31 @@
   .pick-name { font-weight: 500; }
   .pick-note { grid-column: 2; color: var(--dim); font-size: var(--fs-meta); }
 
+  /* --- the liveness meter, directly above the list -----------------------
+     A silent scanner and a working one look the same until something counts.
+     The total is the one number on this page that only ever goes up, so it
+     gets the monospace treatment and a size step above the labels around it —
+     it is meant to be caught out of the corner of the eye. */
+  #meter {
+    display: flex; align-items: baseline; gap: 0.5rem;
+    margin: 0 0 0.6rem; padding: 0.4rem 0.75rem;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--panel);
+  }
+  #adv-total {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: var(--fs-title); font-weight: 600; color: var(--good);
+    font-variant-numeric: tabular-nums;
+  }
+  #meter .mlabel {
+    font-size: var(--fs-label); text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--dim);
+  }
+  #adv-rate {
+    margin-left: auto; font-family: ui-monospace, Menlo, monospace;
+    font-size: var(--fs-meta); color: var(--dim);
+    font-variant-numeric: tabular-nums;
+  }
+
   /* --- a device row ------------------------------------------------------
      The row element is created once per address and written to thereafter,
      so hover, focus, text selection and which row is expanded all survive an
@@ -201,6 +226,12 @@
         <button id="pick-none">Clear scene</button>
       </div>
     </details>
+
+    <div id="meter">
+      <span id="adv-total">0</span>
+      <span class="mlabel">advertising reports</span>
+      <span id="adv-rate">0.0/s</span>
+    </div>
 
     <div id="devices"></div>
     <p id="empty" class="empty" hidden>No advertisements yet — scanning…</p>

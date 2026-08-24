@@ -35,6 +35,17 @@
 //      every element — losing focus, text selection, and which row you had
 //      expanded. Each row keeps its element; only the sub-spans whose text
 //      actually changed are written.
+//
+//   3. A DEVICE'S NAME IS MERGED, NOT OVERWRITTEN. An advertisement and a
+//      scan response can carry different Complete Local Names for the same
+//      device, because the advertisement's 31 bytes are shared with everything
+//      else it sends and the name is trimmed to fit. Copying whichever arrived
+//      last made the name flicker between two spellings four times a second.
+//      See `mergeName`.
+//
+// `checkRows` asserts the first and third of those against the live DOM on
+// every render, and publishes the result on `document.body.dataset.
+// scannerSelfTest` for a headless driver.
 
 import init, { WebLink, WebPeripheral, WebScanner, catalog_script } from "../pkg/simble.js";
 import { createControllerBar } from "../common/controller-bar.js";
@@ -174,6 +185,77 @@ const chosen = new Set(CATALOG.flatMap((e, i) => (e.starter ? [i] : [])));
 
 let backend = null;
 let mode = "in-page";
+
+// --- the liveness meter ----------------------------------------------------
+//
+// Each row's detail already carries that device's own adv/rsp counts. What the
+// page had no sign of was whether it was receiving anything *at all* — a
+// silent list and a working-but-idle list look identical. So: one number that
+// ticks up, and the rate it is ticking at, above the list.
+//
+// The rate is measured the same way the per-device interval is, from report
+// arrivals, over a short trailing window so it reacts rather than averaging
+// across the whole session.
+const RATE_WINDOW_MS = 3000;
+let reportTotal = 0;
+let meterStart = 0;
+// One entry per tick that delivered reports — `{ t, n }`, not one per report.
+// A tick drains everything the controller has buffered, so the reports in a
+// batch all arrive at the same instant: counting them individually would put
+// thousands of identical timestamps in here, and dividing by the span between
+// the first and the last of them divides by roughly zero. A hidden tab, whose
+// timers Chrome drops to once a minute, makes that batch enormous — which is
+// exactly how this read 39,741/s before it counted batches instead.
+const drains = [];
+
+function countReports(now, n) {
+  if (!n) return;
+  reportTotal += n;
+  drains.push({ t: now, n });
+}
+
+function reportRate(now) {
+  const cutoff = now - RATE_WINDOW_MS;
+  while (drains.length && drains[0].t < cutoff) drains.shift();
+  let n = 0;
+  for (const d of drains) n += d.n;
+  if (!n) return 0;
+  // The denominator is the window, not the spread of the arrivals inside it,
+  // so a single fat batch reads as a burst rather than as infinity. Before the
+  // window has filled, the time since the scene started stands in for it.
+  const span = Math.min(RATE_WINDOW_MS, now - meterStart);
+  return span > 0 ? (n / span) * 1000 : 0;
+}
+
+// --- the invariant, asserted in the page -----------------------------------
+//
+// This list has now shown a row the wrong thing twice: once by rebuilding
+// rows from a list sorted on a jittering key, once by a name that alternated
+// between an advertisement's trimmed spelling and a scan response's full one.
+// Both were invisible in the source and plain in the DOM, so the check reads
+// the DOM, runs every render, and is cheap enough to leave on.
+//
+// It is published to `document.body.dataset.scannerSelfTest` so a headless
+// driver can assert on it without the page growing a test-only hook.
+const selfTest = { renders: 0, renames: 0, violations: [] };
+
+function checkRows() {
+  selfTest.renders++;
+  for (const el of $("devices").children) {
+    const addr = el.dataset.addr;
+    const d = devices.get(addr);
+    const fail = (why) => {
+      if (selfTest.violations.length < 20) selfTest.violations.push(`${addr}: ${why}`);
+      console.error("scanner invariant:", addr, why);
+    };
+    if (!d) { fail("row has no device"); continue; }
+    if (rows.get(addr)?.el !== el) { fail("element is not the one keyed for this address"); continue; }
+    // The rendered name must be this address's own name — the whole bug class.
+    const shown = el.querySelector(".nameline .nm-real, .nameline .nm-none")?.textContent;
+    const want = d.name ?? d.address;
+    if (shown !== want) fail(`renders name "${shown}", device holds "${want}"`);
+  }
+}
 
 function setPill(text, cls) {
   const pill = $("conn");
@@ -315,6 +397,12 @@ function rebuildBackend() {
   backend?.teardown();
   devices.clear();
   rows.clear();
+  // The meter counts the scene in front of you, so a new scene starts at zero
+  // rather than carrying a total that no longer refers to anything.
+  reportTotal = 0;
+  drains.length = 0;
+  meterStart = performance.now();
+  selfTest.violations.length = 0;
   $("devices").replaceChildren();
   backend = mode === "websocket" ? makeWsBackend() : makeInPageBackend();
   renderScope();
@@ -325,13 +413,44 @@ function rebuildBackend() {
 // --- report aggregation ----------------------------------------------------
 
 // Handled explicitly below, so the generic pass must not touch them.
-const MERGE_SKIP = new Set(["address", "address_type", "rssi", "connectable", "scan_response", "raw"]);
+const MERGE_SKIP = new Set([
+  "address", "address_type", "rssi", "connectable", "scan_response", "raw", "name",
+]);
 // Fields this page draws a row for. Anything else the Rust decoder starts
 // sending shows up under "other fields" instead of vanishing.
 const RENDERED = new Set([
   "name", "flags", "tx_power", "service_uuids", "service_data",
   "manufacturer_data", "resolvable_set_identifier",
 ]);
+
+// The name is *merged*, not overwritten — the one field where "copy whatever
+// this report carries" is wrong.
+//
+// A device may put a different Complete Local Name in its advertisement than
+// in its scan response, and both are AD type 0x09. The advertisement shares a
+// 31-byte budget with everything else it sends, so the name is trimmed to fit
+// whatever is left; the scan response is a second, nearly empty payload, so
+// the full name goes there. The catalog's hearing aid is exactly this:
+//
+//   ADV      0B 09 "Hearing Ai"     (31 bytes: flags + 3 UUIDs + RSI + name)
+//   SCAN_RSP 0E 09 "Hearing Aid L"  (15 bytes: nothing but the name)
+//
+// Last-writer-wins made `d.name` alternate between the two spellings on every
+// report — a name changing several times a second on a row whose address never
+// moved. That is the "names jump between rows" bug: nothing moved between
+// rows at all, the name of one row was flickering between two values.
+//
+// A shorter name that is a prefix of the one already held is that same name
+// truncated, so the fuller one wins. Anything else is a device actually
+// renaming itself and replaces what is held. The one case this gets wrong —
+// a device renaming itself to a strict prefix of its old name — keeps the old
+// name, which is a far better failure than a name that will not sit still.
+function mergeName(d, name) {
+  if (d.name === undefined) { d.name = name; return; }
+  if (d.name === name || d.name.startsWith(name)) return;
+  if (!name.startsWith(d.name)) selfTest.renames++;
+  d.name = name;
+}
 
 // Folds one advertising report into the device's aggregated state.
 //
@@ -345,6 +464,7 @@ const RENDERED = new Set([
 // "Present" is the right test rather than "in a non-scan-response report",
 // because a scan response is a second, different payload — merging its empty
 // service-UUID list over the advertisement's would erase what the device said.
+// `name` is the exception, and `mergeName` above says why.
 function merge(report, now) {
   const addr = report.address;
   let d = devices.get(addr);
@@ -368,6 +488,7 @@ function merge(report, now) {
     d.arrivals.push(now);
     if (d.arrivals.length > 32) d.arrivals.shift();
   }
+  if (report.name) mergeName(d, report.name);
   for (const [key, value] of Object.entries(report)) {
     if (MERGE_SKIP.has(key)) continue;
     if (value === null || value === undefined) continue;
@@ -620,6 +741,19 @@ function render() {
 
   $("empty").hidden = sorted.length > 0;
   renderScope();
+  renderMeter(now);
+  checkRows();
+  document.body.dataset.scannerSelfTest = JSON.stringify({
+    renders: selfTest.renders, reports: reportTotal,
+    renames: selfTest.renames, violations: selfTest.violations,
+  });
+}
+
+const setText = (el, text) => { if (el.textContent !== text) el.textContent = text; };
+
+function renderMeter(now) {
+  setText($("adv-total"), reportTotal.toLocaleString());
+  setText($("adv-rate"), `${reportRate(now).toFixed(1)}/s`);
 }
 
 // --- "why only these devices?" ---------------------------------------------
@@ -752,7 +886,9 @@ $("pick-none").addEventListener("click", () => {
 function loop() {
   if (!backend) return;
   const now = performance.now();
-  for (const report of backend.tick()) merge(report, now);
+  const reports = backend.tick();
+  countReports(now, reports.length);
+  for (const report of reports) merge(report, now);
   render();
 }
 
