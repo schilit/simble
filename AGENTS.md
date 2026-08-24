@@ -3,9 +3,9 @@
 Simble is a zero-copy, memory-safe virtual Bluetooth (BLE + Classic) host stack
 and device simulation engine in pure Rust. Its primary client is Android's
 netsim. It is inspired by Google's Python [Bumble](https://github.com/google/bumble),
-credited once in README.md's Acknowledgments — **never** add per-file
-"Port of Bumble's X" attribution comments in source; that convention was
-explicitly retired.
+credited in README.md's Acknowledgments. Where a test or module is genuinely
+derived from Bumble's, saying so where it is derived is useful: it tells the
+next reader which foreign implementation to diff against when the two disagree.
 
 ## Module conventions
 
