@@ -4,7 +4,7 @@
 //! A phone and a Bluetooth speaker on one simulated BR/EDR link.
 //!
 //! This is the scene that makes [`crate::device::a2dp`] reachable: two
-//! [`ClassicHost`](crate::device::ClassicHost)s on a shared
+//! [`ClassicHost`]s on a shared
 //! [`Link`](crate::controller::sim::Link), one running an [`A2dpSource`] and
 //! one an [`A2dpSink`], with nothing wired directly together. Everything
 //! between them — inquiry, the Remote Name Request, the page, both L2CAP

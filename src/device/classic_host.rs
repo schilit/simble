@@ -618,7 +618,7 @@ pub type SharedSdpQueryResults = std::sync::Arc<std::sync::Mutex<SdpQueryResults
 /// The SDP **client** as a channel handler: it asks the peer what it offers
 /// and records the answer.
 ///
-/// It builds [`SdpPdu`]s directly rather than using [`crate::classic::sdp::SdpClient`].
+/// It builds `SdpPdu`s directly rather than using `classic::sdp::SdpClient`.
 /// That client takes a `FnMut(&[u8]) -> Vec<u8>` transport — it *blocks* on
 /// each response — which cannot work above an event loop where the answer
 /// comes back several ticks later on an HCI channel. What it does share with
@@ -675,7 +675,7 @@ impl SdpQueryHandler {
     }
 
     /// As [`Self::searching`], but also asks for the profile version. See
-    /// [`Self::want_profile_version`] for why that is not the default.
+    /// `Self::want_profile_version` for why that is not the default.
     pub fn searching_with_profile_version(uuid: SdpUuid) -> (Self, SharedSdpQueryResults) {
         let (mut handler, results) = Self::searching(uuid);
         handler.want_profile_version = true;

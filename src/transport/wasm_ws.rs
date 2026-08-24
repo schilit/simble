@@ -249,7 +249,7 @@ use crate::device::host::adv_data_param;
 /// 16-bit service UUID, optional manufacturer data, then the name. Extras are
 /// dropped and the name trimmed if the 31-byte legacy limit is exceeded — the
 /// name is the demo's identity, so it survives longest. Shares the single
-/// [`fit_within_legacy_limit`] loop with the other two builders, so an
+/// `fit_within_legacy_limit` loop with the other two builders, so an
 /// overflow is an error here too rather than a payload that never transmits.
 pub fn build_demo_adv_payload(
     name: &str,

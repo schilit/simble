@@ -486,7 +486,7 @@ impl CarKit {
     ///
     /// The simulated stack is pumped until something a caller can see has
     /// happened — an AT line crossed the data link, or the link reached a new
-    /// phase — or [`SCENE_STEPS_PER_TICK`] steps are spent.
+    /// phase — or `SCENE_STEPS_PER_TICK` steps are spent.
     ///
     /// Stopping on a phase change is what makes the BR/EDR bring-up visible
     /// at all: inquiry, paging, SDP and the DLC are dozens of HCI round trips
