@@ -23,6 +23,7 @@ who arrives via a link rather than this index still knows which it is.
 | File | What it is |
 |---|---|
 | `scene-format.md` | The scene JSON format. If it disagrees with `src/scene/`, the code is right. |
+| `usb-controllers.md` | Which USB Bluetooth controllers we have, what each can and cannot check, how to flash an nRF52840, and what to buy next. |
 
 ## Decision records — point-in-time by design, still useful
 
