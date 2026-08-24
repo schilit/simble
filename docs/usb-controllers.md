@@ -1,60 +1,89 @@
-# USB Bluetooth controllers
+# Running SimBLE on real hardware
 
-> **Living — must match the hardware and the code.** Verified 2026-08-24 against
-> the dongles actually plugged into this machine. If a claim here disagrees with
-> `examples/usb_list.rs` or `tests/usb_hardware_test.rs`, the code is right.
+> **Reference, kept current.** Verified 2026-08-24 against the dongles it
+> describes. If something here disagrees with `cargo run --example usb_list`,
+> the code is right and this file is a bug.
 
-Real silicon is the only oracle for a whole class of bug. Every hardware
-session so far has found something no simulated test could, because simble's
-own controller is more permissive than any real one: command credits silently
-dropping six of seven commands, `0xFF × 8` event masks rejected as invalid
-parameters, `LE_Set_Host_Feature` answered with Command Status rather than
-Command Complete, and a USB data-toggle that makes a re-opened dongle deaf.
+SimBLE's simulated controller is deliberately permissive, and real silicon is
+not. That difference is the whole reason to plug in a dongle: it is the only
+way to find a class of bug that no simulated test can reach — a controller
+that silently discards commands you sent too fast, or rejects a parameter your
+simulator waved through.
 
-That is why this file exists: **which controller you own decides which parts of
-the stack can be checked at all.**
+This page is about choosing a controller, setting it up, and knowing what each
+one can actually prove.
 
-## What is on the bench now
+## Which controller do you need?
 
-| # | Part | Bluetooth | Notes |
+Work down until a row covers what you want to test. Each tier includes
+everything above it.
+
+| You want to test | You need | Why |
+|---|---|---|
+| Protocol logic, CI, anything deterministic | **No hardware.** The built-in controller | Real RF is non-deterministic; that is wrong for CI. |
+| Against a real phone or another stack | **Any Bluetooth 4.0 dongle** — e.g. a CSR8510 (`0a12:0001`), a few pounds | Real RF, real timing, a real peer. |
+| Extended advertising, periodic advertising, **LE Audio broadcast (BIG)**, 2M/Coded PHY | **A Bluetooth 5.x controller** — an nRF52840 dongle, flashed (below) | A 4.0 controller answers these with *Unknown HCI Command*. There is no software workaround. |
+| **Channel Sounding** (distance ranging) | **Bluetooth 6.0 silicon**, and two of them | Not available as a USB dongle today — see [Channel Sounding](#channel-sounding-hardware). |
+
+A note worth internalising before spending anything: **BIG and Channel
+Sounding cannot be checked against software.** Bumble implements no BIG, and
+Rootcanal answers `LE_Create_BIG` with `Unknown HCI Command`. Neither
+implements the Ranging Service. If you are working on broadcast audio or
+ranging, hardware is not a nice-to-have — it is the only oracle that exists.
+
+## Plugging in more than one
+
+Two dongles of the same model share a `vid:pid` and usually publish no serial
+number, so `0a12:0001` cannot name either of them. SimBLE refuses an ambiguous
+selector rather than guessing, and offers four ways to be specific:
+
+| Form | Example | Precise | Survives a re-plug |
 |---|---|---|---|
-| 0, 1 | Cambridge Silicon Radio **CSR8510 A10** (`0a12:0001`) | 4.0 | The cheap grey dongle. Two of them; identical VID:PID and **no serial numbers**, which is why `UsbSelector` exists. |
-| 2, 3 | **nRF52840 dongle** (PCA10059), flashed with Zephyr `hci_usb` (`2fe3:000b`) | 5.4 | Extended + periodic advertising, **LE Create BIG / BIG Create Sync**, LE Extended Create Connection, 2M + Coded PHY. |
+| index | `#1` | within a session | no |
+| vid:pid | `0a12:0001` | only when unique | yes |
+| bus/address | `02/4` | yes | no |
+| **bus.port** | `02.3.4` | **yes** | **yes** |
 
-Run `cargo run --example usb_list` for the live list and every selector each
-dongle answers to.
+`bus.port` names the physical socket. Use it for anything scripted; the others
+are for typing once.
 
-### Why the nRF52840s matter more than the count suggests
+```sh
+cargo run --example usb_list    # every dongle, and every name it answers to
+```
 
-**Nothing else can check our BIG code.** Bumble implements no BIG at all, and
-upstream rootcanal v1.12.0 answers `LE_Create_BIG` with `Unknown HCI Command` —
-measured, not assumed. So `BigBroadcaster`, `BigReceiver`, BASE and BIGInfo had
-only ever been tested against simble's own controller, which
-`docs/test-strategy.md` calls the configuration that proves nothing. Two
-BIG-capable radios is the first independent check that broadcast code has had.
+## Reaching a dongle from a browser page
 
-The same goes for `LE Extended Create Connection` — top of `docs/gaps.md` §2's
-list of commands worth modelling next, whose completion event (LE *Enhanced*
-Connection Complete) `sim.rs` does not emit at all — and for `LE Set PHY`,
-which `sim.rs` models with no `LL_PHY_REQ`/`LL_PHY_RSP` exchange.
+A web page cannot open a dongle: WebUSB refuses Bluetooth-class devices by
+design, so the browser can never claim a radio. Run the bridge instead — one
+process serves every dongle on one port, the way netsim serves every device:
 
-### Flashing an nRF52840 dongle
+```sh
+simble --usb --ws 32323
+curl http://127.0.0.1:32323/devices        # what is plugged in, as JSON
+# ws://127.0.0.1:32323/?device=02.3.2      # open that one
+```
 
-The dongle ships running Nordic's Open Bootloader and is **not** a Bluetooth
-controller until firmware is on it. Build Zephyr's `hci_usb`, package it, and
-push it over DFU:
+Each client gets its own connection, so several radios can be live at once.
+
+## Turning an nRF52840 dongle into a controller
+
+An nRF52840 dongle ships running a bootloader, **not** Bluetooth firmware — it
+is a blank board, and will not appear as a controller until you flash it. The
+firmware to use is Zephyr's `hci_usb` sample.
+
+You need a Zephyr workspace, the ARM toolchain, and `nrfutil`. Then:
 
 ```sh
 west build -p -b nrf52840dongle/nrf52840 zephyr/samples/bluetooth/hci_usb \
-  -- -DEXTRA_CONF_FILE=extra.conf          # see below
+  -- -DEXTRA_CONF_FILE=extra.conf
 nrfutil nrf5sdk-tools pkg generate --hw-version 52 --sd-req 0x00 \
   --application build/zephyr/zephyr.hex --application-version 1 fw.zip
 nrfutil nrf5sdk-tools dfu usb-serial -pkg fw.zip -p /dev/cu.usbmodemXXXX
 ```
 
-**The stock sample is not enough.** `hci_usb`'s default config leaves
-extended advertising and the whole ISO stack out, so the interesting features
-are absent even on 5.4 silicon. The overlay that turns them on:
+**The stock sample is not what you want.** Its default configuration leaves
+out extended advertising and the entire ISO stack, so a 5.4 chip comes up
+without the features you bought it for. Add this overlay as `extra.conf`:
 
 ```
 CONFIG_BT_EXT_ADV=y
@@ -69,121 +98,68 @@ CONFIG_BT_CTLR_ADV_ISO=y
 CONFIG_BT_CTLR_SYNC_ISO=y
 ```
 
-Flash grows 121 KB → 216 KB, which is the quick way to confirm the overlay
-took. Verify against the controller rather than the build: read
-`Read_Local_Supported_Commands` and check the bits.
+Flash usage roughly doubles (121 KB → 216 KB), which is a quick way to confirm
+the overlay was picked up. To be certain, ask the controller: read
+`Read_Local_Supported_Commands` and check the bits, rather than trusting the
+build.
 
-**To enter DFU mode**, press the **RESET** button — the small one mounted
-*sideways* on the edge, pressed toward the board. It is easy to confuse with
-the round user button (SW1) on the top face, which does nothing for DFU. A red
-LED fading in and out means it is ready. If a valid application is already
-flashed, unplug, hold RESET, plug in, release.
+### Getting into DFU mode
 
-## Selecting one of several
+Press **RESET** — the small button mounted *sideways* on the edge, pressed
+toward the board. It is easy to confuse with the round user button on the top
+face, which does nothing for DFU. A red LED **fading in and out** means it is
+ready.
 
-Two dongles of one model share a VID:PID and publish no serial number, so
-`0a12:0001` cannot name either. `UsbSelector` accepts four forms:
+If the dongle already has working firmware, a plain reset will boot straight
+into it. Unplug, hold RESET, plug in, then release.
 
-| Form | Example | Precise | Survives a re-plug |
-|---|---|---|---|
-| index | `#1` | within a session | no |
-| vid:pid | `0a12:0001` | only when unique | yes |
-| bus/address | `02/4` | yes | no |
-| **bus.port** | `02.3.4` | **yes** | **yes** |
+### Two gotchas
 
-`bus.port` names the *physical socket* and is the form to use in anything
-scripted. A `vid:pid` matching more than one device is an **error** listing the
-candidates — silently taking the first is the bug this replaced.
+**The address is not what you set.** An nRF52840 has no public address in ROM;
+Zephyr uses a random static address, and it reads back as
+`00:00:00:00:00:00`. SimBLE advertises with `own_address_type = public`, so a
+peer sees the controller's address rather than one you configured. Read the
+address from the controller rather than assuming.
 
-## Serving dongles to a browser
+**Bus power.** Several radios behind one unpowered hub is a real limit. A
+dongle that drops out intermittently is more often power than software.
 
-A page cannot open a dongle: WebUSB refuses Bluetooth-class devices by design,
-so the browser can never claim the radio. The bridge does it instead — one
-process, one port, every dongle, mirroring how netsim serves devices:
+## Channel Sounding hardware
 
-```sh
-simble --usb --ws 32323
-curl http://127.0.0.1:32323/devices        # what is available
-# ws://127.0.0.1:32323/?device=02.3.2      # open that one
-```
+Channel Sounding is the Bluetooth 6.0 distance-ranging feature, and it needs
+new silicon. **There is essentially no consumer USB dongle that supports it**
+— the cheap market still ships 5.1–5.3 Realtek parts (RTL8761B, RTL8852BE)
+under many names, and "6.0" on a product listing usually describes a host
+stack rather than Channel Sounding in the controller. Confirm the specific
+feature before ordering.
 
-Each client gets its own thread, so several radios can be live at once.
-
-## Buying more
-
-### Seeed Studio XIAO nRF52840 — Arrow/DigiKey part `102010448`
-
-Another nRF52840, in the XIAO form factor with USB-C. Same silicon as the
-dongles above, so the same `hci_usb` firmware applies and it lands in the same
-capability tier: **Bluetooth 5.x, BIG-capable, no Channel Sounding.** Worth it
-only if you want *more* 5.x radios — a third and fourth BIG endpoint, or a
-spare. It buys no new protocol coverage over what is already on the bench.
-
-Note it is a development board rather than a dongle: castellated pins, a
-different bootloader story (UF2), and no factory HCI firmware.
-
-- [Seeed product page](https://www.seeedstudio.com/Seeed-XIAO-BLE-nRF52840-p-5201.html)
-- [DigiKey 102010448](https://www.digikey.com/en/products/detail/seeed-technology-co-ltd/102010448/16652893)
-
-### Bluetooth 6.0 / Channel Sounding — several boards, one chip
-
-The nRF54L15 is **Bluetooth LE 6.0** silicon: 128 MHz Cortex-M33, 1.5 MB NVM,
-and — the reason to care — **Channel Sounding**.
-
-The makerdiary board is *not* the only way to get it. As of August 2026 the
-practical options are all the same chip, so **the choice is form factor, not
-capability** — and every one inherits the no-USB constraint below:
+What exists today is development kits, and as of August 2026 they are all the
+same Nordic nRF54L15 silicon — so the choice is form factor, not capability:
 
 | Board | Notable |
 |---|---|
-| **Nordic nRF54L15-DK** | The reference kit; what Nordic demonstrated Channel Sounding on at Embedded World 2026. |
-| **makerdiary nRF54L15 Connect Kit** | Compact, castellated pins, onboard debugger. |
-| **Nordic nRF54L15 Tag** | Coin-cell, and **two on-board antennas** to improve distance-measurement reliability. |
+| Nordic **nRF54L15-DK** | The reference kit. |
+| **makerdiary nRF54L15 Connect Kit** ([product](https://makerdiary.com/products/nrf54l15-connectkit), [wiki](https://wiki.makerdiary.com/nrf54l15-connectkit/)) | Compact, castellated pins, onboard debugger. |
+| Nordic **nRF54L15 Tag** | Coin-cell, and **two antennas** — the only listed board that can exercise multiple antenna paths. |
 
-That last one is the interesting one for us specifically. `docs/gaps.md` §2
-records that `profiles/ras.rs` hardcodes `antenna_paths_mask` to `0x01` and
-implements no multiple antenna paths — a **single-antenna board cannot exercise
-that code at all**, whatever the firmware does. If multi-path RAS is ever meant
-to be real, the dual-antenna board is the only listed part that can check it.
+Three things to know before buying:
 
-Silicon Labs (EFR32BG26) and TI (CC2340) have announced Channel Sounding parts;
-neither surfaced as a shipping dev kit in an August 2026 search, so Nordic
-appears to be where availability is.
+1. **You need two.** Channel Sounding measures distance *between* two devices.
+   One kit cannot range against anything.
+2. **The nRF54L15 has no USB device peripheral.** On these boards the USB-C
+   port goes to a separate interface MCU providing a USB-UART bridge, so HCI
+   arrives on a **virtual serial port**. SimBLE's `UsbTransport` cannot talk to
+   it; an HCI-over-UART transport is a prerequisite, not an afterthought.
+3. Silicon Labs (EFR32BG26) and TI (CC2340) have announced Channel Sounding
+   parts. Neither surfaced as a shipping kit in an August 2026 search.
 
-That matters here more than anywhere else, because **Channel Sounding is
-simble's flagship feature and has no foreign oracle of any kind.**
-`docs/test-strategy.md` records that neither Bumble nor Zephyr implements RAS,
-and the four invented RAS UUIDs were caught only by reading the SIG registry —
-no test could have found them. `profiles/ras.rs`, `cs/*`,
-`device/channel_sounding.rs` and `ranging_scene.rs` are ~3,200 lines checked
-against nothing but themselves.
+## Also worth knowing
 
-**The catch, and it is a real one: the nRF54L15 has no USB device peripheral.**
-The board's USB-C port goes to a separate nRF52820 interface MCU providing a
-USB-UART bridge and CMSIS-DAP debugging. So HCI arrives over a **virtual serial
-port**, not as a USB Bluetooth-class device.
+**Seeed XIAO nRF52840** (Arrow/DigiKey `102010448`,
+[product page](https://www.seeedstudio.com/Seeed-XIAO-BLE-nRF52840-p-5201.html))
+is the same nRF52840 silicon as the dongles above, in a XIAO board with USB-C.
+The same `hci_usb` firmware applies and it lands in the same tier. Useful as an
+extra 5.x radio; it adds no capability you would not already have.
 
-`UsbTransport` cannot talk to it. Using one means **writing an HCI-over-UART
-transport** (Core Vol 4 Part A — H4 framing over a serial port, which is the
-same framing `RootcanalTransport` already does over TCP, so the framing is not
-the work; the serial plumbing is). That is a prerequisite, not an afterthought.
-
-- [makerdiary product page](https://makerdiary.com/products/nrf54l15-connectkit)
-- [Documentation wiki](https://wiki.makerdiary.com/nrf54l15-connectkit/)
-- [GitHub](https://github.com/makerdiary/nrf54l15-connectkit)
-
-### Recommendation
-
-Buy the **nRF54L15 Connect Kit** if the goal is checking Channel Sounding
-against real silicon — it is the only listed part that covers ground nothing
-else can, and it needs two of them for a ranging pair. Budget the UART
-transport as part of the cost.
-
-The **XIAO nRF52840** is a spare, not a capability.
-
-Neither is a plain USB dongle you plug in and use; both are development boards
-needing firmware. There are still essentially no consumer USB dongles
-advertising Bluetooth 6.0 — the cheap market ships 5.1–5.3 Realtek parts
-(RTL8761B, RTL8852BE) under many names, and "6.0 certified" on a listing
-usually describes a host stack rather than Channel Sounding in the controller.
-Confirm the specific feature before ordering.
+**Homebrew's `nrfutil` cask fails macOS Gatekeeper** and was flagged for
+removal. If it disappears, Nordic distributes the binary directly.

@@ -23,7 +23,7 @@ who arrives via a link rather than this index still knows which it is.
 | File | What it is |
 |---|---|
 | `scene-format.md` | The scene JSON format. If it disagrees with `src/scene/`, the code is right. |
-| `usb-controllers.md` | Which USB Bluetooth controllers we have, what each can and cannot check, how to flash an nRF52840, and what to buy next. |
+| `usb-controllers.md` | Running SimBLE on real hardware: choosing a controller, what each tier can prove, flashing an nRF52840, and the Channel Sounding situation. |
 
 ## Decision records — point-in-time by design, still useful
 
