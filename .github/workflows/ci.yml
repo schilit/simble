@@ -17,6 +17,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # rootcanal-rs is a submodule and a cfg-gated dev-dependency.
+          # Cargo resolves it regardless of the cfg, so without this every
+          # cargo command fails with "failed to load source".
+          submodules: recursive
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -24,7 +29,7 @@ jobs:
           components: clippy, rustfmt
 
       - name: Check Formatting
-        run: cargo fmt --all -- --check
+        run: cargo fmt -p simble -- --check
 
       # The gate that makes the API boundary real, and it has to run BEFORE
       # anything with --all-features.
@@ -108,6 +113,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # rootcanal-rs is a submodule and a cfg-gated dev-dependency.
+          # Cargo resolves it regardless of the cfg, so without this every
+          # cargo command fails with "failed to load source".
+          submodules: recursive
 
       # src/gatt/sig_names.rs is generated from the Bluetooth SIG's registry.
       # Every test in this repo has simble on both ends, so a wrong constant is
@@ -135,6 +145,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # rootcanal-rs is a submodule and a cfg-gated dev-dependency.
+          # Cargo resolves it regardless of the cfg, so without this every
+          # cargo command fails with "failed to load source".
+          submodules: recursive
 
       # A controller answers a command with either Command Complete or Command
       # Status, and choosing wrong does not fail -- it hangs the host, with
@@ -159,6 +174,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # rootcanal-rs is a submodule and a cfg-gated dev-dependency.
+          # Cargo resolves it regardless of the cfg, so without this every
+          # cargo command fails with "failed to load source".
+          submodules: recursive
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -240,6 +260,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # rootcanal-rs is a submodule and a cfg-gated dev-dependency.
+          # Cargo resolves it regardless of the cfg, so without this every
+          # cargo command fails with "failed to load source".
+          submodules: recursive
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -362,6 +387,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # rootcanal-rs is a submodule and a cfg-gated dev-dependency.
+          # Cargo resolves it regardless of the cfg, so without this every
+          # cargo command fails with "failed to load source".
+          submodules: recursive
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable

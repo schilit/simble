@@ -25,4 +25,6 @@
 
 # A prebuilt rootcanal, fetched by scripts/fetch_rootcanal.sh. ~38 MB of
 # third-party binary; CI caches the download rather than tracking it.
-/third_party/
+/third_party/*
+# ...except the rootcanal-rs submodule, which is source we own and pin.
+!/third_party/rootcanal-rs

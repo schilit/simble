@@ -115,3 +115,31 @@ path = "examples/channel_sounding.rs"
 [[example]]
 name = "in_process_scene"
 path = "examples/in_process_scene.rs"
+
+[lints.rust]
+# `rootcanal_oracle` gates the oracle test below; declared so it is a known
+# cfg rather than an `unexpected_cfgs` warning (this crate has no build.rs).
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(rootcanal_oracle)'] }
+
+# In-process foreign oracle for tests/rootcanal_oracle_test.rs: a real
+# Rootcanal controller as a library, rather than a subprocess on a TCP port.
+# The test body is `#![cfg(rootcanal_oracle)]`, so ordinary `cargo test`
+# compiles it to nothing:
+#
+#   RUSTFLAGS="--cfg rootcanal_oracle" cargo test --test rootcanal_oracle_test
+#
+# A cfg-gated dev-dependency and not a Cargo feature because simble is
+# published: optional dev-dependencies are rejected outright, and an optional
+# regular path dependency fails `cargo package` ("all dependencies must have a
+# version requirement specified"). Dev-dependencies without a version are
+# dropped from the published manifest, which is what makes this legal --
+# verified, the packaged Cargo.toml names no rootcanal-rs at all.
+#
+# Caveat, measured: Cargo resolves every target section regardless of active
+# cfgs, so ../rootcanal-rs must exist for *any* cargo command here, cfg off
+# included. Without it even `cargo metadata` fails. Goes away once
+# rootcanal-rs is on crates.io and this becomes a normal optional dependency
+# with a semver version.
+[target.'cfg(rootcanal_oracle)'.dev-dependencies]
+rootcanal-rs = { path = "third_party/rootcanal-rs" }
+bytes = "1.4"

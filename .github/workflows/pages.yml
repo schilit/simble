@@ -22,6 +22,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # rootcanal-rs is a submodule and a cfg-gated dev-dependency.
+          # Cargo resolves it regardless of the cfg, so without this every
+          # cargo command fails with "failed to load source".
+          submodules: recursive
 
       - name: Install the wasm32 target
         run: rustup target add wasm32-unknown-unknown
