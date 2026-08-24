@@ -107,22 +107,19 @@ nobody "fixes" them by making the labels disappear.
 
 ## 7. Structural gaps against Bumble
 
-*Added 2026-08-23, after BR/EDR landed in the simulated controller
-(`9557778`). These are not correctness bugs in code we have — they are whole
-capabilities Bumble has and simble does not. Each was confirmed absent on that
-date, not inherited from an older list. Recommended order: security first,
-because a real peer refuses unauthenticated profile connections, so the other
-two cannot be honestly demonstrated without it.*
+*Compiled 2026-08-23, **all three closed the same day** (`f99df5f`, `0d3dab9`,
+`4e125bc`). Kept as a record of what each needed and what is still missing
+inside each one — none is "done" in the sense Bumble is done.*
 
-| Gap | What exists today | What Bumble has | What closing it needs |
-|---|---|---|---|
-| **Security, both transports** | LE SMP does the pairing math (`smp/pairing.rs`), but the controller does not model encryption start. Classic has *nothing*: no SSP, no link keys, no authentication, no encryption — `Write Simple Pairing Mode` falls through `sim.rs`'s catch-all. | Classic SSP, link keys, authentication + encryption, LE encryption start, CTKD (`bumble/pairing.py`, `smp.py`, `controller.py`). | SSP in `sim.rs` (IO-capability exchange, numeric comparison at minimum), link-key store on `ClassicHost`, Authentication Requested / Set Connection Encryption + their event chains, LE Enable Encryption actually enabling. Bumble as the foreign peer to prove it. |
-| **SCO/eSCO** | Nothing: no H4 packet type 0x03 anywhere, no Setup Synchronous Connection, no routing in `Link`. HFP is signalling-only — the Car page can place a call but no audio path exists. | SCO/eSCO with HFP audio end-to-end. | A third H4 packet type through `HciChannel`, `Link` routing, Setup Synchronous Connection (+ its Command-Status chain) in `sim.rs`, and a CVSD/mSBC seam to the existing codec code. |
-| **Classic profiles as connectable devices** | ~10 000 lines of protocol code (`classic/{a2dp,avrcp,avdtp,hfp,hid}.rs`) with tests, but none is a `ProtocolHandler` on `ClassicHost` — no scene can host a classic headset, keyboard, or speaker. | Runnable A2DP speakers, HID keyboards/hosts, OPP servers, HFP AG/HF as applications. | One `ProtocolHandler` + SDP record per profile. **Known design item first:** `handle_channel_data` maps one PSM to one handler, but Classic HID needs two channels (0x0011 control, 0x0013 interrupt) distinguished. A2DP first — it unlocks the speaker scenario and can reuse the SBC oracle. |
+| Gap | State |
+|---|---|
+| ~~**Security, both transports**~~ | **Closed.** SSP (IO-capability exchange, association model, User Confirmation), link keys with a bond store, Authentication Requested / Set Connection Encryption, and LE Enable Encryption. Verified against Bumble over netsim in six live runs asserting *Bumble's* keystore and key-type flag. **Still missing:** CTKD; legacy PIN pairing is deliberately unmodelled; link-key derivation is `aes_cmac` over the addresses, documented as **not** the spec's f2 (no P-192 ECDH), which is the no-PHY scope holding. No `SceneEngine`/`ClassicDevice` wiring, so a scene cannot yet ask for an encrypted link. |
+| ~~**SCO/eSCO**~~ | **Closed.** H4 type `0x03` routed on a handle deliberately separate from the ACL's; Setup/Enhanced/Accept/Reject with Synchronous Connection Complete at both ends; the Car page's audio box is solid while a link exists. **Still missing:** no codec — payload crosses byte-for-byte, CVSD and mSBC are a seam, not an implementation. `0x2D` Changed is absent by choice (nothing renegotiates a live link). Interop proved the **AT layer only**; the synchronous link itself has never met a foreign controller. |
+| ~~**Classic profiles as connectable devices**~~ | **Partly closed.** `ProtocolHandler` learned multi-PSM and per-channel dispatch, so A2DP (source + sink, SBC) and Classic HID (device + host, both PSMs) are real scene devices. A foreign Bumble source streamed 40 libsbc frames into our sink. **Still missing:** **AVRCP** — 4 339 lines, still zero tests and no scene; HFP has signalling and SCO but no `ProtocolHandler`; simble's A2DP *source* has never met a foreign sink; no Rhai bindings for any of it; and `SdpQueryHandler::read_record` drops any record without an RFCOMM channel, so an A2DP Audio Sink record is invisible to an SDP search. |
 
 Parity with Bumble is *not* the goal — Bumble has no scripting, MCP, or web
 surface, which is where simble's value lives. Bumble's role stays what it has
-been all along: the foreign peer that proves each of these once built.
+been: the foreign peer that proves each of these once built.
 
 ---
 
