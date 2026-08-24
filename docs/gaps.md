@@ -27,8 +27,8 @@ grep -rn "Not implemented:" src/ --include=*.rs
 grep -rniE "//[/!]? .*(does not model|is a fake|stand-in|not modelled)" src/ --include=*.rs
 
 # API surface documented but not executable
-grep -c 'mode: "doc"' web/explorer/explorer.js    # 24
-grep -c 'mode: "ref"' web/explorer/explorer.js    # 21
+grep -c 'mode: "doc"' web/explorer/explorer.js    # 52
+grep -c 'mode: "ref"' web/explorer/explorer.js    # 57
 ```
 
 ---
@@ -88,8 +88,8 @@ writes the preference down.
 
 ## 4. Declared to users as unavailable
 
-The API Explorer marks **24 members doc-only** (callbacks, `wait_for`, constant
-tables — no form, because they cannot be driven by one line of Rhai) and **21
+The API Explorer marks **52 members doc-only** (callbacks, `wait_for`, constant
+tables — no form, because they cannot be driven by one line of Rhai) and **57
 reference-only** (the whole central role: real Rhai, but `WebSession` pumps
 only `ScriptGattServer`s, so a `BluetoothGatt` built there would queue HCI
 packets nobody drains). Both are honest and correctly labelled. Listed so
@@ -247,10 +247,22 @@ been: the foreign peer that proves each of these once built.
   Bumble's `send_avrcp_response` and `avctp.send_message` both carry a literal
   `# TODO: fragmentation`, and its controller never sends a continuation
   request. That fix rests on spec text plus mutation testing alone.
-- **The Explorer and Testing pages are behind the surface they document.**
-  `web/explorer/explorer.js` lists neither `catalog::*`, `assert_over`, nor
-  `BluetoothHidHost`; `web/testing/testing.js` still offers only the three
-  original example scripts. Both are small additions in `web/`.
+- ~~**The Explorer is behind the surface it documents.**~~ **Closed
+  2026-08-24** — and the gap was ~3× what this entry claimed: 100 members
+  documented against 177 registered, the largest omission being the *entire*
+  Auracast surface, not the three named here. `tests/explorer_surface_test.rs`
+  now walks the eight registration sites and fails when a registered name has
+  no entry; mutation-proven (4 of 6 tests fail against the previous page).
+  **Still open:** `web/testing/testing.js` still offers only the three original
+  example scripts.
+- **A truncated advertising name still claims to be complete.**
+  `fit_within_legacy_limit` trims a name to fit the 31-byte legacy budget and
+  rebuilds through `with_name`, which always emits `COMPLETE_LOCAL_NAME`
+  (0x09). Per CSS Part A §1.2 a truncated name must be `SHORTENED_LOCAL_NAME`
+  (0x08). Found because the scanner showed a device's name flickering between
+  the advertisement's truncated form and the scan response's full one — a real
+  scanner has to cope either way, but our emitter is lying about which it
+  sent.
 
 ---
 

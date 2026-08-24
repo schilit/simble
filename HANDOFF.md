@@ -4,6 +4,73 @@ A single place to pick up the thread: what SimBLE is, the three surfaces, the
 agentic (MCP) direction, the constraints that shape every decision, and what's
 next. Companion to `README.md` (user-facing) — this is the builder's map.
 
+## Where things stand (2026-08-24)
+
+A long session moved several things from "library-only" to "runs in a scene",
+and closed the biggest structural gaps against Bumble. The detail lives in
+`docs/gaps.md` (living) and `docs/decisions-2026-08-23.md` (decisions); this is
+the orientation.
+
+**Classic (BR/EDR) is real now.** `sim.rs` speaks inquiry, paging and ACL
+routing, so two `ClassicHost`s meet in a scene over SDP and RFCOMM.
+`SceneEngine::add_classic_device` is the fifth thing a scene can host. On top
+of that: SSP with link keys, authentication and encryption; SCO/eSCO carrying
+HFP audio; and A2DP, Classic HID and AVRCP as real `ProtocolHandler`s, so a
+scene can host a speaker, a keyboard and a remote control. The Car page now
+runs its AT conversation over a real simulated link.
+
+**CI has foreign oracles, on every push.** This is the change that matters most
+for confidence. Four scripts run against Bumble's own virtual controller with
+no netsim, and `classic_peer.py` runs against a real standalone rootcanal —
+two independent foreign implementations. Both jobs are blocking. The governing
+rule still holds and is worth re-reading in `docs/test-strategy.md`: **a test
+with simble on both ends proves only that simble agrees with itself.** Today
+alone the foreign side caught an SDP continuation returning a prefix, a
+reversed RSI, two unhandled inquiry-result forms, and an AVRCP fragmentation
+bug that 1,287 lines of in-tree test never noticed — while *our* ASCS matrix
+caught Bumble wrong three ways. Neither side is the authority; disagreement is.
+
+**The public API has a boundary.** 7,486 reachable items to 5,636: nine
+plumbing modules (`packets`, `att`, `l2cap`, `gap`, `smp`, `crypto`, `df`,
+`audio`, `obex`) are gated behind a `testing` cfg that `cargo test` enables via
+a self-dev-dependency. CI builds the **closed** surface as its own step —
+without that, `--all-features` would mean the gate is never compiled. All 14
+spec-discriminant enums are `#[non_exhaustive]`.
+
+**The crate is publishable.** `cargo package` is 1.4 MiB compressed (it was
+37.4 — a tracked `.venv` was the whole difference), and `Cargo.lock` is
+tracked. Not published yet, and 1.0 is not the goal: classic has no CTKD, SCO
+carries no codec, and the A2DP source has never met a foreign sink.
+
+**`rootcanal-rs` is a submodule** at `third_party/`, itself vendoring the
+rootcanal C++. It gives an in-process *real* controller for tests, behind
+`--cfg rootcanal_oracle`, off by default. Every `actions/checkout` needs
+`submodules: recursive` or nothing resolves — Cargo's resolver is cfg-agnostic,
+so a gated dependency still has to exist.
+
+**Tests are organised now.** 700 inline tests moved to sibling `#[path]` files
+(`sim.rs` 8,483 → 5,492 lines), duplicate inline/integration pairs deleted, and
+`tests/common/` shares what nine files were each redefining. One consequence
+worth knowing: coverage numbers moved in **both** directions, because
+assertion-heavy tests over small files charge their `panic!` arms to the file
+under test.
+
+### The failure mode to keep watching
+
+Four separate times this session, a claim that was **true when written** had
+quietly stopped being true and misdirected someone: the HID page's "SimBLE has
+no central-role scripting", the Broadcast radio string, the Car multiplexer
+string, and `AGENTS.md` instructing agents to recreate a file that had just
+been deleted. A fifth — the controller bar silently rewriting the user's stored
+backend — made a *working* capability look missing for weeks.
+
+The structural answer is in `docs/README.md`: every document now states which
+contract it is under. A **decision record** is allowed to age and is superseded,
+never edited. A **living** document is worthless the moment it is stale. Where a
+check can replace prose, it should: `scripts/check_hci_command_answers.py` and
+`tests/explorer_surface_test.rs` both exist because a sentence could not be
+trusted to stay true.
+
 ## The idea
 
 SimBLE is a **pure-Rust virtual Bluetooth LE host stack** (HCI → L2CAP → ATT/GATT
@@ -169,10 +236,14 @@ Ordered by leverage; each independently landable.
    back and out again re-announces. Not yet produced by anything else: a live
    backend's own events (connection, disconnect, `last_error`) are still only
    visible by polling `status`.
-5. **Skills** to pair with the MCP: `author-ble-device` (the `android::*`/`uuid::*`
+5. **Classic and the foreign oracles landed** — see "Where things stand"
+   above. What remains there: CTKD, a SCO codec, AVRCP browsing (PSM 0x001B),
+   an A2DP *source* that has met a foreign sink, and Rhai bindings for the
+   Classic profiles.
+6. **Skills** to pair with the MCP: `author-ble-device` (the `android::*`/`uuid::*`
    API + "lint then run_test" loop), `write-ble-test`, `reproduce-ble-bug`,
    `test-app-against-emulator`.
-6. **Smaller polish:** ~~`scan` should report **distinct** devices~~ **done** (one
+7. **Smaller polish:** ~~`scan` should report **distinct** devices~~ **done** (one
    entry per advertiser plus a `reports` count). A **symbol lint** in `--no-run`
    (flag `android::BluetoothGattServ` typos before running) needs Rhai's
    `metadata` feature — `gen_fn_signatures` isn't compiled in without it.
