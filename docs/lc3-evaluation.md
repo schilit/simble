@@ -1,5 +1,7 @@
 # LC3 codec options for the wasm demo devices
 
+> **Decision record, 2026-08-23.** Records why LC3 was built the way it was. Point-in-time by design: read it as reasoning, not as a description of the present tree.
+
 **Scope.** This evaluates LC3 *only* for the example devices simble compiles
 into wasm — the browser demo pages where a scripted LE Audio sink receives
 isochronous SDUs and the page plays them. Not a general-purpose codec for

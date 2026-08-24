@@ -1,5 +1,7 @@
 # SBC for the A2DP media path — options, licensing, and what was built
 
+> **Decision record, 2026-08-23.** Records why SBC was implemented from the specification rather than bound to a library. Point-in-time by design: read it as reasoning, not as a description of the present tree.
+
 **Scope.** SBC is the *mandatory* A2DP codec, so this is not the same kind of
 decision LC3 was (`docs/lc3-evaluation.md`, where a codec was wanted only so a
 demo page could make noise). Simble could negotiate A2DP — AVDTP signalling,

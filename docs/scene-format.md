@@ -1,5 +1,7 @@
 # The SimBLE scene format
 
+> **Reference, kept current.** This describes the scene JSON format as it is today. If it disagrees with `src/scene/`, the code is right and this file is a bug.
+
 A **scene** is a JSON file describing which Bluetooth devices exist, how each
 is placed, and how they are wired to each other. One file, committable and
 diffable, that `simble scene.json` turns into a running scene.
