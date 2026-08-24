@@ -19,7 +19,7 @@
 //! The codecs themselves live elsewhere, and only one of them exists:
 //!
 //! - **SBC**, the mandatory codec, is implemented in
-//!   [`crate::audio::sbc`] — a real encoder and decoder, verified against
+//!   `crate::audio::sbc` — a real encoder and decoder, verified against
 //!   bluez's `libsbc` in both directions. [`SbcFrame`] parses a frame's
 //!   header and hands back its bytes; `SbcDecoder` turns those bytes into
 //!   PCM.

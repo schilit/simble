@@ -1237,7 +1237,7 @@ fn unknown_dlci(dlci: u8) -> SimbleError {
 // ---------------------------------------------------------------------------
 
 /// Client role: thin helper tying [`Multiplexer`] to a
-/// [`ClassicChannelManager`]-obtained L2CAP channel.
+/// `ClassicChannelManager`-obtained L2CAP channel.
 #[derive(Debug, Default)]
 pub struct RfcommClient;
 

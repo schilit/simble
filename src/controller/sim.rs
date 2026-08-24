@@ -31,7 +31,7 @@
 //!   is told what when a BIG appears or goes away.
 //!
 //! HCI packets are parsed and built with zero-copy `#[repr(C)]` structs (the
-//! same idiom as [`crate::packets`]), so the wire layouts are explicit rather
+//! same idiom as `crate::packets`), so the wire layouts are explicit rather
 //! than hand-indexed byte offsets.
 //!
 //! ```

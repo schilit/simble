@@ -10,7 +10,7 @@
 //! This is deliberately transport-free: `handle_packet` takes bytes in and
 //! returns the H4 packets to send back, so the same host runs over the
 //! in-process scene radio, netsim, a USB dongle, or a test harness. Events
-//! are parsed through the typed views in [`crate::packets::hci_events`]
+//! are parsed through the typed views in `crate::packets::hci_events`
 //! rather than by indexing raw bytes.
 
 use crate::device::VirtualDevice;

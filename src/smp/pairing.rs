@@ -584,7 +584,7 @@ impl PairingSession {
     }
 
     /// Whether this session ended because the Security Manager Timer reached
-    /// [`SMP_TIMEOUT_SECONDS`], as opposed to an ordinary Pairing Failed.
+    /// `SMP_TIMEOUT_SECONDS`, as opposed to an ordinary Pairing Failed.
     ///
     /// The two are not interchangeable. After a Pairing Failed, "any
     /// subsequent pairing procedure shall restart from the Pairing Feature

@@ -29,7 +29,7 @@
 //!
 //! Like `CisCentral` this is transport-free — HCI packets in, HCI packets out —
 //! and carries no codec: SDUs are opaque bytes, so the same broadcaster
-//! carries LC3 from [`crate::audio::lc3`] or anything else a caller encodes.
+//! carries LC3 from `crate::audio::lc3` or anything else a caller encodes.
 //!
 //! Encryption is wired through (`broadcast_code`) but untested against a
 //! foreign peer; see the crate's interop notes.

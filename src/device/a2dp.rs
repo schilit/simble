@@ -4,7 +4,7 @@
 //! A2DP as [`ProtocolHandler`]s — the two ends of a Bluetooth speaker.
 //!
 //! [`crate::classic::avdtp`] has been a complete signalling state machine
-//! and [`crate::audio::sbc`] a `libsbc`-verified codec for as long as either
+//! and `crate::audio::sbc` a `libsbc`-verified codec for as long as either
 //! has existed, and nothing could host them: a scene's BR/EDR device
 //! registers `Box<dyn ProtocolHandler>`s, and neither module was one. These
 //! two types are that seam, and nothing else — every protocol decision below
@@ -26,7 +26,7 @@
 //! [`A2dpSink`] renders: it answers Discover / Get_Capabilities /
 //! Set_Configuration / Open / Start, accepts the transport channel, and
 //! hands whole SBC frames up through [`A2dpSink::take_frames`]. It decodes
-//! them with [`crate::audio::sbc::SbcDecoder`] when asked to
+//! them with `crate::audio::sbc::SbcDecoder` when asked to
 //! ([`A2dpSink::decode`]), which is the only thing in simble that turns a
 //! Bluetooth payload back into audio.
 //!
@@ -456,7 +456,7 @@ impl Default for A2dpSource {
     }
 }
 
-/// Hand-written because [`crate::audio::sbc::SbcEncoder`] carries kilobytes
+/// Hand-written because `crate::audio::sbc::SbcEncoder` carries kilobytes
 /// of filter history that nobody wants printed — and `ProtocolHandler`
 /// requires `Debug`.
 impl std::fmt::Debug for A2dpSource {

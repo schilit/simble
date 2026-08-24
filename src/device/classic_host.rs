@@ -3,7 +3,7 @@
 
 //! The **BR/EDR host**: the layer that turns simble's Classic protocol
 //! modules ([`crate::classic`]) and its L2CAP Classic channel manager
-//! ([`crate::l2cap::classic::ClassicChannelManager`]) into a device a real stack can
+//! (`crate::l2cap::classic::ClassicChannelManager`) into a device a real stack can
 //! find, connect to, and use.
 //!
 //! Those protocol modules were complete but unreachable: nothing accepted a
