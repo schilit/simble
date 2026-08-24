@@ -53,7 +53,7 @@ here is a reason that was true when written and quietly stopped being true.
 
 | Where | Gap |
 |---|---|
-| `profiles/bass.rs` | **Biggest one.** Add Source reports "synchronized" unconditionally — for a source that does not exist, or an encrypted one with no code. `BigReceiver` does the real thing next door and is Bumble-verified. This is the largest remaining "our code lies to a foreign peer" surface. ~a day; needs `bass.rs` to hold a transport handle, which is a design decision. |
+| ~~`profiles/bass.rs`~~ | ~~Add Source reports "synchronized" unconditionally.~~ **Closed.** `sync_states()` now reports what is actually true — `SyncInfoRequest` when the Assistant offers PAST, otherwise `NotSynchronizedToPa`, with no BIS synchronised either way — and `report_sync_outcome` is the entry point for a real outcome. **Still open:** nothing calls it; that needs `bass.rs` to hold a transport handle, which is a design decision, so a Delegator still cannot report a *real* sync. |
 | ~~`profiles/ascs.rs`~~ | ~~`Releasing` never assigned; `Released` unimplemented; neither §3.2 link-loss rule.~~ **Closed.** A 104-cell {role,state}×{opcode} matrix found 9 cells with the right response code and the wrong resulting state, plus 16 unconstructible. **Still open:** the link-loss entry points have no caller — every `add_ascs` site drops the service handle, so nothing can deliver the event. |
 | ~~`smp/pairing.rs`~~ | ~~No SMP timer; no `self.failed` guard.~~ **Closed.** §3.4's 30 seconds, the post-failure drop, and per-opcode `INVALID_PARAMETERS` — 16 guards, each mutation-proven, none previously covered by any test. Found on the way: a remote panic from one well-formed Pairing Random. **Still open:** `tick_smp` has no caller in the scene loop, and an inbound re-pair after a plain Pairing Failed is still dropped responder-side. |
 | `profiles/ras.rs` | On-Demand Ranging Data and its Get/Ack/Retrieve flow; Ranging Data Ready / Overwritten notifications; mode-0 and mode-1 steps; multiple antenna paths. `antenna_paths_mask` is hardcoded `0x01` and carries no information. `CONFIG_ID_SHIFT` masks `& 0x07` where the spec field is **4 bits** — config IDs 8–15 truncate on write and mis-read on parse. |
@@ -93,17 +93,18 @@ nobody "fixes" them by making the labels disappear.
 
 ## 6. Infrastructure
 
-- **`Cargo.lock` is gitignored** while the crate ships a binary — CI resolves
-  different dependency versions than local.
+- ~~**`Cargo.lock` is gitignored**~~ **Closed** (`7a9c4ef`) — tracked, 119
+  packages pinned, with a `.gitignore` comment saying why so it is not re-added.
 - **`web/emulator/` has no slot in the top nav** (it has a landing-page card).
 - ~~**24 test functions are duplicated** inline ↔ `tests/`.~~ **Closed** —
   22 inline copies deleted (the `tests/` body was a strict superset in 21;
   one merge carried an assertion across), 2 rfcomm pairs deferred. `tests/mod.rs`
   deleted with them: it re-ran 35 of 44 files as a second binary, double-counting
   376 functions, and `AGENTS.md` had been *instructing* agents to keep it.
-- **`.venv/` is tracked in git.** Running any Python script dirties ~80 `.pyc`
-  files, which every interop agent has had to restore by hand. It should be
-  gitignored and removed from the index.
+- ~~**`.venv/` is tracked in git.**~~ **Closed** (`65ecb30`) — 2 789 files
+  untracked. It was also the reason the crate could not be published:
+  `cargo package` was **105.9 MiB (37.4 compressed)** against crates.io's
+  10 MiB limit, and is now **5.6 MiB (1.4 compressed)**.
 - **`transport/usb.rs` is 45.82% covered, not the ~68% it displayed** — 332
   lines of self-agreeing `MockEndpoints` test were inflating it. It is now the
   worst-covered transport and the only one with neither a loopback nor a
