@@ -28,7 +28,6 @@ reasonable.
 | **Seeed XIAO nRF52840** (Arrow/DigiKey `102010448`) | 5.x | Same as the dongle above — same silicon, different board | ⚠️ untested; expected to work with the same firmware |
 | **Realtek RTL8761B / RTL8852BE** — most "5.x" dongles sold today | 5.1–5.3 | Real RF; extended advertising varies by firmware | ⚠️ untested |
 | **nRF54L15** — [DK](https://www.nordicsemi.com/Products/Development-hardware/nRF54L15-DK), [makerdiary Connect Kit](https://makerdiary.com/products/nrf54l15-connectkit), [Tag](https://www.cnx-software.com/2026/06/23/nordic-nrf54l15-tag-prototyping-platform-supports-bluetooth-channel-sounding-matter-edge-ai/) | 6.0 | **Channel Sounding** (distance ranging) | ❌ untested, **and cannot work today** — no USB HCI; needs an HCI-over-UART transport first |
-| **SIG "LE Only" PTS dongle** (nRF54L15-DK) | 6.2 | Qualification test cases incl. Channel Sounding | ❌ untested; driven by the PTS tool, not a general controller |
 
 One thing to know before spending anything: **BIG and Channel Sounding cannot
 be checked against software.** Bumble implements no BIG, and Rootcanal answers
@@ -143,13 +142,6 @@ leads to an interface MCU offering a **virtual serial port**, not to a USB
 Bluetooth-class controller. The distinction decides whether `UsbTransport` can
 talk to it (it cannot) or whether you need an HCI-over-UART transport (you
 do).
-
-The Bluetooth SIG also sells an **"LE Only" PTS dongle** built on the
-nRF54L15-DK, which
-[supports PTS test cases requiring Core Spec v6.2 features including Channel Sounding](https://store.bluetooth.com/pages/new-le-only-nordic-nrf54l15-dk).
-That is a qualification-testing device driven by the PTS tool rather than a
-general-purpose controller, and it needs PTS 8.9.0 or later — worth knowing it
-exists, but it is not a substitute for a development kit.
 
 What exists today is development kits, and as of August 2026 they are all the
 same Nordic nRF54L15 silicon — so the choice is form factor, not capability:
