@@ -33,9 +33,9 @@
 
 use simble::scene::runner::{RunOptions, RunReport};
 use simble::scene::{Controller, Scene};
-use simble::transport::usb::UsbSelector;
+use simble::transport::usb::{UsbSelector, list_bluetooth_dongles};
 use simble::transport::wasm_ws::{lint_script, run_test_script};
-use simble::transport::{HciChannel, UsbTransport, WsServerConn};
+use simble::transport::{HciChannel, Inbound, UsbTransport, accept_inbound};
 use std::io::Read;
 use std::net::{TcpListener, TcpStream};
 use std::process::ExitCode;
@@ -434,15 +434,20 @@ fn run_bridge(args: &[String]) -> ExitCode {
         "usb-ws: listening on ws://127.0.0.1:{ws_port}/  (point a page's WebSocket backend here)"
     );
 
+    // A thread per client, because one bridge now serves *every* dongle: two
+    // pages driving two radios need two live sessions, and a sequential accept
+    // loop would let the first block the second forever.
     for incoming in listener.incoming() {
         match incoming {
             Ok(stream) => {
-                if let Err(e) = serve(stream, &selector) {
-                    // A client disconnect surfaces as an error too; it's the
-                    // clean end of a session, so log and await the next one.
-                    eprintln!("  session ended: {e}");
-                }
-                eprintln!("usb-ws: waiting for the next client…");
+                let fallback = selector.clone();
+                std::thread::spawn(move || {
+                    if let Err(e) = serve(stream, &fallback) {
+                        // A client disconnect surfaces as an error too; it is
+                        // the clean end of a session, so log it and move on.
+                        eprintln!("  session ended: {e}");
+                    }
+                });
             }
             Err(e) => eprintln!("usb-ws: accept failed: {e}"),
         }
@@ -450,12 +455,83 @@ fn run_bridge(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// The dongle list a page reads before choosing one, as JSON.
+///
+/// Hand-rolled rather than pulled through serde: this is the only JSON the
+/// bridge emits, and the fields are a handful of integers and strings.
+fn devices_json() -> String {
+    let dongles = list_bluetooth_dongles().unwrap_or_default();
+    let mut out = String::from("{\"devices\":[");
+    for (i, d) in dongles.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        let product = d.product.clone().unwrap_or_default().replace('"', "'");
+        out.push_str(&format!(
+            "{{\"index\":{},\"selector\":\"{}\",\"bus\":\"{}\",\"address\":{},\
+              \"vid\":\"{:04x}\",\"pid\":\"{:04x}\",\"product\":\"{product}\"}}",
+            d.index,
+            d.port_selector(),
+            d.bus_id,
+            d.device_address,
+            d.vendor_id,
+            d.product_id
+        ));
+    }
+    out.push_str("]}");
+    out
+}
+
 /// Serves one WebSocket client end-to-end: handshake, open the dongle, then
 /// shuttle HCI both ways through one shared channel until either side closes.
-fn serve(stream: TcpStream, selector: &UsbSelector) -> Result<(), String> {
-    let (mut ws, query) = WsServerConn::accept(stream).map_err(|e| e.to_string())?;
-    eprintln!("  client connected ({query:?}); opening dongle…");
-    let mut dongle = UsbTransport::open_selected(selector).map_err(|e| e.to_string())?;
+fn serve(mut stream: TcpStream, fallback: &UsbSelector) -> Result<(), String> {
+    let inbound = match accept_inbound(stream.try_clone().map_err(|e| e.to_string())?) {
+        Ok(i) => i,
+        Err(e) => return Err(e.to_string()),
+    };
+    let (mut ws, query) = match inbound {
+        Inbound::WebSocket(ws, query) => (ws, query),
+        // A plain GET: the page is asking what it can connect *to*. This is
+        // why the bridge serves every dongle from one port rather than one
+        // port each -- a page cannot discover a port, but it can read a list.
+        Inbound::Request { method, target } => {
+            let body = if target.starts_with("/devices") {
+                devices_json()
+            } else {
+                format!(
+                    "{{\"error\":\"unknown path\",\"method\":{method:?},\"target\":{target:?},\
+                      \"try\":\"/devices\"}}"
+                )
+            };
+            let status = if target.starts_with("/devices") {
+                "200 OK"
+            } else {
+                "404 Not Found"
+            };
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            use std::io::Write as _;
+            stream
+                .write_all(response.as_bytes())
+                .map_err(|e| e.to_string())?;
+            return Ok(());
+        }
+    };
+    // `?device=<selector>` names which dongle this client wants, the way
+    // netsim's `?name=&address=` names which device a connection carries.
+    let wanted = query
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("device="))
+        .map(|v| v.replace("%23", "#"));
+    let selector = match &wanted {
+        Some(spec) => UsbSelector::parse(spec).map_err(|e| e.to_string())?,
+        None => fallback.clone(),
+    };
+    eprintln!("  client connected ({query:?}); opening {selector:?}…");
+    let mut dongle = UsbTransport::open_selected(&selector).map_err(|e| e.to_string())?;
     eprintln!("  bridging — the dongle is now this client's controller");
 
     let channel = HciChannel::new();

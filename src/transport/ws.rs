@@ -441,6 +441,19 @@ use std::net::TcpStream;
 /// the bridge only logs it, since the real dongle has its own identity).
 pub(crate) fn server_handshake<S: Read + Write>(stream: &mut S) -> Result<String, SimbleError> {
     let request = read_http_headers(stream)?;
+    finish_server_handshake(stream, &request)
+}
+
+/// Completes a WebSocket handshake whose headers have already been read.
+///
+/// Split out because a caller may need to look at the request first: the same
+/// port can answer a plain `GET` (a page asking what devices exist) and a
+/// WebSocket upgrade (a page opening one), and by the time the key is missing
+/// it is too late to tell those apart.
+pub(crate) fn finish_server_handshake<S: Read + Write>(
+    stream: &mut S,
+    request: &str,
+) -> Result<String, SimbleError> {
     let request_line = request
         .split("\r\n")
         .next()
@@ -449,7 +462,7 @@ pub(crate) fn server_handshake<S: Read + Write>(stream: &mut S) -> Result<String
     let target = request_line.split_whitespace().nth(1).unwrap_or("/");
     let query = target.split_once('?').map(|(_, q)| q).unwrap_or("");
 
-    let key = header_value(&request, "Sec-WebSocket-Key").ok_or_else(|| {
+    let key = header_value(request, "Sec-WebSocket-Key").ok_or_else(|| {
         SimbleError::Transport("handshake request missing Sec-WebSocket-Key".to_string())
     })?;
     let response = format!(
@@ -492,6 +505,43 @@ pub struct WsServerConn<S: Read + Write> {
     /// same batch are still delivered first. Once set, every later
     /// `poll_messages` returns it.
     closed: Option<String>,
+}
+
+/// What an inbound connection turned out to want.
+///
+/// One port answers both: a page asking *what devices exist* sends a plain
+/// `GET`, and a page opening one sends a WebSocket upgrade. netsim works this
+/// way — one port, one connection per device, each naming its device in the
+/// URL query — and this mirrors it.
+pub enum Inbound {
+    /// A completed WebSocket handshake, with the request's query string.
+    WebSocket(WsServerConn<TcpStream>, String),
+    /// A plain HTTP request the caller should answer and close.
+    Request {
+        /// `GET`, `POST`, …
+        method: String,
+        /// The request target, query string included.
+        target: String,
+    },
+}
+
+/// Reads one inbound request and either completes a WebSocket handshake or
+/// hands back the plain HTTP request for the caller to answer.
+///
+/// The two cannot be told apart after the fact: by the time a missing
+/// `Sec-WebSocket-Key` is noticed, the headers are consumed and the reply is
+/// already wrong. So the decision is made here, before committing.
+pub fn accept_inbound(mut stream: TcpStream) -> Result<Inbound, SimbleError> {
+    let request = read_http_headers(&mut stream)?;
+    let line = request.split("\r\n").next().unwrap_or("");
+    let mut parts = line.split_whitespace();
+    let method = parts.next().unwrap_or("GET").to_string();
+    let target = parts.next().unwrap_or("/").to_string();
+    if header_value(&request, "Sec-WebSocket-Key").is_none() {
+        return Ok(Inbound::Request { method, target });
+    }
+    let query = finish_server_handshake(&mut stream, &request)?;
+    Ok(Inbound::WebSocket(WsServerConn::new(stream), query))
 }
 
 impl WsServerConn<TcpStream> {

@@ -68,4 +68,4 @@ pub use rootcanal::{H4FrameReader, RootcanalTransport, read_h4_packet, write_h4_
 #[cfg(not(target_arch = "wasm32"))]
 pub use usb::UsbTransport;
 #[cfg(not(target_arch = "wasm32"))]
-pub use ws::WsServerConn;
+pub use ws::{Inbound, WsServerConn, accept_inbound};
