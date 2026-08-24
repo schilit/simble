@@ -21,7 +21,7 @@ everything above it.
 | You want to test | You need | Why |
 |---|---|---|
 | Protocol logic, CI, anything deterministic | **No hardware.** The built-in controller | Real RF is non-deterministic; that is wrong for CI. |
-| Against a real phone or another stack | **Any Bluetooth 4.0 dongle** — e.g. a CSR8510 (`0a12:0001`), a few pounds | Real RF, real timing, a real peer. |
+| Against a real phone or another stack | **Any Bluetooth 4.0 dongle** — e.g. a CSR8510 (`0a12:0001`), under $10 | Real RF, real timing, a real peer. |
 | Extended advertising, periodic advertising, **LE Audio broadcast (BIG)**, 2M/Coded PHY | **A Bluetooth 5.x controller** — an nRF52840 dongle, flashed (below) | A 4.0 controller answers these with *Unknown HCI Command*. There is no software workaround. |
 | **Channel Sounding** (distance ranging) | **Bluetooth 6.0 silicon**, and two of them | Not available as a USB dongle today — see [Channel Sounding](#channel-sounding-hardware). |
 
