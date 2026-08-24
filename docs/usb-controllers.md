@@ -25,7 +25,7 @@ everything above it.
 | Extended advertising, periodic advertising, **LE Audio broadcast (BIG)**, 2M/Coded PHY | **A Bluetooth 5.x controller** — an nRF52840 dongle, flashed (below) | A 4.0 controller answers these with *Unknown HCI Command*. There is no software workaround. |
 | **Channel Sounding** (distance ranging) | **Bluetooth 6.0 silicon**, and two of them | Not available as a USB dongle today — see [Channel Sounding](#channel-sounding-hardware). |
 
-A note worth internalising before spending anything: **BIG and Channel
+One thing to know before spending anything: **BIG and Channel
 Sounding cannot be checked against software.** Bumble implements no BIG, and
 Rootcanal answers `LE_Create_BIG` with `Unknown HCI Command`. Neither
 implements the Ranging Service. If you are working on broadcast audio or
