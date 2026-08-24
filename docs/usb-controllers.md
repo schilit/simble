@@ -15,21 +15,26 @@ one can actually prove.
 
 ## Which controller do you need?
 
-Work down until a row covers what you want to test. Each tier includes
-everything above it.
+Work down until a row covers what you want to test; each tier includes
+everything above it. **Tested** means someone has run SimBLE against that part
+and the hardware tests pass — anything else is an expectation, however
+reasonable.
 
-| You want to test | You need | Why |
-|---|---|---|
-| Protocol logic, CI, anything deterministic | **No hardware.** The built-in controller | Real RF is non-deterministic; that is wrong for CI. |
-| Against a real phone or another stack | **Any Bluetooth 4.0 dongle** — e.g. a CSR8510 (`0a12:0001`), under $10 | Real RF, real timing, a real peer. |
-| Extended advertising, periodic advertising, **LE Audio broadcast (BIG)**, 2M/Coded PHY | **A Bluetooth 5.x controller** — an nRF52840 dongle, flashed (below) | A 4.0 controller answers these with *Unknown HCI Command*. There is no software workaround. |
-| **Channel Sounding** (distance ranging) | **Bluetooth 6.0 silicon**, and two of them | These connect over USB, but as a *serial* device rather than a USB Bluetooth controller — see [Channel Sounding](#channel-sounding-hardware). |
+| Part | BT | Adds | Tested with SimBLE |
+|---|---|---|---|
+| Built-in simulated controller | — | Everything deterministic; the right choice for CI | ✅ every test in the suite |
+| **CSR8510 A10** (`0a12:0001`) — the cheap grey dongle, under $10 | 4.0 | Real RF, real timing, a real peer: advertising, scanning, connections, GATT | ✅ `tests/usb_hardware_test.rs` — two of them link and discover over the air |
+| **nRF52840 dongle** (PCA10059) + Zephyr `hci_usb` | 5.4 | Extended advertising, periodic advertising, **LE Audio broadcast (BIG)**, 2M + Coded PHY, LE Extended Create Connection | ✅ flashed and verified against `Read_Local_Supported_Commands` |
+| **Seeed XIAO nRF52840** (Arrow/DigiKey `102010448`) | 5.x | Same as the dongle above — same silicon, different board | ⚠️ untested; expected to work with the same firmware |
+| **Realtek RTL8761B / RTL8852BE** — most "5.x" dongles sold today | 5.1–5.3 | Real RF; extended advertising varies by firmware | ⚠️ untested |
+| **nRF54L15** — [DK](https://www.nordicsemi.com/Products/Development-hardware/nRF54L15-DK), [makerdiary Connect Kit](https://makerdiary.com/products/nrf54l15-connectkit), [Tag](https://www.cnx-software.com/2026/06/23/nordic-nrf54l15-tag-prototyping-platform-supports-bluetooth-channel-sounding-matter-edge-ai/) | 6.0 | **Channel Sounding** (distance ranging) | ❌ untested, **and cannot work today** — no USB HCI; needs an HCI-over-UART transport first |
+| **SIG "LE Only" PTS dongle** (nRF54L15-DK) | 6.2 | Qualification test cases incl. Channel Sounding | ❌ untested; driven by the PTS tool, not a general controller |
 
-One thing to know before spending anything: **BIG and Channel
-Sounding cannot be checked against software.** Bumble implements no BIG, and
-Rootcanal answers `LE_Create_BIG` with `Unknown HCI Command`. Neither
-implements the Ranging Service. If you are working on broadcast audio or
-ranging, hardware is not a nice-to-have — it is the only oracle that exists.
+One thing to know before spending anything: **BIG and Channel Sounding cannot
+be checked against software.** Bumble implements no BIG, and Rootcanal answers
+`LE_Create_BIG` with `Unknown HCI Command`. Neither implements the Ranging
+Service. If you are working on broadcast audio or ranging, hardware is not a
+nice-to-have — it is the only oracle that exists.
 
 ## Plugging in more than one
 
@@ -184,11 +189,10 @@ Three things to know before buying:
 
 ## Also worth knowing
 
-**Seeed XIAO nRF52840** (Arrow/DigiKey `102010448`,
-[product page](https://www.seeedstudio.com/Seeed-XIAO-BLE-nRF52840-p-5201.html))
-is the same nRF52840 silicon as the dongles above, in a XIAO board with USB-C.
-The same `hci_usb` firmware applies and it lands in the same tier. Useful as an
-extra 5.x radio; it adds no capability you would not already have.
+**Seeed XIAO nRF52840** ([product page](https://www.seeedstudio.com/Seeed-XIAO-BLE-nRF52840-p-5201.html))
+is a development board rather than a dongle — castellated pins, a UF2
+bootloader, and no factory HCI firmware. Same silicon as the nRF52840 dongle,
+so the same `hci_usb` build applies.
 
 **Homebrew's `nrfutil` cask fails macOS Gatekeeper** and was flagged for
 removal. If it disappears, Nordic distributes the binary directly.
