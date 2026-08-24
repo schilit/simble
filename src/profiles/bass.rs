@@ -84,6 +84,9 @@ pub const ANY_BIS: u32 = 0xFFFF_FFFF;
 /// PA_Sync parameter of Add/Modify Source operations (BASS Section 3.1.1.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+// The SIG can add a value to this field; `#[non_exhaustive]` is what stops
+// that being a breaking change for every downstream `match`.
+#[non_exhaustive]
 pub enum PeriodicAdvertisingSyncParams {
     /// Do not synchronize to pa.
     DoNotSynchronizeToPa = 0x00,
@@ -108,6 +111,9 @@ impl PeriodicAdvertisingSyncParams {
 /// PA_Sync_State field of a Broadcast Receive State (BASS Section 3.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+// The SIG can add a value to this field; `#[non_exhaustive]` is what stops
+// that being a breaking change for every downstream `match`.
+#[non_exhaustive]
 pub enum PeriodicAdvertisingSyncState {
     /// Not synchronized to pa.
     NotSynchronizedToPa = 0x00,
@@ -138,6 +144,9 @@ impl PeriodicAdvertisingSyncState {
 /// BIG_Encryption field of a Broadcast Receive State (BASS Section 3.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+// The SIG can add a value to this field; `#[non_exhaustive]` is what stops
+// that being a breaking change for every downstream `match`.
+#[non_exhaustive]
 pub enum BigEncryption {
     /// Not encrypted.
     NotEncrypted = 0x00,

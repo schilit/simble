@@ -308,6 +308,9 @@ pub fn describe_metadata(data: &[u8]) -> Vec<(String, String)> {
 /// Bluetooth Assigned Numbers, Section 6.12.5.1 - Sampling Frequency.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+// The SIG can add a value to this field; `#[non_exhaustive]` is what stops
+// that being a breaking change for every downstream `match`.
+#[non_exhaustive]
 pub enum SamplingFrequency {
     /// Freq 8 0 0 0.
     Freq8000 = 0x01,
@@ -434,6 +437,9 @@ pub mod supported_sampling_frequency {
 /// Bluetooth Assigned Numbers, Section 6.12.5.2 - Frame Duration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+// The SIG can add a value to this field; `#[non_exhaustive]` is what stops
+// that being a breaking change for every downstream `match`.
+#[non_exhaustive]
 pub enum FrameDuration {
     /// Duration 7 5 0 0 us.
     Duration7500Us = 0x00,
@@ -471,6 +477,9 @@ pub mod supported_frame_duration {
 /// Basic Audio Profile, 3.5.3 - Additional ASCS requirements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+// The SIG can add a value to this field; `#[non_exhaustive]` is what stops
+// that being a breaking change for every downstream `match`.
+#[non_exhaustive]
 pub enum AnnouncementType {
     /// General.
     General = 0x00,

@@ -30,39 +30,105 @@
 //! The engine is shared, so the surfaces cannot diverge: `run_test_script` and
 //! `lint_script` back the CLI, the browser's Testing page, and the MCP
 //! `run_test`/`lint` tools alike.
+//!
+//! # What is public, and what that means
+//!
+//! The modules below are in two tiers. See `docs/api-surface.md` for the
+//! measurement they came from.
+//!
+//! **Supported** — [`device`], [`devices`], [`scene`], [`scripting`],
+//! [`types`], [`transport`], [`api`], [`service`], [`client`], [`gatt`],
+//! [`profiles`], [`android`], [`classic`], [`controller`], [`cs`]. Every one
+//! of these is imported by an `examples/` program, a `src/bin/` binary, or the
+//! scripting layer's own public API, which is the only evidence this crate has
+//! of what a consumer actually needs. Breaking changes here are still possible
+//! before 1.0, but they are changes we owe you a note about.
+//!
+//! **Exposed for inspection, no stability promise** — `packets`, `att`,
+//! `l2cap`, `gap`, `smp`, `crypto`, `df`, `audio`, `obex`. These are the wire
+//! format and the protocol plumbing: field offsets, PDU builders, parser
+//! internals. Nothing outside this crate imports them except this crate's own
+//! `tests/`, so **they are `pub(crate)` unless the `testing` feature is on**,
+//! and that feature is not for downstream use. Anything from them worth
+//! depending on is re-exported at the crate root below, and the re-export is
+//! the supported spelling. (Deliberately not intra-doc links: they would
+//! resolve only in the wide-open build and fail in the one we publish.)
+//!
+//! The split is enforced, not merely documented: CI builds and clippies the
+//! crate with **no** features so the closed surface stays compilable, because
+//! `--all-features` would switch `testing` on and the closed build would never
+//! run.
 
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
 // Every public item carries a doc comment; combined with CI's `-D warnings`
 // this makes a new undocumented public item fail the build.
 #![warn(missing_docs)]
 
+// --- Supported tier ---------------------------------------------------------
 pub mod android;
 pub mod api;
-pub mod att;
-pub mod audio;
 pub mod classic;
 pub mod client;
 pub mod controller;
-pub mod crypto;
 pub mod cs;
 pub mod device;
 pub mod devices;
-pub mod df;
-pub mod gap;
 pub mod gatt;
-pub mod l2cap;
 // The MCP server (`simble mcp`) uses std stdin/stdout and native transports.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod mcp;
-pub mod obex;
-pub mod packets;
 pub mod profiles;
 pub mod scene;
 pub mod scripting;
 pub mod service;
-pub mod smp;
 pub mod transport;
 pub mod types;
+
+// --- Exposed for inspection, no stability promise ---------------------------
+//
+// Each of these is `pub` only with the `testing` feature, which `cargo test`
+// and `cargo build --examples` turn on through the self-dev-dependency in
+// Cargo.toml and a downstream consumer does not. Rust cannot `cfg` a
+// visibility, so the declaration is written twice; the alternative -- a
+// `pub mod for_testing { pub use ... }` shim -- would have rewritten the
+// import path in all 60 test files and hidden which module an item came from.
+//
+// Anything here that a consumer genuinely needs is re-exported at the crate
+// root below; re-exporting a public item out of a private module is exactly
+// how that is meant to work, and the root spelling is the supported one.
+//
+// The two `allow`s on the closed arm restore exactly the status quo: while
+// these modules were unconditionally `pub`, neither lint could fire in them at
+// all, because a `pub` item is reachable by definition. Making the module
+// crate-private is what wakes them, and what they then report is almost
+// entirely wire-format types and spec tables that `tests/` uses -- real
+// consumers rustc cannot see, because `tests/` is a separate crate. Left as
+// errors they would say "delete the PDU definitions your own test suite
+// parses". The open arm is what every `cargo test` and CI's `--all-features`
+// clippy compile, and it is unchanged.
+//
+// What the lints *would* have found is not lost, only moved: `docs/api-
+// surface.md` lists every item nothing in the tree references, measured by
+// running this build with the allows off.
+macro_rules! plumbing_mod {
+    ($name:ident) => {
+        #[cfg(feature = "testing")]
+        pub mod $name;
+        #[cfg(not(feature = "testing"))]
+        #[allow(unused_imports, dead_code)]
+        pub(crate) mod $name;
+    };
+}
+
+plumbing_mod!(att);
+plumbing_mod!(audio);
+plumbing_mod!(crypto);
+plumbing_mod!(df);
+plumbing_mod!(gap);
+plumbing_mod!(l2cap);
+plumbing_mod!(obex);
+plumbing_mod!(packets);
+plumbing_mod!(smp);
 
 pub use api::{
     CreateDeviceRequest, CreateDeviceResponse, DeviceEvent, DeviceRole, SetAdvertisingRequest,

@@ -140,6 +140,9 @@ const PREFERRED_MAX_TRANSPORT_LATENCY: u16 = 100;
 /// ASE state machine states (ASCS Section 3, Table 3.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+// The SIG can add a value to this field; `#[non_exhaustive]` is what stops
+// that being a breaking change for every downstream `match`.
+#[non_exhaustive]
 pub enum AseState {
     /// Idle.
     Idle = 0x00,

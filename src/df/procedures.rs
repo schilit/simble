@@ -8,6 +8,13 @@
 use serde::{Deserialize, Serialize};
 
 /// Constant Tone Extension type (Core Spec Vol 4, Part E, Section 7.8.80).
+// The shared `AngleOf` prefix is the specification's own naming -- these are
+// Angle of Arrival and Angle of Departure, and shortening them to `Arrival` /
+// `DepartureOneUs` would cost a reader the ability to match the identifier
+// against Section 7.8.80. clippy only reports this at all because `df` is
+// `pub(crate)` without the `testing` feature; while it was unconditionally
+// `pub`, `avoid-breaking-exported-api` suppressed it.
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum CteType {

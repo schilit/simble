@@ -16,6 +16,7 @@ who arrives via a link rather than this index still knows which it is.
 | `gaps.md` | What is missing or faked, and where each gap is already declared in code or UI. Re-derivable — it carries the commands to re-derive it. |
 | `test-strategy.md` | What the tests here can and cannot prove; where the oracle gaps are. |
 | `peripheral-support.md` | What it would take to emulate each peripheral type Android supports, and what is scriptable versus library-only. |
+| `api-surface.md` | Which modules are supported API and which are only exposed for inspection, how the `testing` feature keeps `tests/` from forcing the surface open, and the measurement both came from. Its §4–§7 must match `lib.rs` and `ci.yml`; its §1–§3 are a dated, re-derivable snapshot. |
 
 ## Reference — describes a format or surface as it is
 

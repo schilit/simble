@@ -91,6 +91,9 @@ const GAIN_SETTINGS_MAX_VALUE: u8 = 255;
 /// AICS Section 2.2.1.2 - Mute field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
+// The SIG can add a value to this field; `#[non_exhaustive]` is what stops
+// that being a breaking change for every downstream `match`.
+#[non_exhaustive]
 pub enum Mute {
     #[default]
     /// Not muted.
@@ -104,6 +107,9 @@ pub enum Mute {
 /// AICS Section 2.2.1.3 - Gain Mode field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
+// The SIG can add a value to this field; `#[non_exhaustive]` is what stops
+// that being a breaking change for every downstream `match`.
+#[non_exhaustive]
 pub enum GainMode {
     /// Manual only.
     ManualOnly = 0x00,
@@ -119,6 +125,9 @@ pub enum GainMode {
 /// AICS Section 3.4 - Audio Input Status field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+// The SIG can add a value to this field; `#[non_exhaustive]` is what stops
+// that being a breaking change for every downstream `match`.
+#[non_exhaustive]
 pub enum AudioInputStatus {
     /// Inactive.
     Inactive = 0x00,
@@ -129,6 +138,9 @@ pub enum AudioInputStatus {
 /// Bluetooth Assigned Numbers - Audio Input Type field (AICS Section 3.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+// The SIG can add a value to this field; `#[non_exhaustive]` is what stops
+// that being a breaking change for every downstream `match`.
+#[non_exhaustive]
 pub enum AudioInputType {
     /// Unspecified.
     Unspecified = 0x00,

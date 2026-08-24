@@ -57,6 +57,9 @@ pub const TRACK_LENGTH_UNKNOWN: i32 = -1;
 /// Media State characteristic values (MCS Section 3.17).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+// The SIG can add a value to this field; `#[non_exhaustive]` is what stops
+// that being a breaking change for every downstream `match`.
+#[non_exhaustive]
 pub enum MediaState {
     /// Inactive.
     Inactive = 0x00,
@@ -84,6 +87,9 @@ impl MediaState {
 /// Media Control Point opcodes (MCS Section 3.18.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
+// The SIG can add a value to this field; `#[non_exhaustive]` is what stops
+// that being a breaking change for every downstream `match`.
+#[non_exhaustive]
 pub enum MediaControlPointOpcode {
     /// Play.
     Play = 0x01,

@@ -792,6 +792,7 @@ dependencies = [
  "rhai",
  "serde",
  "serde_json",
+ "simble",
  "thiserror",
  "wasm-bindgen",
  "web-sys",

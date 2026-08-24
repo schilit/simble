@@ -21,6 +21,24 @@ crate-type = ["cdylib", "rlib"]
 [dev-dependencies]
 # Used by the in_process_scene example to parse HCI events zero-copy.
 zerocopy = { version = "0.8", features = ["derive"] }
+# simble depending on itself is not a mistake. Rust has no way to spell
+# "public to this crate's own tests but not to the world": `pub` is global and
+# `pub(crate)` stops at the crate boundary, and `tests/` and `examples/` are
+# separate crates that link simble from outside. So the protocol-plumbing
+# modules are `pub` only under the `testing` feature (see src/lib.rs), and this
+# self-dev-dependency is what turns that feature on automatically -- Cargo
+# unifies the features of a path dependency with the package's own lib target,
+# so `cargo test`, `cargo bench` and `cargo build --examples` all get it while
+# `cargo build` and a downstream `[dependencies] simble` do not. No test or
+# example needed an import changed for this.
+#
+# It carries a `path` and no `version`, which is what makes it invisible to
+# crates.io: `cargo package` strips path-only dev-dependencies from the
+# published manifest, so a consumer never sees the cycle. Not assumed --
+# checked by unpacking the .crate and reading the generated manifest, which
+# lists only zerocopy under [dev-dependencies]. `cargo package` including its
+# verification build still succeeds at 5.6 MiB / 1.4 MiB compressed.
+simble = { path = ".", features = ["testing"] }
 
 [dependencies]
 # Optional: see the `lc3` feature. Its own tests assert against golden
@@ -44,6 +62,18 @@ zerocopy = { version = "0.8", features = ["derive"] }
 # opaque bytes to the protocol layers. The pages build enables it; see
 # .github/workflows/pages.yml.
 lc3 = ["dep:lc3-codec"]
+
+# Widens the crate's public API to include the protocol-plumbing modules
+# (`packets`, `att`, `l2cap`, `gap`, `smp`, `crypto`, `df`, `audio`, `obex`),
+# which are `pub(crate)` without it. It exists so `tests/` can reach into the
+# wire format without that reach becoming a promise to everyone else, and the
+# self-dev-dependency above turns it on for every test and example build.
+#
+# Nothing downstream should enable it: what it exposes has no stability
+# promise, and `--all-features` enabling it is precisely why CI has a separate
+# no-features build (.github/workflows/ci.yml). Enabling it changes no
+# behaviour and compiles no extra code -- only visibility.
+testing = []
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 nusb = "0.2"

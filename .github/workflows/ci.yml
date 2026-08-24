@@ -26,6 +26,27 @@ jobs:
       - name: Check Formatting
         run: cargo fmt --all -- --check
 
+      # The gate that makes the API boundary real, and it has to run BEFORE
+      # anything with --all-features.
+      #
+      # `packets`, `att`, `l2cap`, `gap`, `smp`, `crypto`, `df`, `audio` and
+      # `obex` are `pub` only under the `testing` feature, because the only
+      # thing outside this crate that imports them is this crate's own
+      # `tests/` -- and Rust cannot spell "visible to my tests, not to the
+      # world". Cargo's self-dev-dependency turns that feature on for every
+      # test and example build, which is exactly what makes it invisible: the
+      # three steps below all run with --all-features or with dev-deps, so
+      # every one of them sees the surface WIDE OPEN. Not one of them can tell
+      # you whether the crate a downstream user gets still compiles.
+      #
+      # This step is the only one that compiles what we actually publish. If
+      # it is ever deleted, or folded into an --all-features run, the boundary
+      # silently stops existing and nothing goes red.
+      - name: Build and lint the CLOSED public surface (no features)
+        run: |
+          cargo build --lib --no-default-features
+          cargo clippy --lib --no-default-features -- -D warnings
+
       - name: Clippy Linter
         run: cargo clippy --all-targets --all-features -- -D warnings
 

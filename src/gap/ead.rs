@@ -52,6 +52,12 @@ impl KeyMaterial {
     /// Serializes as the 0x2B88 characteristic value: Session Key octets
     /// followed by IV octets, in over-the-air (least-significant-octet-first)
     /// order per the GATT Specification Supplement.
+    // `&self` rather than `self` on a `Copy` type is what clippy objects to,
+    // and changing it is a signature change to settle separately -- this task
+    // moves visibility, not shapes. Reported only because `gap` is
+    // `pub(crate)` without `testing`; `avoid-breaking-exported-api` hid it
+    // while the module was unconditionally `pub`.
+    #[allow(clippy::wrong_self_convention)]
     pub fn to_bytes(&self) -> [u8; Self::LENGTH] {
         let mut out = [0u8; Self::LENGTH];
         out[..16].copy_from_slice(&self.session_key);

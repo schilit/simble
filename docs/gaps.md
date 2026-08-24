@@ -157,6 +157,20 @@ been: the foreign peer that proves each of these once built.
 *Added 2026-08-23. Not a bug list: a decision nobody has made. The crate is
 `0.1.0`, which is exactly when this costs nothing to fix.*
 
+> **Mostly closed the same day — see `docs/api-surface.md` for the
+> measurement, the boundary and the mechanism.** Nine plumbing modules
+> (`packets`, `att`, `l2cap`, `gap`, `smp`, `crypto`, `df`, `audio`, `obex`)
+> are now `pub(crate)` behind a `testing` feature that `cargo test` turns on
+> through a self-dev-dependency, which took the reachable public surface from
+> 7 486 items to 5 636 with no test or example edited; CI gained a
+> no-features step so `--all-features` cannot hide the closed build. All 14
+> spec-discriminant enums carry `#[non_exhaustive]`, and `GapDataType` is
+> deleted. **Still open from this section:** the unknown-wire-value policy
+> (deliberately undecided — the trade-off is written up as §8 of
+> `api-surface.md`, which found a *fourth* answer already in the tree), the
+> ~390 unreferenced SIG constant tables in supported modules, and
+> `#[doc(hidden)]` / sealed traits, still zero of each.
+
 - **~3 500 public items against 372 `pub(crate)`**: 1 527 `pub fn`, 1 578
   `pub const`, 401 `pub struct`, 296 `pub mod`. `lib.rs` re-exports **all 25
   modules**, so `packets`, `controller`, `l2cap` and `att` are public API and
