@@ -26,21 +26,59 @@ Every fact asserted is a fact only Bumble knows:
   guessed instead of reading the answer fails here and passes everywhere
   else.
 
-Two modes, and the second is the one that finds bugs:
+Three modes, and the last two are the ones that find bugs:
 
     python3 tests/interop/classic_peer.py            # one SPP record
     python3 tests/interop/classic_peer.py --records 40
+    python3 tests/interop/classic_peer.py --pair
 
 `--records N` registers N extra SDP records so Bumble's answer exceeds the
 L2CAP MTU and comes back in **continuation** chunks. A real phone's SDP
 database is bigger than one record; a client that only handles the one-shot
 case truncates silently.
 
+`--pair` makes the client run **Secure Simple Pairing** and encrypt the link
+before it queries SDP. This is the mode that converts "our two ends agree"
+into "a foreign stack accepted our SSP": rootcanal runs the pairing between
+the two controllers, and every step of it is a question one controller asks
+its host and the *other* host has to have answered compatibly —
+
+- simble answers **IO Capability Request** and Bumble reads the reply out of
+  its own **IO Capability Response**, so the three bytes after the BD_ADDR
+  have to sit where both stacks think they do;
+- both hosts get a **User Confirmation Request** carrying the same six
+  digits, computed by rootcanal from the ECDH exchange the two controllers
+  actually ran — a number neither host chose and neither can fake;
+- both get a **Link Key Notification** with the same sixteen octets, and the
+  facts asserted below are read back out of *Bumble's* keystore.
+
+With both ends claiming `DisplayYesNo` and asking for MITM protection the
+model is **Numeric Comparison**, so the key type rootcanal reports is an
+*authenticated* one — and the client is told to require that, which is the
+assertion that fails if the model was silently downgraded to Just Works.
+
+`--io-capability` and `--no-mitm` move the client along Core Vol 3, Part C,
+Table 5.7 and change what the key type has to be. That is the strongest thing
+here: simble's own `association_model()` and rootcanal's independent
+implementation have to reach the same answer, and the key type is where a
+disagreement shows.
+
+    --pair                              # Numeric Comparison -> authenticated
+    --pair --io-capability displayonly  # automatic confirm  -> unauthenticated
+    --pair --io-capability none         # Just Works         -> unauthenticated
+    --pair --client-no-mitm             # peer still asks    -> authenticated
+    --pair --no-mitm                    # nobody asked       -> unauthenticated
+
+The fourth of those is the one worth having. "Either side asking for MITM is
+enough" is a rule stated in the prose of 5.2.2.6 and not visible in Table 5.7
+at all, so a stack that implemented the table alone would downgrade to Just
+Works there and still look correct in every other run.
+
 Usage:
     netsimd --logtostderr --no-shutdown --ws-port 7681
     ~/Library/Android/sdk/emulator/netsim devices   # confirm it is up
     cargo build --example classic_initiator
-    python3 tests/interop/classic_peer.py
+    python3 tests/interop/classic_peer.py --pair
 """
 
 import argparse
@@ -51,6 +89,7 @@ import sys
 from bumble.core import BT_L2CAP_PROTOCOL_ID, UUID
 from bumble.device import Device
 from bumble.hci import Address
+from bumble.pairing import PairingConfig, PairingDelegate
 from bumble.rfcomm import Server as RfcommServer, make_service_sdp_records
 from bumble.sdp import (
     SDP_PROTOCOL_DESCRIPTOR_LIST_ATTRIBUTE_ID,
@@ -113,6 +152,34 @@ def filler_record(handle, channel):
     ]
 
 
+class WatchingDelegate(PairingDelegate):
+    """Bumble's half of the pairing conversation, with a notebook.
+
+    It answers exactly as the default delegate does — yes to everything — but
+    records what it was *asked*, because that is the half of the exchange the
+    client cannot report on. A run where the client says "Numeric Comparison
+    happened" and Bumble was never asked to compare numbers is a run where the
+    client is describing its own imagination.
+    """
+
+    def __init__(self):
+        super().__init__(
+            io_capability=PairingDelegate.DISPLAY_OUTPUT_AND_YES_NO_INPUT
+        )
+        self.compared = None
+        self.confirmed = 0
+
+    async def compare_numbers(self, number, digits):
+        print(f"bumble | asked to compare {number:0{digits}d}", flush=True)
+        self.compared = number
+        return True
+
+    async def confirm(self, auto=False):
+        print(f"bumble | asked to confirm (auto={auto})", flush=True)
+        self.confirmed += 1
+        return True
+
+
 class EchoPort:
     """Bumble's end of the serial port: whatever simble writes comes back."""
 
@@ -148,6 +215,35 @@ async def main(argv):
     parser.add_argument(
         "--timeout", type=int, default=45, help="seconds before the client gives up"
     )
+    parser.add_argument(
+        "--pair",
+        action="store_true",
+        help="run Secure Simple Pairing and encrypt the link before SDP",
+    )
+    parser.add_argument(
+        "--io-capability",
+        # KeyboardOnly is deliberately absent. Against Bumble's DisplayYesNo
+        # it selects Passkey Entry, where Bumble displays six digits and the
+        # client is expected to type them — and this harness has no channel
+        # by which a person could carry them across. Offering the option
+        # would be offering a run that can only fail.
+        choices=("displayyesno", "displayonly", "none"),
+        default="displayyesno",
+        help="what the *client* claims it can show and type",
+    )
+    parser.add_argument(
+        "--no-mitm",
+        action="store_true",
+        help="clear the MITM-protection-required bit at *both* ends, which "
+        "drops the model to Just Works and the key to an unauthenticated one",
+    )
+    parser.add_argument(
+        "--client-no-mitm",
+        action="store_true",
+        help="clear it on the client only. The key must still come back "
+        "authenticated: one side asking is enough, which is the rule a "
+        "table-only reading of Core Vol 3 Part C 5.2.2.6 misses",
+    )
     args = parser.parse_args(argv)
 
     # Inquiry Mode selects the event the *controller* reports results in, and
@@ -164,6 +260,40 @@ async def main(argv):
         )
         device.classic_enabled = True
         device.class_of_device = PEER_CLASS_OF_DEVICE
+
+        # DisplayYesNo at both ends, both asking for MITM protection, so the
+        # controllers select Numeric Comparison rather than Just Works. The
+        # delegate answers yes but writes down what it was asked.
+        delegate = WatchingDelegate()
+        peer_wants_mitm = not args.no_mitm
+        device.pairing_config_factory = lambda _connection: PairingConfig(
+            sc=True, mitm=peer_wants_mitm, bonding=True, delegate=delegate
+        )
+
+        # What Bumble's own stack saw, gathered from its events rather than
+        # from anything the client says.
+        seen = {"peer": None, "encrypted": False, "link_key": None}
+
+        @device.on("connection")
+        def on_connection(connection):
+            print(f"bumble | connected: {connection}", flush=True)
+            # The client's BD_ADDR, as *Bumble's* controller reports it. Kept
+            # in full, `/P` suffix and all, because that is the form
+            # `Device.on_link_key` keys the keystore on — and it is not the
+            # address printed further down, which is Bumble's own.
+            seen["peer"] = str(connection.peer_address)
+
+            @connection.on("connection_encryption_change")
+            def on_encryption_change():
+                print(
+                    f"bumble | encryption now {connection.is_encrypted}", flush=True
+                )
+                seen["encrypted"] = connection.is_encrypted
+
+            @connection.on("link_key")
+            def on_link_key():
+                print("bumble | stored a link key for the peer", flush=True)
+                seen["link_key"] = True
 
         port = EchoPort()
         rfcomm_server = RfcommServer(device)
@@ -206,6 +336,39 @@ async def main(argv):
             SIMBLE_INQUIRY_MODE=args.inquiry_mode,
             SIMBLE_EXPECT_INQUIRY_EVENT=inquiry_event,
         )
+        if args.pair:
+            # Which association model the two controllers pick follows from
+            # these two settings and Bumble's DisplayYesNo + MITM. Both ends
+            # DisplayYesNo asking for MITM is Numeric Comparison, which makes
+            # an *authenticated* key; drop either and it falls to Just Works
+            # and an unauthenticated one. Asserting the key type is what
+            # catches a silent downgrade — the failure mode where pairing
+            # "works" and protects nothing.
+            #
+            # Against Bumble's DisplayYesNo: DisplayYesNo gives Numeric
+            # Comparison, which puts a person in the loop and produces an
+            # authenticated key. DisplayOnly cannot answer, so its
+            # confirmation is automatic and the key is not — that is Core Vol
+            # 3, Part C, Table 5.7, and rootcanal's key type is the
+            # third-party confirmation of it. NoInputNoOutput is Just Works
+            # outright.
+            #
+            # And the rule the table alone does not state: **either** side
+            # asking for MITM is enough. `--client-no-mitm` clears the bit on
+            # the client while Bumble keeps it, and the key still has to come
+            # back authenticated. `--no-mitm` clears it at both ends, and only
+            # then does the model fall to Just Works.
+            expect_authenticated = (
+                not args.no_mitm and args.io_capability == "displayyesno"
+            )
+            environment.update(
+                SIMBLE_PAIR="1",
+                SIMBLE_IO_CAPABILITY=args.io_capability,
+                SIMBLE_MITM=(
+                    "0" if (args.no_mitm or args.client_no_mitm) else "1"
+                ),
+                SIMBLE_EXPECT_AUTHENTICATED_KEY="1" if expect_authenticated else "0",
+            )
         client = await asyncio.create_subprocess_exec(
             CLIENT_BINARY,
             peer_address,
@@ -236,6 +399,53 @@ async def main(argv):
             code = code or 1
         else:
             print(f"ok    Bumble's RFCOMM server received {port.received!r}")
+
+        if args.pair:
+            # Bumble's own view of the pairing. None of this comes from the
+            # client's output: it is what Bumble's stack was asked and what
+            # it stored.
+            # Note what is *not* asserted: that Bumble saw an
+            # "authentication complete". It never will. Bumble is the
+            # responder here, and HCI_Authentication_Complete goes only to the
+            # host that issued HCI_Authentication_Requested. The responder's
+            # evidence that the link is secure is the link key it was handed
+            # and the encryption change it saw — which is exactly what is
+            # checked below, and exactly what a responder profile has to key
+            # off in real life.
+            for ok, message in [
+                (
+                    delegate.compared is not None or delegate.confirmed > 0,
+                    "Bumble's pairing delegate was actually asked to approve "
+                    f"(compared={delegate.compared}, confirmed={delegate.confirmed})",
+                ),
+                (seen["encrypted"], "Bumble saw the link encrypted"),
+                (bool(seen["link_key"]), "Bumble stored a link key for simble"),
+            ]:
+                print(("ok    " if ok else "FAIL  ") + message)
+                if not ok:
+                    code = code or 1
+
+            keys = (
+                await device.keystore.get(seen["peer"]) if seen["peer"] else None
+            )
+            link_key = keys.link_key if keys else None
+            if link_key is None:
+                print(
+                    f"FAIL  Bumble's keystore has no link key for {seen['peer']}"
+                )
+                code = code or 1
+            else:
+                print(
+                    f"ok    Bumble's keystore holds {link_key.value.hex()} "
+                    f"for {seen['peer']} (authenticated={link_key.authenticated})"
+                )
+                if link_key.authenticated != expect_authenticated:
+                    print(
+                        "FAIL  the key type disagrees with the association "
+                        f"model the IO capabilities imply (expected "
+                        f"authenticated={expect_authenticated})"
+                    )
+                    code = code or 1
 
         if code == 0:
             print("PASS — simble's BR/EDR initiator drove a foreign peer")

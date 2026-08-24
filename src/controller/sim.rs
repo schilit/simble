@@ -166,6 +166,55 @@ mod opcode {
     /// Write Class of Device (OGF 0x03, OCF 0x0024).
     pub const WRITE_CLASS_OF_DEVICE: u16 = 0x0C24;
 
+    // --- BR/EDR security: Secure Simple Pairing, link keys, encryption ---
+    //
+    // The answer split here is the one that hangs hosts, so it is spelled out
+    // on `Link::handle_classic_security_command` rather than left to the
+    // reader. Roughly: the *replies* a host sends to a controller's question
+    // are Command Complete (they are the answer), and the commands that start
+    // a procedure are Command Status (they promise a later event).
+    /// Link Key Request Reply (OGF 0x01, OCF 0x000B).
+    pub const LINK_KEY_REQUEST_REPLY: u16 = 0x040B;
+    /// Link Key Request Negative Reply (OGF 0x01, OCF 0x000C).
+    pub const LINK_KEY_REQUEST_NEGATIVE_REPLY: u16 = 0x040C;
+    /// Authentication Requested (OGF 0x01, OCF 0x0011).
+    pub const AUTHENTICATION_REQUESTED: u16 = 0x0411;
+    /// Set Connection Encryption (OGF 0x01, OCF 0x0013).
+    pub const SET_CONNECTION_ENCRYPTION: u16 = 0x0413;
+    /// Change Connection Link Key (OGF 0x01, OCF 0x0015).
+    pub const CHANGE_CONNECTION_LINK_KEY: u16 = 0x0415;
+    /// Link Key Selection (OGF 0x01, OCF 0x0017).
+    pub const LINK_KEY_SELECTION: u16 = 0x0417;
+    /// IO Capability Request Reply (OGF 0x01, OCF 0x002B).
+    pub const IO_CAPABILITY_REQUEST_REPLY: u16 = 0x042B;
+    /// User Confirmation Request Reply (OGF 0x01, OCF 0x002C).
+    pub const USER_CONFIRMATION_REQUEST_REPLY: u16 = 0x042C;
+    /// User Confirmation Request Negative Reply (OGF 0x01, OCF 0x002D).
+    pub const USER_CONFIRMATION_REQUEST_NEGATIVE_REPLY: u16 = 0x042D;
+    /// User Passkey Request Reply (OGF 0x01, OCF 0x002E).
+    pub const USER_PASSKEY_REQUEST_REPLY: u16 = 0x042E;
+    /// User Passkey Request Negative Reply (OGF 0x01, OCF 0x002F).
+    pub const USER_PASSKEY_REQUEST_NEGATIVE_REPLY: u16 = 0x042F;
+    /// IO Capability Request Negative Reply (OGF 0x01, OCF 0x0034).
+    pub const IO_CAPABILITY_REQUEST_NEGATIVE_REPLY: u16 = 0x0434;
+    /// Read Simple Pairing Mode (OGF 0x03, OCF 0x0055).
+    pub const READ_SIMPLE_PAIRING_MODE: u16 = 0x0C55;
+    /// Write Simple Pairing Mode (OGF 0x03, OCF 0x0056).
+    ///
+    /// **0x0C56, not 0x0C45** — 0x0C45 is Write *Inquiry* Mode. The two get
+    /// confused because both are Controller & Baseband writes named after a
+    /// mode, and a host that sends one meaning the other silently gets the
+    /// wrong feature.
+    pub const WRITE_SIMPLE_PAIRING_MODE: u16 = 0x0C56;
+
+    // --- LE encryption ----------------------------------------------------
+    /// LE Enable Encryption (OGF 0x08, OCF 0x0019).
+    pub const LE_ENABLE_ENCRYPTION: u16 = 0x2019;
+    /// LE Long Term Key Request Reply (OGF 0x08, OCF 0x001A).
+    pub const LE_LTK_REQUEST_REPLY: u16 = 0x201A;
+    /// LE Long Term Key Request Negative Reply (OGF 0x08, OCF 0x001B).
+    pub const LE_LTK_REQUEST_NEGATIVE_REPLY: u16 = 0x201B;
+
     use crate::packets::big::big_opcode;
     use crate::packets::ext_adv::ext_adv_opcode;
 
@@ -215,6 +264,11 @@ mod event {
     pub const CONNECTION_REQUEST: u8 = 0x04;
     /// Disconnection Complete event (0x05).
     pub const DISCONNECTION_COMPLETE: u8 = 0x05;
+    /// Authentication Complete event (0x06) — the completion event
+    /// Authentication Requested promises, and it goes only to the host that
+    /// asked. The *other* host learns a pairing happened from Simple Pairing
+    /// Complete and Link Key Notification.
+    pub const AUTHENTICATION_COMPLETE: u8 = 0x06;
     /// Remote Name Request Complete event (0x07).
     pub const REMOTE_NAME_REQUEST_COMPLETE: u8 = 0x07;
     /// Synchronous Connection Complete event (0x2C) — the completion event
@@ -223,6 +277,31 @@ mod event {
     /// controller renegotiates a synchronous link's parameters once it is
     /// up, and an event nobody can cause is a fiction.
     pub const SYNCHRONOUS_CONNECTION_COMPLETE: u8 = 0x2C;
+    /// Encryption Change event (0x08) — the completion event both
+    /// Set Connection Encryption (BR/EDR) and LE Enable Encryption promise.
+    pub const ENCRYPTION_CHANGE: u8 = 0x08;
+    /// Change Connection Link Key Complete event (0x09).
+    pub const CHANGE_CONNECTION_LINK_KEY_COMPLETE: u8 = 0x09;
+    /// Link Key Request event (0x17) — the controller asking its host
+    /// whether it is already bonded to this peer. The answer is what decides
+    /// whether pairing runs at all.
+    pub const LINK_KEY_REQUEST: u8 = 0x17;
+    /// Link Key Notification event (0x18) — a new key for the host to store.
+    pub const LINK_KEY_NOTIFICATION: u8 = 0x18;
+    /// IO Capability Request event (0x31).
+    pub const IO_CAPABILITY_REQUEST: u8 = 0x31;
+    /// IO Capability Response event (0x32) — what the *peer's* host answered.
+    pub const IO_CAPABILITY_RESPONSE: u8 = 0x32;
+    /// User Confirmation Request event (0x33), carrying the six-digit value
+    /// both ends are shown.
+    pub const USER_CONFIRMATION_REQUEST: u8 = 0x33;
+    /// User Passkey Request event (0x34) — asked of the side that can type.
+    pub const USER_PASSKEY_REQUEST: u8 = 0x34;
+    /// Simple Pairing Complete event (0x36).
+    pub const SIMPLE_PAIRING_COMPLETE: u8 = 0x36;
+    /// User Passkey Notification event (0x3B) — told to the side that can
+    /// only display.
+    pub const USER_PASSKEY_NOTIFICATION: u8 = 0x3B;
     /// Command Complete event (0x0E).
     pub const COMMAND_COMPLETE: u8 = 0x0E;
     /// Command Status event (0x0F).
@@ -252,6 +331,9 @@ mod event {
     /// LE CIS Request subevent (0x1A) — how a peripheral's host learns a
     /// central wants an isochronous stream to it.
     pub const LE_CIS_REQUEST: u8 = 0x1A;
+    /// LE Long Term Key Request subevent (0x05) — the peripheral's
+    /// controller asking its host for the key the central named.
+    pub const LE_LONG_TERM_KEY_REQUEST: u8 = 0x05;
 }
 
 /// LE PHY identifiers (Vol 4, Part E, Section 7.8.49).
@@ -348,6 +430,17 @@ const STATUS_CONNECTION_ALREADY_EXISTS: u8 = 0x0B;
 /// `CONNECTION_REJECTED_DUE_TO_LIMITED_RESOURCES` (0x0D) — what a host that
 /// answers a page with Reject Connection Request usually says.
 const STATUS_CONNECTION_REJECTED_RESOURCES: u8 = 0x0D;
+/// `AUTHENTICATION_FAILURE` (0x05) — the pairing was refused. This is what a
+/// User Confirmation Request Negative Reply turns into on the wire.
+const STATUS_AUTHENTICATION_FAILURE: u8 = 0x05;
+/// `PIN_OR_KEY_MISSING` (0x06) — encryption was asked for on a link that has
+/// no key to encrypt with.
+const STATUS_PIN_OR_KEY_MISSING: u8 = 0x06;
+/// `PAIRING_NOT_ALLOWED` (0x18) — pairing would be needed and cannot run.
+/// Here that means a host that never sent Write Simple Pairing Mode: this
+/// controller models SSP and not legacy PIN pairing, and says so rather than
+/// running SSP behind the host's back.
+const STATUS_PAIRING_NOT_ALLOWED: u8 = 0x18;
 /// `UNKNOWN_HCI_COMMAND` (0x01) — this controller does not implement the
 /// command at all. Said out loud, in a Command Status, rather than implied by
 /// silence or contradicted by a success: a host can retry, fall back, or fail
@@ -549,6 +642,232 @@ fn air_mode_of_coding_format(codec_id: u8) -> u8 {
         0x01 => air_mode::A_LAW,
         0x02 => air_mode::CVSD,
         _ => air_mode::TRANSPARENT,
+    }
+}
+
+// --- Secure Simple Pairing ------------------------------------------------
+
+/// IO capabilities, as a host reports them in IO Capability Request Reply
+/// (Vol 4, Part E, Section 7.7.40). The four values and their order are what
+/// the association-model table below is indexed by, so they are named rather
+/// than written as bare integers at the call sites.
+mod io_capability {
+    /// The device can show a number but has no yes/no input.
+    pub const DISPLAY_ONLY: u8 = 0x00;
+    /// The device can show a number and take a yes/no answer.
+    pub const DISPLAY_YES_NO: u8 = 0x01;
+    /// The device can take digits but shows nothing.
+    pub const KEYBOARD_ONLY: u8 = 0x02;
+    /// Neither. A headset button is not an input for this purpose.
+    pub const NO_INPUT_NO_OUTPUT: u8 = 0x03;
+}
+
+/// The `Authentication_Requirements` bit that says "MITM protection
+/// required". The field is 0x00–0x05 (`…_NO_BONDING`, `…_DEDICATED_BONDING`,
+/// `…_GENERAL_BONDING`, each with and without MITM), and the odd values are
+/// the MITM ones — so this is a bit test, not an equality test.
+const AUTH_REQ_MITM: u8 = 0x01;
+
+/// How the two devices authenticate each other in stage 1 of SSP.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum AssociationModel {
+    /// Numeric Comparison with automatic confirmation. The controller still
+    /// sends User Confirmation Request; what differs is that no human is
+    /// expected to look at it, so the resulting key is *unauthenticated*.
+    JustWorks,
+    /// Numeric Comparison: both hosts show the same six digits and a person
+    /// says whether they match. The only model here that resists MITM
+    /// without a keyboard.
+    NumericComparison,
+    /// Passkey Entry: one side displays six digits, the other types them.
+    PasskeyEntry,
+}
+
+/// Which association model two devices use, from their IO capabilities and
+/// authentication requirements.
+///
+/// The source is Core Vol 3, Part C, Section 5.2.2.6 — the same table Zephyr
+/// keeps in `subsys/bluetooth/host/classic/ssp.c` as `ssp_method[remote][local]`
+/// and Bumble in `device.py`'s `on_authentication_user_confirmation_request`.
+/// Both were read; they agree, and this agrees with them.
+///
+/// Two rules, in order:
+///
+/// 1. If **neither** side set the MITM bit, the model is Just Works —
+///    Numeric Comparison with automatic confirmation at both ends. The table
+///    below never gets consulted. This is the rule a table-only reading
+///    misses, and it is why two `DisplayYesNo` devices that both asked for no
+///    MITM still pair without a prompt.
+/// 2. Otherwise the table applies: a `NoInputNoOutput` anywhere forces Just
+///    Works (there is nothing to compare with), a `KeyboardOnly` opposite
+///    anything that can display gives Passkey Entry, two `DisplayYesNo`
+///    devices give Numeric Comparison, and everything else — `DisplayOnly`
+///    against a display — is Numeric Comparison with the confirmation
+///    automatic on the side that cannot answer, i.e. Just Works.
+///
+/// Out-of-band data is not modelled: this controller has no OOB channel to
+/// carry it over, so the `oob_data_present` byte a host sends is recorded and
+/// ignored rather than quietly changing the model.
+fn association_model(
+    local_io: u8,
+    local_auth: u8,
+    remote_io: u8,
+    remote_auth: u8,
+) -> AssociationModel {
+    if local_auth & AUTH_REQ_MITM == 0 && remote_auth & AUTH_REQ_MITM == 0 {
+        return AssociationModel::JustWorks;
+    }
+    use io_capability::{DISPLAY_ONLY, DISPLAY_YES_NO, KEYBOARD_ONLY, NO_INPUT_NO_OUTPUT};
+    match (local_io, remote_io) {
+        (NO_INPUT_NO_OUTPUT, _) | (_, NO_INPUT_NO_OUTPUT) => AssociationModel::JustWorks,
+        (KEYBOARD_ONLY, _) | (_, KEYBOARD_ONLY) => AssociationModel::PasskeyEntry,
+        (DISPLAY_YES_NO, DISPLAY_YES_NO) => AssociationModel::NumericComparison,
+        (DISPLAY_ONLY, _) | (_, DISPLAY_ONLY) => AssociationModel::JustWorks,
+        // Every value is covered above; an IO capability outside 0x00–0x03 is
+        // not a capability this controller can reason about, and the safe
+        // reading of "I do not understand your input hardware" is the model
+        // that asks it for nothing.
+        _ => AssociationModel::JustWorks,
+    }
+}
+
+/// The AES-CMAC key that separates simble's derived pairing material from
+/// every other use of the same primitive.
+const PAIRING_DOMAIN: [u8; 16] = *b"simble link key ";
+
+/// The link key a completed pairing hands both hosts.
+///
+/// **This is not the specification's f2.** Real SSP derives the key from a
+/// P-192 or P-256 ECDH shared secret through HMAC-SHA-256, and the point of
+/// this controller is the *sequence* — which command is legal when, which
+/// event answers it, and who is told what — not the cryptography, which
+/// rootcanal and real silicon already provide.
+///
+/// What a link key has to be for the sequence to work is exactly three
+/// things: the same sixteen bytes at both ends, different for every pair of
+/// devices, and *stable across reconnects* so that a key a host stored still
+/// matches the one the controller would derive next time. AES-CMAC (the real
+/// one, from [`crate::crypto`]) over the two addresses in a fixed order is
+/// all three.
+fn derived_link_key(a: Address, b: Address) -> [u8; 16] {
+    let (low, high) = if a.to_be_bytes() <= b.to_be_bytes() {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    let mut input = [0u8; 12];
+    input[..6].copy_from_slice(&low.to_be_bytes());
+    input[6..].copy_from_slice(&high.to_be_bytes());
+    crate::crypto::aes_cmac(&PAIRING_DOMAIN, &input)
+}
+
+/// Six decimal digits derived from a link key: the value User Confirmation
+/// Request shows (`tag` 0) and the passkey Passkey Entry uses (`tag` 1).
+///
+/// Real SSP computes these with g and f4 over the ECDH public keys and the
+/// pairing nonces, so they differ on every attempt. These do not — the same
+/// pair of devices sees the same digits every time, which is wrong for a real
+/// radio and exactly right for a test that wants to assert on them.
+fn pairing_digits(link_key: &[u8; 16], tag: u8) -> u32 {
+    let out = crate::crypto::aes_cmac(link_key, &[tag]);
+    u32::from_be_bytes([out[0], out[1], out[2], out[3]]) % 1_000_000
+}
+
+/// Link key types, as Link Key Notification reports them (Vol 4, Part E,
+/// Section 7.7.24). This controller models P-192 SSP, so it reports the P-192
+/// key types and starts E0-era encryption — claiming a P-256 key type while
+/// reporting `Encryption_Enabled = 0x01` would be two halves of two different
+/// stories.
+mod link_key_type {
+    /// Unauthenticated Combination key from P-192 — what Just Works produces,
+    /// and the reason a Just Works bond does not satisfy a service that
+    /// requires MITM protection.
+    pub const UNAUTHENTICATED_P192: u8 = 0x04;
+    /// Authenticated Combination key from P-192 — Numeric Comparison or
+    /// Passkey Entry, where a person was in the loop.
+    pub const AUTHENTICATED_P192: u8 = 0x05;
+}
+
+/// `Encryption_Enabled` in Encryption Change: 0x01 is "on", which for BR/EDR
+/// means E0 and for LE means AES-CCM. 0x02 (BR/EDR AES-CCM) would require
+/// Secure Connections host support, which this controller does not model.
+const ENCRYPTION_ON: u8 = 0x01;
+/// `Encryption_Enabled` = off.
+const ENCRYPTION_OFF: u8 = 0x00;
+
+/// What one host answered its IO Capability Request with.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct IoCapabilities {
+    /// `IO_Capability` (see [`io_capability`]).
+    io: u8,
+    /// `OOB_Data_Present`. Recorded and not acted on — see
+    /// [`association_model`].
+    oob: u8,
+    /// `Authentication_Requirements`.
+    auth: u8,
+}
+
+/// Where a pairing conversation has got to.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PairingStage {
+    /// Both hosts have been asked for a stored link key; neither, one, or
+    /// both answers are in. Two matching keys end the whole thing here — that
+    /// is what "a reconnect skips SSP" *is*.
+    LinkKey,
+    /// Both hosts have been asked for their IO capabilities.
+    IoCapability,
+    /// Both hosts have been asked for a user decision: User Confirmation
+    /// Request, or User Passkey Request / Notification.
+    UserAction,
+}
+
+/// One Secure Simple Pairing conversation.
+///
+/// It lives on the [`Link`] rather than on either controller because it has
+/// two ends and neither owns it: every step is "one host answered, so tell
+/// the other one". A pairing is created by Authentication Requested and
+/// destroyed the moment it resolves, in either direction — there is no state
+/// left behind for a later connection to inherit.
+struct ClassicPairing {
+    /// The ACL connection being authenticated.
+    handle: u16,
+    /// Controller indices of the two ends. `ends[0]` is the side whose host
+    /// sent Authentication Requested, and the only side that will be sent an
+    /// Authentication Complete.
+    ends: [usize; 2],
+    /// What each host answered Link Key Request with. `None` = has not
+    /// answered; `Some(None)` = Link Key Request Negative Reply.
+    link_key: [Option<Option<[u8; 16]>>; 2],
+    /// What each host answered IO Capability Request with. `None` = has not
+    /// answered; a negative reply resolves the pairing instead of landing
+    /// here.
+    io: [Option<IoCapabilities>; 2],
+    /// Each host's user decision: confirm/reject, or "a passkey was
+    /// supplied".
+    decision: [Option<bool>; 2],
+    /// The six digits each side ended up with under Passkey Entry — typed on
+    /// a keyboard, or notified to a display. Success needs the two to be
+    /// equal, which is the *only* correct check: with a keyboard at both ends
+    /// the controller never told either side what to type, so comparing
+    /// against its own generated passkey would reject a pairing the user got
+    /// right.
+    entered: [Option<u32>; 2],
+    stage: PairingStage,
+    /// The key this pairing will notify if it succeeds.
+    key: [u8; 16],
+    /// The six digits both hosts are shown in User Confirmation Request.
+    numeric_value: u32,
+    /// The six digits Passkey Entry displays on one side and asks for on the
+    /// other.
+    passkey: u32,
+    /// Which model the IO capabilities selected, once both are in.
+    model: AssociationModel,
+}
+
+impl ClassicPairing {
+    /// Which end of this pairing controller `index` is, if either.
+    fn side_of(&self, index: usize) -> Option<usize> {
+        self.ends.iter().position(|end| *end == index)
     }
 }
 
@@ -780,6 +1099,21 @@ struct Connection {
     tx_phy: u8,
     /// Peripheral-to-central PHY.
     rx_phy: u8,
+    /// Whether this link has a link key both ends agree on — either freshly
+    /// paired or recognised from a host's store. Encryption is refused
+    /// without it, which is the whole point of tracking it.
+    authenticated: bool,
+    /// Whether the link is encrypted. Modelled as *state*, not as
+    /// cryptography: nothing on this link is actually enciphered, and a
+    /// profile that requires encryption asks this rather than measuring it.
+    encrypted: bool,
+    /// The LTK an LE Enable Encryption named, held until the peripheral's
+    /// host answers its LE Long Term Key Request. Lives on the *central's*
+    /// connection, because the central is the side that was told the key.
+    pending_ltk: Option<[u8; 16]>,
+    /// How many times Change Connection Link Key has rolled this link's key.
+    /// Part of the derivation, so a second rotation is a different key.
+    key_rotations: u8,
 }
 
 impl Connection {
@@ -796,6 +1130,10 @@ impl Connection {
             timeout: DEFAULT_SUPERVISION_TIMEOUT,
             tx_phy: le_phy::LE_1M,
             rx_phy: le_phy::LE_1M,
+            authenticated: false,
+            encrypted: false,
+            pending_ltk: None,
+            key_rotations: 0,
         }
     }
 }
@@ -1030,6 +1368,14 @@ struct ClassicState {
     inbound_sco: Option<InboundSco>,
     /// Remote Name Requests to answer on the next tick, oldest first.
     remote_name_requests: Vec<Address>,
+    /// Simple Pairing Mode, as Write Simple Pairing Mode last set it. Zero at
+    /// power-on: a host that never enables it gets Pairing Not Allowed rather
+    /// than SSP it did not ask for, because legacy PIN pairing is the thing
+    /// it would have got on real hardware and that is not modelled here.
+    simple_pairing_mode: u8,
+    /// The Key_Flag of the last Link Key Selection: 0x00 semi-permanent,
+    /// 0x01 temporary.
+    link_key_flag: u8,
 }
 
 impl Default for ClassicState {
@@ -1043,6 +1389,8 @@ impl Default for ClassicState {
             inbound_page: None,
             inbound_sco: None,
             remote_name_requests: Vec::new(),
+            simple_pairing_mode: 0x00,
+            link_key_flag: 0x00,
         }
     }
 }
@@ -1312,6 +1660,33 @@ enum Action {
         from: usize,
         cis_handle: u16,
     },
+    // --- security (BR/EDR SSP and LE encryption) ------------------------
+    //
+    // Every one of these is deferred for the same reason: a security step is
+    // a sentence with two subjects. One host answers a question and the
+    // *other* host is the one that has to be told, and that needs both
+    // controllers at once.
+    /// A step in a Secure Simple Pairing conversation, or the start of one.
+    ClassicSecurity {
+        /// The controller whose host acted.
+        from: usize,
+        step: SecurityStep,
+    },
+    /// LE Enable Encryption: ask the peripheral's host for the key.
+    LeEnableEncryption {
+        from: usize,
+        handle: u16,
+        ltk: [u8; 16],
+        rand: [u8; 8],
+        ediv: u16,
+    },
+    /// The peripheral's host answered its LE Long Term Key Request. `None`
+    /// is the negative reply.
+    LeLtkReply {
+        from: usize,
+        handle: u16,
+        ltk: Option<[u8; 16]>,
+    },
     /// LE BIG Create Sync. Needs the source controller's BIG to answer, and
     /// the handle counter to name the receiver's own BIS handles.
     BigCreateSync {
@@ -1323,6 +1698,34 @@ enum Action {
         /// 1-based BIS indices the host asked to join.
         indices: Vec<u8>,
     },
+}
+
+/// One host's contribution to a security procedure, deferred so the peer's
+/// controller can be reached.
+enum SecurityStep {
+    /// Authentication Requested: start (or restart) the whole conversation.
+    Authenticate { handle: u16 },
+    /// Link Key Request Reply, or — with `key: None` — its negative reply.
+    LinkKeyReply {
+        peer: Address,
+        key: Option<[u8; 16]>,
+    },
+    /// IO Capability Request Reply, or — with `capabilities: None` — its
+    /// negative reply carrying `reason`.
+    IoCapabilityReply {
+        peer: Address,
+        capabilities: Option<IoCapabilities>,
+        reason: u8,
+    },
+    /// User Confirmation Request Reply or Negative Reply.
+    ConfirmationReply { peer: Address, accept: bool },
+    /// User Passkey Request Reply (with the digits the user typed) or its
+    /// negative reply.
+    PasskeyReply { peer: Address, passkey: Option<u32> },
+    /// Set Connection Encryption.
+    Encrypt { handle: u16, enable: u8 },
+    /// Change Connection Link Key.
+    ChangeLinkKey { handle: u16 },
 }
 
 /// The shared medium. Holds every `SimController` on the "air" and, on each
@@ -1339,6 +1742,9 @@ pub struct Link {
     /// Shadowing and phase noise. Seeded, so a test that asserts on a noisy
     /// measurement gets the same noise every run.
     rng: Rng,
+    /// Secure Simple Pairing conversations in flight. See [`ClassicPairing`]
+    /// for why they are held here and not on a controller.
+    pairings: Vec<ClassicPairing>,
 }
 
 impl Link {
@@ -1349,6 +1755,7 @@ impl Link {
             next_handle: 0x0001,
             path_loss: PathLossModel::default(),
             rng: Rng::default(),
+            pairings: Vec::new(),
         }
     }
 
@@ -1534,6 +1941,17 @@ impl Link {
                 Action::ClassicAnswerPage { from, peer, reject } => {
                     self.route_classic_answer_page(from, peer, reject)
                 }
+                Action::ClassicSecurity { from, step } => self.route_classic_security(from, step),
+                Action::LeEnableEncryption {
+                    from,
+                    handle,
+                    ltk,
+                    rand,
+                    ediv,
+                } => self.route_le_enable_encryption(from, handle, ltk, rand, ediv),
+                Action::LeLtkReply { from, handle, ltk } => {
+                    self.route_le_ltk_reply(from, handle, ltk)
+                }
                 Action::BigCreateSync {
                     from,
                     big_handle,
@@ -1650,6 +2068,12 @@ impl Link {
         // under.
         if opcode == opcode::READ_RSSI {
             self.handle_read_rssi(i, le_u16(params, 0));
+            return;
+        }
+        // Security — BR/EDR pairing and encryption, and LE encryption start —
+        // is dispatched first and kept in one function of its own. It spans
+        // both transports, so it does not belong under either heading below.
+        if self.handle_security_command(i, opcode, params, actions) {
             return;
         }
         // BR/EDR is dispatched first and separately: its commands are mostly
@@ -2167,6 +2591,7 @@ impl Link {
         self.tick_inquiry();
         self.tick_paging();
         self.tick_remote_names();
+        self.prune_pairings();
     }
 
     /// Deliver Inquiry Results to every inquiring host, then Inquiry Complete
@@ -2892,6 +3317,744 @@ impl Link {
             _ => false,
         }
     }
+
+    // === security ========================================================
+    //
+    // Everything from here to the `=== end security ===` marker is Secure
+    // Simple Pairing, link keys, BR/EDR authentication and encryption, and
+    // LE encryption start. It is one block on purpose: it is the newest and
+    // most-edited part of this file, and keeping it contiguous is what lets
+    // two people work on the controller at once.
+
+    /// Handles one security command — BR/EDR or LE — returning whether it was
+    /// one.
+    ///
+    /// **The answer each command gives.** Same table as
+    /// [`Self::handle_classic_command`]'s and for the same reason; the split
+    /// here has a shape worth naming, because it is not arbitrary:
+    ///
+    /// | Command | Answer |
+    /// |---|---|
+    /// | Authentication Requested | Command **Status**, then Link Key Request at both hosts, then Authentication Complete at the asking host |
+    /// | Set Connection Encryption | Command **Status**, then Encryption Change at both ends |
+    /// | Change Connection Link Key | Command **Status**, then Link Key Notification at both, then Change Connection Link Key Complete |
+    /// | Link Key Selection | Command **Status**, and nothing else — see below |
+    /// | LE Enable Encryption | Command **Status**, then LE Long Term Key Request at the peer, then Encryption Change |
+    /// | Link Key Request (Negative) Reply | Command **Complete** carrying status + BD_ADDR |
+    /// | IO Capability Request (Negative) Reply | Command **Complete** carrying status + BD_ADDR |
+    /// | User Confirmation Request (Negative) Reply | Command **Complete** carrying status + BD_ADDR |
+    /// | User Passkey Request (Negative) Reply | Command **Complete** carrying status + BD_ADDR |
+    /// | LE LTK Request (Negative) Reply | Command **Complete** carrying status + handle |
+    /// | Read/Write Simple Pairing Mode | Command **Complete** |
+    ///
+    /// The shape: a command that *starts* something is answered with a
+    /// Command Status, and a command that *answers a question the controller
+    /// asked* is answered with a Command Complete — because the reply is
+    /// itself the completion of the controller's question, and there is
+    /// nothing left to promise. Every reply above is the second half of an
+    /// event the controller sent first.
+    ///
+    /// Link Key Selection is the odd one: Core lists it as Command-Status-
+    /// answered and gives it no completion event of its own, because its
+    /// effect lands on the *next* encryption start rather than on anything
+    /// that finishes. `scripts/check_hci_command_answers.py` is what keeps
+    /// that claim honest; the arm below emits a Command Status and stops.
+    fn handle_security_command(
+        &mut self,
+        i: usize,
+        opcode: u16,
+        params: &[u8],
+        actions: &mut Vec<Action>,
+    ) -> bool {
+        let c = &mut self.controllers[i];
+        match opcode {
+            // --- commands that start something: Command Status ----------
+            opcode::AUTHENTICATION_REQUESTED => {
+                let handle = le_u16(params, 0);
+                if !c.is_connected(handle) {
+                    c.outbox
+                        .push_back(command_status(STATUS_UNKNOWN_CONNECTION, opcode));
+                    return true;
+                }
+                c.outbox.push_back(command_status(STATUS_SUCCESS, opcode));
+                actions.push(Action::ClassicSecurity {
+                    from: i,
+                    step: SecurityStep::Authenticate { handle },
+                });
+                true
+            }
+            opcode::SET_CONNECTION_ENCRYPTION => {
+                let handle = le_u16(params, 0);
+                let enable = params.get(2).copied().unwrap_or(0x00);
+                if !c.is_connected(handle) {
+                    c.outbox
+                        .push_back(command_status(STATUS_UNKNOWN_CONNECTION, opcode));
+                    return true;
+                }
+                c.outbox.push_back(command_status(STATUS_SUCCESS, opcode));
+                actions.push(Action::ClassicSecurity {
+                    from: i,
+                    step: SecurityStep::Encrypt { handle, enable },
+                });
+                true
+            }
+            opcode::CHANGE_CONNECTION_LINK_KEY => {
+                let handle = le_u16(params, 0);
+                let authenticated = c
+                    .connections
+                    .iter()
+                    .any(|conn| conn.handle == handle && conn.authenticated);
+                if !c.is_connected(handle) {
+                    c.outbox
+                        .push_back(command_status(STATUS_UNKNOWN_CONNECTION, opcode));
+                } else if !authenticated {
+                    // There is no key to change. An error Command Status is
+                    // the end of the command, so no Change Connection Link
+                    // Key Complete is owed and none is sent.
+                    c.outbox
+                        .push_back(command_status(STATUS_COMMAND_DISALLOWED, opcode));
+                } else {
+                    c.outbox.push_back(command_status(STATUS_SUCCESS, opcode));
+                    actions.push(Action::ClassicSecurity {
+                        from: i,
+                        step: SecurityStep::ChangeLinkKey { handle },
+                    });
+                }
+                true
+            }
+            opcode::LINK_KEY_SELECTION => {
+                c.classic.link_key_flag = params.first().copied().unwrap_or(0x00);
+                c.outbox.push_back(command_status(STATUS_SUCCESS, opcode));
+                true
+            }
+            opcode::LE_ENABLE_ENCRYPTION => {
+                // Connection_Handle(2), Random_Number(8), EDIV(2), LTK(16).
+                let handle = le_u16(params, 0);
+                if !c.is_connected(handle) {
+                    c.outbox
+                        .push_back(command_status(STATUS_UNKNOWN_CONNECTION, opcode));
+                    return true;
+                }
+                let mut rand = [0u8; 8];
+                let mut ltk = [0u8; 16];
+                if let Some(b) = params.get(2..10) {
+                    rand.copy_from_slice(b);
+                }
+                if let Some(b) = params.get(12..28) {
+                    ltk.copy_from_slice(b);
+                }
+                let ediv = le_u16(params, 10);
+                c.outbox.push_back(command_status(STATUS_SUCCESS, opcode));
+                actions.push(Action::LeEnableEncryption {
+                    from: i,
+                    handle,
+                    ltk,
+                    rand,
+                    ediv,
+                });
+                true
+            }
+
+            // --- replies to the controller's own questions: Complete ----
+            opcode::LINK_KEY_REQUEST_REPLY | opcode::LINK_KEY_REQUEST_NEGATIVE_REPLY => {
+                let peer = classic_address(params).unwrap_or(Address::ANY);
+                let key = (opcode == opcode::LINK_KEY_REQUEST_REPLY)
+                    .then(|| {
+                        let mut key = [0u8; 16];
+                        params.get(6..22).map(|b| {
+                            key.copy_from_slice(b);
+                            key
+                        })
+                    })
+                    .flatten();
+                let mut ret = vec![STATUS_SUCCESS];
+                ret.extend_from_slice(&addr_le(peer));
+                c.outbox.push_back(command_complete(opcode, &ret));
+                actions.push(Action::ClassicSecurity {
+                    from: i,
+                    step: SecurityStep::LinkKeyReply { peer, key },
+                });
+                true
+            }
+            opcode::IO_CAPABILITY_REQUEST_REPLY | opcode::IO_CAPABILITY_REQUEST_NEGATIVE_REPLY => {
+                let peer = classic_address(params).unwrap_or(Address::ANY);
+                let positive = opcode == opcode::IO_CAPABILITY_REQUEST_REPLY;
+                let capabilities = positive.then(|| IoCapabilities {
+                    io: params
+                        .get(6)
+                        .copied()
+                        .unwrap_or(io_capability::NO_INPUT_NO_OUTPUT),
+                    oob: params.get(7).copied().unwrap_or(0x00),
+                    auth: params.get(8).copied().unwrap_or(0x00),
+                });
+                // The negative reply's last parameter is the host's reason,
+                // and it is the reason both hosts are given for the failure.
+                let reason = params.get(6).copied().unwrap_or(STATUS_PAIRING_NOT_ALLOWED);
+                let mut ret = vec![STATUS_SUCCESS];
+                ret.extend_from_slice(&addr_le(peer));
+                c.outbox.push_back(command_complete(opcode, &ret));
+                actions.push(Action::ClassicSecurity {
+                    from: i,
+                    step: SecurityStep::IoCapabilityReply {
+                        peer,
+                        capabilities,
+                        reason,
+                    },
+                });
+                true
+            }
+            opcode::USER_CONFIRMATION_REQUEST_REPLY
+            | opcode::USER_CONFIRMATION_REQUEST_NEGATIVE_REPLY => {
+                let peer = classic_address(params).unwrap_or(Address::ANY);
+                let accept = opcode == opcode::USER_CONFIRMATION_REQUEST_REPLY;
+                let mut ret = vec![STATUS_SUCCESS];
+                ret.extend_from_slice(&addr_le(peer));
+                c.outbox.push_back(command_complete(opcode, &ret));
+                actions.push(Action::ClassicSecurity {
+                    from: i,
+                    step: SecurityStep::ConfirmationReply { peer, accept },
+                });
+                true
+            }
+            opcode::USER_PASSKEY_REQUEST_REPLY | opcode::USER_PASSKEY_REQUEST_NEGATIVE_REPLY => {
+                let peer = classic_address(params).unwrap_or(Address::ANY);
+                let passkey = (opcode == opcode::USER_PASSKEY_REQUEST_REPLY).then(|| {
+                    params
+                        .get(6..10)
+                        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                        .unwrap_or(0)
+                });
+                let mut ret = vec![STATUS_SUCCESS];
+                ret.extend_from_slice(&addr_le(peer));
+                c.outbox.push_back(command_complete(opcode, &ret));
+                actions.push(Action::ClassicSecurity {
+                    from: i,
+                    step: SecurityStep::PasskeyReply { peer, passkey },
+                });
+                true
+            }
+            opcode::LE_LTK_REQUEST_REPLY | opcode::LE_LTK_REQUEST_NEGATIVE_REPLY => {
+                let handle = le_u16(params, 0);
+                let ltk = (opcode == opcode::LE_LTK_REQUEST_REPLY)
+                    .then(|| {
+                        let mut ltk = [0u8; 16];
+                        params.get(2..18).map(|b| {
+                            ltk.copy_from_slice(b);
+                            ltk
+                        })
+                    })
+                    .flatten();
+                let mut ret = vec![STATUS_SUCCESS];
+                ret.extend_from_slice(&handle.to_le_bytes());
+                c.outbox.push_back(command_complete(opcode, &ret));
+                actions.push(Action::LeLtkReply {
+                    from: i,
+                    handle,
+                    ltk,
+                });
+                true
+            }
+            opcode::WRITE_SIMPLE_PAIRING_MODE => {
+                c.classic.simple_pairing_mode = params.first().copied().unwrap_or(0x00);
+                c.outbox
+                    .push_back(command_complete(opcode, &[STATUS_SUCCESS]));
+                true
+            }
+            opcode::READ_SIMPLE_PAIRING_MODE => {
+                c.outbox.push_back(command_complete(
+                    opcode,
+                    &[STATUS_SUCCESS, c.classic.simple_pairing_mode],
+                ));
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The pairing conversation controller `from` is having with the device
+    /// at `peer`, if any. Matched on the *pair* rather than on the address
+    /// alone, so a reply that names the wrong peer resolves nothing instead
+    /// of resolving somebody else's pairing.
+    fn pairing_index(&self, from: usize, peer: Address) -> Option<usize> {
+        self.pairings.iter().position(|pairing| {
+            pairing
+                .side_of(from)
+                .is_some_and(|side| self.controllers[pairing.ends[1 - side]].address == peer)
+        })
+    }
+
+    /// Applies one host's contribution to a security procedure.
+    fn route_classic_security(&mut self, from: usize, step: SecurityStep) {
+        match step {
+            SecurityStep::Authenticate { handle } => self.route_authenticate(from, handle),
+            SecurityStep::LinkKeyReply { peer, key } => {
+                let Some(index) = self.pairing_index(from, peer) else {
+                    return;
+                };
+                let Some(side) = self.pairings[index].side_of(from) else {
+                    return;
+                };
+                if self.pairings[index].stage != PairingStage::LinkKey {
+                    return;
+                }
+                self.pairings[index].link_key[side] = Some(key);
+                self.advance_pairing(index);
+            }
+            SecurityStep::IoCapabilityReply {
+                peer,
+                capabilities,
+                reason,
+            } => {
+                let Some(index) = self.pairing_index(from, peer) else {
+                    return;
+                };
+                let Some(side) = self.pairings[index].side_of(from) else {
+                    return;
+                };
+                if self.pairings[index].stage != PairingStage::IoCapability {
+                    return;
+                }
+                let Some(capabilities) = capabilities else {
+                    // An IO Capability Request Negative Reply ends the
+                    // pairing there and then; there is no model to select.
+                    self.finish_pairing(index, reason, true, None);
+                    return;
+                };
+                self.pairings[index].io[side] = Some(capabilities);
+                // The peer's host learns our capabilities from its own IO
+                // Capability Response — the event that has no reply and
+                // exists only to inform.
+                let other = self.pairings[index].ends[1 - side];
+                let our_address = self.controllers[from].address;
+                self.controllers[other]
+                    .outbox
+                    .push_back(io_capability_response(our_address, capabilities));
+                self.advance_pairing(index);
+            }
+            SecurityStep::ConfirmationReply { peer, accept } => {
+                let Some(index) = self.pairing_index(from, peer) else {
+                    return;
+                };
+                let Some(side) = self.pairings[index].side_of(from) else {
+                    return;
+                };
+                if self.pairings[index].stage != PairingStage::UserAction {
+                    return;
+                }
+                self.pairings[index].decision[side] = Some(accept);
+                self.advance_pairing(index);
+            }
+            SecurityStep::PasskeyReply { peer, passkey } => {
+                let Some(index) = self.pairing_index(from, peer) else {
+                    return;
+                };
+                let Some(side) = self.pairings[index].side_of(from) else {
+                    return;
+                };
+                if self.pairings[index].stage != PairingStage::UserAction {
+                    return;
+                }
+                self.pairings[index].decision[side] = Some(passkey.is_some());
+                self.pairings[index].entered[side] = passkey;
+                self.advance_pairing(index);
+            }
+            SecurityStep::Encrypt { handle, enable } => {
+                self.route_set_connection_encryption(from, handle, enable);
+            }
+            SecurityStep::ChangeLinkKey { handle } => {
+                self.route_change_connection_link_key(from, handle);
+            }
+        }
+    }
+
+    /// Authentication Requested: open a pairing conversation on `handle` and
+    /// ask **both** hosts whether they already hold a link key for the other.
+    ///
+    /// Asking both is the whole design. A reconnect between two hosts that
+    /// each stored the key ends at the next step with no SSP at all, and a
+    /// reconnect where either side has forgotten runs the full pairing —
+    /// which is the observable difference a bonded device has, and the reason
+    /// a link key store is not just a cache.
+    fn route_authenticate(&mut self, from: usize, handle: u16) {
+        let Some(peer) = self.peer_of(from, handle) else {
+            return;
+        };
+        if self.pairings.iter().any(|p| p.handle == handle) {
+            // One conversation per link. A second Authentication Requested
+            // while the first is still running joins nothing and is dropped;
+            // its host is still owed the Authentication Complete the first
+            // one will send.
+            return;
+        }
+        let from_address = self.controllers[from].address;
+        let peer_address = self.controllers[peer].address;
+        let key = derived_link_key(from_address, peer_address);
+        self.pairings.push(ClassicPairing {
+            handle,
+            ends: [from, peer],
+            link_key: [None, None],
+            io: [None, None],
+            decision: [None, None],
+            entered: [None, None],
+            stage: PairingStage::LinkKey,
+            key,
+            numeric_value: pairing_digits(&key, 0),
+            passkey: pairing_digits(&key, 1),
+            model: AssociationModel::JustWorks,
+        });
+        self.controllers[from]
+            .outbox
+            .push_back(link_key_request(peer_address));
+        self.controllers[peer]
+            .outbox
+            .push_back(link_key_request(from_address));
+    }
+
+    /// Moves the pairing at `index` on as far as the answers in hand allow.
+    /// Called after every host reply; returns quietly while an answer is
+    /// still outstanding.
+    fn advance_pairing(&mut self, index: usize) {
+        match self.pairings[index].stage {
+            PairingStage::LinkKey => {
+                let (Some(ours), Some(theirs)) = (
+                    self.pairings[index].link_key[0],
+                    self.pairings[index].link_key[1],
+                ) else {
+                    return;
+                };
+                if let (Some(ours), Some(theirs)) = (ours, theirs)
+                    && ours == theirs
+                {
+                    // Both hosts produced the same stored key. This is the
+                    // bonded path: no SSP, no Link Key Notification, no user
+                    // anywhere — just an Authentication Complete.
+                    self.finish_pairing(index, STATUS_SUCCESS, false, None);
+                    return;
+                }
+                let ends = self.pairings[index].ends;
+                if ends
+                    .iter()
+                    .any(|end| self.controllers[*end].classic.simple_pairing_mode == 0)
+                {
+                    // Pairing is needed and SSP is not switched on at one of
+                    // the ends. Real hardware would fall back to legacy PIN
+                    // pairing; this controller does not model it, and saying
+                    // so beats running SSP the host never enabled.
+                    self.finish_pairing(index, STATUS_PAIRING_NOT_ALLOWED, false, None);
+                    return;
+                }
+                self.pairings[index].stage = PairingStage::IoCapability;
+                for side in 0..2 {
+                    let peer_address = self.controllers[ends[1 - side]].address;
+                    self.controllers[ends[side]]
+                        .outbox
+                        .push_back(io_capability_request(peer_address));
+                }
+            }
+            PairingStage::IoCapability => {
+                let (Some(first), Some(second)) =
+                    (self.pairings[index].io[0], self.pairings[index].io[1])
+                else {
+                    return;
+                };
+                let model = association_model(first.io, first.auth, second.io, second.auth);
+                self.pairings[index].model = model;
+                self.pairings[index].stage = PairingStage::UserAction;
+                let ends = self.pairings[index].ends;
+                let numeric_value = self.pairings[index].numeric_value;
+                let passkey = self.pairings[index].passkey;
+                let capabilities = [first, second];
+                for side in 0..2 {
+                    let peer_address = self.controllers[ends[1 - side]].address;
+                    match model {
+                        // Passkey Entry asks the side that can type and only
+                        // *tells* the side that can display: a display has
+                        // nothing to answer with, so it has already agreed by
+                        // the time it is told.
+                        AssociationModel::PasskeyEntry
+                            if capabilities[side].io == io_capability::KEYBOARD_ONLY =>
+                        {
+                            self.controllers[ends[side]]
+                                .outbox
+                                .push_back(user_passkey_request(peer_address));
+                        }
+                        AssociationModel::PasskeyEntry => {
+                            self.controllers[ends[side]]
+                                .outbox
+                                .push_back(user_passkey_notification(peer_address, passkey));
+                            self.pairings[index].decision[side] = Some(true);
+                            self.pairings[index].entered[side] = Some(passkey);
+                        }
+                        // Just Works and Numeric Comparison put exactly the
+                        // same bytes on the wire. The difference is whether a
+                        // person is expected to look at them, which is the
+                        // host's business — and it is why the two produce
+                        // different *key types* below.
+                        AssociationModel::JustWorks | AssociationModel::NumericComparison => {
+                            self.controllers[ends[side]]
+                                .outbox
+                                .push_back(user_confirmation_request(peer_address, numeric_value));
+                        }
+                    }
+                }
+                self.advance_pairing(index);
+            }
+            PairingStage::UserAction => {
+                let (Some(first), Some(second)) = (
+                    self.pairings[index].decision[0],
+                    self.pairings[index].decision[1],
+                ) else {
+                    return;
+                };
+                let entered = self.pairings[index].entered;
+                let digits_agree = self.pairings[index].model != AssociationModel::PasskeyEntry
+                    || (entered[0].is_some() && entered[0] == entered[1]);
+                if !(first && second && digits_agree) {
+                    self.finish_pairing(index, STATUS_AUTHENTICATION_FAILURE, true, None);
+                    return;
+                }
+                // Only a model a person actually took part in produces an
+                // authenticated key. A service that requires MITM protection
+                // reads this byte and refuses a Just Works bond.
+                let key_type = match self.pairings[index].model {
+                    AssociationModel::JustWorks => link_key_type::UNAUTHENTICATED_P192,
+                    AssociationModel::NumericComparison | AssociationModel::PasskeyEntry => {
+                        link_key_type::AUTHENTICATED_P192
+                    }
+                };
+                self.finish_pairing(index, STATUS_SUCCESS, true, Some(key_type));
+            }
+        }
+    }
+
+    /// Resolves the pairing at `index`: tell whoever is owed what, mark the
+    /// link, and forget the conversation.
+    ///
+    /// `ssp` says whether Secure Simple Pairing actually ran — a link that
+    /// authenticated straight off two stored keys never started one, and a
+    /// host handed a Simple Pairing Complete for a pairing that did not
+    /// happen would have to invent a reason for it. `key_type` is `Some`
+    /// only when a *new* key was produced, which is what decides whether the
+    /// two hosts get a Link Key Notification to store.
+    fn finish_pairing(&mut self, index: usize, status: u8, ssp: bool, key_type: Option<u8>) {
+        let pairing = self.pairings.remove(index);
+        let ends = pairing.ends;
+        if let Some(key_type) = key_type {
+            for side in 0..2 {
+                let peer_address = self.controllers[ends[1 - side]].address;
+                self.controllers[ends[side]]
+                    .outbox
+                    .push_back(link_key_notification(peer_address, &pairing.key, key_type));
+            }
+        }
+        if ssp {
+            for side in 0..2 {
+                let peer_address = self.controllers[ends[1 - side]].address;
+                self.controllers[ends[side]]
+                    .outbox
+                    .push_back(simple_pairing_complete(status, peer_address));
+            }
+        }
+        if status == STATUS_SUCCESS {
+            for end in ends {
+                if let Some(conn) = self.controllers[end]
+                    .connections
+                    .iter_mut()
+                    .find(|c| c.handle == pairing.handle)
+                {
+                    conn.authenticated = true;
+                }
+            }
+        }
+        // Authentication Complete goes to the host that asked and to nobody
+        // else. The peer learns what happened from Simple Pairing Complete,
+        // and on the bonded path it learns nothing at all — which is exactly
+        // what a real acceptor sees.
+        self.controllers[ends[0]]
+            .outbox
+            .push_back(authentication_complete(status, pairing.handle));
+    }
+
+    /// Set Connection Encryption: flip both ends of `handle`, or refuse.
+    ///
+    /// Encryption is state here, not cryptography — nothing on the link is
+    /// enciphered and the ACL router does not change. What is modelled is the
+    /// thing a profile can actually act on: whether the link has a key and
+    /// says it is encrypted.
+    fn route_set_connection_encryption(&mut self, from: usize, handle: u16, enable: u8) {
+        let Some(peer) = self.peer_of(from, handle) else {
+            return;
+        };
+        let authenticated = self.controllers[from]
+            .connections
+            .iter()
+            .any(|c| c.handle == handle && c.authenticated);
+        if enable != 0 && !authenticated {
+            // No key, so no encryption — and *nothing changes at either end*.
+            // A link that came back encrypted on one side only would be worse
+            // than one that stayed clear, because both halves would believe
+            // themselves right.
+            self.controllers[from].outbox.push_back(encryption_change(
+                STATUS_PIN_OR_KEY_MISSING,
+                handle,
+                ENCRYPTION_OFF,
+            ));
+            return;
+        }
+        let enabled = if enable != 0 {
+            ENCRYPTION_ON
+        } else {
+            ENCRYPTION_OFF
+        };
+        for end in [from, peer] {
+            if let Some(conn) = self.controllers[end]
+                .connections
+                .iter_mut()
+                .find(|c| c.handle == handle)
+            {
+                conn.encrypted = enable != 0;
+            }
+            self.controllers[end].outbox.push_back(encryption_change(
+                STATUS_SUCCESS,
+                handle,
+                enabled,
+            ));
+        }
+    }
+
+    /// Change Connection Link Key: derive the next key for this link, notify
+    /// both hosts so they can store it, and complete at the asking host.
+    ///
+    /// The rotation counter lives on the connection so that asking twice
+    /// produces two different keys; without it the "new" key would be the
+    /// same one every time, which is a rotation that rotates nothing.
+    fn route_change_connection_link_key(&mut self, from: usize, handle: u16) {
+        let Some(peer) = self.peer_of(from, handle) else {
+            return;
+        };
+        let rotation = self.controllers[from]
+            .connections
+            .iter()
+            .find(|c| c.handle == handle)
+            .map(|c| c.key_rotations.wrapping_add(1))
+            .unwrap_or(1);
+        let base = derived_link_key(
+            self.controllers[from].address,
+            self.controllers[peer].address,
+        );
+        let key = crate::crypto::aes_cmac(&base, &[rotation]);
+        for end in [from, peer] {
+            if let Some(conn) = self.controllers[end]
+                .connections
+                .iter_mut()
+                .find(|c| c.handle == handle)
+            {
+                conn.key_rotations = rotation;
+            }
+        }
+        for (end, other) in [(from, peer), (peer, from)] {
+            let peer_address = self.controllers[other].address;
+            self.controllers[end]
+                .outbox
+                .push_back(link_key_notification(
+                    peer_address,
+                    &key,
+                    link_key_type::UNAUTHENTICATED_P192,
+                ));
+        }
+        self.controllers[from]
+            .outbox
+            .push_back(change_connection_link_key_complete(STATUS_SUCCESS, handle));
+    }
+
+    /// LE Enable Encryption: hold the key the central named and ask the
+    /// peripheral's host for its own with an LE Long Term Key Request.
+    ///
+    /// This is the step `smp/pairing.rs` has been missing. SMP does the
+    /// pairing maths and ends holding an LTK; until now there was no
+    /// controller to hand it to, so the link never actually became encrypted
+    /// and `PairingSession::on_link_encrypted` was called by nothing.
+    fn route_le_enable_encryption(
+        &mut self,
+        from: usize,
+        handle: u16,
+        ltk: [u8; 16],
+        rand: [u8; 8],
+        ediv: u16,
+    ) {
+        let Some(peer) = self.peer_of(from, handle) else {
+            return;
+        };
+        if let Some(conn) = self.controllers[from]
+            .connections
+            .iter_mut()
+            .find(|c| c.handle == handle)
+        {
+            conn.pending_ltk = Some(ltk);
+        }
+        self.controllers[peer]
+            .outbox
+            .push_back(le_long_term_key_request(handle, rand, ediv));
+    }
+
+    /// The peripheral's host answered its LE Long Term Key Request. Two keys
+    /// that match encrypt both ends; anything else fails at the central,
+    /// which is the only side that asked for encryption in the first place.
+    fn route_le_ltk_reply(&mut self, from: usize, handle: u16, ltk: Option<[u8; 16]>) {
+        let Some(central) = self.peer_of(from, handle) else {
+            return;
+        };
+        let expected = self.controllers[central]
+            .connections
+            .iter_mut()
+            .find(|c| c.handle == handle)
+            .and_then(|c| c.pending_ltk.take());
+        let Some(expected) = expected else {
+            // Nobody asked for encryption on this link, so this reply answers
+            // a question that was never put.
+            return;
+        };
+        if ltk != Some(expected) {
+            self.controllers[central]
+                .outbox
+                .push_back(encryption_change(
+                    STATUS_PIN_OR_KEY_MISSING,
+                    handle,
+                    ENCRYPTION_OFF,
+                ));
+            return;
+        }
+        for end in [central, from] {
+            if let Some(conn) = self.controllers[end]
+                .connections
+                .iter_mut()
+                .find(|c| c.handle == handle)
+            {
+                conn.encrypted = true;
+            }
+            self.controllers[end].outbox.push_back(encryption_change(
+                STATUS_SUCCESS,
+                handle,
+                ENCRYPTION_ON,
+            ));
+        }
+    }
+
+    /// Drops pairing conversations whose connection is gone — a disconnect,
+    /// or an HCI Reset at either end. A pairing that outlived its link would
+    /// hand its Authentication Complete to a handle that now means something
+    /// else.
+    fn prune_pairings(&mut self) {
+        let controllers = &self.controllers;
+        self.pairings.retain(|pairing| {
+            pairing
+                .ends
+                .iter()
+                .all(|end| controllers[*end].is_connected(pairing.handle))
+        });
+    }
+
+    // === end security ====================================================
 
     /// Join controller `central` to advertiser `peripheral`: allocate a shared
     /// handle, record the connection on both, stop the advertiser, and emit an
@@ -3776,6 +4939,102 @@ fn remote_name_request_complete(status: u8, peer: Address, name: &[u8; 248]) -> 
     body.extend_from_slice(&addr_le(peer));
     body.extend_from_slice(name);
     event_packet(event::REMOTE_NAME_REQUEST_COMPLETE, &body)
+}
+
+// --- security events -------------------------------------------------------
+//
+// Every layout below is Vol 4, Part E, Section 7.7, cross-checked against
+// Bumble's `bumble/hci.py` event codes rather than transcribed by eye: a
+// hand-copied HCI table has already been wrong once in this project.
+
+/// Link Key Request event (7.7.23): the peer's BD_ADDR, and nothing else.
+fn link_key_request(peer: Address) -> Vec<u8> {
+    event_packet(event::LINK_KEY_REQUEST, &addr_le(peer))
+}
+
+/// Link Key Notification event (7.7.24): BD_ADDR, Link_Key(16), Key_Type.
+fn link_key_notification(peer: Address, key: &[u8; 16], key_type: u8) -> Vec<u8> {
+    let mut body = addr_le(peer).to_vec();
+    body.extend_from_slice(key);
+    body.push(key_type);
+    event_packet(event::LINK_KEY_NOTIFICATION, &body)
+}
+
+/// IO Capability Request event (7.7.40): the peer's BD_ADDR.
+fn io_capability_request(peer: Address) -> Vec<u8> {
+    event_packet(event::IO_CAPABILITY_REQUEST, &addr_le(peer))
+}
+
+/// IO Capability Response event (7.7.41): BD_ADDR, IO_Capability,
+/// OOB_Data_Present, Authentication_Requirements — the peer's answer,
+/// forwarded verbatim.
+fn io_capability_response(peer: Address, capabilities: IoCapabilities) -> Vec<u8> {
+    let mut body = addr_le(peer).to_vec();
+    body.push(capabilities.io);
+    body.push(capabilities.oob);
+    body.push(capabilities.auth);
+    event_packet(event::IO_CAPABILITY_RESPONSE, &body)
+}
+
+/// User Confirmation Request event (7.7.42): BD_ADDR and the six-digit value,
+/// little-endian in four octets.
+fn user_confirmation_request(peer: Address, numeric_value: u32) -> Vec<u8> {
+    let mut body = addr_le(peer).to_vec();
+    body.extend_from_slice(&numeric_value.to_le_bytes());
+    event_packet(event::USER_CONFIRMATION_REQUEST, &body)
+}
+
+/// User Passkey Request event (7.7.43): the peer's BD_ADDR.
+fn user_passkey_request(peer: Address) -> Vec<u8> {
+    event_packet(event::USER_PASSKEY_REQUEST, &addr_le(peer))
+}
+
+/// User Passkey Notification event (7.7.48): BD_ADDR and the passkey to show.
+fn user_passkey_notification(peer: Address, passkey: u32) -> Vec<u8> {
+    let mut body = addr_le(peer).to_vec();
+    body.extend_from_slice(&passkey.to_le_bytes());
+    event_packet(event::USER_PASSKEY_NOTIFICATION, &body)
+}
+
+/// Simple Pairing Complete event (7.7.45): status, then the peer's BD_ADDR.
+fn simple_pairing_complete(status: u8, peer: Address) -> Vec<u8> {
+    let mut body = vec![status];
+    body.extend_from_slice(&addr_le(peer));
+    event_packet(event::SIMPLE_PAIRING_COMPLETE, &body)
+}
+
+/// Authentication Complete event (7.7.6): status and connection handle.
+fn authentication_complete(status: u8, handle: u16) -> Vec<u8> {
+    let mut body = vec![status];
+    body.extend_from_slice(&handle.to_le_bytes());
+    event_packet(event::AUTHENTICATION_COMPLETE, &body)
+}
+
+/// Encryption Change event (7.7.8): status, handle, Encryption_Enabled. The
+/// same event answers BR/EDR's Set Connection Encryption and LE's Enable
+/// Encryption — one of the few places the two transports share a completion.
+fn encryption_change(status: u8, handle: u16, enabled: u8) -> Vec<u8> {
+    let mut body = vec![status];
+    body.extend_from_slice(&handle.to_le_bytes());
+    body.push(enabled);
+    event_packet(event::ENCRYPTION_CHANGE, &body)
+}
+
+/// Change Connection Link Key Complete event (7.7.9): status and handle.
+fn change_connection_link_key_complete(status: u8, handle: u16) -> Vec<u8> {
+    let mut body = vec![status];
+    body.extend_from_slice(&handle.to_le_bytes());
+    event_packet(event::CHANGE_CONNECTION_LINK_KEY_COMPLETE, &body)
+}
+
+/// LE Long Term Key Request subevent (7.7.65.5): handle, Random_Number(8),
+/// Encrypted_Diversifier(2).
+fn le_long_term_key_request(handle: u16, rand: [u8; 8], ediv: u16) -> Vec<u8> {
+    let mut body = vec![event::LE_LONG_TERM_KEY_REQUEST];
+    body.extend_from_slice(&handle.to_le_bytes());
+    body.extend_from_slice(&rand);
+    body.extend_from_slice(&ediv.to_le_bytes());
+    event_packet(event::LE_META, &body)
 }
 
 /// Command Status for `opcode` with `status`.
@@ -6252,16 +7511,973 @@ mod tests {
         link.tick();
         let _ = events(&a);
 
-        // LE Enable Encryption (0x2019) — this controller models no link
-        // encryption at all, and says so instead of pretending.
-        a.send_command(&cmd(0x2019, &[0x00; 28])).unwrap();
+        // Sniff Mode (0x0803) — this controller models no low-power mode at
+        // all, and says so instead of pretending. (This was LE Enable
+        // Encryption until security landed; the point of the test is the
+        // *shape* of an honest refusal, so it needs an opcode that is still
+        // genuinely unmodelled.)
+        a.send_command(&cmd(0x0803, &[0x00; 10])).unwrap();
         link.tick();
 
         let evts = events(&a);
         assert_eq!(
-            command_status_for(&evts, 0x2019),
+            command_status_for(&evts, 0x0803),
             Some(STATUS_UNKNOWN_HCI_COMMAND),
             "{evts:?}"
+        );
+    }
+
+    // --- security: Secure Simple Pairing, link keys, encryption ----------
+    //
+    // One test per command, asserting the answer's *event type* and its
+    // completion event in order — the same shape as the nineteen BR/EDR
+    // tests above, for the same reason: a wrong event type does not fail,
+    // it hangs.
+
+    /// Enables Simple Pairing Mode, then the usual BR/EDR bring-up. A host
+    /// that skips the first of these is told Pairing Not Allowed rather than
+    /// getting SSP it never switched on.
+    fn ssp_bring_up(ch: &HciChannel, name: &str, scan: u8) {
+        ch.send_command(&cmd(opcode::WRITE_SIMPLE_PAIRING_MODE, &[0x01]))
+            .unwrap();
+        classic_bring_up(ch, name, scan);
+    }
+
+    /// What a host answers a security question with, for [`ssp_host_tick`].
+    #[derive(Clone, Copy)]
+    struct SspPolicy {
+        /// The key to answer Link Key Request with, or `None` for the
+        /// negative reply that starts pairing.
+        stored_key: Option<[u8; 16]>,
+        io: u8,
+        auth: u8,
+        /// The answer to User Confirmation Request.
+        accept: bool,
+        /// The digits to answer User Passkey Request with, if asked.
+        passkey: Option<u32>,
+    }
+
+    impl SspPolicy {
+        /// A device with a screen and a button, no stored bond, and a user
+        /// who says yes.
+        fn agreeable(io: u8, auth: u8) -> Self {
+            Self {
+                stored_key: None,
+                io,
+                auth,
+                accept: true,
+                passkey: None,
+            }
+        }
+    }
+
+    /// Drains one host's events and answers every security question in them,
+    /// returning what it saw. This *is* the host half of SSP: the controller
+    /// asks four questions and hangs on any one that goes unanswered.
+    fn ssp_host_tick(ch: &HciChannel, policy: SspPolicy) -> Vec<(u8, Vec<u8>)> {
+        let evts = events(ch);
+        for (code, params) in &evts {
+            let peer = &params[..6.min(params.len())];
+            match *code {
+                event::LINK_KEY_REQUEST => match policy.stored_key {
+                    Some(key) => {
+                        let mut p = peer.to_vec();
+                        p.extend_from_slice(&key);
+                        ch.send_command(&cmd(opcode::LINK_KEY_REQUEST_REPLY, &p))
+                            .unwrap();
+                    }
+                    None => {
+                        ch.send_command(&cmd(opcode::LINK_KEY_REQUEST_NEGATIVE_REPLY, peer))
+                            .unwrap();
+                    }
+                },
+                event::IO_CAPABILITY_REQUEST => {
+                    let mut p = peer.to_vec();
+                    p.extend_from_slice(&[policy.io, 0x00, policy.auth]);
+                    ch.send_command(&cmd(opcode::IO_CAPABILITY_REQUEST_REPLY, &p))
+                        .unwrap();
+                }
+                event::USER_CONFIRMATION_REQUEST => {
+                    let reply = if policy.accept {
+                        opcode::USER_CONFIRMATION_REQUEST_REPLY
+                    } else {
+                        opcode::USER_CONFIRMATION_REQUEST_NEGATIVE_REPLY
+                    };
+                    ch.send_command(&cmd(reply, peer)).unwrap();
+                }
+                event::USER_PASSKEY_REQUEST => match policy.passkey.filter(|_| policy.accept) {
+                    Some(passkey) => {
+                        let mut p = peer.to_vec();
+                        p.extend_from_slice(&passkey.to_le_bytes());
+                        ch.send_command(&cmd(opcode::USER_PASSKEY_REQUEST_REPLY, &p))
+                            .unwrap();
+                    }
+                    None => {
+                        ch.send_command(&cmd(opcode::USER_PASSKEY_REQUEST_NEGATIVE_REPLY, peer))
+                            .unwrap();
+                    }
+                },
+                _ => {}
+            }
+        }
+        evts
+    }
+
+    /// Runs both hosts' SSP policies for as many ticks as a pairing needs,
+    /// returning every event each host saw, in order.
+    fn run_ssp(
+        link: &mut Link,
+        a: &HciChannel,
+        b: &HciChannel,
+        a_policy: SspPolicy,
+        b_policy: SspPolicy,
+    ) -> (Vec<(u8, Vec<u8>)>, Vec<(u8, Vec<u8>)>) {
+        let (mut a_seen, mut b_seen) = (Vec::new(), Vec::new());
+        // Each round trip costs one tick: the controller asks in one, the
+        // host answers into the next. Eight is comfortably past the four
+        // questions a full pairing asks.
+        for _ in 0..8 {
+            link.tick();
+            a_seen.extend(ssp_host_tick(a, a_policy));
+            b_seen.extend(ssp_host_tick(b, b_policy));
+        }
+        (a_seen, b_seen)
+    }
+
+    /// Just the event codes, in order — what an assertion about sequencing
+    /// actually wants to look at.
+    fn codes(evts: &[(u8, Vec<u8>)]) -> Vec<u8> {
+        evts.iter().map(|(code, _)| *code).collect()
+    }
+
+    /// The parameters of the first `code` event, if one came.
+    fn first_of(evts: &[(u8, Vec<u8>)], code: u8) -> Option<&[u8]> {
+        evts.iter()
+            .find(|(c, _)| *c == code)
+            .map(|(_, p)| p.as_slice())
+    }
+
+    /// Two connected devices with Simple Pairing switched on at both ends.
+    fn ssp_pair_connected(link: &mut Link) -> (Arc<HciChannel>, Arc<HciChannel>, u16) {
+        let a = link.add_device(addr("AA:BB:CC:00:00:01"));
+        let b = link.add_device(addr("AA:BB:CC:00:00:02"));
+        ssp_bring_up(&a, "Initiator", 0x03);
+        ssp_bring_up(&b, "Acceptor", 0x03);
+        link.tick();
+        let handle = connect_classic(link, &a, &b);
+        let _ = events(&a);
+        let _ = events(&b);
+        (a, b, handle)
+    }
+
+    /// An LE central connected to an LE peripheral. Returns both channels and
+    /// the connection handle.
+    fn le_pair_connected(link: &mut Link) -> (Arc<HciChannel>, Arc<HciChannel>, u16) {
+        let central = link.add_device(addr("AA:BB:CC:00:00:01"));
+        let peripheral = link.add_device(addr("AA:BB:CC:00:00:02"));
+        let handle = connect(link, &central, &peripheral, addr("AA:BB:CC:00:00:02"));
+        let _ = events(&central);
+        let _ = events(&peripheral);
+        (central, peripheral, handle)
+    }
+
+    #[test]
+    fn test_write_simple_pairing_mode_is_answered_with_command_complete() {
+        // 0x0C56, and it used to fall through the catch-all. The neighbouring
+        // 0x0C45 is Write *Inquiry* Mode; confusing the two is the reason the
+        // opcode is spelled out in `mod opcode` rather than written inline.
+        let mut link = Link::new();
+        let a = link.add_device(addr("AA:BB:CC:00:00:01"));
+        link.tick();
+        let _ = events(&a);
+
+        a.send_command(&cmd(opcode::WRITE_SIMPLE_PAIRING_MODE, &[0x01]))
+            .unwrap();
+        a.send_command(&cmd(opcode::READ_SIMPLE_PAIRING_MODE, &[]))
+            .unwrap();
+        link.tick();
+
+        let evts = events(&a);
+        assert_eq!(
+            command_complete_for(&evts, opcode::WRITE_SIMPLE_PAIRING_MODE).as_deref(),
+            Some(&[STATUS_SUCCESS][..]),
+        );
+        assert_eq!(
+            command_complete_for(&evts, opcode::READ_SIMPLE_PAIRING_MODE).as_deref(),
+            Some(&[STATUS_SUCCESS, 0x01][..]),
+            "Read Simple Pairing Mode must report what the write set: {evts:?}"
+        );
+    }
+
+    #[test]
+    fn test_authentication_requested_asks_both_hosts_for_a_link_key() {
+        let mut link = Link::new();
+        let (a, b, handle) = ssp_pair_connected(&mut link);
+
+        a.send_command(&cmd(
+            opcode::AUTHENTICATION_REQUESTED,
+            &handle.to_le_bytes(),
+        ))
+        .unwrap();
+        link.tick();
+
+        let a_evts = events(&a);
+        assert_eq!(
+            command_status_for(&a_evts, opcode::AUTHENTICATION_REQUESTED),
+            Some(STATUS_SUCCESS),
+            "Authentication Requested is Command-Status-answered: {a_evts:?}"
+        );
+        assert!(
+            command_complete_for(&a_evts, opcode::AUTHENTICATION_REQUESTED).is_none(),
+            "a Command Complete here strands the host on the Authentication \
+             Complete that never comes"
+        );
+        // Both ends, not just the asking one: whether pairing runs depends on
+        // what *both* hosts have stored, so both have to be asked.
+        assert_eq!(
+            first_of(&a_evts, event::LINK_KEY_REQUEST),
+            Some(&WIRE_B[..]),
+            "{a_evts:?}"
+        );
+        let b_evts = events(&b);
+        assert_eq!(
+            first_of(&b_evts, event::LINK_KEY_REQUEST),
+            Some(&WIRE_A[..]),
+            "{b_evts:?}"
+        );
+    }
+
+    #[test]
+    fn test_secure_simple_pairing_runs_in_order_and_keys_both_ends() {
+        let mut link = Link::new();
+        let (a, b, handle) = ssp_pair_connected(&mut link);
+        a.send_command(&cmd(
+            opcode::AUTHENTICATION_REQUESTED,
+            &handle.to_le_bytes(),
+        ))
+        .unwrap();
+
+        let policy = SspPolicy::agreeable(io_capability::DISPLAY_YES_NO, AUTH_REQ_MITM);
+        let (a_seen, b_seen) = run_ssp(&mut link, &a, &b, policy, policy);
+
+        // The order is the whole contract. A host that gets Simple Pairing
+        // Complete before the key has nothing to store; one that gets
+        // Authentication Complete first will start encrypting into a link
+        // whose key it has not been told.
+        let a_security: Vec<u8> = codes(&a_seen)
+            .into_iter()
+            .filter(|c| {
+                matches!(
+                    *c,
+                    event::LINK_KEY_REQUEST
+                        | event::IO_CAPABILITY_REQUEST
+                        | event::IO_CAPABILITY_RESPONSE
+                        | event::USER_CONFIRMATION_REQUEST
+                        | event::LINK_KEY_NOTIFICATION
+                        | event::SIMPLE_PAIRING_COMPLETE
+                        | event::AUTHENTICATION_COMPLETE
+                )
+            })
+            .collect();
+        assert_eq!(
+            a_security,
+            vec![
+                event::LINK_KEY_REQUEST,
+                event::IO_CAPABILITY_REQUEST,
+                event::IO_CAPABILITY_RESPONSE,
+                event::USER_CONFIRMATION_REQUEST,
+                event::LINK_KEY_NOTIFICATION,
+                event::SIMPLE_PAIRING_COMPLETE,
+                event::AUTHENTICATION_COMPLETE,
+            ],
+            "{a_seen:?}"
+        );
+
+        // The acceptor sees the same conversation minus the Authentication
+        // Complete, which belongs to the host that asked and to nobody else.
+        assert!(
+            !codes(&b_seen).contains(&event::AUTHENTICATION_COMPLETE),
+            "only the requesting host is owed an Authentication Complete: \
+             {b_seen:?}"
+        );
+        assert!(codes(&b_seen).contains(&event::SIMPLE_PAIRING_COMPLETE));
+
+        // The same sixteen octets at both ends, or the bond is worthless.
+        let a_key = first_of(&a_seen, event::LINK_KEY_NOTIFICATION).unwrap();
+        let b_key = first_of(&b_seen, event::LINK_KEY_NOTIFICATION).unwrap();
+        assert_eq!(
+            a_key[6..22],
+            b_key[6..22],
+            "the key must match at both ends"
+        );
+        assert_eq!(
+            a_key[22],
+            link_key_type::AUTHENTICATED_P192,
+            "two DisplayYesNo devices that asked for MITM protection did \
+             Numeric Comparison, so the key is an authenticated one"
+        );
+        // And both hosts were shown the same digits.
+        let a_value = first_of(&a_seen, event::USER_CONFIRMATION_REQUEST).unwrap();
+        let b_value = first_of(&b_seen, event::USER_CONFIRMATION_REQUEST).unwrap();
+        assert_eq!(a_value[6..10], b_value[6..10]);
+        assert_eq!(
+            first_of(&a_seen, event::SIMPLE_PAIRING_COMPLETE).unwrap()[0],
+            STATUS_SUCCESS
+        );
+    }
+
+    #[test]
+    fn test_just_works_produces_an_unauthenticated_key() {
+        // The same conversation, with neither host asking for MITM
+        // protection. Byte for byte the same events go out; the difference
+        // is the key type, and it is the only thing a service that requires
+        // MITM protection has to go on.
+        let mut link = Link::new();
+        let (a, b, handle) = ssp_pair_connected(&mut link);
+        a.send_command(&cmd(
+            opcode::AUTHENTICATION_REQUESTED,
+            &handle.to_le_bytes(),
+        ))
+        .unwrap();
+
+        let policy = SspPolicy::agreeable(io_capability::DISPLAY_YES_NO, 0x00);
+        let (a_seen, _) = run_ssp(&mut link, &a, &b, policy, policy);
+
+        assert_eq!(
+            first_of(&a_seen, event::LINK_KEY_NOTIFICATION).unwrap()[22],
+            link_key_type::UNAUTHENTICATED_P192,
+            "{a_seen:?}"
+        );
+    }
+
+    #[test]
+    fn test_a_stored_link_key_at_both_ends_skips_pairing_entirely() {
+        // The observable difference a bond makes. Same command, same link,
+        // and *none* of the four SSP questions gets asked.
+        let mut link = Link::new();
+        let (a, b, handle) = ssp_pair_connected(&mut link);
+        a.send_command(&cmd(
+            opcode::AUTHENTICATION_REQUESTED,
+            &handle.to_le_bytes(),
+        ))
+        .unwrap();
+
+        let bonded = SspPolicy {
+            stored_key: Some([0xA5; 16]),
+            ..SspPolicy::agreeable(io_capability::DISPLAY_YES_NO, AUTH_REQ_MITM)
+        };
+        let (a_seen, b_seen) = run_ssp(&mut link, &a, &b, bonded, bonded);
+
+        for (label, seen) in [("initiator", &a_seen), ("acceptor", &b_seen)] {
+            for unwanted in [
+                event::IO_CAPABILITY_REQUEST,
+                event::USER_CONFIRMATION_REQUEST,
+                event::LINK_KEY_NOTIFICATION,
+                event::SIMPLE_PAIRING_COMPLETE,
+            ] {
+                assert!(
+                    !codes(seen).contains(&unwanted),
+                    "{label} was asked {unwanted:#04X} on a bonded reconnect: \
+                     {seen:?}"
+                );
+            }
+        }
+        assert_eq!(
+            first_of(&a_seen, event::AUTHENTICATION_COMPLETE).map(|p| p[0]),
+            Some(STATUS_SUCCESS),
+            "{a_seen:?}"
+        );
+    }
+
+    #[test]
+    fn test_one_stored_key_and_one_missing_pairs_again() {
+        // Half a bond is no bond. The acceptor forgot, so the whole pairing
+        // runs again — and a controller that had only asked the *initiator*
+        // would have authenticated against a key the peer no longer holds.
+        let mut link = Link::new();
+        let (a, b, handle) = ssp_pair_connected(&mut link);
+        a.send_command(&cmd(
+            opcode::AUTHENTICATION_REQUESTED,
+            &handle.to_le_bytes(),
+        ))
+        .unwrap();
+
+        let remembers = SspPolicy {
+            stored_key: Some([0xA5; 16]),
+            ..SspPolicy::agreeable(io_capability::DISPLAY_YES_NO, AUTH_REQ_MITM)
+        };
+        let forgot = SspPolicy::agreeable(io_capability::DISPLAY_YES_NO, AUTH_REQ_MITM);
+        let (a_seen, _) = run_ssp(&mut link, &a, &b, remembers, forgot);
+
+        assert!(
+            codes(&a_seen).contains(&event::LINK_KEY_NOTIFICATION),
+            "a new key has to be made and told to both: {a_seen:?}"
+        );
+        assert_eq!(
+            first_of(&a_seen, event::AUTHENTICATION_COMPLETE).map(|p| p[0]),
+            Some(STATUS_SUCCESS)
+        );
+    }
+
+    #[test]
+    fn test_a_refused_confirmation_fails_both_ends_and_leaves_the_link_clear() {
+        let mut link = Link::new();
+        let (a, b, handle) = ssp_pair_connected(&mut link);
+        a.send_command(&cmd(
+            opcode::AUTHENTICATION_REQUESTED,
+            &handle.to_le_bytes(),
+        ))
+        .unwrap();
+
+        let willing = SspPolicy::agreeable(io_capability::DISPLAY_YES_NO, AUTH_REQ_MITM);
+        let refuses = SspPolicy {
+            accept: false,
+            ..willing
+        };
+        let (a_seen, b_seen) = run_ssp(&mut link, &a, &b, willing, refuses);
+
+        assert_eq!(
+            first_of(&a_seen, event::SIMPLE_PAIRING_COMPLETE).map(|p| p[0]),
+            Some(STATUS_AUTHENTICATION_FAILURE),
+            "{a_seen:?}"
+        );
+        assert_eq!(
+            first_of(&b_seen, event::SIMPLE_PAIRING_COMPLETE).map(|p| p[0]),
+            Some(STATUS_AUTHENTICATION_FAILURE),
+            "the refusing side is told too, or it never learns why nothing \
+             happened: {b_seen:?}"
+        );
+        assert_eq!(
+            first_of(&a_seen, event::AUTHENTICATION_COMPLETE).map(|p| p[0]),
+            Some(STATUS_AUTHENTICATION_FAILURE)
+        );
+        assert!(
+            !codes(&a_seen).contains(&event::LINK_KEY_NOTIFICATION),
+            "a refused pairing must not hand anyone a key: {a_seen:?}"
+        );
+
+        // And the link must not be half-encrypted afterwards. Asking to
+        // encrypt now is refused at the requester and changes nothing at the
+        // peer — the state a failed pairing has to leave behind.
+        a.send_command(&cmd(
+            opcode::SET_CONNECTION_ENCRYPTION,
+            &[handle as u8, (handle >> 8) as u8, 0x01],
+        ))
+        .unwrap();
+        link.tick();
+        link.tick();
+        let a_after = events(&a);
+        let b_after = events(&b);
+        assert_eq!(
+            first_of(&a_after, event::ENCRYPTION_CHANGE).map(|p| p[0]),
+            Some(STATUS_PIN_OR_KEY_MISSING),
+            "{a_after:?}"
+        );
+        assert!(
+            first_of(&b_after, event::ENCRYPTION_CHANGE).is_none(),
+            "the peer must not be told encryption started: {b_after:?}"
+        );
+    }
+
+    #[test]
+    fn test_passkey_entry_asks_the_keyboard_and_tells_the_display() {
+        // KeyboardOnly against DisplayOnly, with MITM asked for: the model is
+        // Passkey Entry, and the two ends get *different* events — the only
+        // asymmetric moment in SSP.
+        let mut link = Link::new();
+        let (a, b, handle) = ssp_pair_connected(&mut link);
+        a.send_command(&cmd(
+            opcode::AUTHENTICATION_REQUESTED,
+            &handle.to_le_bytes(),
+        ))
+        .unwrap();
+
+        let display = SspPolicy::agreeable(io_capability::DISPLAY_ONLY, AUTH_REQ_MITM);
+        let keyboard = SspPolicy::agreeable(io_capability::KEYBOARD_ONLY, AUTH_REQ_MITM);
+
+        // The keyboard side has to type what the display side is shown, and
+        // nothing on the link tells it — so the test plays the person: watch
+        // for the notification, read the digits, then answer with them.
+        let (mut a_seen, mut b_seen) = (Vec::new(), Vec::new());
+        let mut typed: Option<u32> = None;
+        for _ in 0..8 {
+            link.tick();
+            a_seen.extend(ssp_host_tick(&a, display));
+            // Read the display *before* the keyboard side answers: both
+            // events leave the controller in the same tick, so a person who
+            // only looked at the screen on the next one would be typing
+            // nothing.
+            if let Some(shown) = first_of(&a_seen, event::USER_PASSKEY_NOTIFICATION) {
+                typed = Some(u32::from_le_bytes([shown[6], shown[7], shown[8], shown[9]]));
+            }
+            b_seen.extend(ssp_host_tick(
+                &b,
+                SspPolicy {
+                    passkey: typed,
+                    ..keyboard
+                },
+            ));
+        }
+
+        assert!(
+            codes(&a_seen).contains(&event::USER_PASSKEY_NOTIFICATION),
+            "the display side is told the passkey: {a_seen:?}"
+        );
+        assert!(
+            codes(&b_seen).contains(&event::USER_PASSKEY_REQUEST),
+            "the keyboard side is asked for it: {b_seen:?}"
+        );
+        assert!(
+            !codes(&a_seen).contains(&event::USER_CONFIRMATION_REQUEST),
+            "Passkey Entry does not ask for a confirmation: {a_seen:?}"
+        );
+        assert_eq!(
+            first_of(&a_seen, event::LINK_KEY_NOTIFICATION).map(|p| p[22]),
+            Some(link_key_type::AUTHENTICATED_P192),
+            "a passkey a person typed makes an authenticated key: {a_seen:?}"
+        );
+    }
+
+    #[test]
+    fn test_a_wrong_passkey_fails_the_pairing() {
+        let mut link = Link::new();
+        let (a, b, handle) = ssp_pair_connected(&mut link);
+        a.send_command(&cmd(
+            opcode::AUTHENTICATION_REQUESTED,
+            &handle.to_le_bytes(),
+        ))
+        .unwrap();
+
+        let display = SspPolicy::agreeable(io_capability::DISPLAY_ONLY, AUTH_REQ_MITM);
+        let fumbling = SspPolicy {
+            passkey: Some(111_111),
+            ..SspPolicy::agreeable(io_capability::KEYBOARD_ONLY, AUTH_REQ_MITM)
+        };
+        let (a_seen, _) = run_ssp(&mut link, &a, &b, display, fumbling);
+
+        assert_eq!(
+            first_of(&a_seen, event::SIMPLE_PAIRING_COMPLETE).map(|p| p[0]),
+            Some(STATUS_AUTHENTICATION_FAILURE),
+            "digits that do not match must not make a key: {a_seen:?}"
+        );
+        assert!(!codes(&a_seen).contains(&event::LINK_KEY_NOTIFICATION));
+    }
+
+    #[test]
+    fn test_authentication_without_simple_pairing_mode_says_pairing_not_allowed() {
+        // The honest answer for a host that never sent Write Simple Pairing
+        // Mode. Real hardware would fall back to legacy PIN pairing, which is
+        // not modelled — and running SSP anyway would hide the omission until
+        // the same host met a real controller.
+        let mut link = Link::new();
+        let a = link.add_device(addr("AA:BB:CC:00:00:01"));
+        let b = link.add_device(addr("AA:BB:CC:00:00:02"));
+        classic_bring_up(&a, "Initiator", 0x03);
+        classic_bring_up(&b, "Acceptor", 0x03);
+        link.tick();
+        let handle = connect_classic(&mut link, &a, &b);
+        let _ = events(&a);
+        let _ = events(&b);
+
+        a.send_command(&cmd(
+            opcode::AUTHENTICATION_REQUESTED,
+            &handle.to_le_bytes(),
+        ))
+        .unwrap();
+        let policy = SspPolicy::agreeable(io_capability::DISPLAY_YES_NO, AUTH_REQ_MITM);
+        let (a_seen, b_seen) = run_ssp(&mut link, &a, &b, policy, policy);
+
+        assert_eq!(
+            first_of(&a_seen, event::AUTHENTICATION_COMPLETE).map(|p| p[0]),
+            Some(STATUS_PAIRING_NOT_ALLOWED),
+            "{a_seen:?}"
+        );
+        assert!(
+            !codes(&b_seen).contains(&event::SIMPLE_PAIRING_COMPLETE),
+            "SSP never started, so nobody may be told it completed: {b_seen:?}"
+        );
+    }
+
+    #[test]
+    fn test_set_connection_encryption_changes_both_ends() {
+        let mut link = Link::new();
+        let (a, b, handle) = ssp_pair_connected(&mut link);
+        a.send_command(&cmd(
+            opcode::AUTHENTICATION_REQUESTED,
+            &handle.to_le_bytes(),
+        ))
+        .unwrap();
+        let policy = SspPolicy::agreeable(io_capability::DISPLAY_YES_NO, AUTH_REQ_MITM);
+        run_ssp(&mut link, &a, &b, policy, policy);
+
+        a.send_command(&cmd(
+            opcode::SET_CONNECTION_ENCRYPTION,
+            &[handle as u8, (handle >> 8) as u8, 0x01],
+        ))
+        .unwrap();
+        link.tick();
+        link.tick();
+
+        let a_evts = events(&a);
+        assert_eq!(
+            command_status_for(&a_evts, opcode::SET_CONNECTION_ENCRYPTION),
+            Some(STATUS_SUCCESS),
+            "Set Connection Encryption is Command-Status-answered: {a_evts:?}"
+        );
+        assert!(
+            command_complete_for(&a_evts, opcode::SET_CONNECTION_ENCRYPTION).is_none(),
+            "a Command Complete strands the host on the Encryption Change"
+        );
+        let expected = [
+            STATUS_SUCCESS,
+            handle as u8,
+            (handle >> 8) as u8,
+            ENCRYPTION_ON,
+        ];
+        assert_eq!(
+            first_of(&a_evts, event::ENCRYPTION_CHANGE),
+            Some(&expected[..]),
+            "{a_evts:?}"
+        );
+        let b_evts = events(&b);
+        assert_eq!(
+            first_of(&b_evts, event::ENCRYPTION_CHANGE),
+            Some(&expected[..]),
+            "encryption is a property of the link, so both hosts are told: \
+             {b_evts:?}"
+        );
+    }
+
+    #[test]
+    fn test_set_connection_encryption_on_an_unknown_handle_is_refused_as_a_status() {
+        let mut link = Link::new();
+        let a = link.add_device(addr("AA:BB:CC:00:00:01"));
+        link.tick();
+        let _ = events(&a);
+
+        a.send_command(&cmd(opcode::SET_CONNECTION_ENCRYPTION, &[0x99, 0x00, 0x01]))
+            .unwrap();
+        link.tick();
+
+        let evts = events(&a);
+        assert_eq!(
+            command_status_for(&evts, opcode::SET_CONNECTION_ENCRYPTION),
+            Some(STATUS_UNKNOWN_CONNECTION),
+            "an error answer to a status-type command is still a status: \
+             {evts:?}"
+        );
+        assert!(first_of(&evts, event::ENCRYPTION_CHANGE).is_none());
+    }
+
+    #[test]
+    fn test_change_connection_link_key_notifies_both_and_completes() {
+        let mut link = Link::new();
+        let (a, b, handle) = ssp_pair_connected(&mut link);
+        a.send_command(&cmd(
+            opcode::AUTHENTICATION_REQUESTED,
+            &handle.to_le_bytes(),
+        ))
+        .unwrap();
+        let policy = SspPolicy::agreeable(io_capability::DISPLAY_YES_NO, AUTH_REQ_MITM);
+        let (paired, _) = run_ssp(&mut link, &a, &b, policy, policy);
+        let old_key = first_of(&paired, event::LINK_KEY_NOTIFICATION).unwrap()[6..22].to_vec();
+
+        a.send_command(&cmd(
+            opcode::CHANGE_CONNECTION_LINK_KEY,
+            &handle.to_le_bytes(),
+        ))
+        .unwrap();
+        link.tick();
+        link.tick();
+
+        let a_evts = events(&a);
+        let b_evts = events(&b);
+        assert_eq!(
+            command_status_for(&a_evts, opcode::CHANGE_CONNECTION_LINK_KEY),
+            Some(STATUS_SUCCESS),
+            "{a_evts:?}"
+        );
+        let new_key = first_of(&a_evts, event::LINK_KEY_NOTIFICATION)
+            .expect("a rotated key has to be told to its host")[6..22]
+            .to_vec();
+        assert_ne!(
+            new_key, old_key,
+            "a rotation that returns the old key is not one"
+        );
+        assert_eq!(
+            first_of(&b_evts, event::LINK_KEY_NOTIFICATION).unwrap()[6..22],
+            new_key[..],
+            "both ends store the same new key or the next reconnect fails"
+        );
+        assert_eq!(
+            first_of(&a_evts, event::CHANGE_CONNECTION_LINK_KEY_COMPLETE).map(|p| p[0]),
+            Some(STATUS_SUCCESS),
+            "{a_evts:?}"
+        );
+    }
+
+    #[test]
+    fn test_change_connection_link_key_on_an_unauthenticated_link_is_disallowed() {
+        let mut link = Link::new();
+        let (a, _b, handle) = ssp_pair_connected(&mut link);
+
+        a.send_command(&cmd(
+            opcode::CHANGE_CONNECTION_LINK_KEY,
+            &handle.to_le_bytes(),
+        ))
+        .unwrap();
+        link.tick();
+        link.tick();
+
+        let evts = events(&a);
+        assert_eq!(
+            command_status_for(&evts, opcode::CHANGE_CONNECTION_LINK_KEY),
+            Some(STATUS_COMMAND_DISALLOWED),
+            "there is no key to change: {evts:?}"
+        );
+        assert!(
+            first_of(&evts, event::CHANGE_CONNECTION_LINK_KEY_COMPLETE).is_none(),
+            "an error Command Status ends the command; a completion event \
+             after one is a second answer to a question already answered"
+        );
+    }
+
+    #[test]
+    fn test_link_key_selection_is_answered_with_a_command_status_and_nothing_else() {
+        let mut link = Link::new();
+        let a = link.add_device(addr("AA:BB:CC:00:00:01"));
+        link.tick();
+        let _ = events(&a);
+
+        a.send_command(&cmd(opcode::LINK_KEY_SELECTION, &[0x01]))
+            .unwrap();
+        link.tick();
+
+        let evts = events(&a);
+        assert_eq!(
+            command_status_for(&evts, opcode::LINK_KEY_SELECTION),
+            Some(STATUS_SUCCESS),
+            "{evts:?}"
+        );
+        assert!(command_complete_for(&evts, opcode::LINK_KEY_SELECTION).is_none());
+    }
+
+    #[test]
+    fn test_le_enable_encryption_asks_the_peer_for_the_key_then_encrypts_both() {
+        // The step LE has been missing: `smp/pairing.rs` computes an LTK and
+        // until now had no controller to hand it to, so no link ever actually
+        // became encrypted.
+        let mut link = Link::new();
+        let (central, peripheral, handle) = le_pair_connected(&mut link);
+
+        let ltk = [0x5A; 16];
+        let mut params = handle.to_le_bytes().to_vec();
+        params.extend_from_slice(&[0x11; 8]); // Random_Number
+        params.extend_from_slice(&[0x22, 0x33]); // EDIV
+        params.extend_from_slice(&ltk);
+        central
+            .send_command(&cmd(opcode::LE_ENABLE_ENCRYPTION, &params))
+            .unwrap();
+        link.tick();
+
+        let central_evts = events(&central);
+        assert_eq!(
+            command_status_for(&central_evts, opcode::LE_ENABLE_ENCRYPTION),
+            Some(STATUS_SUCCESS),
+            "{central_evts:?}"
+        );
+        assert!(
+            command_complete_for(&central_evts, opcode::LE_ENABLE_ENCRYPTION).is_none(),
+            "LE Enable Encryption is Command-Status-answered"
+        );
+
+        // The peripheral's host is asked for the key, with the same Random
+        // Number and EDIV the central named — that is how it finds which of
+        // its stored keys applies.
+        let requests = le_subevents(&peripheral, event::LE_LONG_TERM_KEY_REQUEST);
+        let request = requests.first().expect("the peripheral is asked for a key");
+        assert_eq!(
+            &request[6..14],
+            &[0x11; 8],
+            "the Random Number is carried through"
+        );
+        assert_eq!(&request[14..16], &[0x22, 0x33], "and the EDIV");
+
+        let mut reply = handle.to_le_bytes().to_vec();
+        reply.extend_from_slice(&ltk);
+        peripheral
+            .send_command(&cmd(opcode::LE_LTK_REQUEST_REPLY, &reply))
+            .unwrap();
+        link.tick();
+
+        let expected = [
+            STATUS_SUCCESS,
+            handle as u8,
+            (handle >> 8) as u8,
+            ENCRYPTION_ON,
+        ];
+        let peripheral_evts = events(&peripheral);
+        assert_eq!(
+            command_complete_for(&peripheral_evts, opcode::LE_LTK_REQUEST_REPLY).map(|p| p[0]),
+            Some(STATUS_SUCCESS),
+            "the reply *is* the answer, so it completes: {peripheral_evts:?}"
+        );
+        assert_eq!(
+            first_of(&peripheral_evts, event::ENCRYPTION_CHANGE),
+            Some(&expected[..]),
+            "{peripheral_evts:?}"
+        );
+        let central_evts = events(&central);
+        assert_eq!(
+            first_of(&central_evts, event::ENCRYPTION_CHANGE),
+            Some(&expected[..]),
+            "{central_evts:?}"
+        );
+    }
+
+    #[test]
+    fn test_le_encryption_with_no_key_fails_at_the_central_only() {
+        let mut link = Link::new();
+        let (central, peripheral, handle) = le_pair_connected(&mut link);
+
+        let mut params = handle.to_le_bytes().to_vec();
+        params.extend_from_slice(&[0x00; 10]);
+        params.extend_from_slice(&[0x5A; 16]);
+        central
+            .send_command(&cmd(opcode::LE_ENABLE_ENCRYPTION, &params))
+            .unwrap();
+        link.tick();
+        let _ = events(&central);
+
+        // The peripheral has no key for this diversifier, which is the normal
+        // way a bond that one side forgot shows up.
+        peripheral
+            .send_command(&cmd(
+                opcode::LE_LTK_REQUEST_NEGATIVE_REPLY,
+                &handle.to_le_bytes(),
+            ))
+            .unwrap();
+        link.tick();
+
+        let central_evts = events(&central);
+        assert_eq!(
+            first_of(&central_evts, event::ENCRYPTION_CHANGE).map(|p| p[0]),
+            Some(STATUS_PIN_OR_KEY_MISSING),
+            "{central_evts:?}"
+        );
+        assert!(
+            first_of(&events(&peripheral), event::ENCRYPTION_CHANGE).is_none(),
+            "the peripheral never asked for encryption, so it is owed no \
+             Encryption Change"
+        );
+    }
+
+    #[test]
+    fn test_association_model_follows_the_core_table() {
+        use io_capability::{DISPLAY_ONLY, DISPLAY_YES_NO, KEYBOARD_ONLY, NO_INPUT_NO_OUTPUT};
+        let mitm = AUTH_REQ_MITM;
+        let none = 0x00;
+
+        // Rule 1: neither side wants MITM protection, so the table is never
+        // consulted — even for two DisplayYesNo devices, which is the case a
+        // table-only reading gets wrong.
+        assert_eq!(
+            association_model(DISPLAY_YES_NO, none, DISPLAY_YES_NO, none),
+            AssociationModel::JustWorks
+        );
+
+        // Rule 2, the table (Core Vol 3, Part C, 5.2.2.6 Table 5.7).
+        assert_eq!(
+            association_model(DISPLAY_YES_NO, mitm, DISPLAY_YES_NO, none),
+            AssociationModel::NumericComparison,
+            "one side asking is enough to escalate"
+        );
+        assert_eq!(
+            association_model(DISPLAY_ONLY, mitm, DISPLAY_YES_NO, mitm),
+            AssociationModel::JustWorks,
+            "a DisplayOnly device cannot answer, so its confirmation is \
+             automatic"
+        );
+        assert_eq!(
+            association_model(KEYBOARD_ONLY, mitm, DISPLAY_ONLY, mitm),
+            AssociationModel::PasskeyEntry
+        );
+        assert_eq!(
+            association_model(DISPLAY_YES_NO, mitm, KEYBOARD_ONLY, mitm),
+            AssociationModel::PasskeyEntry
+        );
+        assert_eq!(
+            association_model(KEYBOARD_ONLY, mitm, KEYBOARD_ONLY, mitm),
+            AssociationModel::PasskeyEntry,
+            "two keyboards: the user types the same digits on both"
+        );
+        for other in [
+            DISPLAY_ONLY,
+            DISPLAY_YES_NO,
+            KEYBOARD_ONLY,
+            NO_INPUT_NO_OUTPUT,
+        ] {
+            assert_eq!(
+                association_model(NO_INPUT_NO_OUTPUT, mitm, other, mitm),
+                AssociationModel::JustWorks,
+                "nothing a person does can protect a link to a device with \
+                 no input and no output"
+            );
+        }
+    }
+
+    #[test]
+    fn test_a_derived_link_key_is_symmetric_and_stable() {
+        // The three properties the sequence actually needs from a key. Not
+        // the spec's f2 — see `derived_link_key` — but a key that failed any
+        // of these would break the bonded-reconnect path.
+        let a = addr("AA:BB:CC:00:00:01");
+        let b = addr("AA:BB:CC:00:00:02");
+        let c = addr("AA:BB:CC:00:00:03");
+        assert_eq!(derived_link_key(a, b), derived_link_key(b, a));
+        assert_eq!(derived_link_key(a, b), derived_link_key(a, b));
+        assert_ne!(derived_link_key(a, b), derived_link_key(a, c));
+    }
+
+    #[test]
+    fn test_pairing_digits_are_six() {
+        let key = derived_link_key(addr("AA:BB:CC:00:00:01"), addr("AA:BB:CC:00:00:02"));
+        assert!(pairing_digits(&key, 0) < 1_000_000);
+        assert!(pairing_digits(&key, 1) < 1_000_000);
+        assert_ne!(
+            pairing_digits(&key, 0),
+            pairing_digits(&key, 1),
+            "the confirmation value and the passkey are different numbers"
+        );
+    }
+
+    #[test]
+    fn test_a_disconnect_drops_the_pairing_in_flight() {
+        // A pairing that outlived its link would hand its Authentication
+        // Complete to a handle that has since been reused.
+        let mut link = Link::new();
+        let (a, b, handle) = ssp_pair_connected(&mut link);
+        a.send_command(&cmd(
+            opcode::AUTHENTICATION_REQUESTED,
+            &handle.to_le_bytes(),
+        ))
+        .unwrap();
+        link.tick();
+        let _ = events(&a);
+        let _ = events(&b);
+
+        let mut disconnect = handle.to_le_bytes().to_vec();
+        disconnect.push(0x13);
+        a.send_command(&cmd(opcode::DISCONNECT, &disconnect))
+            .unwrap();
+        link.tick();
+        link.tick();
+
+        let policy = SspPolicy::agreeable(io_capability::DISPLAY_YES_NO, AUTH_REQ_MITM);
+        let (a_seen, _) = run_ssp(&mut link, &a, &b, policy, policy);
+        assert!(
+            !codes(&a_seen).contains(&event::AUTHENTICATION_COMPLETE),
+            "the pairing died with the link: {a_seen:?}"
         );
     }
 }

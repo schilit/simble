@@ -58,6 +58,30 @@ mod opcode {
     /// Write Inquiry Mode: choose which of the three inquiry-result event
     /// forms the controller reports with.
     pub const WRITE_INQUIRY_MODE: [u8; 2] = [0x45, 0x0C];
+
+    // --- security ---------------------------------------------------------
+    //
+    // Opcodes are written little-endian here (OCF byte first), which is the
+    // order they go on the wire. `WRITE_SIMPLE_PAIRING_MODE` above is 0x0C56
+    // and *not* 0x0C45 — 0x0C45 is `WRITE_INQUIRY_MODE`, right beside it.
+    /// Link Key Request Reply — "yes, I am bonded to this device".
+    pub const LINK_KEY_REQUEST_REPLY: [u8; 2] = [0x0B, 0x04];
+    /// Link Key Request Negative Reply — "no, and this is what starts SSP".
+    pub const LINK_KEY_REQUEST_NEGATIVE_REPLY: [u8; 2] = [0x0C, 0x04];
+    /// Authentication Requested.
+    pub const AUTHENTICATION_REQUESTED: [u8; 2] = [0x11, 0x04];
+    /// Set Connection Encryption.
+    pub const SET_CONNECTION_ENCRYPTION: [u8; 2] = [0x13, 0x04];
+    /// IO Capability Request Reply.
+    pub const IO_CAPABILITY_REQUEST_REPLY: [u8; 2] = [0x2B, 0x04];
+    /// User Confirmation Request Reply.
+    pub const USER_CONFIRMATION_REQUEST_REPLY: [u8; 2] = [0x2C, 0x04];
+    /// User Confirmation Request Negative Reply.
+    pub const USER_CONFIRMATION_REQUEST_NEGATIVE_REPLY: [u8; 2] = [0x2D, 0x04];
+    /// User Passkey Request Reply.
+    pub const USER_PASSKEY_REQUEST_REPLY: [u8; 2] = [0x2E, 0x04];
+    /// User Passkey Request Negative Reply.
+    pub const USER_PASSKEY_REQUEST_NEGATIVE_REPLY: [u8; 2] = [0x2F, 0x04];
     /// Setup Synchronous Connection: open the SCO/eSCO link that carries
     /// call audio, over an ACL that already exists.
     pub const SETUP_SYNCHRONOUS_CONNECTION: [u8; 2] = [0x28, 0x04];
@@ -109,6 +133,116 @@ mod event_code {
     pub const INQUIRY_RESULT_WITH_RSSI: u8 = 0x22;
     /// Extended Inquiry Result — one response, with 240 octets of EIR.
     pub const EXTENDED_INQUIRY_RESULT: u8 = 0x2F;
+
+    // --- security ---------------------------------------------------------
+    /// Authentication Complete — the answer to Authentication Requested.
+    pub const AUTHENTICATION_COMPLETE: u8 = 0x06;
+    /// Link Key Request — the controller asking whether we are bonded.
+    pub const LINK_KEY_REQUEST: u8 = 0x17;
+    /// Link Key Notification — a new key to store.
+    pub const LINK_KEY_NOTIFICATION: u8 = 0x18;
+    /// IO Capability Request.
+    pub const IO_CAPABILITY_REQUEST: u8 = 0x31;
+    /// IO Capability Response — the peer's capabilities.
+    pub const IO_CAPABILITY_RESPONSE: u8 = 0x32;
+    /// User Confirmation Request, carrying six digits.
+    pub const USER_CONFIRMATION_REQUEST: u8 = 0x33;
+    /// User Passkey Request — type the digits the peer is showing.
+    pub const USER_PASSKEY_REQUEST: u8 = 0x34;
+    /// Simple Pairing Complete.
+    pub const SIMPLE_PAIRING_COMPLETE: u8 = 0x36;
+    /// User Passkey Notification — the digits to show.
+    pub const USER_PASSKEY_NOTIFICATION: u8 = 0x3B;
+}
+
+/// IO capabilities this host can claim in IO Capability Request Reply
+/// (Vol 4, Part E, Section 7.7.40).
+///
+/// The value chosen decides which association model the two controllers
+/// select, so it is the one knob that changes whether a bond is
+/// MITM-protected. It is *not* a description of the hardware simble is
+/// running on — it is a description of what the application will do when
+/// asked, which is why it is set per-host rather than globally.
+pub mod io_capability {
+    /// Shows a number, cannot answer yes/no.
+    pub const DISPLAY_ONLY: u8 = 0x00;
+    /// Shows a number and can answer yes/no. With MITM asked for at either
+    /// end this is what gets Numeric Comparison.
+    pub const DISPLAY_YES_NO: u8 = 0x01;
+    /// Can type digits, shows nothing.
+    pub const KEYBOARD_ONLY: u8 = 0x02;
+    /// Neither, so nothing a person does can protect the link: every model
+    /// involving one of these is Just Works.
+    pub const NO_INPUT_NO_OUTPUT: u8 = 0x03;
+}
+
+/// `Authentication_Requirements` values (Vol 4, Part E, Section 7.7.40). The
+/// odd values are the MITM ones.
+pub mod authentication_requirements {
+    /// No bonding, MITM protection not required.
+    pub const NO_BONDING: u8 = 0x00;
+    /// No bonding, MITM protection required.
+    pub const NO_BONDING_MITM: u8 = 0x01;
+    /// Dedicated bonding, MITM protection not required.
+    pub const DEDICATED_BONDING: u8 = 0x02;
+    /// Dedicated bonding, MITM protection required.
+    pub const DEDICATED_BONDING_MITM: u8 = 0x03;
+    /// General bonding, MITM protection not required — the usual default for
+    /// a device that wants to keep the key and does not need a person.
+    pub const GENERAL_BONDING: u8 = 0x04;
+    /// General bonding, MITM protection required.
+    pub const GENERAL_BONDING_MITM: u8 = 0x05;
+}
+
+/// A link key this host has stored for a peer, as Link Key Notification
+/// delivered it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinkKey {
+    /// The sixteen key octets, in the order the controller gave them and the
+    /// order Link Key Request Reply must give them back.
+    pub value: [u8; 16],
+    /// `Key_Type` (Vol 4, Part E, Section 7.7.24). 0x04/0x08 are the
+    /// unauthenticated combination keys Just Works produces, 0x05/0x07 the
+    /// authenticated ones — which is how a service that requires MITM
+    /// protection can tell a bond it may trust from one it may not.
+    pub key_type: u8,
+}
+
+impl LinkKey {
+    /// Whether a person took part in creating this key, so it resists a
+    /// man-in-the-middle. Both the P-192 (0x05) and P-256 (0x07) authenticated
+    /// combination key types count.
+    pub fn is_authenticated(&self) -> bool {
+        matches!(self.key_type, 0x05 | 0x07)
+    }
+}
+
+/// How far a link has got through security.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LinkSecurity {
+    /// Whether an Authentication Complete arrived with a success status — the
+    /// link has a key both ends agree on.
+    pub authenticated: bool,
+    /// Whether an Encryption Change said encryption is on.
+    pub encrypted: bool,
+    /// The status of the last Simple Pairing Complete, if pairing ran. `None`
+    /// means it did not — which, on a link that authenticated anyway, is the
+    /// signature of a bonded reconnect.
+    pub pairing_status: Option<u8>,
+    /// The peer's IO capability, as its IO Capability Response reported it.
+    pub peer_io_capability: Option<u8>,
+    /// The last six-digit value a User Confirmation Request showed.
+    pub numeric_value: Option<u32>,
+}
+
+/// The BD_ADDR at `offset` in an event's parameters. HCI carries addresses
+/// least-significant octet first, which is the order [`Address::new`] takes,
+/// so this is a copy and not a reversal — the mistake it exists to prevent is
+/// reaching for `from_be_bytes` here.
+fn address_at(parameters: &[u8], offset: usize) -> Option<Address> {
+    Some(Address::new(
+        parameters.get(offset..offset + 6)?.try_into().ok()?,
+    ))
 }
 
 /// The General/Unlimited Inquiry Access Code, 0x9E8B33 — the LAP every
@@ -1021,6 +1155,25 @@ pub struct ClassicHost {
     sco_received: Vec<Vec<u8>>,
     /// Why the last audio setup failed, if it did.
     sco_failure: Option<u8>,
+    /// Link keys this host has stored, by peer address. This is the bond
+    /// database: what it holds is the difference between a reconnect that
+    /// pairs again and one that does not, and it survives disconnection
+    /// because that is the entire point of a bond.
+    link_keys: Vec<(Address, LinkKey)>,
+    /// What this host answers an IO Capability Request with.
+    io_capability: u8,
+    /// The `Authentication_Requirements` it asks for.
+    authentication_requirements: u8,
+    /// Whether a User Confirmation Request is accepted. A host with no
+    /// person attached has to decide this in advance; setting it false is how
+    /// a test makes a peer refuse.
+    accept_pairing: bool,
+    /// The digits to answer a User Passkey Request with, if this host claims
+    /// a keyboard. Without one it answers the negative reply, which is the
+    /// honest answer for a device that cannot type.
+    passkey: Option<u32>,
+    /// Security state of the current link.
+    security: LinkSecurity,
 }
 
 impl ClassicHost {
@@ -1047,7 +1200,104 @@ impl ClassicHost {
             sco_packet_type: 0x0007,
             sco_received: Vec::new(),
             sco_failure: None,
+            link_keys: Vec::new(),
+            // DisplayYesNo with general bonding and no MITM demand is what a
+            // phone or a laptop claims. Two of these pair with Just Works —
+            // asking for MITM is what escalates it to Numeric Comparison, and
+            // that is the host's decision to make, not this constructor's.
+            io_capability: io_capability::DISPLAY_YES_NO,
+            authentication_requirements: authentication_requirements::GENERAL_BONDING,
+            accept_pairing: true,
+            passkey: None,
+            security: LinkSecurity::default(),
         }
+    }
+
+    // -- security ----------------------------------------------------------
+    //
+    // Everything from here to `handle_packet` is Secure Simple Pairing, link
+    // keys and encryption. The events themselves are answered in
+    // `handle_security_event`; this is the policy the answers come from.
+
+    /// Sets what this host claims it can show and type, and what it asks the
+    /// peer for. Together these choose the association model — see
+    /// [`io_capability`] and [`authentication_requirements`].
+    pub fn set_io_capability(&mut self, io_capability: u8, requirements: u8) {
+        self.io_capability = io_capability;
+        self.authentication_requirements = requirements;
+    }
+
+    /// Whether to accept a User Confirmation Request. Setting it false makes
+    /// this host refuse every pairing, which is the only way to test that the
+    /// *other* end fails cleanly.
+    pub fn set_accept_pairing(&mut self, accept: bool) {
+        self.accept_pairing = accept;
+    }
+
+    /// The digits to answer a User Passkey Request with. A host that never
+    /// sets one answers User Passkey Request Negative Reply, because a device
+    /// with no keyboard genuinely cannot answer.
+    pub fn set_passkey(&mut self, passkey: Option<u32>) {
+        self.passkey = passkey;
+    }
+
+    /// Stores a link key for `peer` as though a Link Key Notification had
+    /// delivered it — how a bond survives a process restart, and how a test
+    /// arranges a device that is already paired.
+    pub fn insert_link_key(&mut self, peer: Address, key: LinkKey) {
+        match self.link_keys.iter_mut().find(|(a, _)| *a == peer) {
+            Some(entry) => entry.1 = key,
+            None => self.link_keys.push((peer, key)),
+        }
+    }
+
+    /// The link key stored for `peer`, if this host is bonded to it.
+    pub fn link_key(&self, peer: Address) -> Option<LinkKey> {
+        self.link_keys
+            .iter()
+            .find(|(a, _)| *a == peer)
+            .map(|(_, key)| *key)
+    }
+
+    /// Forgets the bond with `peer`. The next connection to it pairs again.
+    pub fn remove_link_key(&mut self, peer: Address) -> bool {
+        let before = self.link_keys.len();
+        self.link_keys.retain(|(a, _)| *a != peer);
+        self.link_keys.len() != before
+    }
+
+    /// How far the current link has got through security.
+    pub fn security(&self) -> LinkSecurity {
+        self.security
+    }
+
+    /// HCI Authentication Requested on the current ACL link: make the
+    /// controller establish a link key, pairing if it has to.
+    ///
+    /// The answer is a Command Status and then, much later, an Authentication
+    /// Complete — with an IO Capability Request, a User Confirmation Request
+    /// and a Link Key Notification in between if pairing runs. Nothing here
+    /// waits; [`Self::security`] reports what has arrived.
+    pub fn authenticate(&self) -> Vec<Vec<u8>> {
+        let Some((handle, _)) = self.connection else {
+            return Vec::new();
+        };
+        vec![command(
+            opcode::AUTHENTICATION_REQUESTED,
+            &handle.to_le_bytes(),
+        )]
+    }
+
+    /// HCI Set Connection Encryption on the current ACL link. Only legal once
+    /// the link has a key: a controller with nothing to encrypt with answers
+    /// an Encryption Change carrying an error, and the link stays clear.
+    pub fn encrypt(&self, enable: bool) -> Vec<Vec<u8>> {
+        let Some((handle, _)) = self.connection else {
+            return Vec::new();
+        };
+        let mut params = handle.to_le_bytes().to_vec();
+        params.push(u8::from(enable));
+        vec![command(opcode::SET_CONNECTION_ENCRYPTION, &params)]
     }
 
     /// Registers a protocol handler and its PSM, so an inbound connection
@@ -1363,6 +1613,22 @@ impl ClassicHost {
                     complete.connection_handle.get(),
                     Address::new(complete.bd_addr),
                 ));
+                // A fresh link is unauthenticated and unencrypted whatever the
+                // last one was. Carrying the old link's security across would
+                // be the worst possible bug in this file: a profile would ask
+                // "is this encrypted?" and be told about a connection that
+                // has already ended.
+                self.security = LinkSecurity::default();
+                Vec::new()
+            }
+            HciEvent::EncryptionChange(change) => {
+                // Status first. An Encryption Change carrying an error is the
+                // controller saying encryption did *not* start, and reading
+                // the enabled byte past it is how a link ends up believing it
+                // is encrypted when it is not.
+                if change.status == 0x00 {
+                    self.security.encrypted = change.encryption_enabled != 0x00;
+                }
                 Vec::new()
             }
             // Hanging up the audio must not hang up the call. A Disconnection
@@ -1384,6 +1650,10 @@ impl ClassicHost {
                 // The audio rode the ACL and cannot outlive it.
                 self.sco = None;
                 self.sco_received.clear();
+                // The link is gone, so its security is gone. The *link keys*
+                // are not: they outlive the connection, which is what makes
+                // them a bond rather than a session.
+                self.security = LinkSecurity::default();
                 // The ACL is gone, so every channel riding it is gone too —
                 // and a profile holding session state must be told, or it
                 // meets the next peer still believing the last one is there.
@@ -1401,6 +1671,9 @@ impl ClassicHost {
                 )]
             }
             HciEvent::Other { code, parameters } => {
+                if let Some(reply) = self.handle_security_event(code, parameters) {
+                    return reply;
+                }
                 self.handle_discovery_event(code, parameters);
                 Vec::new()
             }
@@ -1463,6 +1736,122 @@ impl ClassicHost {
             return;
         };
         self.sco_received.push(payload.to_vec());
+    }
+
+    /// Answers the controller's security questions, returning `None` for an
+    /// event that is not one.
+    ///
+    /// These arrive as [`HciEvent::Other`] because none of them has a typed
+    /// variant; the layouts are Vol 4, Part E, Sections 7.7.6, 7.7.23, 7.7.24
+    /// and 7.7.40–7.7.48.
+    ///
+    /// **Every request here must be answered.** A controller that asks a
+    /// question and hears nothing does not fail — it sits there, and the
+    /// pairing that was supposed to happen simply never does, with no error
+    /// anywhere. That is the same failure shape as answering a command with
+    /// the wrong event kind, one layer up.
+    fn handle_security_event(&mut self, code: u8, parameters: &[u8]) -> Option<Vec<Vec<u8>>> {
+        match code {
+            event_code::LINK_KEY_REQUEST => {
+                let peer = address_at(parameters, 0)?;
+                // The bond database is what decides whether SSP runs at all.
+                // A negative reply here is not an error: it is the normal
+                // answer for a device met for the first time, and it is what
+                // starts pairing.
+                Some(match self.link_key(peer) {
+                    Some(key) => {
+                        let mut params = peer.as_slice().to_vec();
+                        params.extend_from_slice(&key.value);
+                        vec![command(opcode::LINK_KEY_REQUEST_REPLY, &params)]
+                    }
+                    None => vec![command(
+                        opcode::LINK_KEY_REQUEST_NEGATIVE_REPLY,
+                        peer.as_slice(),
+                    )],
+                })
+            }
+            event_code::LINK_KEY_NOTIFICATION => {
+                // BD_ADDR(6), Link_Key(16), Key_Type(1).
+                let peer = address_at(parameters, 0)?;
+                let value: [u8; 16] = parameters.get(6..22)?.try_into().ok()?;
+                let key_type = parameters.get(22).copied()?;
+                self.insert_link_key(peer, LinkKey { value, key_type });
+                Some(Vec::new())
+            }
+            event_code::IO_CAPABILITY_REQUEST => {
+                let peer = address_at(parameters, 0)?;
+                let mut params = peer.as_slice().to_vec();
+                params.push(self.io_capability);
+                params.push(0x00); // OOB_Data_Present: none, and none is real
+                params.push(self.authentication_requirements);
+                Some(vec![command(opcode::IO_CAPABILITY_REQUEST_REPLY, &params)])
+            }
+            event_code::IO_CAPABILITY_RESPONSE => {
+                // BD_ADDR(6), IO_Capability(1), OOB(1), Auth_Requirements(1).
+                // Nothing to answer — this event exists only to tell a host
+                // what the peer said, which is what lets it work out which
+                // model is coming before the request for it arrives.
+                self.security.peer_io_capability = parameters.get(6).copied();
+                Some(Vec::new())
+            }
+            event_code::USER_CONFIRMATION_REQUEST => {
+                // BD_ADDR(6), Numeric_Value(4, little-endian).
+                let peer = address_at(parameters, 0)?;
+                self.security.numeric_value = parameters
+                    .get(6..10)
+                    .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+                let opcode = if self.accept_pairing {
+                    opcode::USER_CONFIRMATION_REQUEST_REPLY
+                } else {
+                    opcode::USER_CONFIRMATION_REQUEST_NEGATIVE_REPLY
+                };
+                Some(vec![command(opcode, peer.as_slice())])
+            }
+            event_code::USER_PASSKEY_REQUEST => {
+                let peer = address_at(parameters, 0)?;
+                Some(match self.passkey.filter(|_| self.accept_pairing) {
+                    Some(passkey) => {
+                        let mut params = peer.as_slice().to_vec();
+                        params.extend_from_slice(&passkey.to_le_bytes());
+                        vec![command(opcode::USER_PASSKEY_REQUEST_REPLY, &params)]
+                    }
+                    None => vec![command(
+                        opcode::USER_PASSKEY_REQUEST_NEGATIVE_REPLY,
+                        peer.as_slice(),
+                    )],
+                })
+            }
+            event_code::USER_PASSKEY_NOTIFICATION => {
+                // BD_ADDR(6), Passkey(4). Nothing to answer: this side has
+                // only a display, so being told is the whole of its part.
+                self.security.numeric_value = parameters
+                    .get(6..10)
+                    .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+                Some(Vec::new())
+            }
+            event_code::SIMPLE_PAIRING_COMPLETE => {
+                // Status(1), BD_ADDR(6). A non-zero status means no key was
+                // made; the Link Key Notification that would have carried one
+                // never arrives, so there is nothing to undo.
+                self.security.pairing_status = parameters.first().copied();
+                // A successful pairing means this link now has a key,
+                // whichever side asked for it. The *acceptor* is never sent
+                // an Authentication Complete — that goes only to the host
+                // that issued Authentication Requested — so without this the
+                // side that answered a pairing would report a link it just
+                // paired as unauthenticated.
+                if parameters.first() == Some(&0x00) {
+                    self.security.authenticated = true;
+                }
+                Some(Vec::new())
+            }
+            event_code::AUTHENTICATION_COMPLETE => {
+                // Status(1), Connection_Handle(2).
+                self.security.authenticated = parameters.first() == Some(&0x00);
+                Some(Vec::new())
+            }
+            _ => None,
+        }
     }
 
     /// Records what an inquiry turned up. These arrive as `HciEvent::Other`

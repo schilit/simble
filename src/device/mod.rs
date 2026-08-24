@@ -27,9 +27,9 @@ pub use central::{CentralEvent, CentralPhase, LeCentral};
 pub use channel_sounding::{CsInitiator, CsReflector, CsState};
 pub use cis_central::{CisCentral, CisConfig, CisState};
 pub use classic_host::{
-    ClassicHost, DiscoveredDevice, DlcWindow, ProtocolHandler, RfcommHandler, RfcommPort,
-    ScoConnection, ScoPolicy, SdpHandler, SdpQueryHandler, SdpQueryResults, SharedRfcommPort,
-    SharedSdpQueryResults,
+    ClassicHost, DiscoveredDevice, DlcWindow, LinkKey, LinkSecurity, ProtocolHandler,
+    RfcommHandler, RfcommPort, ScoConnection, ScoPolicy, SdpHandler, SdpQueryHandler,
+    SdpQueryResults, SharedRfcommPort, SharedSdpQueryResults,
 };
 pub use connection::{ConnectionRole, ConnectionState, PrepareWriteChunk};
 pub use hid_host::{HidEvent, HidHost, HidKind, HidPlan};
