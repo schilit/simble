@@ -51,15 +51,15 @@ pub(crate) const DEFAULT_VERSION: (u8, u8) = (1, 3);
 /// Signal identifiers (AVDTP spec 8.5, Signal Command Set).
 pub mod signal_identifier {
     /// Discover signal.
-    pub(crate) const DISCOVER: u8 = 0x01;
+    pub const DISCOVER: u8 = 0x01;
     /// Get_Capabilities signal.
     pub const GET_CAPABILITIES: u8 = 0x02;
     /// Set_Configuration signal.
-    pub(crate) const SET_CONFIGURATION: u8 = 0x03;
+    pub const SET_CONFIGURATION: u8 = 0x03;
     /// Get_Configuration signal.
     pub const GET_CONFIGURATION: u8 = 0x04;
     /// Reconfigure signal.
-    pub(crate) const RECONFIGURE: u8 = 0x05;
+    pub const RECONFIGURE: u8 = 0x05;
     /// Open signal.
     pub const OPEN: u8 = 0x06;
     /// Start signal.
@@ -67,9 +67,9 @@ pub mod signal_identifier {
     /// Close signal.
     pub const CLOSE: u8 = 0x08;
     /// Suspend signal.
-    pub(crate) const SUSPEND: u8 = 0x09;
+    pub const SUSPEND: u8 = 0x09;
     /// Abort signal.
-    pub(crate) const ABORT: u8 = 0x0A;
+    pub const ABORT: u8 = 0x0A;
     /// Security_Control signal.
     pub const SECURITY_CONTROL: u8 = 0x0B;
     /// Get_All_Capabilities signal.
@@ -757,6 +757,23 @@ impl Message {
         }
     }
 
+    /// The error code this message carries, if it is a reject.
+    ///
+    /// General Reject carries none — the signal identifier is the whole of
+    /// its content — so it answers `Some(0)`, matching the convention
+    /// [`AvdtpEvent::CommandRejected`] already uses.
+    pub fn reject_error_code(&self) -> Option<u8> {
+        match self {
+            Message::SetConfigurationReject { error_code, .. }
+            | Message::ReconfigureReject { error_code, .. }
+            | Message::StartReject { error_code, .. }
+            | Message::SuspendReject { error_code, .. }
+            | Message::Reject { error_code, .. } => Some(*error_code),
+            Message::GeneralReject { .. } => Some(0),
+            _ => None,
+        }
+    }
+
     /// Parses a payload for the given signal identifier and message type.
     pub fn parse(
         signal_identifier: u8,
@@ -1161,6 +1178,20 @@ pub enum AvdtpEvent {
         /// Error code.
         error_code: u8,
     },
+    /// A command the **peer** sent was rejected by this endpoint — the
+    /// acceptor's own refusal, which [`CommandRejected`](Self::CommandRejected)
+    /// is not: that one reports a refusal *received*.
+    ///
+    /// Without this a refusal is invisible to whatever owns the protocol:
+    /// the reject PDU goes out on the wire and the owner sees nothing but a
+    /// state that did not change, which is indistinguishable from a command
+    /// that never arrived. `error_code` is 0 for a General Reject.
+    CommandRefused {
+        /// Signal identifier of the command that was refused.
+        signal_identifier: u8,
+        /// Error code sent back (AVDTP spec 8.20), or 0 for General Reject.
+        error_code: u8,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -1317,6 +1348,29 @@ impl Protocol {
         self.local_endpoints
             .iter()
             .find(|e| e.remote_seid == Some(remote_seid))
+    }
+
+    /// The SEIDs of every unused remote endpoint of `media_type` in the
+    /// `tsep` role that Discover turned up, lowest SEID first.
+    ///
+    /// This is what an initiator has to work from immediately after
+    /// Discover, and the reason [`Self::find_remote_sink_by_codec`] cannot
+    /// be used there: a Discover response carries SEID, media type, role and
+    /// in-use — and **no capabilities**. Every codec predicate is therefore
+    /// false until a Get_Capabilities has been answered for that endpoint,
+    /// so a source must pick a candidate by role first and learn its codec
+    /// second, exactly as the profile's sequence does.
+    pub fn discovered_endpoints(&self, media_type: MediaType, tsep: StreamEndPointType) -> Vec<u8> {
+        let mut seids: Vec<u8> = self
+            .remote_endpoints
+            .values()
+            .filter(|endpoint| {
+                !endpoint.in_use && endpoint.media_type == media_type && endpoint.tsep == tsep
+            })
+            .map(|endpoint| endpoint.seid)
+            .collect();
+        seids.sort_unstable();
+        seids
     }
 
     /// Finds an unused remote sink endpoint advertising the given codec.
@@ -1746,7 +1800,10 @@ impl Protocol {
                         signal_identifier: assembled.signal_identifier,
                     },
                 ),
-                Vec::new(),
+                vec![AvdtpEvent::CommandRefused {
+                    signal_identifier: assembled.signal_identifier,
+                    error_code: 0,
+                }],
             );
         }
         let Some(message) = Message::parse(
@@ -1874,6 +1931,15 @@ impl Protocol {
             }
             _ => return (Vec::new(), Vec::new()),
         };
+        // A refusal is a decision this endpoint made, and it must be visible
+        // to whoever owns the protocol: the state that did not change looks
+        // identical to a command that never arrived.
+        if let Some(error_code) = response.reject_error_code() {
+            events.push(AvdtpEvent::CommandRefused {
+                signal_identifier: response.signal_identifier(),
+                error_code,
+            });
+        }
         (self.respond(assembled.transaction_label, response), events)
     }
 
@@ -1896,6 +1962,19 @@ impl Protocol {
                 error_code: error_code::SEP_IN_USE,
             };
         }
+        // The configuration has to be one this endpoint can actually
+        // *render*. Accepting anything was the old behaviour, and it is the
+        // worst shape a bug takes here: a 16 kHz mono sink would answer a
+        // 44.1 kHz joint-stereo Set_Configuration with an accept and then be
+        // handed audio it cannot decode. The peer has no way to find out —
+        // AVDTP has no "actually, no" after the fact — so the sink plays
+        // silence and every layer reports success.
+        if let Some((service_category, error_code)) = configuration_error(endpoint, &capabilities) {
+            return Message::SetConfigurationReject {
+                service_category,
+                error_code,
+            };
+        }
         endpoint.configuration = capabilities;
         endpoint.remote_seid = Some(int_seid);
         endpoint.state = StreamState::Configured;
@@ -1903,6 +1982,8 @@ impl Protocol {
         Message::SetConfigurationResponse
     }
 
+    /// Applies the same check to Reconfigure, which changes the codec of an
+    /// already-OPEN stream and is subject to the identical constraint.
     fn on_reconfigure_command(
         &mut self,
         acp_seid: u8,
@@ -1922,7 +2003,18 @@ impl Protocol {
                 error_code: error_code::BAD_STATE,
             };
         }
-        apply_reconfiguration(&mut endpoint.configuration, capabilities);
+        // Reconfigure carries only the categories that change, so the thing
+        // to validate is the *merged* result — a codec change that is legal
+        // on its own can still be one this endpoint cannot render.
+        let mut merged = endpoint.configuration.clone();
+        apply_reconfiguration(&mut merged, capabilities);
+        if let Some((service_category, error_code)) = configuration_error(endpoint, &merged) {
+            return Message::ReconfigureReject {
+                service_category,
+                error_code,
+            };
+        }
+        endpoint.configuration = merged;
         events.push(AvdtpEvent::StreamReconfigured { seid: acp_seid });
         Message::ReconfigureResponse
     }
@@ -2159,6 +2251,110 @@ fn bad_local_state(seid: u8, state: StreamState) -> SimbleError {
 // ---------------------------------------------------------------------------
 // L2CAP / SDP integration
 // ---------------------------------------------------------------------------
+
+/// Checks a proposed configuration against what an endpoint advertised,
+/// returning `(service category, error code)` for the first thing wrong with
+/// it — the two fields a Set_Configuration/Reconfigure reject carries
+/// (AVDTP spec 8.9.2, 8.11.2).
+///
+/// The rules, in the order the spec applies them:
+///
+/// 1. Media Transport is mandatory. A configuration without it names no way
+///    to carry audio at all.
+/// 2. Every category in the configuration must be one the endpoint
+///    advertised. Asking a sink for Content Protection it never claimed is
+///    `BAD_SERV_CATEGORY`, and the category is echoed so the peer knows
+///    which one.
+/// 3. The codec must be the endpoint's codec, and — for SBC, the mandatory
+///    one — every parameter must select **exactly one** bit that the
+///    endpoint advertised, with a bitpool range inside the advertised one.
+///    A2DP spec 4.3.2: a capability may have several bits set, a
+///    configuration must have one.
+///
+/// Codecs other than SBC are checked as far as they can be: media type and
+/// codec type must match. Their information elements stay opaque here, so a
+/// configuration inside the right codec but outside its advertised
+/// parameters is accepted — stated because it is a real remaining hole, not
+/// because it is fine.
+fn configuration_error(
+    endpoint: &LocalStreamEndPoint,
+    capabilities: &[ServiceCapability],
+) -> Option<(u8, u8)> {
+    use crate::classic::a2dp::SbcMediaCodecInformation;
+
+    let advertised: Vec<u8> = endpoint
+        .capabilities
+        .iter()
+        .map(|capability| capability.service_category)
+        .collect();
+
+    if !capabilities
+        .iter()
+        .any(|c| c.service_category == service_category::MEDIA_TRANSPORT)
+    {
+        return Some((
+            service_category::MEDIA_TRANSPORT,
+            error_code::BAD_SERV_CATEGORY,
+        ));
+    }
+    if let Some(unknown) = capabilities
+        .iter()
+        .find(|c| !advertised.contains(&c.service_category))
+    {
+        return Some((unknown.service_category, error_code::BAD_SERV_CATEGORY));
+    }
+
+    let Some(proposed) = capabilities
+        .iter()
+        .find_map(MediaCodecCapabilities::from_capability)
+    else {
+        // No Media Codec entry: nothing says what to encode.
+        return Some((service_category::MEDIA_CODEC, error_code::BAD_SERV_CATEGORY));
+    };
+    let Some(supported) = endpoint
+        .capabilities
+        .iter()
+        .find_map(MediaCodecCapabilities::from_capability)
+    else {
+        return Some((
+            service_category::MEDIA_CODEC,
+            error_code::INVALID_CAPABILITIES,
+        ));
+    };
+    if proposed.media_type != supported.media_type
+        || proposed.media_codec_type != supported.media_codec_type
+    {
+        return Some((
+            service_category::MEDIA_CODEC,
+            error_code::INVALID_CAPABILITIES,
+        ));
+    }
+    if proposed.media_codec_type != codec_type::SBC {
+        return None;
+    }
+    let (Some(want), Some(can)) = (
+        SbcMediaCodecInformation::parse(&proposed.media_codec_information),
+        SbcMediaCodecInformation::parse(&supported.media_codec_information),
+    ) else {
+        return Some((
+            service_category::MEDIA_CODEC,
+            error_code::INVALID_CAPABILITIES,
+        ));
+    };
+    let selects_one = |field: u8, offered: u8| field.count_ones() == 1 && field & offered == field;
+    let ok = selects_one(want.sampling_frequency, can.sampling_frequency)
+        && selects_one(want.channel_mode, can.channel_mode)
+        && selects_one(want.block_length, can.block_length)
+        && selects_one(want.subbands, can.subbands)
+        && selects_one(want.allocation_method, can.allocation_method)
+        && want.minimum_bitpool_value <= want.maximum_bitpool_value
+        && want.minimum_bitpool_value >= can.minimum_bitpool_value
+        && want.maximum_bitpool_value <= can.maximum_bitpool_value;
+    (!ok).then_some((
+        service_category::MEDIA_CODEC,
+        error_code::INVALID_CAPABILITIES,
+    ))
+}
 
 /// Allocates the AVDTP signaling L2CAP channel (initiator role), returning
 /// its local CID plus the `Connection Request` to send.

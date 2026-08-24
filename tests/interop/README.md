@@ -100,6 +100,52 @@ SDP responses arrived whole and simble's lack of a reassembly buffer in
 `ClassicHost::handle_acl` was never exercised. A controller with a smaller
 ACL data length would truncate.
 
+## `a2dp_peer.py`
+
+The **A2DP** direction, and the first foreign witness simble's AVDTP acceptor
+has ever had. `examples/a2dp_sink.rs` joins netsim as a discoverable,
+connectable speaker publishing an Audio Sink SDP record; Bumble pages it and
+runs the whole initiator sequence — Discover, Get_All_Capabilities,
+Set_Configuration, Open, the **second** L2CAP channel on PSM 0x0019, Start —
+then streams RTP/SBC into it. The sink's exit status is the verdict.
+
+```bash
+cargo build --example a2dp_sink
+.venv/bin/python tests/interop/a2dp_peer.py                  # 40 SBC frames
+.venv/bin/python tests/interop/a2dp_peer.py --frames 200     # a longer stream
+```
+
+Three things here are decided by someone other than simble:
+
+- the **SBC operating point** comes from Bumble's `MediaCodecCapabilities`
+  and arrives in Bumble's Set_Configuration;
+- the **media transport channel** is a second L2CAP connection on a PSM that
+  already has one. *Nothing on the wire says which channel is which.* Simble
+  binds it because an OPEN just succeeded (AVDTP §5.4.6), and if that rule is
+  wrong the media lands on an unattached CID and not one frame decodes. This
+  is the check the whole script exists for;
+- the **RTP framing and A2DP payload header** — sequence numbers, the frame
+  count nibble, fragmentation when a frame exceeds the MTU — are Bumble's
+  `MediaPacketPump`.
+
+The audio is **libsbc's**, not simble's and not Bumble's: the frames are read
+straight out of `LIBSBC_JOINT_STEREO_FRAMES` in `tests/sbc_interop_test.rs`,
+where they are recorded as what bluez's libsbc produced for a known signal.
+So a frame that decodes at the far end is three implementations agreeing —
+libsbc wrote it, Bumble packetised it, simble decoded it. The vector is
+parsed out of the Rust source rather than duplicated, so it cannot drift from
+the test that says what it is.
+
+**Not covered:** pairing and encryption (Bumble accepts the link unpaired);
+the **source** direction, since only the sink is exercised here — simble's
+`A2dpSource` has never met a foreign sink; AVRCP, so nothing sends a
+transport key; SDP, because Bumble finds the AVDTP PSM from the profile
+rather than by searching simble's Audio Sink record (the record is published
+and goes unread); and codec fallback — the sink advertises every SBC
+capability, so Bumble never has to negotiate down and the reject path is
+unreached over the air. `tests/a2dp_scene_test.rs` covers that one in
+simulation.
+
 ## `lea_source.py`
 
 A complete LE Audio source: connects to a simble sink, discovers ASCS,

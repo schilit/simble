@@ -192,22 +192,44 @@ host-facing events. It is now used inside `sim.rs` for the connection
 handshake (with a new host-gated `ConnectionPending` state, because answering
 a page is the host's decision), but it was never the missing layer.
 
-**What is left for the profile bindings** is now genuinely the binding work
-plus a `ProtocolHandler` per profile: A2DP, AVRCP, HFP and Classic HID have
-protocol implementations in `classic/*` but are not yet registered as
-handlers. That is per-profile work, not architecture.
+**What is left for the profile bindings** is now genuinely the binding work.
+The `ProtocolHandler` half is done for two of the four: `device::a2dp`
+(`A2dpSource`/`A2dpSink`) and `device::classic_hid`
+(`ClassicHidHost`/`ClassicHidDevice`) are registered handlers with scenes
+(`SpeakerScene`, `KeyboardScene`) and tests through the simulated BR/EDR
+link. AVRCP and HFP still have protocol implementations in `classic/*` and
+no handler.
+
+`ProtocolHandler` gained what those two needed: `psms()` so one handler can
+claim Control **and** Interrupt, `on_channel_data(HandlerChannel, ..)` so a
+handler is told which channel spoke, and `poll_channel_requests()` so AVDTP
+can ask the host for its media transport channel. Single-PSM handlers were
+not touched.
 
 ### Android names for the Classic surface
 
 When those bindings are written, they should use Android's API set, exactly
 as the LE ones do — `@SystemApi` is not a reason to avoid a name.
 
-| simble | Android proxy |
-|---|---|
-| A2DP source / sink | `BluetoothA2dp` / `BluetoothA2dpSink` |
-| AVRCP controller | `BluetoothAvrcpController` |
-| HFP AG / HF | `BluetoothHeadset` / `BluetoothHeadsetClient` |
-| Classic HID host / device | `BluetoothHidHost` / `BluetoothHidDevice` |
+The **Rust type** column is what a binding would wrap. It is filled in only
+where the handler exists; an empty cell is the honest statement that there is
+nothing yet to bind.
+
+| simble | Rust type | Android proxy |
+|---|---|---|
+| A2DP source / sink | `device::a2dp::A2dpSource` / `A2dpSink` | `BluetoothA2dp` / `BluetoothA2dpSink` |
+| AVRCP controller | — (`classic/avrcp.rs`, no handler) | `BluetoothAvrcpController` |
+| HFP AG / HF | — (`classic/hfp.rs`, no handler) | `BluetoothHeadset` / `BluetoothHeadsetClient` |
+| Classic HID host / device | `device::classic_hid::ClassicHidHost` / `ClassicHidDevice` | `BluetoothHidHost` / `BluetoothHidDevice` |
+
+One name needs care, and `src/scripting/hid.rs`'s module doc is the long
+version: **`BluetoothHidHost` is not Classic-only.** Android's proxy spans
+both transports — `HidHostService.java` has no transport-specific code, and
+the split happens down in `bta/hh/`. The existing `android::BluetoothHidHost`
+binding is the HOGP (LE) half; `ClassicHidHost` is the *same role on the
+other transport*, and the `Classic` prefix exists because Rust needs two
+names, not because Bluetooth has two roles. A binding that covers both should
+be one binding.
 
 The one that maps onto the **controller** layer built here is not a profile
 proxy at all. Android's discovery surface is `BluetoothAdapter.startDiscovery()`
@@ -217,8 +239,10 @@ Request. Both are now real underneath.
 
 ## Deliberately out of scope
 
-- **Classic profile bindings**, until the scene can host a BR/EDR device — see
-  above. The blocker is architectural, not a naming exercise.
+- **Classic profile bindings.** The architectural blocker is gone — a scene
+  hosts BR/EDR devices, and A2DP and Classic HID are `ProtocolHandler`s with
+  passing scene tests. What is left is the naming exercise itself, and the
+  table above is the answer to it; nobody needs to re-derive it.
 - **Permissions, of any kind.** Noted once here so nobody re-derives the
   question: they are Android's deployment policy, not an API shape, and they do
   not apply to a simulator.

@@ -37,6 +37,18 @@ fn source_codec_capabilities() -> MediaCodecCapabilities {
     })
 }
 
+/// A configuration a sink can actually accept: Media Transport plus a Media
+/// Codec inside the sink's advertised capabilities. AVDTP 8.9 requires both
+/// — a Set_Configuration naming no codec configures nothing — and the
+/// acceptor now enforces it, so a bare `media_transport()` is refused with
+/// `BAD_SERV_CATEGORY` rather than quietly accepted.
+fn valid_configuration() -> Vec<ServiceCapability> {
+    vec![
+        ServiceCapability::media_transport(),
+        source_codec_capabilities().to_capability(),
+    ]
+}
+
 fn sink_codec_capabilities() -> MediaCodecCapabilities {
     sbc_codec_capabilities(a2dp::SbcMediaCodecInformation {
         sampling_frequency: sbc::sampling_frequency::SF_16000
@@ -137,7 +149,7 @@ fn all_messages() -> Vec<Message> {
         Message::SetConfigurationCommand {
             acp_seid: 1,
             int_seid: 2,
-            capabilities: vec![ServiceCapability::media_transport()],
+            capabilities: valid_configuration(),
         },
         Message::SetConfigurationResponse,
         Message::SetConfigurationReject {
@@ -152,7 +164,7 @@ fn all_messages() -> Vec<Message> {
         },
         Message::ReconfigureCommand {
             acp_seid: 1,
-            capabilities: vec![ServiceCapability::media_transport()],
+            capabilities: valid_configuration(),
         },
         Message::ReconfigureResponse,
         Message::ReconfigureReject {
@@ -450,7 +462,7 @@ fn test_set_configuration_rejected_when_sep_in_use() {
     let configure = Message::SetConfigurationCommand {
         acp_seid: sink_seid,
         int_seid: 1,
-        capabilities: vec![ServiceCapability::media_transport()],
+        capabilities: valid_configuration(),
     };
     let (out, _) = acp.receive(&write_message(0, &configure, MTU)[0]);
     assert_eq!(decode_single(&out[0]).1, Message::SetConfigurationResponse);
@@ -458,7 +470,16 @@ fn test_set_configuration_rejected_when_sep_in_use() {
     // A second configuration while CONFIGURED must be rejected: the SEP is
     // already part of a stream.
     let (out, events) = acp.receive(&write_message(1, &configure, MTU)[0]);
-    assert!(events.is_empty());
+    // The acceptor reports its own refusal. Without an event the only trace
+    // of a rejection here is a state that did not change, which reads
+    // exactly like a command that never arrived.
+    assert_eq!(
+        events,
+        vec![AvdtpEvent::CommandRefused {
+            signal_identifier: avdtp::signal_identifier::SET_CONFIGURATION,
+            error_code: error_code::SEP_IN_USE,
+        }]
+    );
     assert_eq!(
         decode_single(&out[0]).1,
         Message::SetConfigurationReject {
@@ -477,7 +498,13 @@ fn test_open_rejected_before_configuration() {
         acp_seid: sink_seid,
     };
     let (out, events) = acp.receive(&write_message(0, &open, MTU)[0]);
-    assert!(events.is_empty());
+    assert_eq!(
+        events,
+        vec![AvdtpEvent::CommandRefused {
+            signal_identifier: avdtp::signal_identifier::OPEN,
+            error_code: error_code::BAD_STATE,
+        }]
+    );
     assert_eq!(
         decode_single(&out[0]).1,
         Message::Reject {
@@ -499,7 +526,7 @@ fn test_start_rejected_before_open() {
     let configure = Message::SetConfigurationCommand {
         acp_seid: sink_seid,
         int_seid: 1,
-        capabilities: vec![ServiceCapability::media_transport()],
+        capabilities: valid_configuration(),
     };
     acp.receive(&write_message(0, &configure, MTU)[0]);
 
@@ -508,7 +535,13 @@ fn test_start_rejected_before_open() {
         acp_seids: vec![sink_seid],
     };
     let (out, events) = acp.receive(&write_message(1, &start, MTU)[0]);
-    assert!(events.is_empty());
+    assert_eq!(
+        events,
+        vec![AvdtpEvent::CommandRefused {
+            signal_identifier: avdtp::signal_identifier::START,
+            error_code: error_code::BAD_STATE,
+        }]
+    );
     assert_eq!(
         decode_single(&out[0]).1,
         Message::StartReject {
@@ -545,7 +578,15 @@ fn test_unknown_signal_identifier_draws_general_reject() {
     // command header followed by the unknown signal byte.
     let pdu = vec![0x50, 0x0E];
     let (out, events) = acp.receive(&pdu);
-    assert!(events.is_empty());
+    // A General Reject carries no error code, so the event reports 0 —
+    // the same convention `CommandRejected` already uses.
+    assert_eq!(
+        events,
+        vec![AvdtpEvent::CommandRefused {
+            signal_identifier: 0x0E,
+            error_code: 0,
+        }]
+    );
     assert_eq!(
         decode_single(&out[0]),
         (
@@ -616,11 +657,7 @@ fn test_initiator_rejects_invalid_local_transitions() {
     let mut acp = Protocol::new(MTU);
     let sink_seid = acp.add_sink(sink_codec_capabilities());
     let pdus = int
-        .set_configuration(
-            sink_seid,
-            source_seid,
-            vec![ServiceCapability::media_transport()],
-        )
+        .set_configuration(sink_seid, source_seid, valid_configuration())
         .unwrap();
     exchange(&mut int, &mut acp, pdus);
     assert_eq!(

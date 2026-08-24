@@ -388,12 +388,115 @@ fn signaling_pdu(code: u8, identifier: u8, payload: &[u8]) -> Vec<u8> {
     L2capHeader::serialize(cid::BR_SIGNALING, &body)
 }
 
+/// One open L2CAP channel, as a profile sees it.
+///
+/// The local CID is the identity: it is what distinguishes AVDTP's media
+/// transport channel from its signalling channel, which share a PSM and are
+/// told apart by nothing else. `psm` is here too because a handler serving
+/// more than one PSM — Classic HID's control (0x0011) and interrupt (0x0013)
+/// — needs to know which of its channels spoke.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HandlerChannel {
+    /// The PSM this channel was opened on.
+    pub psm: u16,
+    /// The local CID — this channel's stable identity for the handler.
+    pub cid: u16,
+    /// The peer's MTU: the largest SDU this channel may carry outbound.
+    pub peer_mtu: u16,
+}
+
 /// What a profile does with data on an open L2CAP channel: it sees the
 /// payload and returns whatever should be sent back on the same channel.
 /// SDP is one of these; RFCOMM, HID and AVDTP fit the same seam.
-pub trait ProtocolHandler: std::fmt::Debug {
-    /// The PSM this handler serves.
+///
+/// # One handler, several channels
+///
+/// The single-channel methods ([`Self::psm`], [`Self::on_data`],
+/// [`Self::poll_output`]) are the whole trait for a profile that runs one
+/// channel — SDP and RFCOMM both do. Two profiles do not:
+///
+/// * **Classic HID** runs a control channel on PSM 0x0011 and an interrupt
+///   channel on PSM 0x0013. One device, two PSMs.
+/// * **AVDTP** runs signalling and every media transport on PSM 0x0019, as
+///   separate L2CAP channels. One device, one PSM, several *channels*.
+///
+/// So the host's routing table stays keyed on **PSM** — [`Self::psms`] is a
+/// set rather than a single value — and the channel's identity is handed
+/// *through* to the handler by [`Self::on_channel_data`], which keys its own
+/// per-channel state on the CID. The alternative, keying the host's table on
+/// `(psm, cid)`, was rejected: at the moment a second 0x0019 channel is
+/// accepted the host has no way to know what role it plays. Only the profile
+/// knows, and only because an AVDTP OPEN just succeeded. Routing decisions
+/// belong where the knowledge is.
+/// `Any` is a supertrait so a caller can get its handler back out of the
+/// host: registering one *moves* it into a `Box<dyn ProtocolHandler>`, and
+/// without a downcast the only way to read a profile's state would be to
+/// mirror every field of it through an `Arc<Mutex<_>>` — which is what
+/// [`SharedRfcommPort`] does, and is worth it there because the port is a
+/// seam two owners write to. A speaker's stream state has one owner.
+pub trait ProtocolHandler: std::fmt::Debug + std::any::Any {
+    /// The PSM this handler serves. For a multi-PSM handler this is the
+    /// *primary* one — the channel a peer connects first.
     fn psm(&self) -> u16;
+
+    /// Every PSM this handler serves, in the order a peer meets them.
+    ///
+    /// Defaults to just [`Self::psm`], which is the whole story for SDP and
+    /// RFCOMM. Classic HID overrides it with control *and* interrupt.
+    fn psms(&self) -> Vec<u16> {
+        vec![self.psm()]
+    }
+
+    /// A channel this handler serves has finished configuring and can carry
+    /// data. This is how a handler learns the CID of a channel it asked for
+    /// with [`Self::poll_channel_requests`], and how an AVDTP sink learns
+    /// that the second 0x0019 channel — the media transport — has arrived.
+    fn on_channel_open(&mut self, channel: HandlerChannel) {
+        let _ = channel;
+    }
+
+    /// One of this handler's channels went away, named by its local CID.
+    ///
+    /// [`Self::on_channel_closed`] is the coarse form: *every* channel gone,
+    /// so discard the session. This is the fine one, and the difference
+    /// matters — an AVDTP media transport closing must detach that transport
+    /// and nothing else, while the signalling channel closing ends the
+    /// session.
+    fn on_channel_lost(&mut self, cid: u16) {
+        let _ = cid;
+    }
+
+    /// Handles one inbound SDU, told which channel it arrived on; returns
+    /// the SDUs to reply with **on that same channel**.
+    ///
+    /// Defaults to [`Self::on_data`], which is why every single-channel
+    /// handler is unaffected by any of this.
+    fn on_channel_data(&mut self, channel: HandlerChannel, data: &[u8]) -> Vec<Vec<u8>> {
+        self.on_data(data, channel.peer_mtu)
+    }
+
+    /// Unprompted SDUs for one specific channel; see [`Self::poll_output`].
+    ///
+    /// Called once per open channel this handler serves, so a multi-channel
+    /// handler must answer for the channel it is asked about and no other —
+    /// returning a signalling PDU when polled for the media channel would
+    /// put it on the wrong CID.
+    fn poll_channel_output(&mut self, channel: HandlerChannel) -> Vec<Vec<u8>> {
+        self.poll_output(channel.peer_mtu)
+    }
+
+    /// PSMs this handler wants a *new* outbound L2CAP channel on, drained by
+    /// the host after every packet. The CID it gets back arrives at
+    /// [`Self::on_channel_open`].
+    ///
+    /// This exists because a profile cannot open an L2CAP channel itself:
+    /// the channel manager and the ACL handle belong to the host. AVDTP is
+    /// the reason — its media transport is a second channel that only the
+    /// profile knows it is time to open, at the moment OPEN succeeds, with
+    /// no peer traffic to hang the decision off.
+    fn poll_channel_requests(&mut self) -> Vec<u16> {
+        Vec::new()
+    }
 
     /// Handles one inbound SDU; returns the SDUs to reply with, in order.
     ///
@@ -1174,6 +1277,11 @@ pub struct ClassicHost {
     passkey: Option<u32>,
     /// Security state of the current link.
     security: LinkSecurity,
+    /// Local CIDs whose handler has already been told the channel is open,
+    /// so `on_channel_open` fires exactly once per channel. A channel is not
+    /// open when it is created — it opens when both sides have configured —
+    /// and there is no event for that, only a state the poll loop notices.
+    announced_cids: Vec<u16>,
 }
 
 impl ClassicHost {
@@ -1210,6 +1318,7 @@ impl ClassicHost {
             accept_pairing: true,
             passkey: None,
             security: LinkSecurity::default(),
+            announced_cids: Vec::new(),
         }
     }
 
@@ -1300,15 +1409,46 @@ impl ClassicHost {
         vec![command(opcode::SET_CONNECTION_ENCRYPTION, &params)]
     }
 
-    /// Registers a protocol handler and its PSM, so an inbound connection
-    /// request for that PSM is accepted and its data routed here.
+    /// Registers a protocol handler and **every** PSM it serves, so an
+    /// inbound connection request for any of them is accepted and its data
+    /// routed here.
+    ///
+    /// A handler claiming several PSMs is registered atomically: if the
+    /// second one is already taken, the first is released again rather than
+    /// leaving the host advertising half a profile.
     pub fn register_handler(
         &mut self,
         handler: Box<dyn ProtocolHandler>,
     ) -> Result<(), SimbleError> {
-        self.channels.register_server(handler.psm())?;
+        let psms = handler.psms();
+        for (index, psm) in psms.iter().enumerate() {
+            if let Err(e) = self.channels.register_server(*psm) {
+                for done in &psms[..index] {
+                    self.channels.unregister_server(*done);
+                }
+                return Err(e);
+            }
+        }
         self.handlers.push(handler);
         Ok(())
+    }
+
+    /// The first registered handler of type `T`, for a caller that wants to
+    /// read a profile's state back out — an A2DP sink's received frames, an
+    /// AVDTP stream's state. `None` if no handler of that type is here.
+    pub fn handler<T: ProtocolHandler>(&self) -> Option<&T> {
+        self.handlers
+            .iter()
+            .find_map(|handler| (handler.as_ref() as &dyn std::any::Any).downcast_ref::<T>())
+    }
+
+    /// The first registered handler of type `T`, mutably — for a caller that
+    /// drives a profile: queueing audio into a source, draining frames from
+    /// a sink.
+    pub fn handler_mut<T: ProtocolHandler>(&mut self) -> Option<&mut T> {
+        self.handlers
+            .iter_mut()
+            .find_map(|handler| (handler.as_mut() as &mut dyn std::any::Any).downcast_mut::<T>())
     }
 
     /// The current ACL connection as `(handle, peer address)`, if any.
@@ -1657,8 +1797,14 @@ impl ClassicHost {
                 // The ACL is gone, so every channel riding it is gone too —
                 // and a profile holding session state must be told, or it
                 // meets the next peer still believing the last one is there.
+                self.announced_cids.clear();
                 for cid in std::mem::take(&mut self.local_cids) {
-                    self.channels.remove_channel(cid);
+                    let psm = self.channels.remove_channel(cid).map(|c| c.psm);
+                    if let Some(psm) = psm
+                        && let Some(handler) = Self::handler_for(&mut self.handlers, psm)
+                    {
+                        handler.on_channel_lost(cid);
+                    }
                 }
                 for handler in &mut self.handlers {
                     handler.on_channel_closed();
@@ -2129,10 +2275,19 @@ impl ClassicHost {
                 let psm = self.channels.get_channel(local_cid).map(|c| c.psm);
                 self.channels.remove_channel(local_cid);
                 self.local_cids.retain(|cid| *cid != local_cid);
-                if let Some(psm) = psm
-                    && let Some(handler) = self.handlers.iter_mut().find(|h| h.psm() == psm)
-                {
-                    handler.on_channel_closed();
+                self.announced_cids.retain(|cid| *cid != local_cid);
+                if let Some(psm) = psm {
+                    // Does this handler still have a channel? A profile that
+                    // runs several at once — AVDTP signalling plus a media
+                    // transport — must not discard its whole session because
+                    // one of them went away. Only the last one ends it.
+                    let last = !self.has_channel_served_by(psm);
+                    if let Some(handler) = Self::handler_for(&mut self.handlers, psm) {
+                        handler.on_channel_lost(local_cid);
+                        if last {
+                            handler.on_channel_closed();
+                        }
+                    }
                 }
                 out.push(acl_packet(
                     handle,
@@ -2144,21 +2299,55 @@ impl ClassicHost {
         out
     }
 
-    /// Routes an SDU on an open channel to the handler for its PSM.
+    /// Routes an SDU on an open channel to the handler that serves its PSM,
+    /// telling that handler which channel it arrived on.
+    ///
+    /// The lookup is by PSM *set*, not by a single PSM, so one handler can
+    /// own several — Classic HID's control and interrupt channels reach the
+    /// same device. The CID travels with the data because a PSM alone does
+    /// not identify a channel: AVDTP runs signalling and media on 0x0019.
     fn handle_channel_data(&mut self, handle: u16, cid: u16, data: &[u8]) -> Vec<Vec<u8>> {
         let Some(channel) = self.channels.get_channel(cid) else {
             return Vec::new();
         };
-        let (psm, peer_cid, peer_mtu) = (channel.psm, channel.peer_cid, channel.peer_mtu);
-        let Some(handler) = self.handlers.iter_mut().find(|h| h.psm() == psm) else {
+        let peer_cid = channel.peer_cid;
+        let channel = HandlerChannel {
+            psm: channel.psm,
+            cid: channel.cid,
+            peer_mtu: channel.peer_mtu,
+        };
+        let Some(handler) = Self::handler_for(&mut self.handlers, channel.psm) else {
             return Vec::new();
         };
         handler
-            .on_data(data, peer_mtu)
+            .on_channel_data(channel, data)
             .into_iter()
             .filter(|reply| !reply.is_empty())
             .map(|reply| acl_packet(handle, &L2capHeader::serialize(peer_cid, &reply)))
             .collect()
+    }
+
+    /// Whether any channel still alive belongs to the handler serving `psm`
+    /// — over *all* of that handler's PSMs, not just this one. A HID device
+    /// whose interrupt channel drops still has its control channel, and is
+    /// not finished.
+    fn has_channel_served_by(&self, psm: u16) -> bool {
+        let Some(handler) = self.handlers.iter().find(|h| h.psms().contains(&psm)) else {
+            return false;
+        };
+        let psms = handler.psms();
+        self.local_cids
+            .iter()
+            .filter_map(|cid| self.channels.get_channel(*cid))
+            .any(|channel| psms.contains(&channel.psm))
+    }
+
+    /// The handler serving `psm`, if any.
+    fn handler_for(
+        handlers: &mut [Box<dyn ProtocolHandler>],
+        psm: u16,
+    ) -> Option<&mut Box<dyn ProtocolHandler>> {
+        handlers.iter_mut().find(|h| h.psms().contains(&psm))
     }
 
     /// Collects anything the profiles want to send unprompted — bytes a
@@ -2173,24 +2362,72 @@ impl ClassicHost {
         };
         // Map each open channel to its handler once, so a handler is polled
         // against the channel it actually serves.
-        let open: Vec<(u16, u16, u16)> = self
+        let open: Vec<(HandlerChannel, u16)> = self
             .local_cids
             .iter()
             .filter_map(|cid| self.channels.get_channel(*cid))
             .filter(|channel| channel.is_open())
-            .map(|channel| (channel.psm, channel.peer_cid, channel.peer_mtu))
+            .map(|channel| {
+                (
+                    HandlerChannel {
+                        psm: channel.psm,
+                        cid: channel.cid,
+                        peer_mtu: channel.peer_mtu,
+                    },
+                    channel.peer_cid,
+                )
+            })
             .collect();
 
+        // A channel becomes usable when both sides have configured, and
+        // nothing announces that — so the first poll that finds it open is
+        // where a profile learns it has a channel and which CID it is. This
+        // runs before any output is collected, so whatever the profile
+        // queues on being told leaves in the same batch.
+        for (channel, _) in &open {
+            if self.announced_cids.contains(&channel.cid) {
+                continue;
+            }
+            self.announced_cids.push(channel.cid);
+            if let Some(handler) = Self::handler_for(&mut self.handlers, channel.psm) {
+                handler.on_channel_open(*channel);
+            }
+        }
+
         let mut out = Vec::new();
-        for (psm, peer_cid, peer_mtu) in open {
-            let Some(handler) = self.handlers.iter_mut().find(|h| h.psm() == psm) else {
+        for (channel, peer_cid) in open {
+            let Some(handler) = Self::handler_for(&mut self.handlers, channel.psm) else {
                 continue;
             };
-            for sdu in handler.poll_output(peer_mtu) {
+            for sdu in handler.poll_channel_output(channel) {
                 if sdu.is_empty() {
                     continue;
                 }
                 out.push(acl_packet(handle, &L2capHeader::serialize(peer_cid, &sdu)));
+            }
+        }
+        out.extend(self.open_requested_channels());
+        out
+    }
+
+    /// Opens the L2CAP channels the profiles asked for since the last poll.
+    ///
+    /// A profile cannot do this itself — the channel manager and the ACL
+    /// handle are the host's. AVDTP's media transport is why it exists: a
+    /// second channel on a PSM that already has one, opened at a moment only
+    /// the profile can recognise.
+    fn open_requested_channels(&mut self) -> Vec<Vec<u8>> {
+        let mut wanted = Vec::new();
+        for handler in &mut self.handlers {
+            wanted.extend(handler.poll_channel_requests());
+        }
+        let mut out = Vec::new();
+        for psm in wanted {
+            match self.open_channel(psm) {
+                Ok(packets) => out.extend(packets),
+                // A refused open is the profile's problem to notice: it
+                // never sees `on_channel_open` for the channel it asked for.
+                Err(_) => continue,
             }
         }
         out
@@ -3058,6 +3295,259 @@ mod tests {
             delivered,
             vec![b"queued while alone".to_vec()],
             "the queued write reaches the peer that eventually connects"
+        );
+    }
+
+    // -- multi-channel dispatch ------------------------------------------
+    //
+    // Everything above tests one handler on one PSM with one channel. These
+    // test the shape the two-PSM and two-channel profiles need, without
+    // either profile in the way.
+
+    /// A handler on two PSMs that records every callback it receives, so a
+    /// test can assert on *which channel* the host said something happened
+    /// on rather than only that it happened.
+    #[derive(Debug, Default)]
+    struct TwoPsmHandler {
+        opened: Vec<(u16, u16)>,
+        lost: Vec<u16>,
+        closed: usize,
+        seen: Vec<(u16, Vec<u8>)>,
+    }
+
+    const PSM_A: u16 = 0x1001;
+    const PSM_B: u16 = 0x1003;
+
+    impl ProtocolHandler for TwoPsmHandler {
+        fn psm(&self) -> u16 {
+            PSM_A
+        }
+
+        fn psms(&self) -> Vec<u16> {
+            vec![PSM_A, PSM_B]
+        }
+
+        fn on_data(&mut self, _data: &[u8], _peer_mtu: u16) -> Vec<Vec<u8>> {
+            unreachable!("a multi-PSM handler is always routed by channel")
+        }
+
+        fn on_channel_open(&mut self, channel: HandlerChannel) {
+            self.opened.push((channel.psm, channel.cid));
+        }
+
+        fn on_channel_lost(&mut self, cid: u16) {
+            self.lost.push(cid);
+        }
+
+        fn on_channel_closed(&mut self) {
+            self.closed += 1;
+        }
+
+        fn on_channel_data(&mut self, channel: HandlerChannel, data: &[u8]) -> Vec<Vec<u8>> {
+            self.seen.push((channel.psm, data.to_vec()));
+            vec![vec![channel.psm as u8]]
+        }
+    }
+
+    /// Brings up an ACL and opens `psm` as a server, returning the local CID
+    /// of the resulting channel once it is fully configured.
+    fn open_server_channel(host: &mut ClassicHost, handle: u16, psm: u16, peer_cid: u16) -> u16 {
+        let request = ConnectionRequestHeader {
+            psm: psm.into(),
+            source_cid: peer_cid.into(),
+        };
+        let out = host
+            .handle_packet(&acl_packet(
+                handle,
+                &signaling_pdu(signaling_code::CONNECTION_REQUEST, 1, request.as_bytes()),
+            ))
+            .unwrap();
+        let (response, _) = ConnectionResponseHeader::ref_from_prefix(&out[0][13..]).unwrap();
+        assert_eq!(response.result.get(), 0x0000, "PSM {psm:#06x} was refused");
+        let local_cid = response.destination_cid.get();
+
+        let mut config = ConfigurationRequestHeader {
+            destination_cid: local_cid.into(),
+            flags: 0u16.into(),
+        }
+        .as_bytes()
+        .to_vec();
+        config.extend_from_slice(&[0x01, 0x02, 0xA0, 0x02]); // MTU 672
+        host.handle_packet(&acl_packet(
+            handle,
+            &signaling_pdu(signaling_code::CONFIGURATION_REQUEST, 2, &config),
+        ))
+        .unwrap();
+        let ack = ConfigurationResponseHeader {
+            source_cid: local_cid.into(),
+            flags: 0u16.into(),
+            result: 0u16.into(),
+        };
+        host.handle_packet(&acl_packet(
+            handle,
+            &signaling_pdu(signaling_code::CONFIGURATION_RESPONSE, 1, ack.as_bytes()),
+        ))
+        .unwrap();
+        local_cid
+    }
+
+    fn connected_host_with(handler: Box<dyn ProtocolHandler>, handle: u16) -> ClassicHost {
+        let mut host = ClassicHost::new("SimbleClassic", [0x04, 0x04, 0x24]);
+        host.register_handler(handler).unwrap();
+        let addr = [0x33; 6];
+        host.handle_packet(&connection_request_event(addr)).unwrap();
+        host.handle_packet(&connection_complete_event(handle, addr))
+            .unwrap();
+        host
+    }
+
+    #[test]
+    fn test_one_handler_serves_both_of_its_psms() {
+        let handle = 0x0082;
+        let mut host = connected_host_with(Box::new(TwoPsmHandler::default()), handle);
+
+        let cid_a = open_server_channel(&mut host, handle, PSM_A, 0x0050);
+        let cid_b = open_server_channel(&mut host, handle, PSM_B, 0x0051);
+        assert_ne!(cid_a, cid_b, "two channels, two CIDs");
+
+        // Both channels reached the same handler, each announced with its
+        // own PSM. One handler, two PSMs, and the CIDs are distinguishable.
+        let handler = host.handler::<TwoPsmHandler>().unwrap();
+        assert_eq!(handler.opened, vec![(PSM_A, cid_a), (PSM_B, cid_b)]);
+
+        // Data on each channel arrives labelled with the channel it came in
+        // on, and the reply goes back on that same channel.
+        host.handle_channel_data(handle, cid_a, b"from a");
+        host.handle_channel_data(handle, cid_b, b"from b");
+        let handler = host.handler::<TwoPsmHandler>().unwrap();
+        assert_eq!(
+            handler.seen,
+            vec![(PSM_A, b"from a".to_vec()), (PSM_B, b"from b".to_vec())]
+        );
+    }
+
+    #[test]
+    fn test_losing_one_channel_does_not_end_a_two_channel_session() {
+        let handle = 0x0083;
+        let mut host = connected_host_with(Box::new(TwoPsmHandler::default()), handle);
+        let cid_a = open_server_channel(&mut host, handle, PSM_A, 0x0050);
+        let cid_b = open_server_channel(&mut host, handle, PSM_B, 0x0051);
+
+        // Peer disconnects the second channel only.
+        let mut params = cid_b.to_le_bytes().to_vec();
+        params.extend_from_slice(&0x0051u16.to_le_bytes());
+        host.handle_packet(&acl_packet(
+            handle,
+            &signaling_pdu(signaling_code::DISCONNECTION_REQUEST, 3, &params),
+        ))
+        .unwrap();
+
+        let handler = host.handler::<TwoPsmHandler>().unwrap();
+        assert_eq!(handler.lost, vec![cid_b], "the right channel was named");
+        assert_eq!(
+            handler.closed, 0,
+            "a session with a channel still open is not over — discarding it \
+             here is what would make an AVDTP media channel closing kill the \
+             signalling session"
+        );
+
+        // Now the first one goes too: that *is* the end of the session.
+        let mut params = cid_a.to_le_bytes().to_vec();
+        params.extend_from_slice(&0x0050u16.to_le_bytes());
+        host.handle_packet(&acl_packet(
+            handle,
+            &signaling_pdu(signaling_code::DISCONNECTION_REQUEST, 4, &params),
+        ))
+        .unwrap();
+        let handler = host.handler::<TwoPsmHandler>().unwrap();
+        assert_eq!(handler.lost, vec![cid_b, cid_a]);
+        assert_eq!(handler.closed, 1, "the last channel ends the session");
+    }
+
+    /// A handler that asks the host to open a channel for it, the way an
+    /// AVDTP media transport is opened.
+    #[derive(Debug, Default)]
+    struct ChannelRequestingHandler {
+        wanted: Vec<u16>,
+        opened: Vec<(u16, u16)>,
+    }
+
+    impl ProtocolHandler for ChannelRequestingHandler {
+        fn psm(&self) -> u16 {
+            PSM_A
+        }
+
+        fn on_data(&mut self, _data: &[u8], _peer_mtu: u16) -> Vec<Vec<u8>> {
+            Vec::new()
+        }
+
+        fn poll_channel_requests(&mut self) -> Vec<u16> {
+            std::mem::take(&mut self.wanted)
+        }
+
+        fn on_channel_open(&mut self, channel: HandlerChannel) {
+            self.opened.push((channel.psm, channel.cid));
+        }
+    }
+
+    #[test]
+    fn test_a_handler_can_ask_the_host_to_open_a_channel() {
+        let handle = 0x0084;
+        let mut host = connected_host_with(
+            Box::new(ChannelRequestingHandler {
+                wanted: vec![PSM_A],
+                opened: Vec::new(),
+            }),
+            handle,
+        );
+
+        // Bringing the ACL up already drained the request: `handle_packet`
+        // polls at the end of every packet, so a channel asked for before
+        // there was a link opens the moment there is one. Re-arm it and
+        // poll explicitly to look at the packet.
+        assert_eq!(
+            host.handler::<ChannelRequestingHandler>().unwrap().opened,
+            Vec::new(),
+            "the channel is not open until the peer has answered"
+        );
+        host.handler_mut::<ChannelRequestingHandler>()
+            .unwrap()
+            .wanted = vec![PSM_A];
+
+        // The request turns into a real L2CAP Connection Request on the
+        // wire — a handler cannot send one itself, because the channel
+        // manager belongs to the host.
+        let out = host.poll();
+        assert_eq!(out.len(), 1, "the requested channel was not opened");
+        let signalling = &out[0][9..];
+        assert_eq!(
+            signalling[0],
+            signaling_code::CONNECTION_REQUEST,
+            "the host sent something other than a Connection Request"
+        );
+        let (request, _) = ConnectionRequestHeader::ref_from_prefix(&signalling[4..]).unwrap();
+        assert_eq!(request.psm.get(), PSM_A);
+
+        // Asking once opens once: a request drained twice would leave a
+        // device opening a new channel on every tick for ever.
+        assert!(host.poll().is_empty());
+    }
+
+    #[test]
+    fn test_a_single_psm_handler_still_sees_the_old_callbacks() {
+        // The compatibility claim, made explicitly rather than inferred from
+        // the seventeen tests above that would break if it were false: a
+        // handler that implements only `psm`/`on_data` is routed, replied
+        // to, and told when its channel goes — with no new method on it.
+        let handle = 0x0085;
+        let mut host = connected_host_with(Box::new(SdpHandler::default()), handle);
+        let cid = open_server_channel(&mut host, handle, SDP_PSM, 0x0052);
+
+        let out = host.handle_channel_data(handle, cid, &[0xFF, 0x00, 0x00]);
+        assert_eq!(out.len(), 1, "the SDP server did not answer");
+        assert_eq!(
+            out[0][9], 0x01,
+            "an SDP error response is the honest answer to a malformed PDU"
         );
     }
 }
