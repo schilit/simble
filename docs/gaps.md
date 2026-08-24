@@ -96,9 +96,39 @@ nobody "fixes" them by making the labels disappear.
 - **`Cargo.lock` is gitignored** while the crate ships a binary — CI resolves
   different dependency versions than local.
 - **`web/emulator/` has no slot in the top nav** (it has a landing-page card).
-- **24 test functions are duplicated** inline ↔ `tests/`, and in the three real
-  drifts the inline copy is the weaker one. See `docs/test-strategy.md`.
-- **`wasm_ws.rs` is 5 044 lines** and holds AD decoding, scan parsing, Rhai web
+- ~~**24 test functions are duplicated** inline ↔ `tests/`.~~ **Closed** —
+  22 inline copies deleted (the `tests/` body was a strict superset in 21;
+  one merge carried an assertion across), 2 rfcomm pairs deferred. `tests/mod.rs`
+  deleted with them: it re-ran 35 of 44 files as a second binary, double-counting
+  376 functions, and `AGENTS.md` had been *instructing* agents to keep it.
+- **`.venv/` is tracked in git.** Running any Python script dirties ~80 `.pyc`
+  files, which every interop agent has had to restore by hand. It should be
+  gitignored and removed from the index.
+- **`transport/usb.rs` is 45.82% covered, not the ~68% it displayed** — 332
+  lines of self-agreeing `MockEndpoints` test were inflating it. It is now the
+  worst-covered transport and the only one with neither a loopback nor a
+  foreign-vector check.
+- **~11 files still carry inline `#[cfg(test)]`**, led by
+  `device/classic_host.rs` at **1 111 lines** (a third of what remains). Ten
+  files were moved to sibling `#[path]` files; `classic_host.rs` was deferred
+  only because an agent owned it at the time. By *share*, `crypto/smp_crypto.rs`
+  (52%), `audio/lc3.rs` (47%) and `profiles/ascs.rs` (45%) are worst — though
+  spec-vector tables are legitimately bulky.
+- **The SIG assigned-number CI job is `continue-on-error` with no in-tree
+  backstop.** The HCI command-answer job is also non-blocking but has one (the
+  offline sweep test that sends all 61 Command-Status opcodes); the SIG job has
+  nothing, so registry drift goes unnoticed unless someone reads the log.
+- **`sbc.rs::transient_signal` is duplicated and unlinked.** A second,
+  currently byte-identical copy lives at `tests/sbc_interop_test.rs:286`, and
+  the libsbc golden vectors are keyed to *that* copy. If the two ever drift the
+  goldens silently stop describing the signal the unit tests use, and both
+  suites stay green.
+- **`wasm_ws.rs`'s `run_until` returns `usize`** — ticks consumed, so a test can
+  assert *progress* rather than eventual success. That is the strongest of the
+  seven `run_until` contracts and the one not adopted when they were
+  consolidated; adopting it would rewrite every `assert!` call site.
+- **`wasm_ws.rs` is 5 156 lines** (down from 6 818 — three test modules
+  totalling 1 671 lines moved out) and holds AD decoding, scan parsing, Rhai web
   extensions, `ScriptedPeripheral`, `CentralDevice`, `SceneEngine`,
   `run_test_script`, `lint_script` and **41 wasm_bindgen exports**. The
   `LeHost` extraction it was waiting for has landed (`device/host.rs`); the
@@ -120,6 +150,57 @@ inside each one — none is "done" in the sense Bumble is done.*
 Parity with Bumble is *not* the goal — Bumble has no scripting, MCP, or web
 surface, which is where simble's value lives. Bumble's role stays what it has
 been: the foreign peer that proves each of these once built.
+
+## 8. Public API surface — no boundary has ever been drawn
+
+*Added 2026-08-23. Not a bug list: a decision nobody has made. The crate is
+`0.1.0`, which is exactly when this costs nothing to fix.*
+
+- **~3 500 public items against 372 `pub(crate)`**: 1 527 `pub fn`, 1 578
+  `pub const`, 401 `pub struct`, 296 `pub mod`. `lib.rs` re-exports **all 25
+  modules**, so `packets`, `controller`, `l2cap` and `att` are public API and
+  every field offset in `df/packets.rs` is a compatibility promise.
+- **Zero `#[doc(hidden)]`, zero `#[non_exhaustive]`, no sealed traits.** The
+  three modules whose docs say "internal" are fully `pub` anyway.
+- **14 of 128 public enums carry explicit spec discriminants** — `AseState`,
+  `SamplingFrequency`, `FrameDuration`, `Mute`, `GainMode`, `MediaState`,
+  `AddressType` and the rest. These model fields the SIG can extend, so adding
+  a spec-defined value is a breaking change for every downstream `match`.
+  `#[non_exhaustive]` on those 14 is ~an hour and costs nothing in-crate. The
+  other 114 are our own state machines (`StreamState`, `ClassicPhase`) where it
+  would be ceremony.
+- **The question underneath is bigger: there is no policy for an unknown wire
+  value, and the 14 already disagree three ways.** `bap.rs::from_u8` returns
+  `Option`, so unknown becomes `None` and is destroyed. `hci_types.rs` uses a
+  newtype with a `Display` fallback (`UNKNOWN (0x07)`), so it survives and can
+  be echoed back. `ascs.rs` has a bare `_ =>`. The newtype is the right answer
+  for anything a foreign peer sends — this session's most expensive bugs were
+  all "we lied about what the peer said" — but converting `AseState` would
+  touch the state matrix that just landed. **Decide the policy first, convert
+  second.**
+- Deciding which modules are *supported* (`device`, `devices`, `scene`,
+  `scripting`, `api`, `types`) versus *exposed for inspection* (`packets`,
+  `controller`, `l2cap`, `att`), and saying so in `lib.rs`, is the cheap half
+  and makes a 1.0 possible later.
+
+## 9. Test-surface gaps opened by today's work
+
+- **`lea_source.py` cannot assert what the sink *received*.** It now has six
+  checks on foreign facts, but a source streaming into a void would still pass.
+  Closing it needs a **headless LE-audio sink example** — which would also make
+  the script CI-runnable, since Bumble models CIG/CIS and ISO data paths.
+- **Four interop scripts still cannot run without netsim**, each exiting 77
+  rather than pretending: `classic_peer.py` (Bumble has no `HCI_Inquiry`
+  handler, and its Connection Request hardcodes `class_of_device=0`), the
+  `auracast_*` pair (no BIG commands, no periodic-advertising *sync*).
+- **No foreign stack has witnessed AVRCP fragmentation, and none can.**
+  Bumble's `send_avrcp_response` and `avctp.send_message` both carry a literal
+  `# TODO: fragmentation`, and its controller never sends a continuation
+  request. That fix rests on spec text plus mutation testing alone.
+- **The Explorer and Testing pages are behind the surface they document.**
+  `web/explorer/explorer.js` lists neither `catalog::*`, `assert_over`, nor
+  `BluetoothHidHost`; `web/testing/testing.js` still offers only the three
+  original example scripts. Both are small additions in `web/`.
 
 ---
 
