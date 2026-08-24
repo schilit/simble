@@ -29,11 +29,19 @@ reasonable.
 |---|---|---|---|---|
 | **CSR8510 A10** | **Ezurio (Laird) BT820** — `BT820-ND` ([DigiKey](https://www.digikey.com/en/products/detail/laird-connectivity-inc/BT820/4423863), [Newark](https://www.newark.com/laird-technologies/bt820/usb-dongle-bluetooth-bt800-v4/dp/08X8202), [Ezurio](https://www.ezurio.com/part/bt820)) | 4.0 | Real RF, real timing, a real peer: advertising, scanning, connections, GATT | ✅ two of them link and discover over the air (`tests/usb_hardware_test.rs`) |
 | **Realtek RTL8761B / RTL8852BE** | Most "5.x" dongles sold today, many brand names | 5.1–5.3 | Real RF; extended advertising varies by firmware | ⚠️ untested |
-| **Nordic nRF52840** | **Dongle** — `NRF52840-DONGLE` / PCA10059 ([Arrow](https://www.arrow.com/en/products/nrf52840-dongle/nordic-semiconductor), [DigiKey](https://www.digikey.com/en/products/detail/nordic-semiconductor-asa/NRF52840-DONGLE/9491124), [Mouser](https://www.mouser.com/ProductDetail/Nordic-Semiconductor/nRF52840-Dongle?qs=gTYE2QTfZfTbdrOaMHWEZg%3D%3D))<br>**XIAO** — Seeed `102010448` ([DigiKey](https://www.digikey.com/en/products/detail/seeed-technology-co-ltd/102010448/16652893), [Seeed](https://www.seeedstudio.com/Seeed-XIAO-BLE-nRF52840-p-5201.html)) | 5.4 | Extended advertising, periodic advertising, **LE Audio broadcast (BIG)**, 2M + Coded PHY, LE Extended Create Connection | ✅ **dongle** tested, flashed with Zephyr `hci_usb`<br>⚠️ **XIAO** untested — same silicon, expected to work |
+| **Nordic nRF52840** | **Dongle** — `NRF52840-DONGLE` / PCA10059 ([Arrow](https://www.arrow.com/en/products/nrf52840-dongle/nordic-semiconductor), [DigiKey](https://www.digikey.com/en/products/detail/nordic-semiconductor-asa/NRF52840-DONGLE/9491124), [Mouser](https://www.mouser.com/ProductDetail/Nordic-Semiconductor/nRF52840-Dongle?qs=gTYE2QTfZfTbdrOaMHWEZg%3D%3D))<br>**XIAO** — Seeed `102010448` ([DigiKey](https://www.digikey.com/en/products/detail/seeed-technology-co-ltd/102010448/16652893), [Seeed](https://www.seeedstudio.com/Seeed-XIAO-BLE-nRF52840-p-5201.html))<br>**MDK USB Dongle** — makerdiary ([product](https://makerdiary.com/products/nrf52840-mdk-usb-dongle), [wiki](https://wiki.makerdiary.com/nrf52840-mdk-usb-dongle/)), USB-A stick with a UF2 bootloader | 5.4 | Extended advertising, periodic advertising, **LE Audio broadcast (BIG)**, 2M + Coded PHY, LE Extended Create Connection | ✅ **dongle** tested, flashed with Zephyr `hci_usb`<br>⚠️ **XIAO** untested — same silicon, expected to work |
 | **Nordic nRF54L15** | **DK** ([Arrow](https://www.arrow.com/en/products/nrf54l15-dk/nordic-semiconductor.html), [Newark](https://www.newark.com/new-products/embedded-computers-education-maker-boards/nordic-nrf54l15-dk))<br>**makerdiary Connect Kit** ([direct](https://makerdiary.com/products/nrf54l15-connectkit))<br>**Nordic Tag** — two antennas | 6.0 | **Channel Sounding** (distance ranging) | ❌ **cannot work today** — no USB HCI; needs an HCI-over-UART transport first |
 
-Neither nRF board is a plug-in-and-go dongle: both need firmware flashed
-before they are Bluetooth controllers at all.
+No nRF board is plug-in-and-go: all need firmware flashed before they are
+Bluetooth controllers at all.
+
+**If you are buying an nRF52840 to flash, prefer makerdiary's MDK USB
+Dongle.** It has an upstream Zephyr board definition
+(`nrf52840_mdk_usb_dongle`), so `hci_usb` builds for it directly — and it
+ships a **UF2 bootloader**, meaning you flash it by copying a file to a
+mass-storage device. Nordic's own dongle needs `nrfutil`, whose pip package
+has no Apple Silicon wheels (`pc_ble_driver_py`) and whose Homebrew cask fails
+macOS Gatekeeper, so the flashing route is markedly more awkward on a Mac.
 
 One thing to know before spending anything: **BIG and Channel Sounding cannot
 be checked against software.** Bumble implements no BIG, and Rootcanal answers
