@@ -23,11 +23,11 @@ reasonable.
 | Part | BT | Adds | Tested with SimBLE |
 |---|---|---|---|
 | Built-in simulated controller | — | Everything deterministic; the right choice for CI | ✅ every test in the suite |
-| **CSR8510 A10** (`0a12:0001`) — the cheap grey dongle, under $10 | 4.0 | Real RF, real timing, a real peer: advertising, scanning, connections, GATT | ✅ `tests/usb_hardware_test.rs` — two of them link and discover over the air |
-| **nRF52840 dongle** (PCA10059) + Zephyr `hci_usb` | 5.4 | Extended advertising, periodic advertising, **LE Audio broadcast (BIG)**, 2M + Coded PHY, LE Extended Create Connection | ✅ flashed and verified against `Read_Local_Supported_Commands` |
-| **Seeed XIAO nRF52840** (Arrow/DigiKey `102010448`) | 5.x | Same as the dongle above — same silicon, different board | ⚠️ untested; expected to work with the same firmware |
+| **CSR8510 A10** (`0a12:0001`) — the cheap grey dongle, under $10 from any general retailer; not a distributor part | 4.0 | Real RF, real timing, a real peer: advertising, scanning, connections, GATT | ✅ `tests/usb_hardware_test.rs` — two of them link and discover over the air |
+| **nRF52840 dongle** — Nordic `NRF52840-DONGLE` / PCA10059, + Zephyr `hci_usb` ([Arrow](https://www.arrow.com/en/products/nrf52840-dongle/nordic-semiconductor), [DigiKey](https://www.digikey.com/en/products/detail/nordic-semiconductor-asa/NRF52840-DONGLE/9491124), [Mouser](https://www.mouser.com/ProductDetail/Nordic-Semiconductor/nRF52840-Dongle?qs=gTYE2QTfZfTbdrOaMHWEZg%3D%3D)) | 5.4 | Extended advertising, periodic advertising, **LE Audio broadcast (BIG)**, 2M + Coded PHY, LE Extended Create Connection | ✅ flashed and verified against `Read_Local_Supported_Commands` |
+| **Seeed XIAO nRF52840** — `102010448` ([DigiKey](https://www.digikey.com/en/products/detail/seeed-technology-co-ltd/102010448/16652893), [Seeed](https://www.seeedstudio.com/Seeed-XIAO-BLE-nRF52840-p-5201.html)) | 5.x | Same as the dongle above — same silicon, different board | ⚠️ untested; expected to work with the same firmware |
 | **Realtek RTL8761B / RTL8852BE** — most "5.x" dongles sold today | 5.1–5.3 | Real RF; extended advertising varies by firmware | ⚠️ untested |
-| **nRF54L15** — [DK](https://www.nordicsemi.com/Products/Development-hardware/nRF54L15-DK), [makerdiary Connect Kit](https://makerdiary.com/products/nrf54l15-connectkit), [Tag](https://www.cnx-software.com/2026/06/23/nordic-nrf54l15-tag-prototyping-platform-supports-bluetooth-channel-sounding-matter-edge-ai/) | 6.0 | **Channel Sounding** (distance ranging) | ❌ untested, **and cannot work today** — no USB HCI; needs an HCI-over-UART transport first |
+| **nRF54L15** — `NRF54L15-DK` ([Arrow](https://www.arrow.com/en/products/nrf54l15-dk/nordic-semiconductor.html), [Newark](https://www.newark.com/new-products/embedded-computers-education-maker-boards/nordic-nrf54l15-dk)), or [makerdiary Connect Kit](https://makerdiary.com/products/nrf54l15-connectkit) direct | 6.0 | **Channel Sounding** (distance ranging) | ❌ untested, **and cannot work today** — no USB HCI; needs an HCI-over-UART transport first |
 
 One thing to know before spending anything: **BIG and Channel Sounding cannot
 be checked against software.** Bumble implements no BIG, and Rootcanal answers
@@ -148,7 +148,7 @@ same Nordic nRF54L15 silicon — so the choice is form factor, not capability:
 
 | Board | Notable |
 |---|---|
-| Nordic **nRF54L15-DK** | The reference kit. |
+| Nordic **nRF54L15-DK** ([Arrow](https://www.arrow.com/en/products/nrf54l15-dk/nordic-semiconductor.html), [Newark](https://www.newark.com/new-products/embedded-computers-education-maker-boards/nordic-nrf54l15-dk)) | The reference kit; SEGGER J-Link on board, and it can emulate the nRF54L10 and nRF54L05 too. |
 | **makerdiary nRF54L15 Connect Kit** ([product](https://makerdiary.com/products/nrf54l15-connectkit), [wiki](https://wiki.makerdiary.com/nrf54l15-connectkit/)) | Compact, castellated pins, onboard debugger, and a [ready-made Channel Sounding sample](https://wiki.makerdiary.com/nrf54l15-connectkit/guides/ncs/samples/bluetooth/channel_sounding/). |
 | Nordic **nRF54L15 Tag** | Coin-cell, and **two antennas** — the only listed board that can exercise multiple antenna paths. |
 
