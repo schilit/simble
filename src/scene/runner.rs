@@ -206,13 +206,23 @@ fn run_in_process(scene: &ResolvedScene, options: &RunOptions) -> Result<RunRepo
 }
 
 fn run_on_netsim(scene: &ResolvedScene, options: &RunOptions) -> Result<RunReport, SceneError> {
-    let mut netsim_scene = NetsimScene::new(netsim::DEFAULT_WS_URL);
-    let mut indices = Vec::with_capacity(scene.devices.len());
-
+    // Validate every role *before* touching the network. Rejecting a scene it
+    // was never going to be able to run is a decision about the scene file,
+    // not about whether netsimd happens to be up — and the check used to sit
+    // inside the loop below, so a scene listing a peripheral before a central
+    // connected the peripheral first and failed with "connection refused"
+    // instead of naming the unsupported role. That also made the test for
+    // this behaviour pass only on a machine already running netsimd.
     for device in &scene.devices {
         if device.role != Role::Peripheral {
             return Err(unsupported_role(device, Controller::Netsim));
         }
+    }
+
+    let mut netsim_scene = NetsimScene::new(netsim::DEFAULT_WS_URL);
+    let mut indices = Vec::with_capacity(scene.devices.len());
+
+    for device in &scene.devices {
         let script = device.script.as_deref().unwrap_or_default();
         let index = netsim_scene
             .add_peripheral_named(device.address, script, device.node_name.as_deref())
