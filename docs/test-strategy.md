@@ -49,13 +49,18 @@ So tests here divide by what they can disagree with:
 
 ## Test bodies moved out of the implementation files
 
-The ten largest inline `#[cfg(test)]` blocks now live in sibling files —
-`sim.rs` keeps `#[cfg(test)] #[path = "sim_tests.rs"] mod tests;` and nothing
-else. The tests are still compiled as part of the module, so private access is
-unchanged; what changes is that `cargo llvm-cov` now attributes their lines to
-`*_tests.rs` instead of to the production file. **9 175 lines of test body
-stopped being counted as production code.** Same 1 323 tests, same names, same
-module paths.
+This happened in two passes. The first took the ten largest inline
+`#[cfg(test)]` blocks; the second took the twelve that were left above ~200
+test lines. In both, the implementation file keeps `#[cfg(test)] #[path =
+"foo_tests.rs"] mod tests;` and nothing else. The tests are still compiled as
+part of the module, so private access is unchanged; what changes is that
+`cargo llvm-cov` now attributes their lines to `*_tests.rs` instead of to the
+production file.
+
+### First pass — the ten largest
+
+**9 175 lines of test body stopped being counted as production code.** Same
+1 323 tests, same names, same module paths.
 
 Line coverage, before (test bodies inline) and after (attributed separately):
 
@@ -107,6 +112,62 @@ The moved test files themselves measure 99.20% — the missing 0.8% is exactly
 the never-taken failure arms described above. **89.03% is the honest number for
 the ten files that were fixed; the crate figure is still overstated by every
 file that still has its tests inline.**
+
+### Second pass — the remaining twelve
+
+The twelve implementation files still holding more than ~200 lines of inline
+test are now split the same way. **3 636 lines of test body moved**, which
+`llvm-cov` counts as 2 356 executable lines that had been charged to production
+files. Same 1 410 tests, same names, same module paths — verified by diffing
+the full `module::path` → count map before and after, not just the total.
+
+| File | before | after | production lines |
+|---|---|---|---|
+| `transport/netsim.rs` | 88.15% | **81.78%** | 247 |
+| `device/hid_host.rs` | 96.24% | **90.62%** | 128 |
+| `controller/lmp.rs` | 94.06% | 91.01% | 267 |
+| `device/classic_host.rs` | 93.85% | 91.19% | 1 158 |
+| `classic/rtp.rs` | 97.50% | 95.74% | 188 |
+| `device/big_broadcaster.rs` | 97.18% | 95.71% | 326 |
+| `transport/ws.rs` | 89.65% | 88.35% | 352 |
+| `obex/server.rs` | 96.88% | 95.74% | 141 |
+| `profiles/ascs.rs` | 95.48% | 94.36% | 514 |
+| `profiles/ras.rs` | 99.03% | 98.28% | 174 |
+| `cs/ranging.rs` | 99.08% | 98.00% | 100 |
+| `gap/advertising.rs` | 99.68% | 99.43% | 176 |
+
+**`transport/netsim.rs` is this pass's `usb.rs`: 81.78% line and 66.67%
+*function*, not the 88.15% it displayed.** That makes it the second
+worst-covered transport after USB, and it undercuts the sentence three
+paragraphs up — "`netsim` has the scripts" was doing more reassuring than the
+number supports. A third of its functions are never called by any test.
+
+**`device/hid_host.rs` is the sharpest drop, −5.62pp, off only 128 production
+lines.** A small file with a large inline block is where the distortion is
+worst in relative terms; 190 lines of test were flattering 128 lines of code.
+
+**Nothing went *up* this time.** `packets/att.rs` gained 2.19pp in the first
+pass because its production file was small enough that the never-taken
+`panic!` arms outweighed the inflation. None of these twelve is small enough
+for that to win — the closest, `cs/ranging.rs` at 100 production lines, still
+lost 1.08pp. The deflation effect is real but it only dominates below roughly
+`packets/att.rs`'s scale.
+
+Whole-crate figures after both passes, `cargo llvm-cov --lib --tests`:
+
+| | line | function |
+|---|---|---|
+| as reported (test files as their own rows) | 90.49% | 88.47% |
+| **excluding every `*_tests.rs`** | **88.59%** | **86.79%** |
+
+The as-reported figure is **byte-for-byte identical before and after this
+pass** — 90.49% / 88.47% either way. That is the proof the move is pure
+re-attribution: the same lines execute, they are merely filed under a different
+name. Only the production-only figure moves, 89.15% → 88.59%, and that 0.56pp
+is the part that was never production code to begin with.
+
+`packets/ext_adv.rs` (80.63%) and every inline block under ~200 lines are still
+unmeasured in this sense, so **88.59% remains an upper bound, not the answer.**
 
 ---
 
