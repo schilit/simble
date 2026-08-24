@@ -20,7 +20,7 @@
 //! simble tests/*.rhai                # run many; nonzero exit if any fail
 //! simble scene.json                  # instantiate a whole scene and run it
 //! simble < device.rhai               # or read the script from stdin
-//! simble --usb [VID:PID] [--ws-port N]
+//! simble --usb [SELECTOR] [--ws-port N]  # SELECTOR: 0a12:0001 | #0 | 02/4 | 02.3.4
 //!                                    # instead, bridge a USB dongle onto a
 //!                                    # WebSocket so a browser can drive real HW
 //! simble mcp [--ws-server [PORT]]    # the MCP server for agents, on stdio or
@@ -33,7 +33,7 @@
 
 use simble::scene::runner::{RunOptions, RunReport};
 use simble::scene::{Controller, Scene};
-use simble::transport::usb::parse_vid_pid;
+use simble::transport::usb::UsbSelector;
 use simble::transport::wasm_ws::{lint_script, run_test_script};
 use simble::transport::{HciChannel, UsbTransport, WsServerConn};
 use std::io::Read;
@@ -49,7 +49,9 @@ usage:
   simble FILE.rhai [FILE.rhai ...]     run device script(s) as tests (stdin if none)
   simble SCENE.json [SCENE.json ...]   instantiate a scene file and run it
   simble --no-run FILE ...             check only: compile scripts / validate scenes
-  simble --usb [VID:PID] [--ws-port N] bridge a USB dongle onto ws://127.0.0.1:N/
+  simble --usb [SELECTOR] [--ws N]     bridge a USB dongle onto ws://127.0.0.1:N/
+                                       SELECTOR: 0a12:0001, #0, 02/4, or 02.3.4
+                                       (`simble --usb-list` names every dongle)
   simble mcp                           run the MCP server (stdio) for agents
   simble mcp --ws-server [PORT]        …serve MCP over WebSocket instead (7682)
 
@@ -404,15 +406,20 @@ fn report_scene(file: &str, report: &RunReport) -> ExitCode {
 const POLL_INTERVAL: Duration = Duration::from_millis(1);
 
 fn run_bridge(args: &[String]) -> ExitCode {
-    // `--usb` may be followed by a VID:PID; if that token doesn't parse as one
-    // (e.g. it's `--ws-port`), fall back to auto-detecting the first dongle.
-    let device = args
+    // `--usb` may be followed by any selector form -- `0a12:0001`, `#0`,
+    // `02/4`, `02.3.4`. If the next token is not one (it is another flag, or
+    // absent), fall back to the first dongle. Two dongles of one model share a
+    // vid:pid, so `#0`/`bus.port` are the forms that can actually name one;
+    // `usb_list` prints every name each dongle answers to.
+    let selector = args
         .windows(2)
         .find(|w| w[0] == "--usb")
-        .and_then(|w| parse_vid_pid(&w[1]).ok());
+        .and_then(|w| UsbSelector::parse(&w[1]).ok())
+        .unwrap_or(UsbSelector::First);
+    // `--ws` is accepted as well, because that is what the flag reads like.
     let ws_port = args
         .windows(2)
-        .find(|w| w[0] == "--ws-port")
+        .find(|w| w[0] == "--ws-port" || w[0] == "--ws")
         .and_then(|w| w[1].parse::<u16>().ok())
         .unwrap_or(7681);
 
@@ -430,7 +437,7 @@ fn run_bridge(args: &[String]) -> ExitCode {
     for incoming in listener.incoming() {
         match incoming {
             Ok(stream) => {
-                if let Err(e) = serve(stream, device) {
+                if let Err(e) = serve(stream, &selector) {
                     // A client disconnect surfaces as an error too; it's the
                     // clean end of a session, so log and await the next one.
                     eprintln!("  session ended: {e}");
@@ -445,14 +452,10 @@ fn run_bridge(args: &[String]) -> ExitCode {
 
 /// Serves one WebSocket client end-to-end: handshake, open the dongle, then
 /// shuttle HCI both ways through one shared channel until either side closes.
-fn serve(stream: TcpStream, device: Option<(u16, u16)>) -> Result<(), String> {
+fn serve(stream: TcpStream, selector: &UsbSelector) -> Result<(), String> {
     let (mut ws, query) = WsServerConn::accept(stream).map_err(|e| e.to_string())?;
     eprintln!("  client connected ({query:?}); opening dongle…");
-    let mut dongle = match device {
-        Some((vid, pid)) => UsbTransport::open(vid, pid),
-        None => UsbTransport::open_first(),
-    }
-    .map_err(|e| e.to_string())?;
+    let mut dongle = UsbTransport::open_selected(selector).map_err(|e| e.to_string())?;
     eprintln!("  bridging — the dongle is now this client's controller");
 
     let channel = HciChannel::new();
