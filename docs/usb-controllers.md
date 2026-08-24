@@ -30,7 +30,7 @@ reasonable.
 | **CSR8510 A10** | **Ezurio (Laird) BT820** — `BT820-ND` ([DigiKey](https://www.digikey.com/en/products/detail/laird-connectivity-inc/BT820/4423863), [Newark](https://www.newark.com/laird-technologies/bt820/usb-dongle-bluetooth-bt800-v4/dp/08X8202), [Ezurio](https://www.ezurio.com/part/bt820)) | 4.0 | Real RF, real timing, a real peer: advertising, scanning, connections, GATT | ✅ two of them link and discover over the air (`tests/usb_hardware_test.rs`) |
 | **Realtek RTL8761B / RTL8852BE** | Most "5.x" dongles sold today, many brand names | 5.1–5.3 | Real RF; extended advertising varies by firmware | ⚠️ untested |
 | **Nordic nRF52840** | **Dongle** — `NRF52840-DONGLE` / PCA10059 ([Arrow](https://www.arrow.com/en/products/nrf52840-dongle/nordic-semiconductor), [DigiKey](https://www.digikey.com/en/products/detail/nordic-semiconductor-asa/NRF52840-DONGLE/9491124), [Mouser](https://www.mouser.com/ProductDetail/Nordic-Semiconductor/nRF52840-Dongle?qs=gTYE2QTfZfTbdrOaMHWEZg%3D%3D))<br>**XIAO** — Seeed `102010448` ([DigiKey](https://www.digikey.com/en/products/detail/seeed-technology-co-ltd/102010448/16652893), [Seeed](https://www.seeedstudio.com/Seeed-XIAO-BLE-nRF52840-p-5201.html))<br>**MDK USB Dongle** — makerdiary ([product](https://makerdiary.com/products/nrf52840-mdk-usb-dongle), [wiki](https://wiki.makerdiary.com/nrf52840-mdk-usb-dongle/)), USB-A stick with a UF2 bootloader | 5.4 | Extended advertising, periodic advertising, **LE Audio broadcast (BIG)**, 2M + Coded PHY, LE Extended Create Connection | ✅ **dongle** tested, flashed with Zephyr `hci_usb`<br>⚠️ **XIAO** untested — same silicon, expected to work |
-| **Nordic nRF54L15** | **DK** ([Arrow](https://www.arrow.com/en/products/nrf54l15-dk/nordic-semiconductor.html), [Newark](https://www.newark.com/new-products/embedded-computers-education-maker-boards/nordic-nrf54l15-dk))<br>**makerdiary Connect Kit** ([direct](https://makerdiary.com/products/nrf54l15-connectkit))<br>**Nordic Tag** — two antennas | 6.0 | **Channel Sounding** (distance ranging) | ❌ **cannot work today** — no USB HCI; needs an HCI-over-UART transport first |
+| **Nordic nRF54L15** | **DK** ([Arrow](https://www.arrow.com/en/products/nrf54l15-dk/nordic-semiconductor.html), [Newark](https://www.newark.com/new-products/embedded-computers-education-maker-boards/nordic-nrf54l15-dk))<br>**makerdiary Connect Kit** ([direct](https://makerdiary.com/products/nrf54l15-connectkit))<br>**Nordic Tag** — two antennas | 6.0 | **Channel Sounding** (distance ranging) | ❌ blocked **on SimBLE, not the board** — these expose HCI on a virtual serial port and SimBLE has no UART transport yet |
 
 No nRF board is plug-in-and-go: all need firmware flashed before they are
 Bluetooth controllers at all.
@@ -186,10 +186,13 @@ Three things to know before buying:
 
 1. **You need two.** Channel Sounding measures distance *between* two devices.
    One kit cannot range against anything.
-2. **The nRF54L15 has no USB device peripheral.** On these boards the USB-C
-   port goes to a separate interface MCU providing a USB-UART bridge, so HCI
-   arrives on a **virtual serial port**. SimBLE's `UsbTransport` cannot talk to
-   it; an HCI-over-UART transport is a prerequisite, not an afterthought.
+2. **SimBLE needs a UART transport before it can use one.** The boards are
+   fine — the nRF54L15 has no USB device peripheral, so the USB-C port goes to
+   an interface MCU that bridges to a **virtual serial port**, and HCI is right
+   there on it. SimBLE simply has no serial transport: `UsbTransport` speaks to
+   USB Bluetooth-class devices only. The framing (H4) is already implemented —
+   `RootcanalTransport` does it over TCP — so this is serial plumbing rather
+   than protocol work, but budget it as part of the purchase.
 3. Silicon Labs (EFR32BG26) and TI (CC2340) have announced Channel Sounding
    parts. Neither surfaced as a shipping kit in an August 2026 search.
 
