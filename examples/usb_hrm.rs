@@ -18,10 +18,13 @@
 
 use simble::transport::{HciChannel, UsbTransport, h4_type, usb::parse_vid_pid};
 
-fn cmd(channel: &HciChannel, opcode: [u8; 2], params: &[u8]) {
+/// Builds one HCI command packet. It is *queued*, not sent: a real
+/// controller grants the host a command budget and ignores anything beyond
+/// it, so `main` releases these one at a time (see `credits`).
+fn cmd(opcode: [u8; 2], params: &[u8]) -> Vec<u8> {
     let mut c = vec![opcode[0], opcode[1], params.len() as u8];
     c.extend_from_slice(params);
-    channel.send_command(&c).expect("queue command");
+    c
 }
 
 /// Minimal decode of the events the demo produces, so a phone session is
@@ -95,23 +98,40 @@ fn main() {
     });
     let channel = HciChannel::new();
 
-    cmd(&channel, [0x03, 0x0C], &[]); // Reset
+    let mut pending: std::collections::VecDeque<Vec<u8>> = std::collections::VecDeque::new();
+    pending.push_back(cmd([0x03, 0x0C], &[])); // Reset
     // The post-Reset default event mask excludes LE Meta Events (Core Spec
     // Vol 4 Part E 7.3.1, bit 61) - unmask before anything LE can be seen.
-    cmd(&channel, [0x01, 0x0C], &[0xFF; 8]); // Set Event Mask
-    cmd(&channel, [0x01, 0x20], &[0xFF; 8]); // LE Set Event Mask
-    cmd(&channel, [0x09, 0x10], &[]); // Read BD_ADDR
+    //
+    // Not 0xFF x8. Bits 62-63 of Event_Mask are reserved, and this CSR8510
+    // answers a mask with reserved bits set with 0x12, Invalid HCI Command
+    // Parameters -- so the LE unmask silently did not happen and no LE Meta
+    // Event would ever have arrived. simble's own controller accepts any
+    // mask, which is why the all-ones value survived until real hardware saw
+    // it. Bits 0..=61, little-endian on the wire:
+    pending.push_back(cmd(
+        [0x01, 0x0C],
+        &[0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x3F],
+    )); // Set Event Mask
+    // Likewise LE_Event_Mask (7.8.1): a 4.0 controller defines bits 0..=4
+    // (Connection Complete, Advertising Report, Connection Update Complete,
+    // Read Remote Features Complete, Long Term Key Request) and rejects the
+    // rest.
+    pending.push_back(cmd(
+        [0x01, 0x20],
+        &[0x1F, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+    )); // LE Set Event Mask
+    pending.push_back(cmd([0x09, 0x10], &[])); // Read BD_ADDR
 
     // LE Set Advertising Parameters: interval 100ms both bounds, ADV_IND,
     // public own address, all channels, no filter.
-    cmd(
-        &channel,
+    pending.push_back(cmd(
         [0x06, 0x20],
         &[
             0xA0, 0x00, 0xA0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07,
             0x00,
         ],
-    );
+    ));
     // LE Set Advertising Data: Flags (LE General Discoverable, no BR/EDR),
     // Complete List of 16-bit Service UUIDs (0x180D Heart Rate), Complete
     // Local Name "Simble HRM".
@@ -123,15 +143,36 @@ fn main() {
     let mut ad_param = vec![ad.len() as u8];
     ad_param.extend_from_slice(&ad);
     ad_param.resize(32, 0x00);
-    cmd(&channel, [0x08, 0x20], &ad_param);
-    cmd(&channel, [0x0A, 0x20], &[0x01]); // LE Set Advertising Enable
+    pending.push_back(cmd([0x08, 0x20], &ad_param));
+    pending.push_back(cmd([0x0A, 0x20], &[0x01])); // LE Set Advertising Enable
 
+    // A controller tells the host how many command packets it may have
+    // outstanding, in every Command Complete and Command Status. Ignoring
+    // that budget is invisible against simble's own controller, which answers
+    // instantly and never drops anything -- and fatal against real hardware:
+    // this dongle answered Reset and silently discarded the six commands sent
+    // behind it. Start at one, spend on send, refill from the answer.
+    let mut credits: u8 = 1;
     println!("Advertising as \"Simble HRM\" - scan with nRF Connect. Ctrl-C to stop.");
     loop {
+        while credits > 0 {
+            let Some(next) = pending.pop_front() else {
+                break;
+            };
+            channel.send_command(&next).expect("queue command");
+            credits -= 1;
+        }
         transport.pump(&channel).expect("pump");
         while let Some(p) = channel.poll_controller_packet() {
             match p[0] {
                 h4_type::HCI_EVENT => {
+                    // Num_HCI_Command_Packets: byte 3 of a Command Complete,
+                    // byte 4 of a Command Status.
+                    match p[1] {
+                        0x0E if p.len() >= 4 => credits = p[3],
+                        0x0F if p.len() >= 5 => credits = p[4],
+                        _ => {}
+                    }
                     // Read BD_ADDR's Command Complete carries the address.
                     if p[1] == 0x0E && p.len() >= 13 && p[4..6] == [0x09, 0x10] {
                         println!("controller BD_ADDR: {}", bd_addr(&p[7..13]));

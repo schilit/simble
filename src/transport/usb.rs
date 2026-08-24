@@ -338,6 +338,30 @@ impl UsbTransport {
                  (is the dongle claimed by the OS Bluetooth stack, or missing usbfs permissions on Linux?)"
             ))
         })?;
+        // A device with no active configuration has no interfaces to claim, and
+        // the error for that reads like the dongle is the wrong kind:
+        // "interface not found". On Linux the kernel's btusb driver configures
+        // a Bluetooth dongle as it enumerates, so this never comes up. On
+        // macOS nothing claims a generic dongle — `ioreg -p IOUSB` shows the
+        // device with no IOUSBHostInterface children at all — so it stays
+        // unconfigured until someone asks. Select the first configuration the
+        // device advertises; Bluetooth dongles have exactly one.
+        if device.active_configuration().is_err() {
+            let first = device
+                .configurations()
+                .next()
+                .map(|c| c.configuration_value())
+                .ok_or_else(|| {
+                    SimbleError::Transport(format!(
+                        "USB device {vid:04x}:{pid:04x} advertises no configuration"
+                    ))
+                })?;
+            device.set_configuration(first).wait().map_err(|e| {
+                SimbleError::Transport(format!(
+                    "setting configuration {first} on {vid:04x}:{pid:04x} failed: {e}"
+                ))
+            })?;
+        }
         // detach_and_claim_interface rather than claim_interface: on Linux
         // the kernel's btusb driver typically owns a new dongle and must be
         // detached first; on other platforms it degrades to a plain claim.
