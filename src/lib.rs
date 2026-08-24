@@ -23,8 +23,10 @@
 //! - **MCP (agent-first)** — [`mcp`] serves `simble mcp` over stdio, so an AI
 //!   agent builds, runs and tests devices as tool calls without a checkout or
 //!   a build step. This is the surface designed for agents.
-//! - **Web** — the crate compiled to `wasm32-unknown-unknown`; see
-//!   [`transport::wasm_ws`] for the browser bindings.
+//! - **Web** — the crate compiled for the browser, as `wasm32-unknown-unknown`
+//!   (Rust's `arch-vendor-os` target name: the two `unknown`s mean no vendor
+//!   and no host OS, because the code runs in a browser sandbox rather than on
+//!   an operating system). See [`transport::wasm_ws`] for the bindings.
 //! - **Native** — this library API and the `simble` CLI, for tests and CI.
 //!
 //! The engine is shared, so the surfaces cannot diverge: `run_test_script` and
