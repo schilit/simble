@@ -96,6 +96,37 @@ UNMODELLED = {
 }
 
 
+# The controllers a script can be pointed at. `rootcanal` is the standalone
+# upstream binary (see `rootcanal_link.py`), which reaches the inquiry
+# coverage Bumble cannot host without needing the Android SDK netsim does.
+TRANSPORTS = ("netsim", "bumble", "rootcanal")
+
+
+# Where each feature Bumble lacks *can* be had. Measured against both
+# rootcanal builds (see `rootcanal_link.py`): the standalone upstream release
+# models inquiry and periodic sync but not BIG, so only BIG still needs the
+# Android SDK.
+ELSEWHERE = {
+    "inquiry": (
+        "Run it with --transport rootcanal (a standalone upstream rootcanal, "
+        "no Android SDK) or --transport netsim for this coverage."
+    ),
+    "big": (
+        "Only netsim's bundled rootcanal implements BIG — the upstream "
+        "v1.12.0 release answers LE Create BIG with Unknown HCI Command. Run "
+        "it with --transport netsim (a live netsimd) for this coverage."
+    ),
+    "periodic-sync": (
+        "Run it with --transport rootcanal or --transport netsim for this "
+        "coverage."
+    ),
+    "classic-pairing": (
+        "Run it with --transport rootcanal or --transport netsim for this "
+        "coverage."
+    ),
+}
+
+
 def transport_argument(parser, default=None):
     """Adds the `--transport` flag every convertible script takes.
 
@@ -105,13 +136,16 @@ def transport_argument(parser, default=None):
     """
     parser.add_argument(
         "--transport",
-        choices=("netsim", "bumble"),
+        choices=TRANSPORTS,
         default=default or os.environ.get("SIMBLE_INTEROP_TRANSPORT", "netsim"),
         help=(
             "netsim: both ends join a live netsimd's rootcanal (the default, "
-            "and the only mode that covers inquiry and BIG). "
+            "and the only mode that covers BIG). "
             "bumble: this process hosts a Bumble virtual controller and link, "
-            "and needs no netsim."
+            "and needs no netsim. "
+            "rootcanal: this process starts a standalone upstream rootcanal "
+            "and both ends join it over H4/TCP — no Android SDK, and it "
+            "models inquiry, which Bumble does not."
         ),
     )
     return parser
@@ -140,8 +174,10 @@ def transport_from_argv(argv=None):
             continue
         rest.append(argument)
         index += 1
-    if mode not in ("netsim", "bumble"):
-        raise SystemExit(f"--transport must be netsim or bumble, not {mode!r}")
+    if mode not in TRANSPORTS:
+        raise SystemExit(
+            f"--transport must be one of {', '.join(TRANSPORTS)}, not {mode!r}"
+        )
     return mode, rest
 
 
@@ -159,11 +195,7 @@ def requires(transport, *features):
         if reason is None:
             raise ValueError(f"unknown controller feature {feature!r}")
         print(f"SKIP — this script needs {feature}, and {reason}.", flush=True)
-        print(
-            "      Run it with --transport netsim (a live netsimd) for this "
-            "coverage.",
-            flush=True,
-        )
+        print(f"      {ELSEWHERE[feature]}", flush=True)
         sys.exit(SKIP)
 
 

@@ -211,6 +211,125 @@ jobs:
           run tests/interop/avrcp_peer.py --transport bumble
           exit $rc
 
+  rootcanal-interop:
+    name: Rootcanal interop (inquiry, no Android SDK)
+    runs-on: ubuntu-latest
+    # Also deliberately NOT continue-on-error. The one third-party fetch here
+    # is a pinned GitHub release asset, and it is cached.
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Bumble
+        run: python3 -m pip install --upgrade pip bumble
+
+      # `classic_peer.py` is the one foreign-oracle script Bumble cannot host:
+      # its controller has no `HCI_Inquiry` handler at all, and the script
+      # *starts* with an inquiry. That used to mean "needs netsimd from the
+      # Android SDK", so it never ran here.
+      #
+      # It does not. rootcanal is published as a prebuilt release binary
+      # (~16 MB, no SDK and no bazel) that serves bare H4 over TCP -- which
+      # simble's `RootcanalTransport` and Bumble's `tcp-client:` both already
+      # speak. So both ends join the real controller and nothing new was
+      # needed on either side.
+      - name: Cache rootcanal
+        uses: actions/cache@v4
+        with:
+          path: third_party/rootcanal
+          key: rootcanal-1.12.0-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Fetch rootcanal
+        run: scripts/fetch_rootcanal.sh
+
+      # The gate that makes this job worth having.
+      #
+      # A controller that accepts connections and answers nothing would let
+      # every script below exit 0 having tested nothing -- and that is not
+      # hypothetical: `rootcanal-rs`'s `rootcanal-ws` falls back to a C stub
+      # that answers *every* command with a well-formed Command Complete,
+      # status 0x00. A liveness check passes against it.
+      #
+      # So this asserts on the *content* of the answers instead: a real
+      # controller owes 6 BD_ADDR bytes, 8 version bytes and a 64-byte
+      # supported-commands bitmap, and the scripts then gate on named bits
+      # inside that bitmap. A stub cannot answer uniformly and pass; it would
+      # have to implement the real tables, and then implement the features
+      # they claim.
+      - name: Prove the controller is real, not a stub
+        run: python3 tests/interop/rootcanal_link.py
+
+      - name: Build the example the script drives
+        run: cargo build --example classic_initiator
+
+      - name: BR/EDR interop against the real rootcanal (no netsim)
+        env:
+          SIMBLE_INTEROP_SETTLE: '6'
+        run: |
+          set -u
+          rc=0
+          run() {
+            echo "== $* =="
+            if python3 "$@"; then
+              echo "  PASS"
+            else
+              status=$?
+              if [ "$status" -eq 77 ]; then
+                echo "  UNEXPECTED SKIP (exit 77): this script is supposed to run here"
+              else
+                echo "  FAIL (exit $status)"
+              fi
+              rc=1
+            fi
+          }
+          # The inquiry-result forms are the coverage netsim was needed for:
+          # Class of Device sits at a different offset in the standard form
+          # than in the RSSI and EIR ones, which is how two parsing bugs were
+          # found. `--records 40` forces a continuation-state SDP answer, and
+          # `--pair` runs Secure Simple Pairing between the two controllers.
+          run tests/interop/classic_peer.py --transport rootcanal
+          run tests/interop/classic_peer.py --transport rootcanal --inquiry-mode rssi
+          run tests/interop/classic_peer.py --transport rootcanal --inquiry-mode eir
+          run tests/interop/classic_peer.py --transport rootcanal --records 40
+          run tests/interop/classic_peer.py --transport rootcanal --pair
+          run tests/interop/classic_peer.py --transport rootcanal --pair --client-no-mitm
+          exit $rc
+
+      # The other half of honesty: the auracast pair *must* skip here, and
+      # must skip for a reason read off the live controller rather than
+      # asserted in a comment. The upstream rootcanal release answers
+      # `LE Create BIG` with Unknown HCI Command while netsim's build
+      # implements it, so BIG stays netsim-only -- and if one of these ever
+      # exits 0 against a controller with no BIG, that is a script claiming
+      # coverage it does not have.
+      - name: The BIG scripts must skip, not pass
+        run: |
+          set -u
+          rc=0
+          for script in auracast_source auracast_sink; do
+            echo "== $script (expecting exit 77) =="
+            if python3 "tests/interop/$script.py" --transport rootcanal; then
+              echo "  FAIL: exited 0 against a controller with no BIG"
+              rc=1
+            else
+              status=$?
+              if [ "$status" -eq 77 ]; then
+                echo "  OK: skipped"
+              else
+                echo "  FAIL (exit $status): expected the 77 skip"
+                rc=1
+              fi
+            fi
+          done
+          exit $rc
+
   duplication-report:
     name: Duplication Report (non-blocking)
     runs-on: ubuntu-latest

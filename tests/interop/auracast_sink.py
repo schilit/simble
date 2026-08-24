@@ -29,6 +29,7 @@ Usage:
 """
 
 import asyncio
+import contextlib
 import math
 import os
 import re
@@ -38,6 +39,7 @@ import tempfile
 
 
 import bumble_link
+import rootcanal_link
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
@@ -91,14 +93,34 @@ async def build_source():
         raise SystemExit("cargo build failed")
 
 
+async def select_controller(stack):
+    """`(spec the simble source joins, spec Bumble receives on)`.
+
+    netsim mode is unchanged. rootcanal mode puts both ends on a standalone
+    rootcanal over H4/TCP, and gates on BIG first — read live from that
+    controller, because the upstream release does not implement it.
+    """
+    if TRANSPORT != "rootcanal":
+        return f"{NETSIM_WS}?name=simble-auracast-src&address={SOURCE_ADDRESS}", HCI
+    link = await stack.enter_async_context(rootcanal_link.rootcanal_link())
+    link.requires("big", "periodic-sync")
+    return link.hci_spec, link.bumble_transport
+
+
 async def main():
+    async with contextlib.AsyncExitStack() as stack:
+        source_spec, peer_hci = await select_controller(stack)
+        return await run(source_spec, peer_hci)
+
+
+async def run(source_spec, peer_hci):
     await build_source()
     with tempfile.TemporaryDirectory() as workdir:
         pcm_path = os.path.join(workdir, "received.pcm")
 
         source = await asyncio.create_subprocess_exec(
             SOURCE_BINARY,
-            f"{NETSIM_WS}?name=simble-auracast-src&address={SOURCE_ADDRESS}",
+            source_spec,
             f"{BROADCAST_ID:06X}",
             str(SECONDS + 15),
             stdout=asyncio.subprocess.PIPE,
@@ -127,7 +149,7 @@ async def main():
             "-m",
             "bumble.apps.auracast",
             "receive",
-            HCI,
+            peer_hci,
             str(BROADCAST_ID),
             "--output",
             f"file:{pcm_path}",

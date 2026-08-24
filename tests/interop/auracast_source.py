@@ -18,6 +18,7 @@ Usage:
 """
 
 import asyncio
+import contextlib
 import math
 import os
 import struct
@@ -27,6 +28,7 @@ import wave
 
 
 import bumble_link
+import rootcanal_link
 
 # Bumble joins netsim over its HCI TCP port; the simble sink joins over the
 # WebSocket frontend. Both land on the same rootcanal ether.
@@ -46,6 +48,14 @@ BROADCAST_ID = 0xABCDEF
 # there is no Bumble-hosted run to have here, in either direction, and the
 # script says so and skips rather than exiting 0 having broadcast into a
 # void.
+#
+# Nor does `--transport rootcanal` rescue it, which is the surprise: the
+# *upstream* rootcanal release answers `LE Create BIG` and `LE BIG Create
+# Sync` with `Unknown HCI Command` (0x01), while the rootcanal bundled in
+# netsim answers both with semantic errors — a command it has, refusing the
+# arguments. The two builds differ, and only netsim's does BIG. So this pair
+# stays netsim-only for now; `select_controller` asks the live controller
+# rather than trusting this comment, so the day that changes it just runs.
 TRANSPORT, ARGV = bumble_link.transport_from_argv()
 bumble_link.requires(TRANSPORT, "big")
 SECONDS = int(ARGV[0]) if ARGV else 20
@@ -86,7 +96,29 @@ async def build_sink():
         raise SystemExit("cargo build failed")
 
 
+async def select_controller(stack):
+    """`(spec Bumble transmits on, spec the simble sink joins)`.
+
+    netsim mode is unchanged: Bumble over rootcanal's HCI TCP port, the sink
+    over the WebSocket frontend. rootcanal mode puts both ends on a
+    standalone rootcanal over H4/TCP — and gates on BIG first, read live from
+    that controller's supported-commands bitmap, because the upstream release
+    does not implement it.
+    """
+    if TRANSPORT != "rootcanal":
+        return HCI, f"{NETSIM_WS}?name=simble-auracast-sink&address={SINK_ADDRESS}"
+    link = await stack.enter_async_context(rootcanal_link.rootcanal_link())
+    link.requires("big", "periodic-sync")
+    return link.bumble_transport, link.hci_spec
+
+
 async def main():
+    async with contextlib.AsyncExitStack() as stack:
+        peer_hci, sink_spec = await select_controller(stack)
+        return await run(peer_hci, sink_spec)
+
+
+async def run(peer_hci, sink_spec):
     await build_sink()
     with tempfile.TemporaryDirectory() as workdir:
         wav = os.path.join(workdir, "tone.wav")
@@ -97,7 +129,7 @@ async def main():
             "-m",
             "bumble.apps.auracast",
             "transmit",
-            HCI,
+            peer_hci,
             "--broadcast-id",
             str(BROADCAST_ID),
             "--broadcast-name",
@@ -117,7 +149,7 @@ async def main():
 
         sink = await asyncio.create_subprocess_exec(
             SINK_BINARY,
-            f"{NETSIM_WS}?name=simble-auracast-sink&address={SINK_ADDRESS}",
+            sink_spec,
             f"{BROADCAST_ID:06X}",
             str(SECONDS),
             stdout=asyncio.subprocess.PIPE,

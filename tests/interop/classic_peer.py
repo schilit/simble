@@ -74,15 +74,26 @@ enough" is a rule stated in the prose of 5.2.2.6 and not visible in Table 5.7
 at all, so a stack that implemented the table alone would downgrade to Just
 Works there and still look correct in every other run.
 
+This needs a controller that models **inquiry**, which rules Bumble out —
+but not CI. `--transport rootcanal` starts a standalone upstream rootcanal
+(a ~16 MB release binary, no Android SDK and no bazel; see
+`rootcanal_link.py`) and puts both ends on it over H4/TCP. `--transport
+netsim` is unchanged and stays the default.
+
 Usage:
+    scripts/fetch_rootcanal.sh                     # once
+    cargo build --example classic_initiator
+    python3 tests/interop/classic_peer.py --transport rootcanal --pair
+
+    # or against a live netsimd, which is the only mode covering BIG:
     netsimd --logtostderr --no-shutdown --ws-port 7681
     ~/Library/Android/sdk/emulator/netsim devices   # confirm it is up
-    cargo build --example classic_initiator
     python3 tests/interop/classic_peer.py --pair
 """
 
 import argparse
 import asyncio
+import contextlib
 import os
 import sys
 
@@ -101,6 +112,7 @@ from bumble.sdp import (
 from bumble.transport import open_transport
 
 import bumble_link
+import rootcanal_link
 
 # Bumble joins netsim over its HCI TCP port; the simble initiator joins over
 # the WebSocket frontend. Both land on the same rootcanal ether.
@@ -200,6 +212,29 @@ class EchoPort:
         dlc.write(data)
 
 
+async def select_controller(stack, transport):
+    """`(spec Bumble joins on, extra env the simble client is launched with)`.
+
+    In `netsim` mode both ends join a running `netsimd`: Bumble over
+    rootcanal's HCI TCP port, the client over the WebSocket frontend it
+    already defaults to, so nothing about that path changes.
+
+    In `rootcanal` mode this process starts its own upstream rootcanal and
+    both ends join *it* over H4/TCP. That needs no Android SDK, which is what
+    puts the inquiry path — the thing this script exists to exercise, and the
+    thing Bumble's controller cannot host at all — inside CI.
+    """
+    if transport != "rootcanal":
+        return HCI, {}
+    link = await stack.enter_async_context(rootcanal_link.rootcanal_link())
+    # Starting rootcanal proved a controller answers; this proves it answers
+    # *inquiry*. Read from the controller's own supported-commands bitmap, so
+    # a build that quietly lacks it skips here instead of failing later in a
+    # way that reads like a simble bug.
+    link.requires("inquiry")
+    return link.bumble_transport, {"SIMBLE_HCI": link.hci_spec}
+
+
 async def main(argv):
     parser = bumble_link.transport_argument(
         argparse.ArgumentParser(description=__doc__)
@@ -250,7 +285,7 @@ async def main(argv):
     )
     args = parser.parse_args(argv)
 
-    # This script cannot run without netsim, and the reason is the whole
+    # This script cannot run against *Bumble*, and the reason is the whole
     # point of it. `examples/classic_initiator.rs` *starts* with an inquiry —
     # it discovers the peer rather than being told where it is — and Bumble's
     # virtual controller has no `HCI_Inquiry` handler at all, so nothing is
@@ -269,7 +304,9 @@ async def main(argv):
     # octet further along in the standard form than in the other two.
     inquiry_event = {"standard": "02", "rssi": "22", "eir": "2F"}[args.inquiry_mode]
 
-    async with await open_transport(HCI) as transport:
+    async with contextlib.AsyncExitStack() as stack:
+        peer_hci, simble_environment = await select_controller(stack, args.transport)
+        transport = await stack.enter_async_context(await open_transport(peer_hci))
         # The address given here is Bumble's *LE* identity; a classic BD_ADDR
         # belongs to the controller, so the one that matters is read back
         # from rootcanal after power-on and handed to the client below.
@@ -345,6 +382,9 @@ async def main(argv):
         )
 
         environment = dict(os.environ)
+        # Which controller the client joins. Empty in netsim mode, so the
+        # client keeps its own netsim default.
+        environment.update(simble_environment)
         environment.update(
             SIMBLE_EXPECT_NAME=PEER_NAME,
             SIMBLE_EXPECT_COD=f"{PEER_CLASS_OF_DEVICE:06X}",

@@ -17,10 +17,14 @@
 //! Exit status is the verdict: 0 if SDUs arrived, 1 otherwise.
 
 use simble::device::{BigReceiver, ReceiverConfig, ReceiverState};
-use simble::transport::{HciChannel, NetsimTransport};
+use simble::transport::{HciChannel, HciTransport, LiveTransport};
+use std::str::FromStr;
 use std::time::{Duration, Instant};
 
 fn main() {
+    // A controller spec, not just a URL: a `ws://…` is still passed through
+    // verbatim, so every existing invocation is unchanged, and `tcp:HOST:PORT`
+    // now reaches a standalone rootcanal as well.
     let url = std::env::args().nth(1).unwrap_or_else(|| {
         "ws://127.0.0.1:7681/v1/websocket/bt?name=simble-auracast-sink&address=CC:1E:57:00:0B:02"
             .to_string()
@@ -33,7 +37,9 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(30);
 
-    let mut transport = match NetsimTransport::connect(&url) {
+    let address = simble::types::Address::from_str("CC:1E:57:00:0B:02")
+        .unwrap_or(simble::types::Address::ANY);
+    let mut transport = match LiveTransport::open(&url, "simble-auracast-sink", address) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("connect: {e}");

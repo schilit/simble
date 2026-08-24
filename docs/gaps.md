@@ -189,10 +189,31 @@ been: the foreign peer that proves each of these once built.
   checks on foreign facts, but a source streaming into a void would still pass.
   Closing it needs a **headless LE-audio sink example** — which would also make
   the script CI-runnable, since Bumble models CIG/CIS and ISO data paths.
-- **Four interop scripts still cannot run without netsim**, each exiting 77
-  rather than pretending: `classic_peer.py` (Bumble has no `HCI_Inquiry`
-  handler, and its Connection Request hardcodes `class_of_device=0`), the
-  `auracast_*` pair (no BIG commands, no periodic-advertising *sync*).
+- ~~**Four interop scripts still cannot run without netsim.**~~ **Two.**
+  `classic_peer.py` now runs in CI against the **real rootcanal**, which
+  upstream publishes as a prebuilt release binary (~16 MB, no Android SDK and
+  no bazel) serving bare H4 over TCP — the thing `RootcanalTransport` and
+  Bumble's `tcp-client:` already speak. All three inquiry-result forms, SDP
+  continuation and SSP run there. See `scripts/fetch_rootcanal.sh` and
+  `tests/interop/rootcanal_link.py`.
+- **The `auracast_*` pair still cannot run without netsim**, and the reason
+  changed: it is no longer "Bumble models no BIG" but **no controller
+  reachable without the Android SDK models BIG at all**. The upstream
+  rootcanal release answers `LE Create BIG` and `LE BIG Create Sync` with
+  `Unknown HCI Command`, while the rootcanal bundled inside netsim implements
+  both — the two builds differ, and only netsim's has BIG. The scripts read
+  this off the live controller's supported-commands bitmap, so the day
+  upstream ships BIG they run with no edit.
+- **A controller that answers is not the same as a controller that works,**
+  and the gap is not hypothetical. `rootcanal-rs`'s `rootcanal-ws` links a C
+  stub whenever `build.rs` finds neither `$ROOTCANAL_LIB_DIR` nor bazel, and
+  that stub answers *every* command with a well-formed Command Complete,
+  status `0x00`. A `Reset`-and-wait probe passes against it; so would any
+  script that only checks an exit status. `rootcanal_link.py` asserts on the
+  *content* of the answers instead — 6 `BD_ADDR` bytes, 8 version bytes, a
+  64-byte command bitmap, where the stub returns 0 of each — and CI runs that
+  probe as its own step before any script. **Anything else pointed at a live
+  controller deserves the same treatment.**
 - **No foreign stack has witnessed AVRCP fragmentation, and none can.**
   Bumble's `send_avrcp_response` and `avctp.send_message` both carry a literal
   `# TODO: fragmentation`, and its controller never sends a continuation

@@ -150,30 +150,66 @@ is why none of them ran in CI. That was a mistaken requirement: they need a
 already speaks. No new transport was needed; `src/transport/live.rs` only
 *picks* between the two that existed.
 
-| Script | In CI | State |
+A second controller then followed, for the scripts Bumble cannot host at all.
+**rootcanal is published as a prebuilt binary** — a ~16 MB GitHub release
+asset from `google/rootcanal`, no Android SDK and no bazel — and it serves
+bare H4 over TCP, the same thing `RootcanalTransport` and Bumble's
+`tcp-client:` already speak. `scripts/fetch_rootcanal.sh` installs it and
+`tests/interop/rootcanal_link.py` runs it. Still no new transport.
+
+| Script | In CI | Controller | State |
+|---|---|---|---|
+| `hfp_oracle.py` | ✅ | none | needs no controller at all — was miscategorised as netsim-dependent |
+| `gatt_client.py` | ✅ | Bumble | full run under `--transport bumble` |
+| `a2dp_peer.py` | ✅ | Bumble | full run |
+| `avrcp_peer.py` | ✅ | Bumble | both phases, including the foreign `delegate.volume` |
+| `classic_peer.py` | ✅ | rootcanal | full run under `--transport rootcanal`: all three inquiry-result forms, SDP continuation, and SSP including the authenticated-key assertions |
+| `auracast_source.py` | ❌ | — | needs **BIG**, and *no* controller reachable without the SDK has it (below) |
+| `auracast_sink.py` | ❌ | — | same |
+| `lea_source.py` | ❌ | — | its peer is the browser page, not a binary |
+
+**The two rootcanals are not the same rootcanal**, which is the finding that
+decides the last two rows. Measured with `Read_Local_Supported_Commands`
+against both, and confirmed behaviourally:
+
+| | netsim's rootcanal | upstream v1.12.0 |
 |---|---|---|
-| `hfp_oracle.py` | ✅ | needs no controller at all — was miscategorised as netsim-dependent |
-| `gatt_client.py` | ✅ | full run under `--transport bumble` |
-| `a2dp_peer.py` | ✅ | full run |
-| `avrcp_peer.py` | ✅ | both phases, including the foreign `delegate.volume` |
-| `classic_peer.py` | ❌ | Bumble's controller models **no inquiry**; `--inquiry-mode rssi\|eir` and the Class of Device assertion are rootcanal-only |
-| `auracast_source.py` | ❌ | Bumble's controller implements **no BIG** and no periodic-advertising sync |
-| `auracast_sink.py` | ❌ | same |
-| `lea_source.py` | ❌ | its peer is the browser page, not a binary |
+| `HCI_Inquiry`, `Write_Inquiry_Mode` | yes | yes |
+| `LE_Periodic_Advertising_Create_Sync` | yes | yes |
+| `LE_Create_BIG`, `LE_BIG_Create_Sync` | yes | **no** — `Unknown HCI Command` |
 
-The four that cannot run **exit 77 with the specific missing piece named**,
-rather than passing having tested nothing. netsim is still the default for
-every script and is not replaced: rootcanal dies on malformed HCI instead of
-returning an error status, and honours `Write Inquiry Mode` — both of which
-found real bugs here and neither of which Bumble's controller reproduces.
+So inquiry came within reach of CI and BIG did not. The auracast pair still
+**exits 77**, but the reason is now read off the live controller's own
+supported-commands bitmap rather than asserted in a comment — and CI asserts
+that they *do* skip, because a BIG script exiting 0 against a controller with
+no BIG is a script claiming coverage it does not have.
 
-**So the remaining oracle gap is now precise:** inquiry, BIG/broadcast, and LE
-Audio unicast are the profiles whose only foreign witness is still a manual
-netsim run.
+netsim is still the default for every script and is not replaced.
+
+### Why a controller that answers is not yet a controller
+
+The obvious vehicle for this was `rootcanal-rs`'s `rootcanal-ws`, and it is
+deliberately unused. Its `build.rs` resolves the native library three ways and
+the third is `c/ffi_stub.c` — and that stub is **not inert**. It answers
+*every* command with a well-formed Command Complete carrying status `0x00`. A
+probe that sends `Reset` and requires an answer passes against it. So would a
+whole interop script that only ever checks an exit status.
+
+`tests/interop/rootcanal_link.py` therefore asserts on the **content** of the
+answers, never on their arrival: a real controller owes 6 `BD_ADDR` bytes, 8
+version bytes and a 64-byte supported-commands bitmap, where a stub answers 0
+return-parameter bytes to all three. `requires()` then gates on named command
+bits *inside* that bitmap. Each layer costs real implementation, which is the
+property a liveness check does not have. CI runs the probe as its own step
+before any script.
+
+**So the remaining oracle gap is now precise:** BIG/broadcast and LE Audio
+unicast are the profiles whose only foreign witness is still a manual netsim
+run. Inquiry is no longer among them.
 
 ### The single highest-leverage change
 
-*Partly done.* Four of the eight scripts now run in CI, which was the cheaper
+*Partly done.* Five of the eight scripts now run in CI, which was the cheaper
 half of this. The other half stands and is unchanged by it:
 
 **The `tests/interop/*.py` runs that still cannot run in CI already produce

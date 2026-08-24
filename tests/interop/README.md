@@ -13,16 +13,26 @@ python3 -m venv .venv && .venv/bin/pip install bumble lc3py   # Python >= 3.10
 ~/Library/Android/sdk/emulator/netsim devices                 # confirm netsimd
 ```
 
-## Two transports, and why both exist
+## Three transports, and why all three exist
 
 Every convertible script takes `--transport`:
 
-| | `--transport netsim` (default) | `--transport bumble` |
-|---|---|---|
-| Controller | rootcanal, inside `netsimd` | Bumble's `bumble.controller.Controller` |
-| Ether | netsim's rootcanal link | `bumble.link.LocalLink`, in the script's own process |
-| Needs | the Android SDK's `netsimd` running | nothing but `pip install bumble` |
-| Runs in CI | no | **yes** |
+| | `--transport netsim` (default) | `--transport bumble` | `--transport rootcanal` |
+|---|---|---|---|
+| Controller | rootcanal, inside `netsimd` | Bumble's `bumble.controller.Controller` | rootcanal, standalone |
+| Ether | netsim's rootcanal link | `bumble.link.LocalLink`, in the script's own process | rootcanal's own link |
+| Needs | the Android SDK's `netsimd` running | nothing but `pip install bumble` | `scripts/fetch_rootcanal.sh` (a ~16 MB release binary) |
+| Runs in CI | no | **yes** | **yes** |
+
+`--transport rootcanal` exists because Bumble's controller cannot host
+inquiry *at all*, and inquiry is the whole subject of `classic_peer.py`.
+Getting rootcanal used to mean installing the Android SDK for `netsimd`; it
+does not. Upstream publishes prebuilt binaries as GitHub release assets, and
+the standalone `bin/rootcanal` serves bare H4 over TCP — the same thing
+`RootcanalTransport` and Bumble's `tcp-client:` already speak. Each TCP
+connection is one device and all of them share one link, so both ends simply
+connect. `tests/interop/rootcanal_link.py` starts it, and **probes it before
+yielding** (see "Trusting a controller" below).
 
 `--transport bumble` works because **Bumble already ships a virtual
 controller and a virtual link** — the same architecture as simble's `sim.rs`
@@ -49,16 +59,57 @@ and its `HCI_Connection_Request_Event` carries a hardcoded
 `class_of_device=0`. A script that needs any of that **exits 77 and says
 which piece is missing** rather than passing having tested nothing.
 
-| Script | `bumble` mode | Why |
+| Script | `bumble` mode | `rootcanal` mode | Why |
+|---|---|---|---|
+| `hfp_oracle.py` | ✅ (needs no controller at all) | — | pure AT over a pipe |
+| `gatt_client.py` | ✅ full run | — | LE only |
+| `a2dp_peer.py` | ✅ full run | — | Bumble pages by address; no inquiry |
+| `avrcp_peer.py` | ✅ both phases | — | same |
+| `classic_peer.py` | ⏭ skips (77) | ✅ **full run** | starts with an **inquiry**, which only rootcanal models |
+| `auracast_source.py` | ⏭ skips (77) | ⏭ skips (77) | needs **BIG**, which the *upstream* rootcanal does not implement either |
+| `auracast_sink.py` | ⏭ skips (77) | ⏭ skips (77) | same |
+| `lea_source.py` | ⏭ skips (77) | — | its peer is the browser page, not a binary |
+
+### The two rootcanals are not the same rootcanal
+
+This is the finding that decides the auracast rows. Measured with
+`Read_Local_Supported_Commands` against both, and confirmed behaviourally:
+
+| | netsim's rootcanal | upstream v1.12.0 |
 |---|---|---|
-| `hfp_oracle.py` | ✅ (needs no controller at all) | pure AT over a pipe |
-| `gatt_client.py` | ✅ full run | LE only |
-| `a2dp_peer.py` | ✅ full run | Bumble pages by address; no inquiry |
-| `avrcp_peer.py` | ✅ both phases | same |
-| `classic_peer.py` | ⏭ skips (77) | starts with an **inquiry**; `--inquiry-mode` and the Class of Device assertion are rootcanal-only |
-| `auracast_source.py` | ⏭ skips (77) | needs **BIG** + periodic-advertising sync |
-| `auracast_sink.py` | ⏭ skips (77) | same |
-| `lea_source.py` | ⏭ skips (77) | its peer is the browser page, not a binary |
+| `HCI_Inquiry`, `Write_Inquiry_Mode` | yes | yes |
+| `LE_Periodic_Advertising_Create_Sync` | yes | yes |
+| `LE_Create_BIG`, `LE_BIG_Create_Sync` | yes | **no** — `Unknown HCI Command` |
+
+`requires()` reads this from the controller that is actually running, not
+from this table, so the day upstream ships BIG the auracast scripts start
+working with no edit here.
+
+### Trusting a controller
+
+The obvious vehicle for `--transport rootcanal` was `rootcanal-rs`'s
+`rootcanal-ws`, and it is deliberately unused. Its `build.rs` falls back to
+`c/ffi_stub.c` when it can find neither `$ROOTCANAL_LIB_DIR` nor bazel — and
+that stub is **not inert**. It answers *every* command with a well-formed
+Command Complete carrying status `0x00`:
+
+    Reset                         -> Command Complete, 1 return byte (status)
+    Read_BD_ADDR                  -> Command Complete, 1 return byte (status)
+    Read_Local_Supported_Commands -> Command Complete, 1 return byte (status)
+
+A probe that sends `Reset` and requires an answer passes against that. So
+would a script that only checks an exit status. So `rootcanal_link.probe()`
+asserts on the **content** of the answers instead — a real controller owes 6
+`BD_ADDR` bytes, 8 version bytes and a 64-byte supported-commands bitmap —
+and `requires()` then gates on named command bits *inside* that bitmap. A
+stub cannot answer uniformly and pass; it would have to implement the real
+tables, and then the features they claim. CI runs the probe as its own step:
+
+```sh
+python3 tests/interop/rootcanal_link.py                      # start one and report
+python3 tests/interop/rootcanal_link.py tcp:127.0.0.1:6402   # vet a running one
+python3 tests/interop/rootcanal_link.py ws://127.0.0.1:7681/v1/websocket/bt?name=p&address=00:00:00:00:00:01
+```
 
 The first four run in CI (`bumble-interop` in `.github/workflows/ci.yml`).
 The rest stay manual, and the table is the honest record of what CI therefore
@@ -101,12 +152,19 @@ finds it, reads its name, pages it, queries SDP, opens the DLC on the channel
 client's exit status is the verdict, and Bumble adds one check of its own —
 that the bytes really did reach a foreign RFCOMM server.
 
+Bumble cannot host this one — no `HCI_Inquiry` handler at all — so it runs
+against rootcanal. `scripts/fetch_rootcanal.sh` gets one without the Android
+SDK, and this is what CI runs:
+
 ```bash
+scripts/fetch_rootcanal.sh                                   # once
 cargo build --example classic_initiator
-python3 tests/interop/classic_peer.py                        # the base run
-python3 tests/interop/classic_peer.py --inquiry-mode rssi    # event 0x22
-python3 tests/interop/classic_peer.py --inquiry-mode eir     # event 0x2F
-python3 tests/interop/classic_peer.py --records 40           # forces SDP continuation
+T="--transport rootcanal"    # or omit for a live netsimd
+python3 tests/interop/classic_peer.py $T                     # the base run
+python3 tests/interop/classic_peer.py $T --inquiry-mode rssi # event 0x22
+python3 tests/interop/classic_peer.py $T --inquiry-mode eir  # event 0x2F
+python3 tests/interop/classic_peer.py $T --records 40        # forces SDP continuation
+python3 tests/interop/classic_peer.py $T --pair              # SSP, authenticated key
 ```
 
 Every fact asserted is one only Bumble knows: the name comes from its

@@ -57,7 +57,7 @@ use simble::device::classic_host::{
     authentication_requirements, inquiry_mode, io_capability, scan_enable,
 };
 use simble::device::{ClassicHost, DiscoveredDevice};
-use simble::transport::{HciChannel, NetsimTransport};
+use simble::transport::{HciChannel, HciTransport, LiveTransport};
 use simble::types::Address;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
@@ -637,26 +637,28 @@ fn main() {
     let name = std::env::var("SIMBLE_NAME").unwrap_or_else(|_| "simble-initiator".to_string());
     let address = std::env::var("SIMBLE_ADDR").unwrap_or_else(|_| "F0:DE:C0:00:0C:02".to_string());
     let local = Address::from_str(&address).unwrap_or(Address::ANY);
-    // netsim reads `address=` least-significant byte first, so the display
-    // form has to be converted or the device lands on the air reversed.
-    let url = format!(
-        "ws://127.0.0.1:7681/v1/websocket/bt?name={name}&address={}",
-        local.to_netsim_wire_string()
-    );
-    let mut transport = match NetsimTransport::connect(&url) {
+    // netsim unless `$SIMBLE_HCI` says otherwise, so every existing
+    // invocation is unchanged; `tcp:HOST:PORT` reaches a standalone
+    // rootcanal instead, which is how the inquiry path runs with no Android
+    // SDK. Bumble's controller is *not* an option here — it has no
+    // `HCI_Inquiry` handler at all — so this example is netsim-or-rootcanal.
+    let mut transport = match LiveTransport::open_from_env(&name, local) {
         Ok(transport) => transport,
         Err(e) => {
-            eprintln!("{e}");
+            eprintln!("cannot reach a controller: {e}");
             std::process::exit(1);
         }
     };
     if let Ok(path) = std::env::var("SIMBLE_BTSNOOP")
         && let Ok(file) = std::fs::File::create(&path)
-        && transport.set_trace(file).is_ok()
+        && transport.set_trace(file)
     {
         println!("btsnoop capture: {path}");
     }
-    println!("connected to netsim as {name} ({local}); target {target}");
+    println!(
+        "connected to {} as {name} ({local}); target {target}",
+        transport.describe()
+    );
 
     // Class of Device 0x5A020C: phone major class with networking/capturing
     // /object-transfer services — what a peer renders as a phone, and what
