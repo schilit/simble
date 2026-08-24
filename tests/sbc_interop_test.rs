@@ -279,6 +279,39 @@ const LIBSBC_NARROWBAND_PCM: [i16; 256] = [
 // MONO: window 512..768, 576/576 bytes identical
 // NARROWBAND: window 512..768, 480/480 bytes identical
 
+/// The fingerprint of this file's [`transient_signal`], asserted here **and**
+/// in `src/audio/sbc_tests.rs`, which has a byte-identical copy of it.
+///
+/// The two cannot share code: this is an integration test and sees only the
+/// crate's public surface, while that copy is `pub(crate)`. The libsbc golden
+/// vectors below are keyed to *this* copy. So if the two ever drift, those
+/// goldens quietly stop describing the signal the unit tests use and **both
+/// suites stay green** while testing different audio.
+///
+/// Both files assert the same triple over the same parameters, so a change to
+/// either generator fails immediately and says why. Changing the signal on
+/// purpose means updating this number in both files.
+const TRANSIENT_SIGNAL_FINGERPRINT: (usize, i64, i64) = (4096, 795_762, 269_988_344_806);
+
+#[test]
+fn the_transient_signal_generator_matches_the_crates_copy() {
+    let signal = transient_signal(4096, 44_100);
+    let fingerprint = (
+        signal.len(),
+        signal.iter().map(|&v| i64::from(v)).sum::<i64>(),
+        signal
+            .iter()
+            .map(|&v| i64::from(v) * i64::from(v))
+            .sum::<i64>(),
+    );
+    assert_eq!(
+        fingerprint, TRANSIENT_SIGNAL_FINGERPRINT,
+        "this generator drifted from the copy in `src/audio/sbc_tests.rs`. \
+         The libsbc goldens in this file are keyed to this copy, so the two \
+         suites would now be testing different audio."
+    );
+}
+
 /// The signal every golden vector was captured from. A byte-for-byte copy of
 /// the generator in `src/audio/sbc.rs`'s unit tests, deliberately duplicated
 /// so this file needs nothing from the crate's private test scaffolding — and

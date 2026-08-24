@@ -1,6 +1,42 @@
 use super::*;
 use crate::classic::a2dp::SBC_STEREO_CHANNEL_MODE;
 
+/// The fingerprint of [`transient_signal`], asserted in **both** places that
+/// generate it.
+///
+/// There are two copies of that generator — this one, and a byte-identical
+/// private copy in `tests/sbc_interop_test.rs`, which cannot call this one
+/// because an integration test sees only the crate's public surface. The
+/// libsbc golden vectors in that file are keyed to *its* copy. So if the two
+/// ever drift, the goldens quietly stop describing the signal these unit tests
+/// use, and **both suites stay green** while testing different audio.
+///
+/// This constant is the tripwire: both files assert it over the same
+/// parameters, so a change to either generator fails immediately and names the
+/// reason, rather than being discovered as an unexplained codec regression.
+/// Changing the signal on purpose means updating this number in both files.
+pub(crate) const TRANSIENT_SIGNAL_FINGERPRINT: (usize, i64, i64) = (4096, 795_762, 269_988_344_806);
+
+/// Folds a signal into [`TRANSIENT_SIGNAL_FINGERPRINT`]'s shape.
+pub(crate) fn signal_fingerprint(signal: &[i16]) -> (usize, i64, i64) {
+    (
+        signal.len(),
+        signal.iter().map(|&v| i64::from(v)).sum(),
+        signal.iter().map(|&v| i64::from(v) * i64::from(v)).sum(),
+    )
+}
+
+#[test]
+fn the_transient_signal_generator_has_not_drifted() {
+    assert_eq!(
+        signal_fingerprint(&transient_signal(4096, 44_100)),
+        TRANSIENT_SIGNAL_FINGERPRINT,
+        "this generator changed. `tests/sbc_interop_test.rs` has its own copy \
+         and the libsbc goldens are keyed to it — update both, or the two \
+         suites silently test different audio."
+    );
+}
+
 /// Transient-rich test signal: hard onsets, a chirp through every
 /// subband, and a silent gap. A steady sine hides codec bugs — the LC3
 /// bug this module's testing method comes from measured 11.7 dB on music
