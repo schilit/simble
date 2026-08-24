@@ -23,7 +23,7 @@ everything above it.
 | Protocol logic, CI, anything deterministic | **No hardware.** The built-in controller | Real RF is non-deterministic; that is wrong for CI. |
 | Against a real phone or another stack | **Any Bluetooth 4.0 dongle** — e.g. a CSR8510 (`0a12:0001`), under $10 | Real RF, real timing, a real peer. |
 | Extended advertising, periodic advertising, **LE Audio broadcast (BIG)**, 2M/Coded PHY | **A Bluetooth 5.x controller** — an nRF52840 dongle, flashed (below) | A 4.0 controller answers these with *Unknown HCI Command*. There is no software workaround. |
-| **Channel Sounding** (distance ranging) | **Bluetooth 6.0 silicon**, and two of them | Not available as a USB dongle today — see [Channel Sounding](#channel-sounding-hardware). |
+| **Channel Sounding** (distance ranging) | **Bluetooth 6.0 silicon**, and two of them | These connect over USB, but as a *serial* device rather than a USB Bluetooth controller — see [Channel Sounding](#channel-sounding-hardware). |
 
 One thing to know before spending anything: **BIG and Channel
 Sounding cannot be checked against software.** Bumble implements no BIG, and
@@ -127,11 +127,24 @@ dongle that drops out intermittently is more often power than software.
 ## Channel Sounding hardware
 
 Channel Sounding is the Bluetooth 6.0 distance-ranging feature, and it needs
-new silicon. **There is essentially no consumer USB dongle that supports it**
-— the cheap market still ships 5.1–5.3 Realtek parts (RTL8761B, RTL8852BE)
-under many names, and "6.0" on a product listing usually describes a host
-stack rather than Channel Sounding in the controller. Confirm the specific
-feature before ordering.
+new silicon. **No cheap consumer dongle has it** — that market still ships
+5.1–5.3 Realtek parts (RTL8761B, RTL8852BE) under many names, and "6.0" on a
+product listing usually describes a host stack rather than Channel Sounding in
+the controller. Confirm the specific feature before ordering.
+
+What you can buy are development kits and one test device. Be precise about
+what "USB" means for each: they all plug into a USB-C port, but that port
+leads to an interface MCU offering a **virtual serial port**, not to a USB
+Bluetooth-class controller. The distinction decides whether `UsbTransport` can
+talk to it (it cannot) or whether you need an HCI-over-UART transport (you
+do).
+
+The Bluetooth SIG also sells an **"LE Only" PTS dongle** built on the
+nRF54L15-DK, which
+[supports PTS test cases requiring Core Spec v6.2 features including Channel Sounding](https://store.bluetooth.com/pages/new-le-only-nordic-nrf54l15-dk).
+That is a qualification-testing device driven by the PTS tool rather than a
+general-purpose controller, and it needs PTS 8.9.0 or later — worth knowing it
+exists, but it is not a substitute for a development kit.
 
 What exists today is development kits, and as of August 2026 they are all the
 same Nordic nRF54L15 silicon — so the choice is form factor, not capability:
@@ -139,8 +152,24 @@ same Nordic nRF54L15 silicon — so the choice is form factor, not capability:
 | Board | Notable |
 |---|---|
 | Nordic **nRF54L15-DK** | The reference kit. |
-| **makerdiary nRF54L15 Connect Kit** ([product](https://makerdiary.com/products/nrf54l15-connectkit), [wiki](https://wiki.makerdiary.com/nrf54l15-connectkit/)) | Compact, castellated pins, onboard debugger. |
+| **makerdiary nRF54L15 Connect Kit** ([product](https://makerdiary.com/products/nrf54l15-connectkit), [wiki](https://wiki.makerdiary.com/nrf54l15-connectkit/)) | Compact, castellated pins, onboard debugger, and a [ready-made Channel Sounding sample](https://wiki.makerdiary.com/nrf54l15-connectkit/guides/ncs/samples/bluetooth/channel_sounding/). |
 | Nordic **nRF54L15 Tag** | Coin-cell, and **two antennas** — the only listed board that can exercise multiple antenna paths. |
+
+makerdiary's [Channel Sounding sample](https://wiki.makerdiary.com/nrf54l15-connectkit/guides/ncs/samples/bluetooth/channel_sounding/)
+is the most useful starting point, and worth reading before you order because
+it shows exactly what the hardware gives you. It runs one board as an
+**Initiator with Ranging Requestor** and the other as a **Reflector with
+Ranging Responder** — the Ranging Service roles — and logs a distance per
+antenna path by three independent methods:
+
+```
+Distance estimates on antenna path 0: ifft: 1.610213, phase_slope: 2.249911, rtt: 13.750394
+```
+
+Those are the same roles and the same measurement methods SimBLE implements in
+`profiles/ras.rs` and `cs/ranging.rs`. Three estimates from one procedure is
+also a useful sanity check in itself: they should broadly agree, and the
+spread tells you how much to trust any single one.
 
 Three things to know before buying:
 
