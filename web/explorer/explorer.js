@@ -20,21 +20,35 @@
 // Three kinds of member, and the difference is load-bearing:
 //
 //   exec  the default — the line runs in this session, right now.
-//   ref   real API, but nothing on this page hosts it. The whole central role
-//         is like this: `WebSession` collects `ScriptGattServer`s from its
-//         scope and pumps those; an `android::BluetoothGatt` built here would
-//         evaluate, queue packets into an outbox, and have no one drain it. A
-//         green "⇒ ()" would be a lie, so these get Copy instead of Execute.
+//   ref   real API, but nothing on this page hosts it. `eval_line` re-collects
+//         exactly one thing from the session scope — `ScriptGattServer`s — and
+//         pumps those. Anything else evaluates, queues packets into an outbox,
+//         and has no one drain it: `android::BluetoothGatt`, the HID host and
+//         the Assistant (all centrals), and `BluetoothLeBroadcast` (not a
+//         central at all — it is simply not in the list `eval_line` collects).
+//         A green "⇒ ()" would be a lie, so these get Copy instead of Execute.
 //   doc   a callback you define, custom syntax, or a constant family. There is
 //         no call to build, so there is no form — faking one would invent an
 //         API.
 //
+// These labels are load-bearing and they are not a to-do list. Deleting one
+// does not make the call work; it makes the page lie. docs/gaps.md §4 exists
+// to say so.
+//
 // Everything below was read off the Rust rather than remembered: the peripheral
 // surface from src/scripting/bindings.rs, the web-only additions from
 // src/transport/wasm_ws.rs (register_web_extensions), the central from
-// src/scripting/client.rs, the constants from src/scripting/constants.rs and
-// the android layer they alias. Each member names its source file, so the next
-// person can check a claim without grepping.
+// src/scripting/client.rs, the HID host from src/scripting/hid.rs, both
+// Auracast proxies and the BASS registrars from src/scripting/broadcast.rs,
+// `catalog::*` from src/scripting/catalog.rs, `assert_over`/`advance` from
+// src/scripting/monitor.rs, and the constants from src/scripting/constants.rs
+// and the android layer they alias. Each member names its source file, so the
+// next person can check a claim without grepping.
+//
+// And it stays that way mechanically: tests/explorer_surface_test.rs walks
+// those same registration sites and fails if a registered name has no entry
+// here. This page went stale once because nothing checked it; that is now CI's
+// job rather than a reader's.
 
 import init, { WebSession } from "../pkg/simble.js";
 import { renderGatt, escapeHtml } from "../common/viewer.js";
@@ -139,6 +153,17 @@ const UUID_DOC =
   "<code>uuid::of(\"…\")</code>, which takes a 16-bit assigned number (<code>\"2A6E\"</code>) " +
   "or a full 128-bit string.";
 
+// Android's callbacks carry a `BluetoothStatusCodes` reason. There is no
+// mapping from an HCI status or an ATT error to one, so ours carry the
+// controller's or the peer's own status byte instead of an invented constant —
+// which is why this sentence is shared rather than restated per callback.
+const REASON_DOC =
+  "The controller's or the peer's own status byte, <code>0</code> on success. Android would pass a " +
+  "<code>BluetoothStatusCodes</code> value here; there is no mapping from an HCI status or an ATT " +
+  "error to one, so this is the real status rather than an invented constant.";
+const SINK_ARG_DOC = "The Delegator's address, as a string.";
+const SOURCE_ID_DOC = "The Source_ID BASS assigned to this source.";
+
 // --- types -----------------------------------------------------------------
 // Sections, in reading order: the peripheral you can build, the value types it
 // is built from, the central, then the parts that are documentation only.
@@ -146,6 +171,13 @@ const TYPES = [
   { id: "session", short: "Session", name: "Session", role: "engine",
     blurb: "Free functions every script sees, registered on the engine itself rather than on an object. " +
       "<code>assert</code> is what turns a script into a test." },
+  { id: "catalog", short: "Catalog", name: "catalog::*", role: "peripheral",
+    blurb: "The shipped devices, by name. <code>catalog::device(\"hrm\")</code> compiles and runs a " +
+      "catalog entry <em>in this very engine</em>, so what comes back is an ordinary " +
+      "<code>BluetoothGattServer</code> — the load <strong>is</strong> the peripheral being added. " +
+      "It is the fastest thing on this page: one Execute and you are hosting a real device, with its " +
+      "<code>fn tick</code> carried along so <code>advance</code> and <code>assert_over</code> can run " +
+      "its physics." },
   { id: "server", short: "Server", name: "android::BluetoothGattServer", role: "peripheral",
     blurb: "The device. Android's <code>BluetoothGattServer</code>, wrapping a <code>VirtualDevice</code> " +
       "with a real GATT database. Its address is allocated per engine session " +
@@ -184,6 +216,26 @@ const TYPES = [
       "<code>BluetoothGattCallback</code>. <strong>This page hosts servers only</strong>, so a central " +
       "built here would queue packets nobody sends — every member below is documented and copyable " +
       "rather than executable. Run them in the Playground, a scene, or <code>run_test</code>." },
+  { id: "hid", short: "HID host", name: "android::BluetoothHidHost", role: "central",
+    blurb: "A central that knows what a HID peer is — the HOGP half of Android's " +
+      "<code>BluetoothHidHost</code> proxy. It composes <code>BluetoothGatt</code> for the connection " +
+      "and Rust's <code>HidHost</code> for the protocol, so discovery is automatic: once services are " +
+      "found it reads every Report Map and subscribes to every notifying Report on its own. " +
+      "<strong>No report is decoded in Rhai</strong> — the script sees the result. Being a central, " +
+      "every member below is reference-only here for the same reason <code>BluetoothGatt</code> is." },
+  { id: "broadcast", short: "Broadcast", name: "android::BluetoothLeBroadcast", role: "broadcast",
+    blurb: "The Auracast source: the whole advertising → periodic advertising → BIG ladder, driven by " +
+      "Rust's <code>BigBroadcaster</code>. No HCI type crosses into Rhai — you hand it a settings map " +
+      "and it hands you a <code>BluetoothLeBroadcastMetadata</code>-shaped map back. " +
+      "<strong>Reference-only here</strong>: this session re-collects only the " +
+      "<code>BluetoothGattServer</code>s in scope, so a source built on this page would queue its " +
+      "setup packets into an outbox nothing flushes. The Broadcast page hosts one for real." },
+  { id: "assistant", short: "Assistant", name: "android::BluetoothLeBroadcastAssistant", role: "central",
+    blurb: "The phone half of Auracast: pure GATT, writing BASS Add/Modify/Remove Source to a Scan " +
+      "Delegator's control point and reading the Broadcast Receive State back. It is a central " +
+      "underneath — it borrows the whole central binding — so it is reference-only here, and it has no " +
+      "<code>connect</code>: like Android's framework-owned proxy, the first call that names a sink " +
+      "opens the link." },
   { id: "callbacks", short: "Callbacks", name: "Callbacks", role: "reference",
     blurb: "Functions the script defines and the runtime calls. Not closures assigned to a callback " +
       "object, as Android would: this Rhai build is non-<code>sync</code>, so dispatch goes by name and " +
@@ -233,6 +285,113 @@ const METHODS = [
       "empty in the one case that matters — see <code>take_events()[0].device</code> under BluetoothDevice.",
     params: [], src: "scripting/bindings.rs",
     build: () => "take_events()" },
+
+  { group: "session", kind: "method",
+    sig: "assert_over(server, uuid, op, threshold, seconds, byte)", ret: "int",
+    desc: "The temporal assertion: fail unless the comparison held on *every* sample of a window.",
+    prose: "<code>assert</code> says <em>this happened</em>; <code>assert_over</code> says <em>this " +
+      "stayed true</em>, and those are different claims — a heart rate that reads 72 once has proved " +
+      "nothing about the spike at t=1.4 s. The window is sampled every 0.1 s; between samples the " +
+      "server's own <code>fn tick</code> is run, so the device's physics move under the assertion. " +
+      "On the first violation it throws, naming the value, the time and which sample it was. " +
+      "Same semantics as the MCP <code>assert_over</code> tool, deliberately unchanged, so " +
+      "“monitor HR &lt; 200 for 3 s” means one thing on both surfaces.",
+    note: "Three shorter arities are registered and resolve to the same function: " +
+      "<code>(server, uuid, op, threshold)</code> uses the 2.0 s default window and byte 1; " +
+      "<code>(…, seconds)</code> defaults the byte. And because Rhai has one integer type and no " +
+      "coercion at the call site, <code>seconds</code> is registered for both <code>f64</code> and " +
+      "<code>i64</code> — <code>assert_over(srv1, u, \"&lt;\", 200, 3)</code> resolves, which is the " +
+      "most natural spelling. This form passes all six, so it always resolves.",
+    params: [
+      { key: "srv", label: "server", kind: "objref", objType: "server", type: "BluetoothGattServer",
+        doc: "The device to sample. Read host-side through <code>server.value(uuid)</code> — there is " +
+          "no central and no radio involved." },
+      { key: "uuid", label: "uuid", kind: "uuid", type: "Uuid",
+        presetExpr: "uuid::HEART_RATE_MEASUREMENT",
+        doc: "The characteristic to sample. Errors if the server has no such characteristic." },
+      { key: "op", label: "op", kind: "code", type: "string", default: '"<"',
+        doc: "One of <code>&lt;</code> <code>&gt;</code> <code>&lt;=</code> <code>&gt;=</code> " +
+          "<code>==</code> <code>!=</code>, quoted. Anything else is an error, not a silent pass." },
+      { key: "threshold", label: "threshold", kind: "code", type: "int", default: "200",
+        doc: "The right-hand side of the comparison." },
+      { key: "seconds", label: "seconds", kind: "code", type: "float | int", default: "2.0", opt: true,
+        doc: "Window length. Defaults to 2.0. A window is <code>ceil(seconds / 0.1)</code> samples and " +
+          "always at least one, so <code>0.0</code> still checks the value it starts with." },
+      { key: "byte", label: "byte", kind: "code", type: "int", default: "1", opt: true,
+        doc: "Index into the characteristic's value. Defaults to 1 — index 0 is the flags octet in " +
+          "nearly every SIG measurement format." },
+    ],
+    retDesc: "the extreme sample — the one that came closest to violating the rule",
+    src: "scripting/monitor.rs",
+    build: (_on, a) =>
+      `assert_over(${a.srv}, ${a.uuid}, ${a.op}, ${a.threshold}, ${a.seconds}, ${a.byte})` },
+
+  { group: "session", kind: "method", sig: "advance(server, t)", ret: "()",
+    desc: "Run one step of the server's own `fn tick(server, t)` at time `t`.",
+    prose: "The other half of “the device's physics run under the assertion”. A server loaded with " +
+      "<code>catalog::device</code> carries its entry's script along, and this is what forwards a tick " +
+      "into it — so a scene that composed itself out of catalog devices keeps them moving once the " +
+      "test is over. Also spelled <code>server.advance(t)</code>: Rhai accepts method-call syntax for " +
+      "any registered function.",
+    note: "A server with no carried script — anything you built by hand on this page — is a no-op " +
+      "here, and deliberately <em>not</em> an error: a static device is a legitimate thing to " +
+      "monitor, it simply never changes. Load one with <code>catalog::device</code> to see it move.",
+    params: [
+      { key: "srv", label: "server", kind: "objref", objType: "server", type: "BluetoothGattServer",
+        doc: "The device to tick." },
+      { key: "t", label: "t", kind: "code", type: "float | int", default: "1.0",
+        doc: "The time to pass to <code>fn tick</code>, in seconds. Registered for both " +
+          "<code>f64</code> and <code>i64</code>, for the reason <code>assert_over</code> is." },
+    ],
+    src: "scripting/monitor.rs",
+    build: (_on, a) => `advance(${a.srv}, ${a.t})` },
+
+  { group: "session", kind: "method", sig: "f32_le(value)", ret: "blob",
+    desc: "Lay an IEEE-754 float out little-endian, the four bytes a characteristic carries.",
+    prose: "Several profiles carry floats — ranging distance, weight scales, some sensor readings — " +
+      "and a script has no other way to build one. Little-endian, as everything on the wire is.",
+    params: [{ key: "v", label: "value", kind: "code", type: "float", default: "1.25",
+      doc: "The value, as an <code>f64</code>; it is narrowed to <code>f32</code> before encoding." }],
+    src: "transport/wasm_ws.rs (web runtime)",
+    build: (_on, a) => `f32_le(${a.v})` },
+
+  // ---- catalog::* ----------------------------------------------------------
+  // The one section where a single Execute produces a whole working device.
+  { group: "catalog", kind: "method", sig: 'catalog::device(name)', ret: "BluetoothGattServer",
+    binds: "server",
+    desc: "Load a shipped catalog device by name — and host it.",
+    prose: "The entry is compiled and run <strong>in this engine</strong>, not a sub-engine, which is " +
+      "what makes it useful: every binding the entry needs (<code>update_value</code>, " +
+      "<code>add_pacs</code>, <code>f32_le</code>) is already here, its events land in this session's " +
+      "queue, and the value that comes back is an ordinary <code>BluetoothGattServer</code>. So this " +
+      "page hosts it the moment the line succeeds — it advertises, accepts connections and notifies, " +
+      "exactly like one you built by hand. The entry's <code>fn tick</code> is carried with it, so " +
+      "<code>advance</code> and <code>assert_over</code> run the real device.",
+    note: "An entry that loads another entry is legitimate composition; one that loads itself is a " +
+      "stack overflow that Rhai's call-depth limit cannot see, because the recursion runs through " +
+      "native frames. So nesting is capped at 4 and says so.",
+    params: [{ key: "name", label: "name", kind: "text", type: "string", default: "hrm",
+      doc: "A catalog name — run <code>catalog::names()</code> below for the list. An unknown name is " +
+        "an error naming what you asked for, never a silent empty device." }],
+    src: "scripting/catalog.rs",
+    build: (_on, a) => `catalog::device(${JSON.stringify(a.name)})` },
+
+  { group: "catalog", kind: "method", sig: "catalog::names()", ret: "array of strings",
+    desc: "Every name `catalog::device` would accept, in catalog order.",
+    prose: "Peripherals then clients — the same order the listings and the docs quote. It exists so an " +
+      "error message is never the only way to find out what is available.",
+    params: [], src: "scripting/catalog.rs",
+    build: () => "catalog::names()" },
+
+  { group: "catalog", kind: "method", sig: "catalog::source(name)", ret: "string",
+    desc: "The entry's Rhai source, unrun.",
+    prose: "For a test that wants to assert <em>about</em> a catalog entry — that it still sets a CCCD, " +
+      "that it still defines a <code>tick</code> — rather than duplicating the file. Nothing is " +
+      "evaluated, so this is also the way to read what <code>catalog::device</code> is about to do.",
+    params: [{ key: "name", label: "name", kind: "text", type: "string", default: "hrm",
+      doc: "A catalog name. Unknown names error the same way <code>device</code>'s do." }],
+    src: "scripting/catalog.rs",
+    build: (_on, a) => `catalog::source(${JSON.stringify(a.name)})` },
 
   // ---- BluetoothGattServer ----
   { group: "server", kind: "ctor", sig: 'android::BluetoothGattServer(name)',
@@ -635,6 +794,82 @@ const METHODS = [
     src: "transport/wasm_ws.rs (web runtime)",
     build: (on, a) => `${on}.add_mcs("${a.name}", ${a.ccid})` },
 
+  { group: "profiles", kind: "method", sig: "server.add_bass(num_receive_states)", ret: "()",
+    desc: "Install the Broadcast Audio Scan Service (184F) — this device becomes an Auracast Scan Delegator.",
+    prose: "The earbud side of Auracast. Android has no proxy for <em>being</em> a Delegator — a phone " +
+      "is always the Assistant — so this keeps the <code>add_pacs</code>/<code>add_ascs</code> " +
+      "registrar spelling rather than inventing a Java class name for it. Once installed, an " +
+      "Assistant's Add Source writes land on a real control-point handler and show up in " +
+      "<code>receive_states()</code>.",
+    receiver: "server",
+    params: [{ key: "n", label: "num_receive_states", kind: "code", type: "int", default: "1",
+      doc: "How many Broadcast Receive State slots to publish. BASS Section 3.2 requires at least " +
+        "one, and zero is rejected rather than quietly making an unusable service." }],
+    src: "scripting/broadcast.rs",
+    build: (on, a) => `${on}.add_bass(${a.n})` },
+
+  { group: "profiles", kind: "method", sig: "server.receive_states()", ret: "array of maps",
+    desc: "The Delegator's view of its own BASS slots.",
+    prose: "So a script can see which sources an Assistant added and what each is synchronised to. " +
+      "Each map is a Broadcast Receive State: <code>source_id</code>, <code>source_device</code>, " +
+      "<code>source_address_type</code>, <code>source_advertising_sid</code>, " +
+      "<code>broadcast_id</code>, <code>pa_sync_state</code>, <code>big_encryption</code>, and " +
+      "<code>subgroups</code> — each carrying its own <code>bis_sync</code> mask and " +
+      "<code>metadata</code> blob. Empty on a server with no BASS.",
+    receiver: "server", params: [],
+    retDesc: "one map per occupied slot; [] if add_bass was never called",
+    src: "scripting/broadcast.rs",
+    build: (on) => `${on}.receive_states()` },
+
+  { group: "profiles", kind: "method",
+    sig: "server.report_sync_outcome(source_id, pa_sync_state, bis_sync)", ret: "()",
+    desc: "Tell the Delegator what a synchronisation attempt actually achieved.",
+    prose: "No Android equivalent, deliberately: on a real earbud the <em>controller</em> carries out " +
+      "the synchronisation an Add Source requested and reports back what it managed. Nothing in a " +
+      "scripted Delegator owns a radio, so the script stands in for one — this is the composition " +
+      "step <code>BroadcastAudioScanService</code>'s own docs say it does not take. Without it a " +
+      "Delegator reports <code>NotSynchronizedToPa</code> forever, which is the honest default.",
+    note: "Expect <code>BASS rejected Source_ID 1: 0x81</code> here on a fresh page, and that is the " +
+      "binding working: you cannot report an outcome for a source that was never added, and the " +
+      "Delegator says so with the spec's own <em>Invalid Source_ID</em> error rather than inventing a " +
+      "slot. Run it against a Source_ID that <code>receive_states()</code> lists — which needs an " +
+      "Assistant, and this page hosts no central.",
+    receiver: "server",
+    params: [
+      { key: "id", label: "source_id", kind: "code", type: "int (0-255)", default: "1",
+        doc: "The Source_ID BASS assigned when the source was added — read it out of " +
+          "<code>receive_states()</code>." },
+      { key: "pa", label: "pa_sync_state", kind: "code", type: "string", default: '"SynchronizedToPa"',
+        doc: "A PA_Sync_State name, quoted: <code>\"NotSynchronizedToPa\"</code>, " +
+          "<code>\"SyncInfoRequest\"</code>, <code>\"SynchronizedToPa\"</code>, " +
+          "<code>\"FailedToSynchronizeToPa\"</code> or <code>\"NoPast\"</code>." },
+      { key: "bis", label: "bis_sync", kind: "code", type: "int (bitmask)", default: "0x00000001",
+        doc: "Which BISes are synchronised, one bit per BIS index. <code>0</code> for none; " +
+          "<code>0xFFFFFFFF</code> means “failed to sync to BIG”." },
+    ],
+    src: "scripting/broadcast.rs",
+    build: (on, a) => `${on}.report_sync_outcome(${a.id}, ${a.pa}, ${a.bis})` },
+
+  { group: "profiles", kind: "method", sig: "server.send_audio(sdu)", ret: "bool",
+    desc: "Stream one ISO SDU to the connected peer.",
+    prose: "The unicast media plane. Returns <code>false</code> — rather than erroring — when there is " +
+      "no audio handle or no packet could be built, which is exactly when a real controller would drop " +
+      "the SDU. Expect <code>false</code> on this page until an ASCS endpoint is enabled by a peer.",
+    receiver: "server",
+    params: [{ key: "sdu", label: "sdu", kind: "bytes", type: "blob | array", default: "0x01, 0x02",
+      doc: BYTES_DOC }],
+    retDesc: "true if the SDU was queued, false if no data path is open",
+    src: "transport/wasm_ws.rs (web runtime)",
+    build: (on, a) => `${on}.send_audio(${bytesExpr(a.sdu)})` },
+
+  { group: "profiles", kind: "method", sig: "server.take_audio()", ret: "array of blobs",
+    desc: "Drain the ISO SDUs this device has received, oldest first.",
+    prose: "The sink half of <code>send_audio</code>. Draining is destructive, so a script polls it " +
+      "from <code>fn tick</code> and keeps whatever it needs itself.",
+    receiver: "server", params: [],
+    retDesc: "[] when nothing has arrived", src: "transport/wasm_ws.rs (web runtime)",
+    build: (on) => `${on}.take_audio()` },
+
   // ---- BluetoothGattService ----
   { group: "service", kind: "ctor", sig: "android::BluetoothGattService(uuid, service_type)",
     ret: "BluetoothGattService", binds: "service",
@@ -851,6 +1086,30 @@ const METHODS = [
     src: "scripting/bindings.rs",
     build: (_on, a) => `${a.a} == ${a.b}` },
 
+  { group: "uuid", kind: "method", sig: "a != b", ret: "bool",
+    desc: "The negation, registered separately.",
+    prose: "Rhai does not derive <code>!=</code> from <code>==</code> for a custom type, so it is its " +
+      "own registration. Listed as its own member for that reason — it is a distinct entry in the " +
+      "function registry, not sugar.",
+    params: [
+      { key: "a", label: "a", kind: "uuid", type: "Uuid", doc: "Left-hand UUID." },
+      { key: "b", label: "b", kind: "uuid", type: "Uuid", presetExpr: 'uuid::of("2A6E")',
+        doc: "Right-hand UUID." },
+    ],
+    src: "scripting/bindings.rs",
+    build: (_on, a) => `${a.a} != ${a.b}` },
+
+  { group: "uuid", kind: "method", sig: "uuid.to_debug()", ret: "string",
+    desc: "The Rust `{:?}` form, for when `to_string` hides what you need to see.",
+    prose: "<code>to_string</code> gives the canonical spelling; <code>to_debug</code> gives the " +
+      "<code>Debug</code> rendering, which shows whether a value is held as a 16-bit assigned number " +
+      "or as a full 128-bit UUID. That distinction is exactly what <code>==</code> compares on, so " +
+      "this is the member to reach for when a comparison surprises you.",
+    params: [{ key: "u", label: "uuid", kind: "uuid", type: "Uuid",
+      presetExpr: "uuid::HEART_RATE_MEASUREMENT", doc: UUID_DOC }],
+    src: "scripting/bindings.rs",
+    build: (_on, a) => `${a.u}.to_debug()` },
+
   // ---- android::BluetoothGatt (central) ------------------------------------
   // Every member here is mode 'ref'. See the file header: this session pumps
   // servers, so a client's queued packets would never leave the page.
@@ -1030,6 +1289,396 @@ const METHODS = [
     receiver: "client", receiverName: "client", params: [], src: "scripting/client.rs",
     build: (on) => `${on}.mtu` },
 
+  // ---- android::BluetoothHidHost -------------------------------------------
+  // Reference-only for the same structural reason the central is: a HID host
+  // IS a central, so the packets it queues would never leave this page.
+  { group: "hid", kind: "ctor", mode: "ref", sig: "android::BluetoothHidHost(name)",
+    ret: "BluetoothHidHost", binds: "host", bindsName: "host",
+    desc: "Create a HID host — a central that decodes HOGP input.",
+    prose: "Named for the Android proxy it mirrors. This binds the <strong>HOGP (LE) half</strong>; " +
+      "the Classic half is out of reach because a scene cannot host a BR/EDR device at all yet.",
+    params: [{ key: "name", label: "name", kind: "text", type: "string", default: "Computer",
+      doc: "What a page or a scene labels this host with." }],
+    src: "scripting/hid.rs",
+    build: (_on, a) => `android::BluetoothHidHost(${JSON.stringify(a.name)})` },
+
+  { group: "hid", kind: "prop", mode: "ref", sig: "host.name", ret: "string",
+    desc: "The name given to the constructor.",
+    receiver: "host", receiverName: "host", params: [], src: "scripting/hid.rs",
+    build: (on) => `${on}.name` },
+
+  { group: "hid", kind: "prop", mode: "ref", sig: "host.peer", ret: "string",
+    desc: "The address this host is connected to, or aimed at.",
+    receiver: "host", receiverName: "host", params: [], src: "scripting/hid.rs",
+    build: (on) => `${on}.peer` },
+
+  { group: "hid", kind: "prop", mode: "ref", sig: "host.connected", ret: "bool",
+    desc: "Whether the link is up.",
+    prose: "True once a connection handle exists — the same test <code>client.connected</code> makes.",
+    receiver: "host", receiverName: "host", params: [], src: "scripting/hid.rs",
+    build: (on) => `${on}.connected` },
+
+  { group: "hid", kind: "prop", mode: "ref", sig: "host.discovered", ret: "bool",
+    desc: "Whether GATT discovery has finished.",
+    prose: "The GATT half only. <code>ready</code> is the HID-level question — discovery finishing is " +
+      "when this host <em>starts</em> reading Report Maps.",
+    receiver: "host", receiverName: "host", params: [], src: "scripting/hid.rs",
+    build: (on) => `${on}.discovered` },
+
+  { group: "hid", kind: "prop", mode: "ref", sig: "host.gatt", ret: "BluetoothGatt",
+    desc: "The GATT client underneath, so a script can do plain GATT on the same connection.",
+    prose: "A HOGP device usually has a Battery Service too. Rather than opening a second link, reach " +
+      "through this and use the whole central binding — <code>read</code>, <code>subscribe</code>, " +
+      "everything — on the connection the HID host already holds.",
+    receiver: "host", receiverName: "host", params: [], src: "scripting/hid.rs",
+    build: (on) => `${on}.gatt` },
+
+  { group: "hid", kind: "prop", mode: "ref", sig: "host.kind", ret: "string",
+    desc: "What the Report Map said the peer is.",
+    prose: "<code>\"keyboard\"</code>, <code>\"mouse\"</code>, <code>\"game pad\"</code>, " +
+      "<code>\"unsupported\"</code> — or <code>\"unknown\"</code> before the Report Map has been read. " +
+      "The same string <code>on_identified</code> is handed.",
+    receiver: "host", receiverName: "host", params: [], src: "scripting/hid.rs",
+    build: (on) => `${on}.kind` },
+
+  { group: "hid", kind: "prop", mode: "ref", sig: "host.ready", ret: "bool",
+    desc: "True once the Report Map has been read and the Report characteristics subscribed.",
+    prose: "The HID-level readiness, as distinct from <code>discovered</code>. This is the point after " +
+      "which input reports actually arrive.",
+    receiver: "host", receiverName: "host", params: [], src: "scripting/hid.rs",
+    build: (on) => `${on}.ready` },
+
+  { group: "hid", kind: "prop", mode: "ref", sig: "host.report_map", ret: "blob",
+    desc: "The Report Map bytes, exactly as read.",
+    prose: "Empty until read. A USB HID report descriptor — the thing that says what the reports mean. " +
+      "It is here to be asserted on and dumped, not re-parsed: the decoding is done in Rust.",
+    receiver: "host", receiverName: "host", params: [], src: "scripting/hid.rs",
+    build: (on) => `${on}.report_map` },
+
+  { group: "hid", kind: "prop", mode: "ref", sig: "host.report", ret: "blob",
+    desc: "The most recent input report, exactly as it arrived.",
+    prose: "The wire beside its meaning: the decoded callbacks tell you a key went down, this tells " +
+      "you which bytes said so. Empty before the first one.",
+    receiver: "host", receiverName: "host", params: [], src: "scripting/hid.rs",
+    build: (on) => `${on}.report` },
+
+  { group: "hid", kind: "prop", mode: "ref", sig: "host.report_handle", ret: "int",
+    desc: "The value handle that report arrived on.",
+    prose: "A device with several Report characteristics — a combo keyboard/mouse — sends on more than " +
+      "one handle, and this is how a script tells them apart. <code>0</code> before the first report.",
+    receiver: "host", receiverName: "host", params: [], src: "scripting/hid.rs",
+    build: (on) => `${on}.report_handle` },
+
+  { group: "hid", kind: "prop", mode: "ref", sig: "host.report_len_hint", ret: "int",
+    desc: "The largest input report this host expects.",
+    prose: "For a script sizing a view of the raw bytes. A hint, as the name says — derived from the " +
+      "Report Map, not enforced on what arrives.",
+    receiver: "host", receiverName: "host", params: [], src: "scripting/hid.rs",
+    build: (on) => `${on}.report_len_hint` },
+
+  { group: "hid", kind: "method", mode: "ref", sig: "host.connect(address)", ret: "()",
+    desc: "Connect to a HID peer by address. Discovery, Report Map reads and subscription follow automatically.",
+    prose: "The one place this deliberately does more than the GATT binding. Once services are " +
+      "discovered the host reads every Report Map and subscribes to every notifying Report on its own, " +
+      "because that is what a HID host <em>is</em> — a script doing it by hand would be " +
+      "re-implementing <code>HidHost::plan</code>. It matches Android, where an app never issues those " +
+      "reads either.",
+    receiver: "host", receiverName: "host",
+    params: [{ key: "address", label: "address", kind: "text", type: "string",
+      default: "AA:BB:CC:00:00:01", doc: "The peer's address. A string that is not an address errors." }],
+    src: "scripting/hid.rs",
+    build: (on, a) => `${on}.connect(${JSON.stringify(a.address)})` },
+
+  { group: "hid", kind: "method", mode: "ref", sig: "host.disconnect()", ret: "()",
+    desc: "Drop the link.",
+    receiver: "host", receiverName: "host", params: [], src: "scripting/hid.rs",
+    build: (on) => `${on}.disconnect()` },
+
+  { group: "hid", kind: "method", mode: "ref", sig: "host.services()", ret: "array of Uuid",
+    desc: "The peer's discovered service UUIDs.",
+    prose: "The same list <code>client.services()</code> returns — this host is a central underneath.",
+    receiver: "host", receiverName: "host", params: [], src: "scripting/hid.rs",
+    build: (on) => `${on}.services()` },
+
+  { group: "hid", kind: "method", mode: "ref", sig: "host.emit(kind, payload)", ret: "()",
+    desc: "Send a host-side event to the page or the test.",
+    prose: "The same <code>emit</code> every other script object offers. The payload crosses as JSON, " +
+      "so it must be serialisable.",
+    receiver: "host", receiverName: "host",
+    params: [
+      { key: "kind", label: "kind", kind: "text", type: "string", default: "typed",
+        doc: "The event name the host sees." },
+      { key: "payload", label: "payload", kind: "code", type: "any (JSON-serialisable)",
+        default: '#{ key: "a" }', doc: "Any Rhai value that serialises to JSON." },
+    ],
+    src: "scripting/hid.rs",
+    build: (on, a) => `${on}.emit(${JSON.stringify(a.kind)}, ${a.payload})` },
+
+  // ---- android::BluetoothLeBroadcast (Auracast source) ---------------------
+  // Reference-only for a different reason than the centrals: this session
+  // re-collects only BluetoothGattServers from its scope, so a source built
+  // here would queue its setup packets into an outbox nothing flushes.
+  { group: "broadcast", kind: "ctor", mode: "ref", sig: "android::BluetoothLeBroadcast(name)",
+    ret: "BluetoothLeBroadcast", binds: "broadcast", bindsName: "broadcast",
+    desc: "Create an Auracast broadcast source.",
+    prose: "Nothing goes on the air yet — the name is the default <code>broadcast_name</code>, and " +
+      "<code>start_broadcast</code> is what builds the BIG.",
+    params: [{ key: "name", label: "name", kind: "text", type: "string", default: "SimBLE Auracast",
+      doc: "The default Broadcast Name, overridable per-broadcast in the settings map." }],
+    src: "scripting/broadcast.rs",
+    build: (_on, a) => `android::BluetoothLeBroadcast(${JSON.stringify(a.name)})` },
+
+  { group: "broadcast", kind: "prop", mode: "ref", sig: "broadcast.name", ret: "string",
+    desc: "The name given to the constructor.",
+    receiver: "broadcast", receiverName: "broadcast", params: [], src: "scripting/broadcast.rs",
+    build: (on) => `${on}.name` },
+
+  { group: "broadcast", kind: "prop", mode: "ref", sig: "broadcast.state", ret: "string",
+    desc: "Where the source is on the advertising → PA → BIG ladder.",
+    prose: "One of <code>\"idle\"</code> (nothing started), <code>\"starting\"</code> (anywhere in " +
+      "bring-up), <code>\"streaming\"</code>, <code>\"stopped\"</code> or <code>\"failed\"</code>. " +
+      "Deliberately coarse: the fine-grained <code>BroadcastState</code> is a Rust type and no HCI " +
+      "detail crosses into Rhai.",
+    receiver: "broadcast", receiverName: "broadcast", params: [], src: "scripting/broadcast.rs",
+    build: (on) => `${on}.state` },
+
+  { group: "broadcast", kind: "method", mode: "ref", sig: "broadcast.start_broadcast(settings)",
+    ret: "()",
+    desc: "Build the BIG and start advertising it.",
+    prose: "Android's <code>startBroadcast(BluetoothLeBroadcastSettings)</code>. The Java type is a " +
+      "builder; a map literal is the honest translation. Errors if this source is already " +
+      "broadcasting — stop it first.",
+    note: "Exactly one subgroup: <code>BroadcastConfig::base()</code> publishes one, so a second " +
+      "would describe a BASE that never reaches the air, and is rejected rather than dropped. " +
+      "Channel allocations are assigned by BIS index, so the <code>bis</code> list is " +
+      "<em>validated</em> against what the BASE will carry rather than honoured — naming " +
+      "<code>[\"FRONT_RIGHT\", \"FRONT_LEFT\"]</code> is an error, not a swap.",
+    receiver: "broadcast", receiverName: "broadcast",
+    params: [{ key: "settings", label: "settings", kind: "code", type: "map",
+      default: '#{ broadcast_id: 0xC0FFEE, broadcast_code: (), subgroups: [ #{ codec: "lc3_48_2", bis: ["FRONT_LEFT", "FRONT_RIGHT"] } ] }',
+      doc: "Keys, all optional: <code>broadcast_name</code> (defaults to the source's name), " +
+        "<code>broadcast_id</code> (24-bit; a wider value errors rather than truncating into a " +
+        "different broadcast), <code>advertising_sid</code>, <code>broadcast_code</code> " +
+        "(<code>()</code> for unencrypted, otherwise up to 16 octets, zero-extended as the spec " +
+        "requires), and <code>subgroups</code> — one map with <code>codec</code>, <code>bis</code> " +
+        "and <code>metadata</code>." }],
+    src: "scripting/broadcast.rs",
+    build: (on, a) => `${on}.start_broadcast(${a.settings})` },
+
+  { group: "broadcast", kind: "method", mode: "ref", sig: "broadcast.stop_broadcast(broadcast_id)",
+    ret: "()",
+    desc: "Terminate the BIG.",
+    prose: "The Broadcast_ID is checked against this source's own, so stopping the wrong broadcast is " +
+      "an error rather than a silent no-op.",
+    receiver: "broadcast", receiverName: "broadcast",
+    params: [{ key: "id", label: "broadcast_id", kind: "code", type: "int (24-bit)",
+      default: "0xC0FFEE", doc: "Must equal the Broadcast_ID this source is running." }],
+    src: "scripting/broadcast.rs",
+    build: (on, a) => `${on}.stop_broadcast(${a.id})` },
+
+  { group: "broadcast", kind: "method", mode: "ref",
+    sig: "broadcast.update_broadcast(broadcast_id, settings)", ret: "()",
+    desc: "Rewrite the subgroup metadata of a running broadcast.",
+    prose: "Android's <code>updateBroadcast(int, BluetoothLeBroadcastSettings)</code>. <strong>Only " +
+      "the metadata can change</strong> while the BIG runs — everything else in the BASE has to agree " +
+      "with the LE Create BIG the controller already acted on. Errors if the broadcast is not " +
+      "streaming yet, because there is no periodic train to rewrite.",
+    receiver: "broadcast", receiverName: "broadcast",
+    params: [
+      { key: "id", label: "broadcast_id", kind: "code", type: "int (24-bit)", default: "0xC0FFEE",
+        doc: "Must equal the Broadcast_ID this source is running." },
+      { key: "settings", label: "settings", kind: "code", type: "map",
+        default: '#{ subgroups: [ #{ codec: "lc3_48_2", metadata: [0x03, 0x02, 0x04, 0x00] } ] }',
+        doc: "The same shape <code>start_broadcast</code> takes; only the subgroup " +
+          "<code>metadata</code> reaches the air." },
+    ],
+    src: "scripting/broadcast.rs",
+    build: (on, a) => `${on}.update_broadcast(${a.id}, ${a.settings})` },
+
+  { group: "broadcast", kind: "method", mode: "ref", sig: "broadcast.is_playing(broadcast_id)",
+    ret: "bool",
+    desc: "Whether that Broadcast_ID is streaming right now.",
+    prose: "False for a broadcast that is still in bring-up, and false for any id that is not this " +
+      "source's — it answers about one broadcast, not about the source.",
+    receiver: "broadcast", receiverName: "broadcast",
+    params: [{ key: "id", label: "broadcast_id", kind: "code", type: "int (24-bit)",
+      default: "0xC0FFEE", doc: "The Broadcast_ID to ask about." }],
+    src: "scripting/broadcast.rs",
+    build: (on, a) => `${on}.is_playing(${a.id})` },
+
+  { group: "broadcast", kind: "method", mode: "ref", sig: "broadcast.get_all_broadcast_metadata()",
+    ret: "array of maps",
+    desc: "The `BluetoothLeBroadcastMetadata` a receiver — or an Assistant — needs to find and join this broadcast.",
+    prose: "One entry, because one source runs one broadcast. The map carries " +
+      "<code>source_device</code>, <code>source_address_type</code>, " +
+      "<code>source_advertising_sid</code>, <code>broadcast_id</code>, <code>broadcast_name</code>, " +
+      "<code>pa_sync_interval</code> and <code>encrypted</code> — exactly the fields " +
+      "<code>assistant.add_source</code> reads back out. That round trip is the point: it is how a " +
+      "script joins the two halves without either of them naming an HCI type.",
+    receiver: "broadcast", receiverName: "broadcast", params: [],
+    retDesc: "[] before start_broadcast", src: "scripting/broadcast.rs",
+    build: (on) => `${on}.get_all_broadcast_metadata()` },
+
+  { group: "broadcast", kind: "method", mode: "ref", sig: "broadcast.send_audio(bis_index, sdu)",
+    ret: "bool",
+    desc: "Push one SDU into a BIS.",
+    prose: "The media plane. Android has no equivalent — an app hands audio to the LE Audio framework, " +
+      "never to the proxy — so this is named for what it does rather than after a Java method that " +
+      "would be an invention. Returns <code>false</code> while the data paths are not open, which is " +
+      "when a real controller would drop the SDU.",
+    receiver: "broadcast", receiverName: "broadcast",
+    params: [
+      { key: "bis", label: "bis_index", kind: "code", type: "int (1-based)", default: "1",
+        doc: "Which BIS of the BIG to send on. Indices start at 1, as they do in the BASE." },
+      { key: "sdu", label: "sdu", kind: "bytes", type: "blob | array", default: "0x01, 0x02",
+        doc: BYTES_DOC },
+    ],
+    retDesc: "true if the SDU was queued, false if the data paths are not open",
+    src: "scripting/broadcast.rs",
+    build: (on, a) => `${on}.send_audio(${a.bis}, ${bytesExpr(a.sdu)})` },
+
+  // ---- android::BluetoothLeBroadcastAssistant -------------------------------
+  { group: "assistant", kind: "ctor", mode: "ref",
+    sig: "android::BluetoothLeBroadcastAssistant(name)", ret: "BluetoothLeBroadcastAssistant",
+    binds: "assistant", bindsName: "assistant",
+    desc: "Create a Broadcast Assistant — the phone that tells an earbud which broadcast to join.",
+    prose: "Pure GATT underneath: it writes BASS control-point operations to a Scan Delegator and reads " +
+      "the Broadcast Receive State back. Nothing below GATT is involved.",
+    params: [{ key: "name", label: "name", kind: "text", type: "string", default: "Phone",
+      doc: "What a page or a scene labels this Assistant with." }],
+    src: "scripting/broadcast.rs",
+    build: (_on, a) => `android::BluetoothLeBroadcastAssistant(${JSON.stringify(a.name)})` },
+
+  { group: "assistant", kind: "prop", mode: "ref", sig: "assistant.name", ret: "string",
+    desc: "The name given to the constructor.",
+    receiver: "assistant", receiverName: "assistant", params: [], src: "scripting/broadcast.rs",
+    build: (on) => `${on}.name` },
+
+  { group: "assistant", kind: "prop", mode: "ref", sig: "assistant.sink", ret: "string",
+    desc: "The Delegator this Assistant is talking to, as an address.",
+    prose: "Empty until the first operation that names a sink. Android's framework knows every " +
+      "connected sink; simble's central holds one link at a time, so this Assistant learns its one " +
+      "sink from <code>add_source</code>, <code>modify_source</code> or <code>remove_source</code> — " +
+      "and a second sink needs a second Assistant.",
+    receiver: "assistant", receiverName: "assistant", params: [], src: "scripting/broadcast.rs",
+    build: (on) => `${on}.sink` },
+
+  { group: "assistant", kind: "prop", mode: "ref", sig: "assistant.connected", ret: "bool",
+    desc: "Whether the link to the sink is up.",
+    receiver: "assistant", receiverName: "assistant", params: [], src: "scripting/broadcast.rs",
+    build: (on) => `${on}.connected` },
+
+  { group: "assistant", kind: "method", mode: "ref",
+    sig: "assistant.add_source(sink, metadata, is_group_op)", ret: "()",
+    desc: "Write BASS Add Source: tell the earbud to join a broadcast.",
+    prose: "There is no <code>connect</code> to call first — Android's <code>addSource</code> reaches a " +
+      "sink whether or not a link is up, because the framework owns the connection, and this does the " +
+      "same rather than inventing a method Android does not have. The Source_ID is BASS's to assign, " +
+      "so <code>on_source_added</code> fires when the Receive State carrying it arrives, not when the " +
+      "write is answered.",
+    note: "<code>is_group_op</code> is accepted and <strong>not honoured</strong>: applying an " +
+      "operation to a sink's whole coordinated set needs a CSIP set coordinator, and nothing wires one " +
+      "to this. The operation reaches the one connected sink either way.",
+    receiver: "assistant", receiverName: "assistant",
+    params: [
+      { key: "sink", label: "sink", kind: "text", type: "string", default: "AA:BB:CC:00:00:01",
+        doc: "The Delegator's address. The first call that names one opens the link." },
+      { key: "metadata", label: "metadata", kind: "code", type: "map",
+        default: "broadcast.get_all_broadcast_metadata()[0]",
+        doc: "A <code>BluetoothLeBroadcastMetadata</code>-shaped map — the one " +
+          "<code>get_all_broadcast_metadata</code> returns. <code>source_device</code> is required; " +
+          "<code>source_address_type</code>, <code>source_advertising_sid</code>, " +
+          "<code>broadcast_id</code>, <code>pa_sync</code>, <code>pa_sync_interval</code> and " +
+          "<code>subgroups</code> fill in the rest." },
+      { key: "group", label: "is_group_op", kind: "bool", type: "bool",
+        doc: "Android's whole-set flag. Accepted, not honoured — see the note." },
+    ],
+    src: "scripting/broadcast.rs",
+    build: (on, a) => `${on}.add_source(${JSON.stringify(a.sink)}, ${a.metadata}, ${a.group})` },
+
+  { group: "assistant", kind: "method", mode: "ref",
+    sig: "assistant.modify_source(sink, source_id, metadata)", ret: "()",
+    desc: "Write BASS Modify Source: change the PA sync or subgroup selection of a source already added.",
+    prose: "The Source_ID is the one BASS assigned, which a script reads off " +
+      "<code>on_receive_state_changed</code> or <code>get_all_sources</code>.",
+    receiver: "assistant", receiverName: "assistant",
+    params: [
+      { key: "sink", label: "sink", kind: "text", type: "string", default: "AA:BB:CC:00:00:01",
+        doc: "The Delegator's address." },
+      { key: "id", label: "source_id", kind: "code", type: "int (0-255)", default: "1",
+        doc: "The Source_ID BASS assigned." },
+      { key: "metadata", label: "metadata", kind: "code", type: "map",
+        default: '#{ pa_sync: "SynchronizeToPaPastNotAvailable", pa_sync_interval: 0xFFFF }',
+        doc: "<code>pa_sync</code> is one of <code>\"DoNotSynchronizeToPa\"</code>, " +
+          "<code>\"SynchronizeToPaPastAvailable\"</code> or " +
+          "<code>\"SynchronizeToPaPastNotAvailable\"</code> (the default); " +
+          "<code>pa_sync_interval</code> and <code>subgroups</code> follow " +
+          "<code>add_source</code>'s shapes." },
+    ],
+    src: "scripting/broadcast.rs",
+    build: (on, a) => `${on}.modify_source(${JSON.stringify(a.sink)}, ${a.id}, ${a.metadata})` },
+
+  { group: "assistant", kind: "method", mode: "ref",
+    sig: "assistant.remove_source(sink, source_id)", ret: "()",
+    desc: "Write BASS Remove Source: drop a source from the earbud's slot.",
+    prose: "The Delegator answers by emptying the slot, which arrives as a zero-length Receive State — " +
+      "so the confirmation is <code>on_source_removed</code>, not a state map.",
+    receiver: "assistant", receiverName: "assistant",
+    params: [
+      { key: "sink", label: "sink", kind: "text", type: "string", default: "AA:BB:CC:00:00:01",
+        doc: "The Delegator's address." },
+      { key: "id", label: "source_id", kind: "code", type: "int (0-255)", default: "1",
+        doc: "The Source_ID to remove." },
+    ],
+    src: "scripting/broadcast.rs",
+    build: (on, a) => `${on}.remove_source(${JSON.stringify(a.sink)}, ${a.id})` },
+
+  { group: "assistant", kind: "method", mode: "ref",
+    sig: "assistant.start_searching_for_sources()", ret: "()",
+    desc: "Write BASS Remote Scan Started — tell the sink a scan is underway on its behalf.",
+    prose: "Half of Android's <code>startSearchingForSources(List&lt;ScanFilter&gt;)</code>: the BASS " +
+      "half, which is the half that is reachable. Errors if this Assistant has not learned its sink " +
+      "yet — an operation that names no sink cannot open the link.",
+    note: "<strong>The scanning half is not implemented</strong>, so no <code>on_source_found</code> " +
+      "is ever delivered. <code>LeCentral</code> has no scan surface of its own, and scan-report " +
+      "parsing decodes only <em>legacy</em> advertising while an Auracast source advertises with an " +
+      "extended set. A script gets its metadata from " +
+      "<code>broadcast.get_all_broadcast_metadata()</code> instead.",
+    receiver: "assistant", receiverName: "assistant", params: [], src: "scripting/broadcast.rs",
+    build: (on) => `${on}.start_searching_for_sources()` },
+
+  { group: "assistant", kind: "method", mode: "ref",
+    sig: "assistant.stop_searching_for_sources()", ret: "()",
+    desc: "Write BASS Remote Scan Stopped.",
+    prose: "The other half of the pair, and subject to the same “knows its sink already” rule.",
+    receiver: "assistant", receiverName: "assistant", params: [], src: "scripting/broadcast.rs",
+    build: (on) => `${on}.stop_searching_for_sources()` },
+
+  { group: "assistant", kind: "method", mode: "ref", sig: "assistant.get_all_sources(sink)",
+    ret: "array of maps",
+    desc: "Every Broadcast Receive State this Assistant has seen from that sink.",
+    prose: "The Assistant's own cache, updated from each Receive State notification — the same map " +
+      "shape <code>server.receive_states()</code> returns. The <code>sink</code> argument is accepted " +
+      "for Android's signature and ignored: this Assistant holds one link.",
+    receiver: "assistant", receiverName: "assistant",
+    params: [{ key: "sink", label: "sink", kind: "text", type: "string", default: "AA:BB:CC:00:00:01",
+      doc: "Android's sink argument. Ignored — one Assistant, one sink." }],
+    src: "scripting/broadcast.rs",
+    build: (on, a) => `${on}.get_all_sources(${JSON.stringify(a.sink)})` },
+
+  { group: "assistant", kind: "method", mode: "ref", sig: "assistant.emit(kind, payload)", ret: "()",
+    desc: "Send a host-side event to the page or the test.",
+    prose: "The same <code>emit</code> the central and the server already have; the payload crosses as JSON.",
+    receiver: "assistant", receiverName: "assistant",
+    params: [
+      { key: "kind", label: "kind", kind: "text", type: "string", default: "joined",
+        doc: "The event name the host sees." },
+      { key: "payload", label: "payload", kind: "code", type: "any (JSON-serialisable)",
+        default: "#{ source_id: 1 }", doc: "Any Rhai value that serialises to JSON." },
+    ],
+    src: "scripting/broadcast.rs",
+    build: (on, a) => `${on}.emit(${JSON.stringify(a.kind)}, ${a.payload})` },
+
   // ---- Callbacks -----------------------------------------------------------
   // Documentation only, and honestly so: these are functions the script
   // defines, not calls the page can build. Arity is not cosmetic — the runtime
@@ -1162,6 +1811,349 @@ const METHODS = [
         doc: "The event map — see Event maps for the central's kinds and fields." },
     ],
     src: "scripting/client.rs" },
+
+  // HID host. `on_report` mirrors Android's ACTION_REPORT and stops at the
+  // bytes; everything below it is decoded, has no counterpart on Android's
+  // proxy, and is named for what it is rather than after a Java callback that
+  // does not exist. They are the reason the binding is worth having.
+  { group: "callbacks", kind: "callback", mode: "doc", sig: "fn on_report(host, report)",
+    ret: "ignored",
+    desc: "HID. A raw input report arrived — the wire, before its meaning.",
+    prose: "Android's own surface: <code>ACTION_REPORT</code> carries the report bytes and nothing " +
+      "more. Raised <em>before</em> the decoded callbacks for the same notification, so a script sees " +
+      "the bytes ahead of what they turned into.",
+    params: [
+      { key: "host", label: "host", type: "BluetoothHidHost", doc: "The host." },
+      { key: "report", label: "report", type: "blob",
+        doc: "The report exactly as it arrived. <code>host.report_handle</code> says which " +
+          "characteristic it came from." },
+    ],
+    src: "scripting/hid.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc", sig: "fn on_input(host, event)",
+    ret: "ignored",
+    desc: "HID. Every decoded event, as one stream — for a script that would rather match than define seven handlers.",
+    prose: "Raised for each decoded event <em>in addition to</em> its specific handler, and before it. " +
+      "<code>event.type</code> carries the same snake_case tag <code>HidEvent</code>'s serde " +
+      "representation uses, so a script and the JSON a page reads agree on the vocabulary: " +
+      "<code>identified</code>, <code>key_down</code>, <code>key_up</code>, <code>roll_over</code>, " +
+      "<code>pointer</code>, <code>button_down</code>, <code>button_up</code>. The remaining fields " +
+      "are whichever the specific callback would have been passed.",
+    params: [
+      { key: "host", label: "host", type: "BluetoothHidHost", doc: "The host." },
+      { key: "event", label: "event", type: "map", doc: "The decoded event; see the tags above." },
+    ],
+    src: "scripting/hid.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc",
+    sig: "fn on_identified(host, kind, report_map)", ret: "ignored",
+    desc: "HID. The Report Map has been read and the peer classified.",
+    prose: "The first thing a HID host learns, and the point after which reports mean something. " +
+      "Decoding happens in Rust — the script is handed the verdict.",
+    params: [
+      { key: "host", label: "host", type: "BluetoothHidHost", doc: "The host." },
+      { key: "kind", label: "kind", type: "string",
+        doc: "<code>\"keyboard\"</code>, <code>\"mouse\"</code>, <code>\"game pad\"</code> or " +
+          "<code>\"unsupported\"</code>. Same string as <code>host.kind</code>." },
+      { key: "report_map", label: "report_map", type: "blob",
+        doc: "The Report Map bytes that produced that verdict." },
+    ],
+    src: "scripting/hid.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc", sig: "fn on_key_down(host, key)",
+    ret: "ignored",
+    desc: "HID. A key went down — a press edge, differenced out of consecutive reports.",
+    prose: "HID reports carry the set of keys currently held, not events; the edges are computed in " +
+      "Rust by differencing consecutive reports.",
+    params: [
+      { key: "host", label: "host", type: "BluetoothHidHost", doc: "The host." },
+      { key: "key", label: "key", type: "map",
+        doc: "<code>#{usage, modifiers, character, label}</code>. <code>character</code> and " +
+          "<code>label</code> are <code>()</code> when the key produces neither — test with " +
+          "<code>key.character != ()</code> rather than against a sentinel." },
+    ],
+    src: "scripting/hid.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc", sig: "fn on_key_up(host, usage)",
+    ret: "ignored",
+    desc: "HID. A key was released.",
+    prose: "The release edge. Only the usage is carried — the character a key produced was already " +
+      "reported on the way down.",
+    params: [
+      { key: "host", label: "host", type: "BluetoothHidHost", doc: "The host." },
+      { key: "usage", label: "usage", type: "int", doc: "The HID usage code that went up." },
+    ],
+    src: "scripting/hid.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc", sig: "fn on_rollover(host)", ret: "ignored",
+    desc: "HID. The keyboard reported more keys than it can distinguish.",
+    prose: "Phantom-key rollover: the report says <code>ErrorRollOver</code> in every slot, so the " +
+      "held-key set is unknowable for that report. Arity 1 — there is nothing to carry.",
+    params: [{ key: "host", label: "host", type: "BluetoothHidHost", doc: "The host." }],
+    src: "scripting/hid.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc", sig: "fn on_pointer(host, dx, dy, wheel)",
+    ret: "ignored",
+    desc: "HID. Relative pointer movement.",
+    prose: "Four parameters, not a map — pointer motion is three numbers and arrives at report rate. " +
+      "A handler defined at any other arity is not recognised.",
+    params: [
+      { key: "host", label: "host", type: "BluetoothHidHost", doc: "The host." },
+      { key: "dx", label: "dx", type: "int", doc: "Horizontal movement since the last report, signed." },
+      { key: "dy", label: "dy", type: "int", doc: "Vertical movement, signed." },
+      { key: "wheel", label: "wheel", type: "int", doc: "Wheel detents, signed. <code>0</code> if the device has no wheel." },
+    ],
+    src: "scripting/hid.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc", sig: "fn on_button_down(host, button)",
+    ret: "ignored",
+    desc: "HID. A pointer button went down.",
+    params: [
+      { key: "host", label: "host", type: "BluetoothHidHost", doc: "The host." },
+      { key: "button", label: "button", type: "int", doc: "Button index, 1-based — 1 is primary." },
+    ],
+    src: "scripting/hid.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc", sig: "fn on_button_up(host, button)",
+    ret: "ignored",
+    desc: "HID. A pointer button was released.",
+    params: [
+      { key: "host", label: "host", type: "BluetoothHidHost", doc: "The host." },
+      { key: "button", label: "button", type: "int", doc: "Button index, 1-based." },
+    ],
+    src: "scripting/hid.rs" },
+
+  // Broadcast source. Android's BluetoothLeBroadcast.Callback, minus the ones
+  // that need a framework we do not have.
+  { group: "callbacks", kind: "callback", mode: "doc",
+    sig: "fn on_broadcast_started(broadcast, reason, broadcast_id)", ret: "ignored",
+    desc: "Source. The BIG was created — the broadcast exists on the air.",
+    prose: "Raised on the edge into bring-up's second half (data paths opening, or streaming), and " +
+      "only once per broadcast: a source that goes on to fail after this point reports " +
+      "<code>on_broadcast_stopped</code>, not <code>on_broadcast_start_failed</code>.",
+    params: [
+      { key: "b", label: "broadcast", type: "BluetoothLeBroadcast", doc: "The source." },
+      { key: "reason", label: "reason", type: "int", doc: REASON_DOC },
+      { key: "id", label: "broadcast_id", type: "int", doc: "The 24-bit Broadcast_ID that started." },
+    ],
+    src: "scripting/broadcast.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc",
+    sig: "fn on_broadcast_start_failed(broadcast, reason)", ret: "ignored",
+    desc: "Source. Bring-up failed before the BIG ever existed.",
+    prose: "The one broadcast callback with no Broadcast_ID: nothing was created, so there is nothing " +
+      "to name. Arity 2 for that reason.",
+    params: [
+      { key: "b", label: "broadcast", type: "BluetoothLeBroadcast", doc: "The source." },
+      { key: "reason", label: "reason", type: "int", doc: REASON_DOC },
+    ],
+    src: "scripting/broadcast.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc",
+    sig: "fn on_broadcast_stopped(broadcast, reason, broadcast_id)", ret: "ignored",
+    desc: "Source. The BIG was terminated, cleanly or otherwise.",
+    prose: "Follows <code>on_playback_stopped</code> when the broadcast was streaming. A non-zero " +
+      "<code>reason</code> means it ended by failure rather than by <code>stop_broadcast</code>.",
+    params: [
+      { key: "b", label: "broadcast", type: "BluetoothLeBroadcast", doc: "The source." },
+      { key: "reason", label: "reason", type: "int", doc: REASON_DOC },
+      { key: "id", label: "broadcast_id", type: "int", doc: "The Broadcast_ID that stopped." },
+    ],
+    src: "scripting/broadcast.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc",
+    sig: "fn on_broadcast_updated(broadcast, reason, broadcast_id)", ret: "ignored",
+    desc: "Source. An `update_broadcast` reached the periodic train.",
+    prose: "Followed immediately by <code>on_broadcast_metadata_changed</code> carrying the new BASE.",
+    params: [
+      { key: "b", label: "broadcast", type: "BluetoothLeBroadcast", doc: "The source." },
+      { key: "reason", label: "reason", type: "int", doc: REASON_DOC },
+      { key: "id", label: "broadcast_id", type: "int", doc: "The Broadcast_ID that was updated." },
+    ],
+    src: "scripting/broadcast.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc",
+    sig: "fn on_broadcast_update_failed(broadcast, reason, broadcast_id)", ret: "ignored",
+    desc: "Source. The controller refused the periodic-advertising-data rewrite.",
+    params: [
+      { key: "b", label: "broadcast", type: "BluetoothLeBroadcast", doc: "The source." },
+      { key: "reason", label: "reason", type: "int", doc: REASON_DOC },
+      { key: "id", label: "broadcast_id", type: "int", doc: "The Broadcast_ID that was being updated." },
+    ],
+    src: "scripting/broadcast.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc",
+    sig: "fn on_broadcast_metadata_changed(broadcast, broadcast_id, metadata)", ret: "ignored",
+    desc: "Source. The published metadata changed — here is the new `BluetoothLeBroadcastMetadata`.",
+    prose: "Note the argument order: this one carries the id <em>second</em> and a map third, where " +
+      "the rest carry a reason second. It is the only broadcast callback whose third argument is not " +
+      "an integer, and dispatch is by name and arity, so getting the order wrong is silent.",
+    params: [
+      { key: "b", label: "broadcast", type: "BluetoothLeBroadcast", doc: "The source." },
+      { key: "id", label: "broadcast_id", type: "int", doc: "The Broadcast_ID whose metadata changed." },
+      { key: "metadata", label: "metadata", type: "map",
+        doc: "The same map <code>get_all_broadcast_metadata()</code> returns." },
+    ],
+    src: "scripting/broadcast.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc",
+    sig: "fn on_playback_started(broadcast, reason, broadcast_id)", ret: "ignored",
+    desc: "Source. The BIG reached Streaming — audio can now flow.",
+    prose: "Distinct from <code>on_broadcast_started</code>: that one fires when the BIG is created, " +
+      "this when it is actually streaming. <code>send_audio</code> returns <code>false</code> until " +
+      "this point.",
+    params: [
+      { key: "b", label: "broadcast", type: "BluetoothLeBroadcast", doc: "The source." },
+      { key: "reason", label: "reason", type: "int", doc: REASON_DOC },
+      { key: "id", label: "broadcast_id", type: "int", doc: "The Broadcast_ID now streaming." },
+    ],
+    src: "scripting/broadcast.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc",
+    sig: "fn on_playback_stopped(broadcast, reason, broadcast_id)", ret: "ignored",
+    desc: "Source. Streaming ended.",
+    prose: "Raised only if the broadcast was streaming, and always before " +
+      "<code>on_broadcast_stopped</code>.",
+    params: [
+      { key: "b", label: "broadcast", type: "BluetoothLeBroadcast", doc: "The source." },
+      { key: "reason", label: "reason", type: "int", doc: REASON_DOC },
+      { key: "id", label: "broadcast_id", type: "int", doc: "The Broadcast_ID that stopped streaming." },
+    ],
+    src: "scripting/broadcast.rs" },
+
+  // Assistant. Each BASS operation answers with exactly one of a
+  // success/failure pair, decided by the control-point write's ATT status.
+  { group: "callbacks", kind: "callback", mode: "doc",
+    sig: "fn on_source_added(assistant, sink, source_id, reason)", ret: "ignored",
+    desc: "Assistant. The Delegator accepted an Add Source and assigned it a Source_ID.",
+    prose: "Deferred on purpose: the Source_ID is BASS's to assign, so this waits for the Broadcast " +
+      "Receive State that carries it rather than firing when the write is answered. " +
+      "<code>on_receive_state_changed</code> follows with the state itself.",
+    params: [
+      { key: "a", label: "assistant", type: "BluetoothLeBroadcastAssistant", doc: "The Assistant." },
+      { key: "sink", label: "sink", type: "string", doc: SINK_ARG_DOC },
+      { key: "id", label: "source_id", type: "int", doc: SOURCE_ID_DOC },
+      { key: "reason", label: "reason", type: "int", doc: REASON_DOC },
+    ],
+    src: "scripting/broadcast.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc",
+    sig: "fn on_source_add_failed(assistant, sink, metadata, reason)", ret: "ignored",
+    desc: "Assistant. The Delegator rejected the Add Source write.",
+    prose: "The failure half carries the <em>metadata</em> that was refused, not a Source_ID — none " +
+      "was ever assigned. That is why its third argument differs from every other failure callback's.",
+    params: [
+      { key: "a", label: "assistant", type: "BluetoothLeBroadcastAssistant", doc: "The Assistant." },
+      { key: "sink", label: "sink", type: "string", doc: SINK_ARG_DOC },
+      { key: "metadata", label: "metadata", type: "map", doc: "The metadata map that was refused." },
+      { key: "reason", label: "reason", type: "int", doc: REASON_DOC },
+    ],
+    src: "scripting/broadcast.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc",
+    sig: "fn on_source_modified(assistant, sink, source_id, reason)", ret: "ignored",
+    desc: "Assistant. A Modify Source write was accepted.",
+    params: [
+      { key: "a", label: "assistant", type: "BluetoothLeBroadcastAssistant", doc: "The Assistant." },
+      { key: "sink", label: "sink", type: "string", doc: SINK_ARG_DOC },
+      { key: "id", label: "source_id", type: "int", doc: SOURCE_ID_DOC },
+      { key: "reason", label: "reason", type: "int", doc: REASON_DOC },
+    ],
+    src: "scripting/broadcast.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc",
+    sig: "fn on_source_modify_failed(assistant, sink, source_id, reason)", ret: "ignored",
+    desc: "Assistant. A Modify Source write was rejected.",
+    params: [
+      { key: "a", label: "assistant", type: "BluetoothLeBroadcastAssistant", doc: "The Assistant." },
+      { key: "sink", label: "sink", type: "string", doc: SINK_ARG_DOC },
+      { key: "id", label: "source_id", type: "int", doc: SOURCE_ID_DOC },
+      { key: "reason", label: "reason", type: "int", doc: REASON_DOC },
+    ],
+    src: "scripting/broadcast.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc",
+    sig: "fn on_source_removed(assistant, sink, source_id, reason)", ret: "ignored",
+    desc: "Assistant. A Remove Source write was accepted and the slot forgotten.",
+    prose: "The Assistant drops its cached state for that Source_ID here, so " +
+      "<code>get_all_sources</code> stops returning it.",
+    params: [
+      { key: "a", label: "assistant", type: "BluetoothLeBroadcastAssistant", doc: "The Assistant." },
+      { key: "sink", label: "sink", type: "string", doc: SINK_ARG_DOC },
+      { key: "id", label: "source_id", type: "int", doc: SOURCE_ID_DOC },
+      { key: "reason", label: "reason", type: "int", doc: REASON_DOC },
+    ],
+    src: "scripting/broadcast.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc",
+    sig: "fn on_source_remove_failed(assistant, sink, source_id, reason)", ret: "ignored",
+    desc: "Assistant. A Remove Source write was rejected.",
+    params: [
+      { key: "a", label: "assistant", type: "BluetoothLeBroadcastAssistant", doc: "The Assistant." },
+      { key: "sink", label: "sink", type: "string", doc: SINK_ARG_DOC },
+      { key: "id", label: "source_id", type: "int", doc: SOURCE_ID_DOC },
+      { key: "reason", label: "reason", type: "int", doc: REASON_DOC },
+    ],
+    src: "scripting/broadcast.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc",
+    sig: "fn on_search_started(assistant, reason)", ret: "ignored",
+    desc: "Assistant. Remote Scan Started reached the sink.",
+    prose: "Arity 2: a sink-wide operation names no source, so there is no Source_ID to carry. It " +
+      "confirms the <em>BASS write</em> only — no scan is running, and no " +
+      "<code>on_source_found</code> will follow.",
+    params: [
+      { key: "a", label: "assistant", type: "BluetoothLeBroadcastAssistant", doc: "The Assistant." },
+      { key: "reason", label: "reason", type: "int", doc: REASON_DOC },
+    ],
+    src: "scripting/broadcast.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc",
+    sig: "fn on_search_start_failed(assistant, reason)", ret: "ignored",
+    desc: "Assistant. The sink rejected Remote Scan Started.",
+    params: [
+      { key: "a", label: "assistant", type: "BluetoothLeBroadcastAssistant", doc: "The Assistant." },
+      { key: "reason", label: "reason", type: "int", doc: REASON_DOC },
+    ],
+    src: "scripting/broadcast.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc",
+    sig: "fn on_search_stopped(assistant, reason)", ret: "ignored",
+    desc: "Assistant. Remote Scan Stopped reached the sink.",
+    params: [
+      { key: "a", label: "assistant", type: "BluetoothLeBroadcastAssistant", doc: "The Assistant." },
+      { key: "reason", label: "reason", type: "int", doc: REASON_DOC },
+    ],
+    src: "scripting/broadcast.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc",
+    sig: "fn on_search_stop_failed(assistant, reason)", ret: "ignored",
+    desc: "Assistant. The sink rejected Remote Scan Stopped.",
+    params: [
+      { key: "a", label: "assistant", type: "BluetoothLeBroadcastAssistant", doc: "The Assistant." },
+      { key: "reason", label: "reason", type: "int", doc: REASON_DOC },
+    ],
+    src: "scripting/broadcast.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc",
+    sig: "fn on_receive_state_changed(assistant, sink, source_id, state)", ret: "ignored",
+    desc: "Assistant. A Broadcast Receive State notification arrived — what the earbud is actually synchronised to.",
+    prose: "The callback that tells you whether the join worked, as opposed to whether the write was " +
+      "accepted. An empty Receive State — the slot a Remove Source leaves behind — is <em>not</em> " +
+      "reported here; that edge is <code>on_source_removed</code>.",
+    note: "One slot. A Delegator may publish several Broadcast Receive State characteristics, one per " +
+      "source, but <code>LeCentral</code> resolves a characteristic by UUID and takes the first match " +
+      "— so this Assistant reads and subscribes to the first slot only.",
+    params: [
+      { key: "a", label: "assistant", type: "BluetoothLeBroadcastAssistant", doc: "The Assistant." },
+      { key: "sink", label: "sink", type: "string", doc: SINK_ARG_DOC },
+      { key: "id", label: "source_id", type: "int", doc: SOURCE_ID_DOC },
+      { key: "state", label: "state", type: "map",
+        doc: "The Broadcast Receive State — the same map <code>server.receive_states()</code> and " +
+          "<code>assistant.get_all_sources()</code> return. <code>state.pa_sync_state</code> is the " +
+          "field that says whether the earbud joined." },
+    ],
+    src: "scripting/broadcast.rs" },
 
   { group: "callbacks", kind: "syntax", mode: "doc", sig: 'wait_for "event_name" { … }',
     ret: "the block's value",
@@ -1486,7 +2478,9 @@ function paramsTable(m) {
       <div class="preq">receiver</div>
       ${control}
       <div class="pdoc">${m.mode === "ref"
-        ? "The variable your script bound the client to."
+        // Named by type rather than "the client": four different types are
+        // reference-only now, and only one of them is a client.
+        ? `The variable your script bound the ${escapeHtml(receiverType(m.receiver))} to.`
         : "Which bound object to call this on."}</div>
     </div>`);
   }
@@ -1500,7 +2494,8 @@ function paramsTable(m) {
 const receiverType = (t) => ({
   server: "BluetoothGattServer", service: "BluetoothGattService",
   characteristic: "BluetoothGattCharacteristic", descriptor: "BluetoothGattDescriptor",
-  device: "BluetoothDevice", client: "BluetoothGatt",
+  device: "BluetoothDevice", client: "BluetoothGatt", host: "BluetoothHidHost",
+  broadcast: "BluetoothLeBroadcast", assistant: "BluetoothLeBroadcastAssistant",
 }[t] || t);
 
 function constTable(t) {

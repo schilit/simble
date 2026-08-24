@@ -52,6 +52,10 @@
   .type-head[data-role="central"] { border-left-color: var(--warn); }
   .type-head[data-role="value"] { border-left-color: var(--good); }
   .type-head[data-role="reference"] { border-left-color: var(--dim); }
+  /* The Auracast source is neither central nor peripheral — it never accepts a
+     connection — but it shares the centrals' "real API, not hosted here"
+     status, so it sits in the same warm family rather than inventing a hue. */
+  .type-head[data-role="broadcast"] { border-left-color: var(--warn); }
   .type-head h2 { margin: 0; font-size: var(--fs-title); font-weight: 700;
     font-family: ui-monospace, Menlo, monospace; color: var(--text);
     text-transform: none; letter-spacing: 0; display: flex; align-items: baseline;
