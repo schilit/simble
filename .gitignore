@@ -1,5 +1,8 @@
 /target
-Cargo.lock
+# Cargo.lock IS tracked: this crate ships binaries (simble, the MCP server)
+# and examples, so a reproducible dependency graph matters more than letting
+# downstream library users resolve their own. Without it CI resolved different
+# versions than any developer did.
 
 # Generated in CI for the Pages deploy, never committed.
 /web/pkg/
@@ -15,3 +18,7 @@ Cargo.lock
 # tests/interop/bumble_link.py is imported by the scripts beside it, so
 # running any of them leaves a bytecode cache here.
 /tests/interop/__pycache__/
+
+# Local Python virtualenv for the interop scripts (see tests/interop/README.md).
+# A convenience for running them, never a dependency: CI just pip-installs bumble.
+.venv/
