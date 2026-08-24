@@ -212,9 +212,26 @@ mod layout {
     /// Step mode lives in the low two bits of the step mode octet; bit 7 is
     /// the "step aborted" flag.
     pub const STEP_MODE_MASK: u8 = 0x03;
-    /// Mode-2 step data: an antenna permutation index, then per path a
-    /// 3-byte PCT and a 1-byte tone quality indicator.
-    pub const MODE_2_STEP_DATA_LEN: usize = 1 + 4;
+    /// Antenna paths this encoder reports. One path is the 1:1 antenna
+    /// configuration; `antenna_paths_mask` is hardcoded to match.
+    pub const NUM_ANTENNA_PATHS: usize = 1;
+    /// Mode-2 step data: an antenna permutation index, then a 3-byte PCT and
+    /// a 1-byte Tone Quality Indicator for each of `N_AP + 1` tone entries —
+    /// one per antenna path **plus the tone extension slot** (Core 6.0,
+    /// Vol 4, Part E, Section 7.7.65.44, which RAS v1.0 §3.2.1.4 carries
+    /// through unchanged).
+    ///
+    /// The `+ 1` is not optional and does not depend on tone extension being
+    /// in use: the slot is always present, and a receiver that sizes the step
+    /// from `N_AP` alone lands four bytes short. This encoder omitted it and
+    /// wrote `1 + 4 = 5`, which no real controller produces — see
+    /// `tests/cs_real_capture_test.rs`, where all 9 072 mode-2 steps captured
+    /// off an nRF54L15 declare a length of **9**. `controller::sim::pbr_step`
+    /// had it right; only this encoder did not.
+    pub const MODE_2_STEP_DATA_LEN: usize = 1 + 4 * (NUM_ANTENNA_PATHS + 1);
+    /// Offset of the first antenna path's tone entry within mode-2 step data,
+    /// past the antenna permutation index.
+    pub const MODE_2_FIRST_TONE: usize = 1;
     /// Step mode 2 — Phase-Based Ranging.
     pub const STEP_MODE_PBR: u8 = 2;
 }
@@ -260,8 +277,15 @@ impl RangingData {
             out.push(0x00); // antenna permutation index
             let packed =
                 (u32::from(tone.i as u16) & 0x0FFF) | ((u32::from(tone.q as u16) & 0x0FFF) << 12);
-            out.extend_from_slice(&[packed as u8, (packed >> 8) as u8, (packed >> 16) as u8]);
-            out.push(tone.quality);
+            // One entry per antenna path, then the tone extension slot. Only
+            // one path is modelled, so the slot repeats the path's sample —
+            // which is what real silicon does too when tone extension is not
+            // in use: the captured slots differ from their path by a count or
+            // two of the 12-bit quantization.
+            for _ in 0..=layout::NUM_ANTENNA_PATHS {
+                out.extend_from_slice(&[packed as u8, (packed >> 8) as u8, (packed >> 16) as u8]);
+                out.push(tone.quality);
+            }
         }
         out
     }
@@ -294,7 +318,13 @@ impl RangingData {
             if mode & layout::STEP_MODE_MASK != layout::STEP_MODE_PBR {
                 continue;
             }
-            let pct = step.get(1..5)?;
+            // The first antenna path's tone entry. Later paths and the tone
+            // extension slot follow and are not read — one path is what the
+            // 1:1 antenna configuration provides, and what this encoder
+            // writes. Indexing past the permutation index rather than off the
+            // end of the step means a real 9-byte step and this encoder's own
+            // output are read identically.
+            let pct = step.get(layout::MODE_2_FIRST_TONE..layout::MODE_2_FIRST_TONE + 4)?;
             let (i, q) = decode_pct([pct[0], pct[1], pct[2]]);
             data.tones.push(Tone {
                 channel,

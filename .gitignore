@@ -28,3 +28,7 @@
 /third_party/*
 # ...except the rootcanal-rs submodule, which is source we own and pin.
 !/third_party/rootcanal-rs
+# ...and the vendored Channel Sounding capture, which is 12 KB of text that
+# `tests/cs_real_capture_test.rs` include_str!s. Without it that test does not
+# compile, so it has to be tracked.
+!/third_party/waves
