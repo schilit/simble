@@ -11,3 +11,7 @@ Cargo.lock
 
 # Staged by the Pages workflow from the top-level catalog/ (see pages.yml).
 /web/catalog/
+
+# tests/interop/bumble_link.py is imported by the scripts beside it, so
+# running any of them leaves a bytecode cache here.
+/tests/interop/__pycache__/

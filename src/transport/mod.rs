@@ -9,6 +9,8 @@ pub(crate) mod hci_adapter;
 // `wasm_ws` instead, whose JS-binding half is gated inside the module so its
 // pure-Rust demo engines stay natively compiled and natively tested.
 #[cfg(not(target_arch = "wasm32"))]
+pub mod live;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod live_scene;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod netsim;
@@ -55,6 +57,8 @@ impl HciTransport for usb::UsbTransport {
         UsbTransport::pump(self, channel)
     }
 }
+#[cfg(not(target_arch = "wasm32"))]
+pub use live::LiveTransport;
 #[cfg(not(target_arch = "wasm32"))]
 // Renamed on the way out: at this level "the default WebSocket URL" is
 // ambiguous — there is more than one live backend.

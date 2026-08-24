@@ -1,16 +1,68 @@
 # Interop scripts
 
-Bumble-driven scripts that test simble against a *foreign* stack over netsim.
-Unit tests cannot find the bugs these find: two simble endpoints always agree
-with each other, so only a real peer proves the wire format is right.
+Bumble-driven scripts that test simble against a *foreign* stack. Unit tests
+cannot find the bugs these find: two simble endpoints always agree with each
+other, so only a real peer proves the wire format is right.
 
-They are not run by `cargo test` — they need a live `netsimd` and a Python
-environment with [Bumble](https://github.com/google/bumble) installed.
+They are not run by `cargo test`. They need a Python environment with
+[Bumble](https://github.com/google/bumble) installed, and — depending on the
+mode — a live `netsimd`.
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install bumble lc3py   # Python >= 3.10
 ~/Library/Android/sdk/emulator/netsim devices                 # confirm netsimd
 ```
+
+## Two transports, and why both exist
+
+Every convertible script takes `--transport`:
+
+| | `--transport netsim` (default) | `--transport bumble` |
+|---|---|---|
+| Controller | rootcanal, inside `netsimd` | Bumble's `bumble.controller.Controller` |
+| Ether | netsim's rootcanal link | `bumble.link.LocalLink`, in the script's own process |
+| Needs | the Android SDK's `netsimd` running | nothing but `pip install bumble` |
+| Runs in CI | no | **yes** |
+
+`--transport bumble` works because **Bumble already ships a virtual
+controller and a virtual link** — the same architecture as simble's `sim.rs`
+plus `Link`, and the arrangement Bumble's own `examples/run_controller.py`
+demonstrates. `tests/interop/bumble_link.py` builds a `LocalLink`, attaches
+the script's Bumble `Device` to one `Controller`, and publishes a second
+`Controller` over `tcp-server:`. That is bare H4 over TCP, which simble's
+existing `RootcanalTransport` already speaks, so the example joins with
+`SIMBLE_HCI=tcp:127.0.0.1:PORT` and lands on the same ether. **No new Rust
+transport was needed** — only `LiveTransport` in `src/transport/live.rs`,
+which picks between the two that already existed.
+
+**netsim is not replaced, and must not be.** rootcanal is the controller a
+real Android emulator runs, and two of its properties are load-bearing
+coverage that Bumble's controller cannot give:
+
+- it **dies on malformed HCI** rather than answering with an error status,
+  which is how this project learned its bytes were wrong twice;
+- it **honours `Write Inquiry Mode`**, which is how the two unhandled
+  inquiry-result forms (0x22 RSSI, 0x2F EIR) were found.
+
+Bumble's controller models no inquiry at all, no BIG, and no classic pairing,
+and its `HCI_Connection_Request_Event` carries a hardcoded
+`class_of_device=0`. A script that needs any of that **exits 77 and says
+which piece is missing** rather than passing having tested nothing.
+
+| Script | `bumble` mode | Why |
+|---|---|---|
+| `hfp_oracle.py` | ✅ (needs no controller at all) | pure AT over a pipe |
+| `gatt_client.py` | ✅ full run | LE only |
+| `a2dp_peer.py` | ✅ full run | Bumble pages by address; no inquiry |
+| `avrcp_peer.py` | ✅ both phases | same |
+| `classic_peer.py` | ⏭ skips (77) | starts with an **inquiry**; `--inquiry-mode` and the Class of Device assertion are rootcanal-only |
+| `auracast_source.py` | ⏭ skips (77) | needs **BIG** + periodic-advertising sync |
+| `auracast_sink.py` | ⏭ skips (77) | same |
+| `lea_source.py` | ⏭ skips (77) | its peer is the browser page, not a binary |
+
+The first four run in CI (`bumble-interop` in `.github/workflows/ci.yml`).
+The rest stay manual, and the table is the honest record of what CI therefore
+still does not cover.
 
 ## `gatt_client.py`
 

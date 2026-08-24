@@ -25,6 +25,9 @@ import sys
 import tempfile
 import wave
 
+
+import bumble_link
+
 # Bumble joins netsim over its HCI TCP port; the simble sink joins over the
 # WebSocket frontend. Both land on the same rootcanal ether.
 HCI = os.environ.get("SIMBLE_NETSIM_HCI", "tcp-client:127.0.0.1:6402")
@@ -34,7 +37,18 @@ SINK_BINARY = os.environ.get(
 )
 SINK_ADDRESS = "CC:1E:57:00:0B:02"
 BROADCAST_ID = 0xABCDEF
-SECONDS = int(sys.argv[1]) if len(sys.argv) > 1 else 20
+# Auracast is a BIG — a Broadcast Isochronous Group — and Bumble's virtual
+# controller implements no BIG commands at all: no `LE Create BIG` for the
+# source side, no `LE BIG Create Sync` for the sink side, and no
+# `LE Periodic Advertising Create Sync` to reach the train in the first
+# place. It models periodic advertising *parameters, data and enable*, which
+# is enough to transmit a train and not remotely enough to join one. So
+# there is no Bumble-hosted run to have here, in either direction, and the
+# script says so and skips rather than exiting 0 having broadcast into a
+# void.
+TRANSPORT, ARGV = bumble_link.transport_from_argv()
+bumble_link.requires(TRANSPORT, "big")
+SECONDS = int(ARGV[0]) if ARGV else 20
 
 # 440 Hz left, 554.37 Hz right: two different notes, so a decoder that mixes
 # the BISes up produces the wrong tone in the wrong channel rather than

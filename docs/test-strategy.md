@@ -132,16 +132,62 @@ Ranked by traffic. This list is the most useful output of the analysis.
 vector), `gap/ead.rs` (CSS Pt A §2.3), `audio/sbc.rs` (libsbc, both directions
 — the strongest in the repo), `classic/a2dp.rs` ADTS framing (Bumble),
 `classic/rfcomm.rs` (one Bumble SABM frame), `transport/ws.rs` (RFC 6455).
-Manual and out-of-CI: `hfp_oracle.py`, `gatt_client.py`, `lea_source.py`,
-`auracast_*.py`. `audio/lc3.rs`'s goldens are explicitly disclaimed as
-non-conformance in its own module doc.
+`audio/lc3.rs`'s goldens are explicitly disclaimed as non-conformance in its
+own module doc.
+
+### Foreign oracles now in CI — and the ones still not
+
+*This section replaces "Manual and out-of-CI: `hfp_oracle.py`,
+`gatt_client.py`, `lea_source.py`, `auracast_*.py`", which is no longer true
+of the first two.*
+
+The `tests/interop/*.py` scripts needed `netsimd` from the Android SDK, which
+is why none of them ran in CI. That was a mistaken requirement: they need a
+*controller and a link*, and **Bumble ships both** — `bumble.controller` plus
+`bumble.link.LocalLink` is the same architecture as simble's `sim.rs` plus
+`Link`. `tests/interop/bumble_link.py` publishes one such controller over
+`tcp-server:` (bare H4), which simble's **existing** `RootcanalTransport`
+already speaks. No new transport was needed; `src/transport/live.rs` only
+*picks* between the two that existed.
+
+| Script | In CI | State |
+|---|---|---|
+| `hfp_oracle.py` | ✅ | needs no controller at all — was miscategorised as netsim-dependent |
+| `gatt_client.py` | ✅ | full run under `--transport bumble` |
+| `a2dp_peer.py` | ✅ | full run |
+| `avrcp_peer.py` | ✅ | both phases, including the foreign `delegate.volume` |
+| `classic_peer.py` | ❌ | Bumble's controller models **no inquiry**; `--inquiry-mode rssi\|eir` and the Class of Device assertion are rootcanal-only |
+| `auracast_source.py` | ❌ | Bumble's controller implements **no BIG** and no periodic-advertising sync |
+| `auracast_sink.py` | ❌ | same |
+| `lea_source.py` | ❌ | its peer is the browser page, not a binary |
+
+The four that cannot run **exit 77 with the specific missing piece named**,
+rather than passing having tested nothing. netsim is still the default for
+every script and is not replaced: rootcanal dies on malformed HCI instead of
+returning an error status, and honours `Write Inquiry Mode` — both of which
+found real bugs here and neither of which Bumble's controller reproduces.
+
+**So the remaining oracle gap is now precise:** inquiry, BIG/broadcast, and LE
+Audio unicast are the profiles whose only foreign witness is still a manual
+netsim run.
 
 ### The single highest-leverage change
 
-**The four `tests/interop/*.py` runs already produce foreign bytes. Capture
-them as consts and assert against them in-tree.** That converts four manual
-checks into CI checks and closes the BAP, ext_adv, big and ASCS oracle gaps at
-once.
+*Partly done.* Four of the eight scripts now run in CI, which was the cheaper
+half of this. The other half stands and is unchanged by it:
+
+**The `tests/interop/*.py` runs that still cannot run in CI already produce
+foreign bytes. Capture them as consts and assert against them in-tree** — the
+pattern `tests/classic_foreign_bytes_test.rs` and
+`tests/avrcp_foreign_bytes_test.rs` already establish. That is the only way
+the BAP/BASE, `ext_adv`, `big` and ASCS gaps get a CI-visible oracle, because
+the controller that can exercise them is the one CI does not have.
+
+The next-cheapest concrete step is smaller than it looks: **a headless simble
+LE-audio sink example**. Bumble's controller *does* model CIG/CIS and ISO data
+paths, so `lea_source.py` becomes CI-runnable the moment there is a binary to
+point it at instead of the browser page — and that closes ASCS's only foreign
+witness.
 
 ---
 
@@ -158,6 +204,12 @@ once.
    test is a table over {state} × {opcode} asserting the response code **and
    that the state did not change on rejection** — the second half is what makes
    it real, since a rejection that still mutates state is the actual bug shape.
+   *One cell now has a foreign witness:* `lea_source.py` asserts that a
+   **Bumble** peer reads the ASE back as `Enabling` (0x03) after Enable, per
+   ASCS §5.3. One cell is not a matrix, but it is the only cell checked by
+   anything that is not simble — and it guards the `bass.rs` bug shape, where
+   our code reported a state it was not in and only a foreign reader could
+   tell. (netsim path only; see the CI table above.)
 3. **`bap.rs` BASE and codec config — self-round-trip only.** No exact-wire-byte
    assertion anywhere. If `Freq16000` encoded as `0x04`, or the Frame Duration
    and Audio Channel Allocation LTV codes were transposed, every test passes and

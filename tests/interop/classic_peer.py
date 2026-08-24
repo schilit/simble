@@ -100,6 +100,8 @@ from bumble.sdp import (
 )
 from bumble.transport import open_transport
 
+import bumble_link
+
 # Bumble joins netsim over its HCI TCP port; the simble initiator joins over
 # the WebSocket frontend. Both land on the same rootcanal ether.
 HCI = os.environ.get("SIMBLE_NETSIM_HCI", "tcp-client:127.0.0.1:6402")
@@ -199,7 +201,9 @@ class EchoPort:
 
 
 async def main(argv):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = bumble_link.transport_argument(
+        argparse.ArgumentParser(description=__doc__)
+    )
     parser.add_argument(
         "--records",
         type=int,
@@ -245,6 +249,20 @@ async def main(argv):
         "table-only reading of Core Vol 3 Part C 5.2.2.6 misses",
     )
     args = parser.parse_args(argv)
+
+    # This script cannot run without netsim, and the reason is the whole
+    # point of it. `examples/classic_initiator.rs` *starts* with an inquiry —
+    # it discovers the peer rather than being told where it is — and Bumble's
+    # virtual controller has no `HCI_Inquiry` handler at all, so nothing is
+    # ever discoverable to it. Worse, `--inquiry-mode rssi|eir` exists
+    # precisely to exercise the two result-event forms rootcanal produces and
+    # Bumble does not, which is how the 0x22 and 0x2F handling bugs (and the
+    # RSSI form's Class of Device offset) were found. Add the missing
+    # Class of Device too: Bumble's `HCI_Connection_Request_Event` carries a
+    # hardcoded `class_of_device=0`, so even the paging half could not check
+    # the 0x2C0114 this script asserts. A Bumble-hosted run would therefore
+    # test strictly less while looking green — so it skips instead.
+    bumble_link.requires(args.transport, "inquiry")
 
     # Inquiry Mode selects the event the *controller* reports results in, and
     # the three layouts are not interchangeable: Class of Device sits one

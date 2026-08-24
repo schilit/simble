@@ -128,6 +128,89 @@ jobs:
       - name: Diff sim.rs's command answers against the Core specification
         run: python3 scripts/check_hci_command_answers.py
 
+  bumble-interop:
+    name: Bumble interop (foreign oracle)
+    runs-on: ubuntu-latest
+    # Deliberately NOT continue-on-error. Everything this job needs is
+    # installed from PyPI and built from this tree -- there is no third-party
+    # host to be flaky, which is the only reason the two jobs above are
+    # non-blocking. A gate that cannot fail is not a gate.
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # These scripts are the only tests in the repo with a *foreign* stack on
+      # the other end. Every other test has simble at both ends, so it proves
+      # simble agrees with itself -- and this project has twice shipped bytes
+      # that every simulated test accepted and a real controller rejected.
+      #
+      # They used to need `netsimd` from the Android SDK, which is why none of
+      # them ran here. They do not actually need netsim: they need a
+      # controller and a link, and Bumble ships both (`bumble.controller` +
+      # `bumble.link.LocalLink`, the same architecture as simble's `sim.rs` +
+      # `Link`). `tests/interop/bumble_link.py` puts a Bumble Device on one
+      # controller and publishes a second over `tcp-server:`, which is bare
+      # H4 -- exactly what simble's existing `RootcanalTransport` speaks. No
+      # new Rust transport was needed for any of this.
+      #
+      # netsim remains the default and is NOT replaced. rootcanal is a
+      # different controller implementation and the difference is load-bearing
+      # coverage: it dies on malformed HCI instead of returning an error
+      # status, and it honours `Write Inquiry Mode`. The scripts that depend
+      # on what only rootcanal models -- `classic_peer.py` (inquiry) and the
+      # `auracast_*.py` pair (BIG) -- exit 77 rather than pretend, and stay
+      # manual. See `docs/test-strategy.md`.
+      - name: Install Bumble
+        run: python3 -m pip install --upgrade pip bumble
+
+      - name: Build the examples the scripts drive
+        run: >
+          cargo build
+          --example scripted_central
+          --example a2dp_sink
+          --example avrcp_remote
+          --example hfp_hf_pipe
+
+      - name: Foreign-oracle interop runs (no netsim)
+        # A shared runner is slower than a developer machine, and a page that
+        # arrives before the peer is page-scanning fails like a protocol bug.
+        env:
+          SIMBLE_INTEROP_SETTLE: '6'
+        run: |
+          set -u
+          rc=0
+          run() {
+            echo "== $* =="
+            if python3 "$@"; then
+              echo "  PASS"
+            else
+              status=$?
+              # 77 is the scripts' "cannot honestly run in this mode" status.
+              # Nothing invoked here should skip -- if one starts to, that is
+              # a real regression in what this job covers, not an excuse.
+              if [ "$status" -eq 77 ]; then
+                echo "  UNEXPECTED SKIP (exit 77): this script is supposed to run here"
+              else
+                echo "  FAIL (exit $status)"
+              fi
+              rc=1
+            fi
+          }
+          # Needs no controller at all: Bumble's AgProtocol against simble's
+          # HF over a pipe. It never needed netsim and was miscategorised.
+          run tests/interop/hfp_oracle.py
+          run tests/interop/gatt_client.py --transport bumble
+          run tests/interop/a2dp_peer.py --transport bumble
+          run tests/interop/avrcp_peer.py --transport bumble
+          exit $rc
+
   duplication-report:
     name: Duplication Report (non-blocking)
     runs-on: ubuntu-latest

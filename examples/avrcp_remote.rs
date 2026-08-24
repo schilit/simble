@@ -54,7 +54,7 @@ use simble::classic::sdp::SdpServer;
 use simble::device::avrcp::{AvrcpController, AvrcpTarget, Track};
 use simble::device::classic_host::scan_enable;
 use simble::device::{ClassicHost, SdpHandler};
-use simble::transport::{HciChannel, NetsimTransport};
+use simble::transport::{HciChannel, HciTransport, LiveTransport};
 use simble::types::Address;
 
 /// SDP record handle for whichever AVRCP record this run publishes.
@@ -220,13 +220,10 @@ fn main() {
     let address = env("SIMBLE_ADDR", "F0:DE:C0:00:0A:1C");
     let local = Address::from_str(&address).unwrap_or(Address::ANY);
 
-    // netsim reads `address=` least-significant byte first, so the display
-    // form has to be converted or the device lands on the air reversed.
-    let url = format!(
-        "ws://127.0.0.1:7681/v1/websocket/bt?name={name}&address={}",
-        local.to_netsim_wire_string()
-    );
-    let mut transport = match NetsimTransport::connect(&url) {
+    // netsim unless `$SIMBLE_HCI` says otherwise, so every existing
+    // invocation is unchanged; `tcp:HOST:PORT` reaches a Bumble-hosted
+    // controller instead, which is how this runs in CI with no Android SDK.
+    let mut transport = match LiveTransport::open_from_env(&name, local) {
         Ok(transport) => transport,
         Err(e) => {
             eprintln!("{e}");
@@ -235,11 +232,12 @@ fn main() {
     };
     if let Ok(path) = std::env::var("SIMBLE_BTSNOOP")
         && let Ok(file) = std::fs::File::create(&path)
-        && transport.set_trace(file).is_ok()
+        && transport.set_trace(file)
     {
         println!("btsnoop capture: {path}");
     }
-    println!("connected to netsim as {name} ({local}), role {role}");
+    let backend = transport.describe();
+    println!("connected over {backend} as {name} ({local}), role {role}");
 
     let outcome = match role.as_str() {
         "target" => run_target(&mut transport, &name, timeout),
@@ -261,7 +259,7 @@ fn main() {
 // ---------------------------------------------------------------------------
 
 fn run_target(
-    transport: &mut NetsimTransport<std::net::TcpStream>,
+    transport: &mut LiveTransport,
     name: &str,
     timeout: Duration,
 ) -> Result<String, String> {
@@ -355,7 +353,7 @@ fn run_target(
 // ---------------------------------------------------------------------------
 
 fn run_controller(
-    transport: &mut NetsimTransport<std::net::TcpStream>,
+    transport: &mut LiveTransport,
     name: &str,
     timeout: Duration,
 ) -> Result<String, String> {
@@ -471,7 +469,7 @@ fn bring_up(host: &ClassicHost, channel: &HciChannel, scan: u8) {
 }
 
 fn pump(
-    transport: &mut NetsimTransport<std::net::TcpStream>,
+    transport: &mut LiveTransport,
     channel: &HciChannel,
     host: &mut ClassicHost,
     captured: &mut Captured,

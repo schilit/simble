@@ -49,6 +49,7 @@ Usage:
 
 import argparse
 import asyncio
+import contextlib
 import os
 import sys
 
@@ -58,6 +59,8 @@ from bumble.device import Device
 from bumble.hci import Address
 from bumble.transport import open_transport
 
+import bumble_link
+
 # Bumble joins netsim over its HCI TCP port; the simble side joins over the
 # WebSocket frontend. Both land on the same rootcanal ether.
 HCI = os.environ.get("SIMBLE_NETSIM_HCI", "tcp-client:127.0.0.1:6402")
@@ -66,6 +69,10 @@ BINARY = os.environ.get("SIMBLE_AVRCP_BINARY", "target/debug/examples/avrcp_remo
 # The address simble puts on the air, and the one Bumble pages in phase 1.
 SIMBLE_ADDRESS = os.environ.get("SIMBLE_ADDR", "F0:DE:C0:00:0A:1C")
 SIMBLE_NAME = "simble-player"
+
+# Phase 2 puts simble in the *controller* role, at its own address, so the
+# two phases never share one identity on the ether.
+HEAD_UNIT_ADDRESS = "F0:DE:C0:00:0A:1D"
 
 # Bumble's *requested* classic address for phase 2. rootcanal hands out its
 # own BD_ADDR per session and ignores this, so the address simble is told to
@@ -100,9 +107,9 @@ def fail(message):
 # ---------------------------------------------------------------------------
 
 
-async def phase_one(transport, args):
+async def phase_one(make_device, base_environment, args):
     """Bumble pages simble's AVRCP target and drives its media player."""
-    environment = dict(os.environ)
+    environment = dict(base_environment)
     environment.update(
         AVRCP_ROLE="target",
         AVRCP_EXPECT_KEYS="44,46",  # PLAY, PAUSE
@@ -119,18 +126,12 @@ async def phase_one(transport, args):
         stderr=asyncio.subprocess.STDOUT,
     )
     reader = asyncio.create_task(stream_output(simble, "simble"))
-    # Give it time to reach netsim and enable page scan.
-    await asyncio.sleep(3)
+    # Give it time to reach its controller and enable page scan.
+    await bumble_link.settle()
 
     ok = True
     try:
-        device = Device.with_hci(
-            "Bumble AVRCP Controller",
-            Address("F0:F1:F2:F3:F4:AB/P"),
-            transport.source,
-            transport.sink,
-        )
-        device.classic_enabled = True
+        device = make_device("Bumble AVRCP Controller", "F0:F1:F2:F3:F4:AB/P")
         device.sdp_service_records = {
             0x00010001: avrcp.ControllerServiceSdpRecord(
                 0x00010001
@@ -229,7 +230,7 @@ async def phase_one(transport, args):
 # ---------------------------------------------------------------------------
 
 
-async def phase_two(transport, args):
+async def phase_two(make_device, base_environment, args):
     """Bumble hosts an AVRCP target; simble pages it and sets its volume."""
     delegate = avrcp.Delegate(
         [
@@ -237,13 +238,7 @@ async def phase_two(transport, args):
             avrcp.EventId.PLAYBACK_STATUS_CHANGED,
         ]
     )
-    device = Device.with_hci(
-        "Bumble AVRCP Target",
-        Address(f"{BUMBLE_ADDRESS}/P"),
-        transport.source,
-        transport.sink,
-    )
-    device.classic_enabled = True
+    device = make_device("Bumble AVRCP Target", f"{BUMBLE_ADDRESS}/P")
     device.sdp_service_records = {
         0x00010002: avrcp.TargetServiceSdpRecord(0x00010002).to_service_attributes()
     }
@@ -255,13 +250,13 @@ async def phase_two(transport, args):
     peer_address = str(device.public_address).split("/")[0]
     print(f"bumble | AVRCP target listening at {peer_address}", flush=True)
 
-    environment = dict(os.environ)
+    environment = dict(base_environment)
     environment.update(
         AVRCP_ROLE="controller",
         AVRCP_PEER=peer_address,
         AVRCP_EXPECT_VOLUME=str(VOLUME),
         AVRCP_TIMEOUT_SECS=str(args.timeout),
-        SIMBLE_ADDR="F0:DE:C0:00:0A:1D",
+        SIMBLE_ADDR=HEAD_UNIT_ADDRESS,
         SIMBLE_NAME="simble-head-unit",
     )
     simble = await asyncio.create_subprocess_exec(
@@ -294,8 +289,43 @@ async def phase_two(transport, args):
     return ok
 
 
+@contextlib.asynccontextmanager
+async def bumble_side(mode, simble_address):
+    """Yields `(make_device, environment)` for one phase.
+
+    `make_device(name, address)` builds a classic-enabled Bumble `Device` on
+    the right controller for the mode; `environment` is what the simble
+    process has to be launched with to reach the same ether. A phase gets its
+    own link because the two phases put simble at different addresses.
+    """
+    if mode == "bumble":
+        async with bumble_link.hosted_link(simble_address) as hosted:
+            print(f"bumble | controller+link hosted at {hosted.hci_spec}", flush=True)
+
+            def make_device(name, address):
+                device = hosted.attach(name, address)
+                device.classic_enabled = True
+                return device
+
+            yield make_device, hosted.environment()
+        return
+
+    async with await open_transport(HCI) as transport:
+
+        def make_device(name, address):
+            device = Device.with_hci(
+                name, Address(address), transport.source, transport.sink
+            )
+            device.classic_enabled = True
+            return device
+
+        yield make_device, dict(os.environ)
+
+
 async def main(argv):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = bumble_link.transport_argument(
+        argparse.ArgumentParser(description=__doc__)
+    )
     parser.add_argument(
         "--timeout", type=int, default=45, help="seconds before a phase gives up"
     )
@@ -309,14 +339,17 @@ async def main(argv):
 
     results = {}
     if args.phase in ("1", "both"):
-        async with await open_transport(HCI) as transport:
+        async with bumble_side(args.transport, SIMBLE_ADDRESS) as (make, environment):
             results["Bumble controller -> simble target"] = await phase_one(
-                transport, args
+                make, environment, args
             )
     if args.phase in ("2", "both"):
-        async with await open_transport(HCI) as transport:
+        async with bumble_side(args.transport, HEAD_UNIT_ADDRESS) as (
+            make,
+            environment,
+        ):
             results["simble controller -> Bumble target"] = await phase_two(
-                transport, args
+                make, environment, args
             )
 
     print("\n--- verdict ---")

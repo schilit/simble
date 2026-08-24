@@ -30,15 +30,26 @@ bitstream bluez's libsbc produced for a known signal. So a frame that decodes
 at the far end is three independent implementations agreeing: libsbc wrote
 it, Bumble packetised it, simble decoded it.
 
-Usage:
+Two ways to run it, and they cover different things (see `bumble_link.py`):
+
+    # the default — both ends on a live netsimd's rootcanal
     netsimd --logtostderr --no-shutdown --ws-port 7681
     ~/Library/Android/sdk/emulator/netsim devices   # confirm it is up
     cargo build --example a2dp_sink
     .venv/bin/python tests/interop/a2dp_peer.py
+
+    # no netsim, no Android SDK — this process hosts the controller and link
+    .venv/bin/python tests/interop/a2dp_peer.py --transport bumble
+
+Nothing here needs inquiry — Bumble pages the sink at an address it is told —
+so the `bumble` mode runs the whole sequence above, not a reduced one. What
+it does not carry over is rootcanal's habit of dying on malformed HCI instead
+of answering with an error status, and rootcanal's own ACL scheduling.
 """
 
 import argparse
 import asyncio
+import contextlib
 import os
 import re
 import sys
@@ -61,9 +72,12 @@ from bumble.device import Device
 from bumble.hci import Address
 from bumble.transport import open_transport
 
+import bumble_link
+
 # Bumble joins netsim over its HCI TCP port; the simble sink joins over the
 # WebSocket frontend. Both land on the same rootcanal ether.
 HCI = os.environ.get("SIMBLE_NETSIM_HCI", "tcp-client:127.0.0.1:6402")
+SOURCE_ADDRESS = "F0:F1:F2:F3:F4:C2"
 SINK_BINARY = os.environ.get("SIMBLE_SINK_BINARY", "target/debug/examples/a2dp_sink")
 
 # The address the simble sink puts on the air, and the one Bumble pages.
@@ -120,8 +134,39 @@ def codec_capabilities():
     )
 
 
+@contextlib.asynccontextmanager
+async def bumble_source(mode):
+    """Yields `(device, environment)` for the requested transport.
+
+    `device` is Bumble's A2DP source, not yet powered on; `environment` is
+    what the simble sink has to be launched with to reach the same ether. In
+    `bumble` mode that is a `$SIMBLE_HCI` pointing at the controller this
+    process publishes; in `netsim` mode it is just our own environment,
+    because the sink finds netsim on its default port.
+    """
+    if mode == "bumble":
+        async with bumble_link.hosted_link(SINK_ADDRESS) as hosted:
+            print(f"bumble | controller+link hosted at {hosted.hci_spec}", flush=True)
+            device = hosted.attach("Bumble A2DP Source", f"{SOURCE_ADDRESS}/P")
+            device.classic_enabled = True
+            yield device, hosted.environment()
+        return
+
+    async with await open_transport(HCI) as transport:
+        device = Device.with_hci(
+            "Bumble A2DP Source",
+            Address(f"{SOURCE_ADDRESS}/P"),
+            transport.source,
+            transport.sink,
+        )
+        device.classic_enabled = True
+        yield device, dict(os.environ)
+
+
 async def main(argv):
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = bumble_link.transport_argument(
+        argparse.ArgumentParser(description=__doc__)
+    )
     parser.add_argument(
         "--frames",
         type=int,
@@ -150,41 +195,32 @@ async def main(argv):
         flush=True,
     )
 
-    # Start the sink first: Bumble pages it, so it has to be page-scanning
-    # before the connect attempt or the page times out.
-    environment = dict(os.environ)
-    environment.update(
-        A2DP_EXPECT_FRAMES=str(args.frames),
-        A2DP_TIMEOUT_SECS=str(args.timeout),
-        SIMBLE_ADDR=SINK_ADDRESS,
-        SIMBLE_NAME=SINK_NAME,
-    )
-    sink = await asyncio.create_subprocess_exec(
-        SINK_BINARY,
-        env=environment,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
-
-    async def pump_output():
-        assert sink.stdout is not None
-        async for line in sink.stdout:
-            print("sink   |", line.decode(errors="replace").rstrip(), flush=True)
-
-    reader = asyncio.create_task(pump_output())
-    # Give the sink time to reach netsim and enable page scan.
-    await asyncio.sleep(3)
-
     code = 1
+    # Bound before the `try`: the sink is now launched *inside* it (in
+    # `bumble` mode it cannot start until the controller has a port), so a
+    # failure before that point must not turn into a NameError in the
+    # handlers and hide the real error.
+    sink = None
+    reader = None
     try:
-        async with await open_transport(HCI) as transport:
-            device = Device.with_hci(
-                "Bumble A2DP Source",
-                Address("F0:F1:F2:F3:F4:C2/P"),
-                transport.source,
-                transport.sink,
+        # The transport comes up first: in `bumble` mode it is what publishes
+        # the controller the sink has to be told to join.
+        async with bumble_source(args.transport) as (device, base_environment):
+            # Start the sink before paging it: Bumble pages, so the sink has
+            # to be page-scanning already or the page times out.
+            environment = dict(base_environment)
+            environment.update(
+                A2DP_EXPECT_FRAMES=str(args.frames),
+                A2DP_TIMEOUT_SECS=str(args.timeout),
+                SIMBLE_ADDR=SINK_ADDRESS,
+                SIMBLE_NAME=SINK_NAME,
             )
-            device.classic_enabled = True
+            sink, reader = await bumble_link.run_simble(
+                SINK_BINARY, environment=environment, prefix="sink  "
+            )
+            # Give the sink time to reach its controller and enable page scan.
+            await bumble_link.settle()
+
             device.sdp_service_records = {
                 0x00010001: make_audio_source_service_sdp_records(0x00010001)
             }
@@ -243,16 +279,18 @@ async def main(argv):
         if code is None:
             code = await asyncio.wait_for(sink.wait(), timeout=args.timeout)
     except asyncio.TimeoutError:
-        sink.kill()
+        if sink is not None:
+            sink.kill()
         print("FAIL — the sink never exited", flush=True)
         code = 1
     except Exception as error:  # noqa: BLE001 - the verdict is the exit status
         print(f"FAIL — Bumble raised {error!r}", flush=True)
-        if sink.returncode is None:
+        if sink is not None and sink.returncode is None:
             sink.kill()
         code = 1
     finally:
-        await reader
+        if reader is not None:
+            await reader
         os.unlink(sbc_file.name)
 
     print(f"\nsink exited {code}")

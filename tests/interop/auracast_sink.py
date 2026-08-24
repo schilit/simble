@@ -36,6 +36,9 @@ import struct
 import sys
 import tempfile
 
+
+import bumble_link
+
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 HCI = os.environ.get("SIMBLE_NETSIM_HCI", "tcp-client:127.0.0.1:6402")
@@ -45,7 +48,18 @@ SOURCE_BINARY = os.environ.get(
 )
 SOURCE_ADDRESS = "CC:1E:57:00:0B:01"
 BROADCAST_ID = 0xABCDEF
-SECONDS = int(sys.argv[1]) if len(sys.argv) > 1 else 20
+# Auracast is a BIG — a Broadcast Isochronous Group — and Bumble's virtual
+# controller implements no BIG commands at all: no `LE Create BIG` for the
+# source side, no `LE BIG Create Sync` for the sink side, and no
+# `LE Periodic Advertising Create Sync` to reach the train in the first
+# place. It models periodic advertising *parameters, data and enable*, which
+# is enough to transmit a train and not remotely enough to join one. So
+# there is no Bumble-hosted run to have here, in either direction, and the
+# script says so and skips rather than exiting 0 having broadcast into a
+# void.
+TRANSPORT, ARGV = bumble_link.transport_from_argv()
+bumble_link.requires(TRANSPORT, "big")
+SECONDS = int(ARGV[0]) if ARGV else 20
 
 LEFT_HZ, RIGHT_HZ, SAMPLE_RATE = 440, 554, 48000
 

@@ -23,7 +23,7 @@
 use std::time::{Duration, Instant};
 
 use simble::scripting::ScriptedCentral;
-use simble::transport::{HciChannel, NETSIM_WS_URL, NetsimTransport};
+use simble::transport::{HciChannel, HciTransport, LiveTransport};
 use simble::types::Address;
 
 fn main() -> std::process::ExitCode {
@@ -68,15 +68,13 @@ fn main() -> std::process::ExitCode {
     };
     central.set_target(target);
 
-    let url = format!(
-        "{}/v1/websocket/bt?name=simble-client&address={}",
-        NETSIM_WS_URL,
-        own.to_netsim_wire_string()
-    );
-    let mut transport = match NetsimTransport::connect(&url) {
+    // netsim unless `$SIMBLE_HCI` says otherwise, so every existing
+    // invocation is unchanged; `tcp:HOST:PORT` reaches a Bumble-hosted
+    // controller instead, which is how this runs in CI with no Android SDK.
+    let mut transport = match LiveTransport::open_from_env("simble-client", own) {
         Ok(transport) => transport,
         Err(e) => {
-            eprintln!("cannot reach netsimd: {e}");
+            eprintln!("cannot reach a controller: {e}");
             return std::process::ExitCode::from(2);
         }
     };
@@ -84,7 +82,7 @@ fn main() -> std::process::ExitCode {
         let path = std::path::Path::new(&dir).join("simble-client.btsnoop");
         match std::fs::File::create(&path) {
             Ok(file) => {
-                let _ = transport.set_trace(file);
+                transport.set_trace(file);
             }
             Err(e) => eprintln!("SIMBLE_BTSNOOP: cannot create {path:?}: {e}"),
         }
