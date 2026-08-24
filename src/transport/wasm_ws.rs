@@ -4025,6 +4025,20 @@ mod web {
                 .map_err(js_error)
         }
 
+        /// Writes a characteristic and notifies it even when the bytes are
+        /// unchanged — the netsim counterpart of
+        /// `WebLink::peripheral_notify_value`, and the reason the HID domain
+        /// can run here at all. See
+        /// [`ScriptedPeripheral::notify_characteristic_value`]: a HID input
+        /// report describes *change*, so two identical reports are two
+        /// events, and the value-diff that is right for a battery level would
+        /// swallow the second of them.
+        pub fn notify_value(&mut self, uuid: &str, value: Vec<u8>) -> Result<(), JsValue> {
+            self.peripheral
+                .notify_characteristic_value(uuid, &value)
+                .map_err(js_error)
+        }
+
         /// One pump + script tick; `t_seconds` is seconds since the current
         /// script was Run. Returns the peripheral status JSON.
         pub fn tick(&mut self, t_seconds: f64) -> Result<String, JsValue> {

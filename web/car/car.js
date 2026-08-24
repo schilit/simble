@@ -34,12 +34,30 @@ import { createAboutBox } from "../common/about-box.js";
 /// reads this: an option mapped to a string is offered disabled, with that
 /// string as the reason, rather than hidden.
 ///
-/// The link is real now, but it is real *in this page*: WebCarKit builds its
-/// own SceneEngine around the simulated BR/EDR controller. Nothing in SimBLE
-/// puts a ClassicHost on a WebSocket, so the netsim backend still cannot run
-/// this domain — the reason has changed, the answer has not.
+/// Still true, and worth stating precisely, because the obvious reading of
+/// the old wording — "it just needs a ClassicHost-on-a-WebSocket export, the
+/// way HID just needed a scripted-central one" — is wrong, and would send
+/// whoever tries it down a much longer road than they expect.
+///
+/// There are two blockers, not one:
+///
+///  1. No wasm type puts a `ClassicHost` on a socket. That part *is* the
+///     same shape as the LE exports (`WasmWsTransport` + `HciChannel` are
+///     transport-agnostic HCI) and is the smaller half.
+///  2. `CarKit` is not two devices that happen to share a page. It holds one
+///     `SceneEngine` containing *both* endpoints, and — the real obstacle —
+///     an `ag_port`/`hf_port` pair of `SharedRfcommPort` handles: the AT
+///     conversation moves between the phone and the head unit through shared
+///     Rust memory, not over the link. Splitting the two ends onto separate
+///     sockets means giving each its own RFCOMM stack over its own ACL, so
+///     that the only thing they share is the wire. That is a rewrite of
+///     `car_kit.rs`, not a binding.
+///
+/// Unverified either way: whether rootcanal's WebSocket frontend routes
+/// inquiry and paging between two of its clients at all. `netsim devices`
+/// reports a `classic` radio per device, which is suggestive and not proof.
 export const SUPPORTS = { "in-page": true,
-  "websocket": "both hosts run on this page's own simulated BR/EDR controller — no transport carries a ClassicHost to netsim" };
+  "websocket": "the phone and head unit are one `CarKit`: one SceneEngine, and an RFCOMM port pair they talk through in memory rather than over the link — netsim needs both a ClassicHost on a socket and those two ends split apart" };
 
 
 // One timer for both endpoints. Chrome throttles a hidden tab hard enough

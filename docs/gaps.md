@@ -41,13 +41,27 @@ reason. Four remain.
 | Domain | Off on | Stated reason | Real? |
 |---|---|---|---|
 | Broadcast | in-page | "the in-page controller models periodic advertising and a BIG, but nothing is bound to it" | True, and the reason was **rewritten** — the old string blamed the radio, which had modelled PA and a BIG since `d78b0fb`. The real blocker is one layer up: `WebLink` has no broadcast device kind and `WebBigBroadcaster`/`WebBigReceiver` demand a netsim URL. Needs a wasm export. |
-| HID | netsim | "the HID host is not wired for it yet" | True. Needs a `WebHidHost` wasm export — `HidHost` is only reachable inside `WebLink` (`wasm_ws.rs:1312`). |
-| Car | netsim | "both hosts run on this page's own simulated BR/EDR controller — no transport carries a `ClassicHost` to netsim" | True, and **newly true for a different reason**. The old string said the multiplexers were wired directly together with no ACL; they now run over a real simulated BR/EDR link. What is missing is a transport that carries a `ClassicHost` out to netsim. |
-| Ranging | netsim | "the tag and locator need a radio that models distance; here the radio is netsim's own, and positions come from `netsim move`" | True and correct — see `controller/propagation.rs` on who owns RSSI. |
+| ~~HID~~ | ~~netsim~~ | ~~"the HID host is not wired for it yet"~~ | **Closed 2026-08-24.** The entry above was itself an instance of the failure mode this file exists to catch: it was written when the hosts were `WebLink::add_central` + `central_start_hid`, and stopped being true when `android::BluetoothHidHost` landed and both hosts became ordinary **scripted centrals** — which `WebScriptedCentral` already hosts on netsim, as Generic does. No `WebHidHost` was needed. The one genuinely missing piece was `WebPeripheral::notify_value`: a HID report describes *change*, so two identical reports are two events, and `set_value`'s value-diff swallowed the second. |
+| Car | netsim | "the phone and head unit are one `CarKit`: one SceneEngine, and an RFCOMM port pair they talk through in memory rather than over the link — netsim needs both a ClassicHost on a socket and those two ends split apart" | True, and the string was **sharpened 2026-08-24**. The previous one named only the missing transport, which invited the (wrong) assumption that this is HID-shaped wiring. It is not: `CarKit` holds one `SceneEngine` with *both* endpoints plus `ag_port`/`hf_port` `SharedRfcommPort` handles, so the AT conversation crosses shared Rust memory, not the link. Splitting them is a `car_kit.rs` rewrite. Unverified: whether rootcanal's WebSocket frontend routes inquiry/paging between two clients at all. |
+| Ranging | netsim | "the tag's position is dragged on this page's floor plan and turned into RSSI by `controller/propagation.rs` — a model that belongs to the built-in radio alone…" | True, re-confirmed against `controller/propagation.rs` on 2026-08-24 rather than trusting the old string. Its module docs state the rule directly: applying that model to netsim's reports would attenuate twice. **Closing this would be a mistake, not an improvement.** |
 
-All four reasons are now accurate. Two were rewritten on 2026-08-23 after
-the thing they blamed stopped being the blocker — the recurring failure mode
-here is a reason that was true when written and quietly stopped being true.
+Three reasons remain, and the fourth (HID) was closed by checking whether its
+premise still held rather than by believing it. That is the recurring failure
+mode here: a reason that was true when written and quietly stopped being true.
+**A `SUPPORTS` string is a claim with an expiry date — re-derive it, do not
+inherit it.**
+
+### The controller bar clobbered the stored choice (fixed 2026-08-24)
+
+Worth recording separately, because it made a *working* capability look
+missing and no `SUPPORTS` string was wrong. `createControllerBar`'s `render()`
+corrected a selection the current domain could not honour — and **persisted**
+the correction. Since HID, Car and Ranging are in-page only and sit one click
+away in the same tab strip, merely visiting any of them rewrote
+`localStorage["simble-backend"]` to `in-page`. Generic, which supports netsim
+fully, then came up in-browser with nothing on screen saying the choice had
+been discarded. The fallback is now per-render and per-domain; only a click
+writes the preference down.
 
 ## 2. Protocol behaviour the code admits it does not do
 

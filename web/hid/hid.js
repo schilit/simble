@@ -1,8 +1,14 @@
 // Copyright 2026 Bill Schilit — SPDX-License-Identifier: Apache-2.0
 //
-// HID over GATT, both halves in one page. Four devices share a single in-page
-// `WebLink`: two HOGP peripherals (a keyboard and a mouse) and two centrals
-// that connect to them and act as HID hosts.
+// HID over GATT, both halves in one page: two HOGP peripherals (a keyboard and
+// a mouse) and two centrals that connect to them and act as HID hosts.
+//
+// Either controller can carry all four. In the browser they share a single
+// `WebLink`; on netsim each is its own engine on its own socket, so an Android
+// emulator on the same rootcanal sees a keyboard and a mouse it can pair with.
+// Which one is in use is the shell's controller bar's business, not this
+// module's — everything below goes through the small engine facade further
+// down, which is the only code that knows the difference.
 //
 // The module's job is deliberately small. It owns the *device* state — which
 // keys are physically down, where the pointer has moved since the last frame —
@@ -29,7 +35,8 @@
 // "hello" and walk the pointer in a square, which would fight with the user.
 // The host scripts are the `hid_host` example, pointed at this page's peers.
 
-import init, { WebLink } from "../pkg/simble.js";
+import init, { WebLink, WebPeripheral, WebScriptedCentral } from "../pkg/simble.js";
+import { currentController } from "../common/controller-bar.js";
 import { createDeviceHeader } from "../common/device-header.js";
 import { createAboutBox } from "../common/about-box.js";
 import { escapeHtml } from "../common/viewer-format.js";
@@ -37,23 +44,52 @@ import { escapeHtml } from "../common/viewer-format.js";
 /// Which controllers this domain can run on. The shell's controller bar
 /// reads this: an option mapped to a string is offered disabled, with that
 /// string as the reason, rather than hidden.
-export const SUPPORTS = { "in-page": true,
-  "websocket": "the HID host is not wired for it yet" };
+///
+/// netsim was refused here on the grounds that "the HID host is not wired for
+/// it yet". That was true when the hosts were `WebLink::add_central` plus
+/// `central_start_hid` — a HID host that existed only inside the in-page link.
+/// It stopped being true when `android::BluetoothHidHost` landed and both
+/// hosts became ordinary *scripted centrals*: a scripted central is exactly
+/// what `WebScriptedCentral` hosts on netsim, and Generic already runs one
+/// that way. The only piece actually missing was a peripheral write that
+/// notifies an unchanged value — a HID report describes change, so two
+/// identical reports are two events — and that is `WebPeripheral::notify_value`.
+export const SUPPORTS = { "in-page": true, "websocket": true };
 
 
-// All four devices share one `WebLink`, and `WebLink` has `add_peripheral` and
-// `add_central` and no way at all to remove either: freeing the link is the
-// only teardown there is, and it takes every device with it. So none of these
-// headers offers a working stop — they say so instead.
-const SHARED_LINK = "four devices, one in-page link — they stop together";
+// In-page, all four devices share one `WebLink`, which has `add_peripheral`
+// and `add_central` and no way at all to remove either: freeing the link is
+// the only teardown there is, and it takes every device with it. Over netsim
+// each device is its own engine on its own socket, so they *could* stop
+// singly — but this page drives all four from one report pipeline and one
+// timer, and a half-stopped pipeline has nothing to show. Either way the stop
+// is all-or-nothing, so no header offers one; they say why instead.
+const SHARED_LINK = {
+  "in-page": "four devices, one in-page link — they stop together",
+  "websocket": "four devices, one report pipeline — they stop together",
+};
 
 // --- addresses --------------------------------------------------------------
+// In-page addresses are this page's own; on netsim every domain shares one
+// rootcanal, so these have to be unique across the whole site. Taken from the
+// CC:1E:57 block: Scanner holds :01, Health :02/:12, Playground :03, Explorer
+// :04, Home :05/:15, Media :07/:08/:09, Ranging :0A/:0B, Generic :0C/:1C.
 const ADDR = {
   keyboard: "AA:BB:CC:00:00:01",
   mouse: "AA:BB:CC:00:00:02",
   kbdHost: "AA:BB:CC:00:00:11",
   mouseHost: "AA:BB:CC:00:00:12",
 };
+
+const NETSIM_ADDR = {
+  keyboard: "CC:1E:57:00:00:0D",
+  mouse: "CC:1E:57:00:00:0E",
+  kbdHost: "CC:1E:57:00:00:1D",
+  mouseHost: "CC:1E:57:00:00:1E",
+};
+
+const WS = (node, address) =>
+  `ws://localhost:7681/v1/websocket/bt?name=${encodeURIComponent(node)}&address=${address}`;
 
 const REPORT_UUID = "2A4D";
 
@@ -223,8 +259,81 @@ fn tick(host, t) {
 }
 `;
 
-const KBD_HOST_SCRIPT = hostScript("Keyboard Host", "SimKeyboard", ADDR.keyboard);
-const MOUSE_HOST_SCRIPT = hostScript("Mouse Host", "SimMouse", ADDR.mouse);
+// The host script names its peer's address, so it is built against whichever
+// address map the current controller uses rather than baked in at module load.
+const kbdHostScript = (addr) => hostScript("Keyboard Host", "SimKeyboard", addr.keyboard);
+const mouseHostScript = (addr) => hostScript("Mouse Host", "SimMouse", addr.mouse);
+
+// ===========================================================================
+//  Engines — one in-page link, or four netsim sockets
+// ===========================================================================
+//
+// The page above this line does four things to its devices: notify a report,
+// drain what a host script emitted, tick, and free. Both controllers can do
+// all four; they differ only in how many objects it takes. So the difference
+// is confined to this factory, and nothing in the UI knows which one it got.
+//
+// The in-page link tolerates being ticked before it is ready. The netsim
+// engines are WebSockets, and a `tick` on one that is still opening is not an
+// error — it pumps nothing and returns. What *is* worth reporting is a socket
+// that closes without ever having opened, which means netsimd is not there;
+// `ready()` lets the loop tell those apart.
+
+function inPageEngines() {
+  const link = new WebLink();
+  const index = {
+    keyboard: link.add_peripheral(ADDR.keyboard, KEYBOARD_SCRIPT),
+    mouse: link.add_peripheral(ADDR.mouse, MOUSE_SCRIPT),
+    kbdHost: link.add_scripted_central(ADDR.kbdHost, kbdHostScript(ADDR)),
+    mouseHost: link.add_scripted_central(ADDR.mouseHost, mouseHostScript(ADDR)),
+  };
+  return {
+    addr: ADDR,
+    notify: (role, uuid, bytes) => link.peripheral_notify_value(index[role], uuid, bytes),
+    emitted: (role) => link.scripted_central_emitted(index[role]),
+    tick: (t) => link.tick(t),
+    unreachable: () => false,
+    free: () => link.free(),
+  };
+}
+
+function netsimEngines() {
+  const addr = NETSIM_ADDR;
+  const engines = {
+    keyboard: new WebPeripheral(WS("web-hid-keyboard", addr.keyboard), KEYBOARD_SCRIPT),
+    mouse: new WebPeripheral(WS("web-hid-mouse", addr.mouse), MOUSE_SCRIPT),
+    kbdHost: new WebScriptedCentral(WS("web-hid-kbd-host", addr.kbdHost), kbdHostScript(addr)),
+    mouseHost: new WebScriptedCentral(WS("web-hid-mouse-host", addr.mouseHost),
+      mouseHostScript(addr)),
+  };
+  // The script already connects to the right address (it was built against
+  // this map), but topology beats script: say it again so a stale script can
+  // never aim a host at the in-page address.
+  engines.kbdHost.set_target(addr.keyboard);
+  engines.mouseHost.set_target(addr.mouse);
+
+  // CLOSED (3) without ever reaching OPEN (1) is netsimd not running, as
+  // opposed to netsimd having dropped us.
+  let openedOnce = false;
+  return {
+    addr,
+    notify: (role, uuid, bytes) => engines[role].notify_value(uuid, bytes),
+    emitted: (role) => engines[role].emitted(),
+    tick: (t) => {
+      for (const engine of Object.values(engines)) {
+        if (engine.ready_state() === 1) openedOnce = true;
+        engine.tick(t);
+      }
+    },
+    unreachable: () => !openedOnce
+      && Object.values(engines).some((e) => e.ready_state() === 3),
+    free: () => {
+      for (const engine of Object.values(engines)) {
+        try { engine.free(); } catch (_) { /* already gone */ }
+      }
+    },
+  };
+}
 
 // --- the keyboard's key matrix ----------------------------------------------
 // Each key carries the HID usage ID its position sends (Usage Tables 1.12,
@@ -372,7 +481,7 @@ const STYLES = `
 
 const ABOUT = `<p>
     Two GATT peripherals — a keyboard and a mouse — and two GATT centrals that connect to them,
-    all four hosted in this tab on one simulated radio. Type on the left and the characters appear
+    all four driven from this tab. Type on the left and the characters appear
     on the right, but nothing on the right reads a variable on the left. The device turns your
     keystroke into an <strong>HID input report</strong>, notifies it on the Report characteristic
     (<code>0x2A4D</code>), the report crosses the link as an ATT Handle Value Notification, and the
@@ -381,6 +490,11 @@ const ABOUT = `<p>
   <p class="hint">
     Everything runs on one timer in this page. A hidden tab is throttled by Chrome to about one
     tick a second, so keep this tab in front while you drive it.
+  </p>
+  <p class="hint">
+    With the <strong>in-browser</strong> controller all four share this tab's simulated radio.
+    With <strong>netsim</strong> each gets its own connection to netsimd, so an Android emulator
+    on the same rootcanal sees a keyboard and a mouse it can pair with.
   </p>`;
 
 const TEMPLATE = `
@@ -628,7 +742,7 @@ const hexBytes = (bytes) =>
 // `last_report`, so when two reports landed in the same frame the earlier rows
 // displayed the later report's bytes.
 function pollHost(role, source) {
-  for (const line of S.link.scripted_central_emitted(S.index[role])) {
+  for (const line of S.engines.emitted(role)) {
     const { event, payload } = JSON.parse(line);
     if (event === "ready") {
       S.hostReady[role] = true;
@@ -851,7 +965,7 @@ function sendQueued() {
     // notify_value rather than set_value: two identical reports in a row are
     // meaningful here (the same key pressed twice, the same mouse step
     // repeated), and a value-diff would swallow the second.
-    S.link.peripheral_notify_value(S.index.keyboard, REPORT_UUID, kbdBytes);
+    S.engines.notify("keyboard", REPORT_UUID, kbdBytes);
     showSent("kbd", kbdBytes);
   }
   let mouseBytes = S.queue.mouse.shift();
@@ -860,7 +974,7 @@ function sendQueued() {
     S.mouse.dx = 0; S.mouse.dy = 0; S.mouse.wheel = 0; S.mouse.dirty = false;
   }
   if (mouseBytes) {
-    S.link.peripheral_notify_value(S.index.mouse, REPORT_UUID, mouseBytes);
+    S.engines.notify("mouse", REPORT_UUID, mouseBytes);
     showSent("mouse", mouseBytes);
   }
 }
@@ -870,7 +984,7 @@ function loop() {
   S.raf = requestAnimationFrame(loop);
   try {
     sendQueued();
-    S.link.tick((performance.now() - S.t0) / 1000);
+    S.engines.tick((performance.now() - S.t0) / 1000);
     pollHost("kbdHost", "keyboard");
     pollHost("mouseHost", "mouse");
   } catch (e) {
@@ -883,6 +997,20 @@ function loop() {
   }
   refreshKeyStyles();
   renderHost();
+
+  // On netsim a socket that closed without ever opening means netsimd is not
+  // running. Without this the page sits forever on "connecting…", which is
+  // indistinguishable from a protocol bug and sends the reader looking in the
+  // wrong place.
+  if (S.engines.unreachable()) {
+    $("error").textContent =
+      "netsim is not reachable at localhost:7681 — is netsimd running with its "
+      + "WebSocket frontend enabled? Start it with: "
+      + "netsimd --logtostderr --no-shutdown --ws-port 7681. "
+      + "Or switch the controller above to In browser.";
+  } else if ($("error").textContent.startsWith("netsim is not reachable")) {
+    $("error").textContent = "";
+  }
 
   // A HOGP peripheral's dot is lit when a host has actually subscribed to its
   // Report characteristic: until then it is advertising into an empty room and
@@ -932,7 +1060,7 @@ function buildHeaders() {
       name,
       kind: "peripheral · HOGP",
       accent: "good",
-      address: ADDR[key],
+      address: S.engines.addr[key],
       dotMeans: "a host has subscribed to its Report characteristic",
       script: {
         text: source,
@@ -943,7 +1071,7 @@ function buildHeaders() {
           "<code>tick</code> — that one types on its own and would fight with you. The " +
           "<code>0x2A4B</code> Report Map in it is the descriptor the host parses.",
       },
-      run: { running: true, disabled: true, reason: SHARED_LINK },
+      run: { running: true, disabled: true, reason: SHARED_LINK[S.mode] },
     });
     $(target + "-head").append(head.el);
     $(target + "-script").append(head.panel);
@@ -958,7 +1086,7 @@ function buildHeaders() {
       name,
       kind: `central · android::BluetoothHidHost → ${peer}`,
       accent: "accent",
-      address: ADDR[key],
+      address: S.engines.addr[key],
       dotMeans: "it has read the peer's Report Map and subscribed to its reports",
       script: {
         text: source,
@@ -969,15 +1097,17 @@ function buildHeaders() {
           "composes the Rust <code>HidHost</code>, so what the script receives is " +
           "already a keystroke.",
       },
-      run: { running: true, disabled: true, reason: SHARED_LINK },
+      run: { running: true, disabled: true, reason: SHARED_LINK[S.mode] },
     });
     $(target + "-head").append(head.el);
     $(target + "-script").append(head.panel);
     head.setState(false, "starting…");
     S.heads[key] = head;
   };
-  host("kbdHost", "Keyboard Host", "SimKeyboard", KBD_HOST_SCRIPT, "kbdhost");
-  host("mouseHost", "Mouse Host", "SimMouse", MOUSE_HOST_SCRIPT, "mousehost");
+  // The script shown is the one actually running, so the peer address in it
+  // matches the address on the peripheral's own header.
+  host("kbdHost", "Keyboard Host", "SimKeyboard", kbdHostScript(S.engines.addr), "kbdhost");
+  host("mouseHost", "Mouse Host", "SimMouse", mouseHostScript(S.engines.addr), "mousehost");
 }
 
 function injectStyles() {
@@ -1004,16 +1134,12 @@ export async function mount(root) {
   root.innerHTML = TEMPLATE;
   (root.querySelector(".domain") ?? root).prepend(createAboutBox(ABOUT));
 
-  const link = new WebLink();
+  const mode = currentController();
+  const engines = mode === "in-page" ? inPageEngines() : netsimEngines();
   S = {
     root,
-    link,
-    index: {
-      keyboard: link.add_peripheral(ADDR.keyboard, KEYBOARD_SCRIPT),
-      mouse: link.add_peripheral(ADDR.mouse, MOUSE_SCRIPT),
-      kbdHost: link.add_scripted_central(ADDR.kbdHost, KBD_HOST_SCRIPT),
-      mouseHost: link.add_scripted_central(ADDR.mouseHost, MOUSE_HOST_SCRIPT),
-    },
+    mode,
+    engines,
     hostReady: { kbdHost: false, mouseHost: false },
     kbd: { held: new Set(), eventMods: 0, latched: new Set() },
     mouse: { buttons: 0, dx: 0, dy: 0, wheel: 0, dirty: false },
@@ -1046,10 +1172,10 @@ export async function mount(root) {
     if (document.hidden) releaseEverything();
   }, { signal });
 
-  // A handle for the console: `simbleHid.link.central_status_json(
-  // simbleHid.index.kbdHost)` shows what the host has discovered — the first
-  // thing to look at if the page sits in "connecting" — and
-  // `scripted_central_failure(…)` reports a failed assert in a host script.
+  // A handle for the console: `simbleHid.mode` says which controller is
+  // running, `simbleHid.engines.addr` the addresses it put the devices at,
+  // and `simbleHid.engines.unreachable()` whether netsimd answered — the
+  // first things to look at if the page sits in "connecting".
   window.simbleHid = S;
 
   S.raf = requestAnimationFrame(loop);
@@ -1065,9 +1191,11 @@ export function unmount() {
   S.listeners.abort();
   for (const timer of S.timers) clearTimeout(timer);
   for (const head of Object.values(S.heads)) head.destroy();
-  // Dropping the WebLink drops all four devices with it; leaving it alive
-  // would keep a scene running with nothing rendering it.
-  try { S.link.free(); } catch (_) { /* already freed */ }
+  // Freeing the engines drops all four devices; leaving them alive would keep
+  // a scene running with nothing rendering it, and on netsim would leave four
+  // ghosts behind — netsim does not synthesise a disconnect when a socket
+  // drops, so the entries linger at the same addresses.
+  try { S.engines.free(); } catch (_) { /* already freed */ }
   S.root.classList.remove("hid");
   S.root.classList.remove("hid", "domain", "two-up");
   S.root.innerHTML = "";

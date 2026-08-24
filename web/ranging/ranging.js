@@ -24,8 +24,24 @@ import { createAboutBox } from "../common/about-box.js";
 /// Which controllers this domain can run on. The shell's controller bar
 /// reads this: an option mapped to a string is offered disabled, with that
 /// string as the reason, rather than hidden.
+/// Confirmed against the code, not inherited from the string it replaces.
+///
+/// This is not a missing binding, and closing it would be a mistake. The
+/// page's whole interaction is dragging the tag around a floor plan *it*
+/// owns; `controller/propagation.rs` turns that position into the RSSI and
+/// the carrier phase, and its module docs are explicit that the model
+/// "belongs to the built-in controller alone" — on netsim the radio is
+/// netsim's, positions are set with `netsim move`, and the RSSI in a report
+/// has already been attenuated by netsim's own propagation. Running this
+/// domain there would attenuate twice and read the drag from a floor plan
+/// netsimd knows nothing about.
+///
+/// Inverting a measurement stays fine anywhere: `cs::path_loss` estimates a
+/// distance *from* an RSSI whatever produced it, and deliberately does not
+/// share constants with the model above so it cannot mark its own homework.
+/// It is imposing the model that is the built-in controller's business.
 export const SUPPORTS = { "in-page": true,
-  "websocket": "the tag and locator need a radio that models distance; here the radio is netsim's own, and positions come from `netsim move`" };
+  "websocket": "the tag's position is dragged on this page's floor plan and turned into RSSI by `controller/propagation.rs` — a model that belongs to the built-in radio alone. On netsim the radio is netsim's: positions move with `netsim move`, and its reports are already attenuated, so applying it again would attenuate twice" };
 
 
 const TAG_ADDRESS = "CC:1E:57:00:00:0A";

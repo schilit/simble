@@ -19,11 +19,13 @@ const STORE_KEY = "simble-backend";
 /// The controllers a domain may declare. Ids match the values the existing
 /// selector already writes, so a stored choice carries over.
 export const CONTROLLERS = [
-  // The bar is already labelled "Controller" and each option already carries
-  // its own name, so the notes say what is different about it and nothing
-  // that is already on screen.
-  { id: "in-page", label: "In browser", note: "wasm radio in this tab, no setup" },
-  { id: "websocket", label: "netsim", note: "rootcanal, over a WebSocket" },
+  // Id and label only. Each option used to carry a `note` rendered beside its
+  // button; the reasons moved into the one sentence under the row and the
+  // note stopped being read, but the field and the comment describing it
+  // stayed behind for long enough to look load-bearing. Whatever
+  // distinguishes the two controllers is in `why` below, said once.
+  { id: "in-page", label: "In browser" },
+  { id: "websocket", label: "netsim" },
 ];
 
 /// Reads the current choice. A stored value the caller cannot honour is not
@@ -69,17 +71,25 @@ export function createControllerBar({ supports, onChange }) {
     // A selection this domain cannot honour is corrected here rather than
     // left showing: a disabled option that is also the checked one tells the
     // reader they are on a controller the page is not using.
-    if (map[selected] !== true) {
-      const fallback = CONTROLLERS.find((c) => map[c.id] === true);
-      if (fallback) {
-        selected = fallback.id;
-        try {
-          localStorage.setItem(STORE_KEY, selected);
-        } catch (e) {
-          /* not remembered, but correct for this page */
-        }
-      }
-    }
+    //
+    // The correction is for *this domain only*. What is stored is the
+    // reader's standing preference across the whole shell, and a domain that
+    // cannot honour it has no business rewriting it. Persisting the fallback
+    // is what made netsim unreachable on Generic even though Generic supports
+    // it: clicking any in-page-only tab -- Car and Ranging still are, and HID
+    // was until it was wired up alongside this fix -- rewrote the stored
+    // choice to "in-page". They sit in the same tab strip as Generic, one
+    // click away, so coming back found in-page waiting with nothing on screen
+    // saying the choice had been discarded. Measured before the fix: pick
+    // netsim on Generic, touch Car, return, and the bar reads "In browser".
+    //
+    // So the effective choice is re-derived from the preference on every
+    // render rather than accumulated in this closure; only a click (below) is
+    // a choice, and only a choice is written down.
+    const preferred = currentController();
+    selected = map[preferred] === true
+      ? preferred
+      : (CONTROLLERS.find((c) => map[c.id] === true)?.id ?? preferred);
     for (const input of inputs) input.wrap.remove();
     inputs.length = 0;
 
@@ -115,8 +125,6 @@ export function createControllerBar({ supports, onChange }) {
       pick.className = "controller-pick";
       const name = document.createElement("b");
       name.textContent = c.label;
-
-
 
       radio.addEventListener("change", () => {
         if (!radio.checked) return;
