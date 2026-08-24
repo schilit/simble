@@ -298,8 +298,26 @@
       <p>Natively, open the dongle with <code class="inl">UsbTransport</code> in place of a WebSocket
         transport — the rest of SimBLE sees the same HCI packet stream. To reach it from a browser page, run the
         bridge and point the page's WebSocket backend at it:</p>
-      <pre class="run"><code>simble --usb            # first dongle, ws://127.0.0.1:7681
-simble --usb 0a12:0001  # a specific vendor:product</code></pre>
+      <pre class="run"><code>simble --usb --ws 32323   # every dongle, one port
+curl 127.0.0.1:32323/devices              # what is plugged in
+# ws://127.0.0.1:32323/?device=02.3.2     # open that one</code></pre>
+
+      <p>One bridge serves every dongle, the way netsim serves every device: one port, one
+        connection each, named in the URL. Two dongles of the same model share a
+        <code class="inl">vid:pid</code> and publish no serial number, so that form is refused as
+        ambiguous — <code class="inl">02.3.2</code> names the physical socket and is the only
+        selector that survives a re-plug. <code class="inl">cargo run --example usb_list</code>
+        prints every name each dongle answers to.</p>
+
+      <span class="lbl">Which dongle you own decides what you can test</span>
+      <p>A Bluetooth 4.0 dongle gives you real RF and real timing, but cannot do extended
+        advertising, periodic advertising, BIG, or PHY switching — so those parts of the stack
+        stay unverifiable on it. A 5.x controller (an nRF52840 flashed with Zephyr's
+        <code class="inl">hci_usb</code>) adds all four, and is currently the only way to check
+        SimBLE's broadcast code against an independent implementation at all. Channel Sounding
+        needs 6.0 silicon, which today is not USB.
+        <a href="https://github.com/schilit/simble/blob/main/docs/usb-controllers.md">docs/usb-controllers.md</a>
+        has the inventory, the flashing procedure, and what is worth buying.</p>
     </div>
   </section>
 
