@@ -125,10 +125,30 @@ different bootloader story (UF2), and no factory HCI firmware.
 - [Seeed product page](https://www.seeedstudio.com/Seeed-XIAO-BLE-nRF52840-p-5201.html)
 - [DigiKey 102010448](https://www.digikey.com/en/products/detail/seeed-technology-co-ltd/102010448/16652893)
 
-### makerdiary nRF54L15 Connect Kit — the Bluetooth 6.0 option
+### Bluetooth 6.0 / Channel Sounding — several boards, one chip
 
 The nRF54L15 is **Bluetooth LE 6.0** silicon: 128 MHz Cortex-M33, 1.5 MB NVM,
 and — the reason to care — **Channel Sounding**.
+
+The makerdiary board is *not* the only way to get it. As of August 2026 the
+practical options are all the same chip, so **the choice is form factor, not
+capability** — and every one inherits the no-USB constraint below:
+
+| Board | Notable |
+|---|---|
+| **Nordic nRF54L15-DK** | The reference kit; what Nordic demonstrated Channel Sounding on at Embedded World 2026. |
+| **makerdiary nRF54L15 Connect Kit** | Compact, castellated pins, onboard debugger. |
+| **Nordic nRF54L15 Tag** | Coin-cell, and **two on-board antennas** to improve distance-measurement reliability. |
+
+That last one is the interesting one for us specifically. `docs/gaps.md` §2
+records that `profiles/ras.rs` hardcodes `antenna_paths_mask` to `0x01` and
+implements no multiple antenna paths — a **single-antenna board cannot exercise
+that code at all**, whatever the firmware does. If multi-path RAS is ever meant
+to be real, the dual-antenna board is the only listed part that can check it.
+
+Silicon Labs (EFR32BG26) and TI (CC2340) have announced Channel Sounding parts;
+neither surfaced as a shipping dev kit in an August 2026 search, so Nordic
+appears to be where availability is.
 
 That matters here more than anywhere else, because **Channel Sounding is
 simble's flagship feature and has no foreign oracle of any kind.**
