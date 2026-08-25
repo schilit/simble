@@ -26,7 +26,17 @@ export const CONTROLLERS = [
   // distinguishes the two controllers is in `why` below, said once.
   { id: "in-page", label: "In browser" },
   { id: "websocket", label: "netsim" },
+  // A `simble --usb` bridge holding a physical dongle. Only domains whose
+  // devices can ride real silicon declare it; the rest inherit the default
+  // reason below rather than each inventing their own wording for "not
+  // wired up here".
+  { id: "usb", label: "USB dongle" },
 ];
+
+/// What a domain that says nothing about a controller means: it has not been
+/// wired for it. Spelled here once so eight SUPPORTS maps do not each carry
+/// the sentence.
+const NOT_WIRED = "this page has not been wired for it yet";
 
 /// Reads the current choice. A stored value the caller cannot honour is not
 /// this module's problem to fix — the caller decides what to fall back to.
@@ -96,7 +106,7 @@ export function createControllerBar({ supports, onChange }) {
     const blocked = CONTROLLERS.filter((c) => map[c.id] !== true);
     why.textContent = blocked.length
       ? blocked
-          .map((c) => `${c.label} is not available here — ${map[c.id]}.`)
+          .map((c) => `${c.label} is not available here — ${map[c.id] ?? NOT_WIRED}.`)
           .join(" ")
       // "the same radio" was wrong: each device has its own radio, and what
       // joining netsim shares is the medium they all transmit into. "Network"

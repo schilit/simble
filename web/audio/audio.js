@@ -23,7 +23,7 @@
 // it created. Anything left running would be a leak here and a ghost device on
 // netsim, which does not synthesize a disconnect when a socket goes away.
 
-import init, { WebSource, WebPeripheral, WebLink, WebLc3, WebScanner } from "../pkg/simble.js";
+import init, { WebSource, WebPeripheral, WebLink, WebLc3, WebScanner, WebA2dpSink } from "../pkg/simble.js";
 import { createSduPlayer } from "../common/lc3-player.js";
 import { LE_AUDIO_SINK_SCRIPT as DEFAULT_SCRIPT } from "../common/le-audio-sink.js";
 import { createGattView } from "../common/gatt-view.js";
@@ -35,7 +35,7 @@ import { createAboutBox } from "../common/about-box.js";
 /// Which controllers this domain can run on. The shell's controller bar
 /// reads this: an option mapped to a string is offered disabled, with that
 /// string as the reason, rather than hidden.
-export const SUPPORTS = { "in-page": true, "websocket": true };
+export const SUPPORTS = { "in-page": true, "websocket": true, "usb": true };
 
 
 // Each device gets its own socket, which is to say its own controller, exactly
@@ -173,7 +173,18 @@ let root = null;
 let generation = 0; // guards async boot against an unmount that beat it
 let timer = 0;
 
-let mode = "in-page"; // "in-page" (a wasm WebLink in this tab) | "websocket" (netsim)
+let mode = "in-page"; // "in-page" (a wasm WebLink) | "websocket" (netsim) | "usb" (bridge)
+
+// --- USB mode state ---------------------------------------------------------
+// One WebA2dpSink over the `simble --usb` bridge, and its own player: A2DP is
+// 44.1/48 kHz stereo where the LE player is 16 kHz mono, and a player's rate
+// is fixed at creation. The phone is the source, so the LE source, scanner
+// and script editor all stand down in this mode.
+let usb = null;
+let usbPlayer = null;
+let usbRate = 0;
+let usbLogLen = 0;
+let soundOn = false; // the gate was clicked; a later-created player may enable itself
 let lc3 = null;
 let player = null;
 
@@ -430,9 +441,11 @@ function renderMeter() {
   // on whether this loop ran before or after play(), which is not something a
   // display should care about. A timestamp settles it either way.
   let peak = 0;
-  if (player && !lastMuted && player.state === "running") {
-    const age = performance.now() - (player.stats.peakAt || 0);
-    if (age < PEAK_FRESH_MS) peak = player.stats.peak;
+  const active = mode === "usb" ? usbPlayer : player;
+  const muted = mode === "usb" ? false : lastMuted; // no VCS on the USB path
+  if (active && !muted && active.state === "running") {
+    const age = performance.now() - (active.stats.peakAt || 0);
+    if (age < PEAK_FRESH_MS) peak = active.stats.peak;
   }
   meterLevel = peak > meterLevel ? peak : meterLevel * METER_DECAY;
   // sqrt curve: a linear peak leaves quiet passages invisible, because most
@@ -443,11 +456,17 @@ function renderMeter() {
 }
 
 function renderSinkStats() {
-  const stats = player.stats;
+  const active = mode === "usb" ? usbPlayer : player;
+  if (!active) {
+    $("sink-stats").textContent = "no media yet · audio off";
+    return;
+  }
+  const stats = active.stats;
+  const batches = mode === "usb" ? "batches" : "SDUs";
   $("sink-stats").textContent =
-    `${stats.received} SDUs received` +
+    `${stats.received} ${batches} received` +
     (stats.received ? ` · ${stats.underruns} underruns` : "") +
-    ` · audio ${player.state}`;
+    ` · audio ${active.state}`;
 }
 
 // Every control writes the Volume Control Point; the sink's script decides what
@@ -682,7 +701,25 @@ function buildInPage() {
   runStart = performance.now();
 }
 
+function dropUsb() {
+  try {
+    usb?.free();
+  } catch (_) {
+    /* already gone */
+  }
+  usb = null;
+  usbLogLen = 0;
+  try {
+    usbPlayer?.close();
+  } catch (_) {
+    /* already closed */
+  }
+  usbPlayer = null;
+  usbRate = 0;
+}
+
 function teardown() {
+  dropUsb();
   freeNetsim();
   try {
     link?.free();
@@ -699,6 +736,23 @@ function teardown() {
 // here is the CIS.
 function applyMode() {
   const inPage = mode === "in-page";
+  const isUsb = mode === "usb";
+  // The USB card replaces the LE source outright, and strips the sink card
+  // down to the parts that still mean something: the speaker face, the meter,
+  // the gate and the volume. The script editor, identity fields and VCS
+  // controls all describe the LE peripheral, which is not on the air here.
+  $("usb-card").hidden = !isUsb;
+  $("le-source").hidden = isUsb;
+  for (const el of [root.querySelector(".ident"), $("sink-script"),
+                    root.querySelector(".ops"), $("readout"), $("air-note")]) {
+    if (el) el.hidden = isUsb;
+  }
+  if (isUsb) {
+    $("mode-hint").textContent =
+      "USB dongle — a Classic A2DP sink on real silicon; the phone is the source.";
+    $("status").textContent = "waiting for the bridge";
+    return;
+  }
   $("sink-pick").disabled = inPage;
   $("rescan").disabled = inPage;
   $("sink-addr").hidden = true;
@@ -740,6 +794,11 @@ function switchBackend() {
   target = sinkAddr;
   renderSinkOptions();
   applyMode();
+  if (mode === "usb") {
+    sourceHead.setState(false, "the phone is the source");
+    sinkHead.setState(false, "USB bridge — not connected");
+    return; // the connect button builds the sink; nothing to do until then
+  }
   if (mode === "in-page") {
     sourceHead.setState(false, "connecting…");
     sinkHead.setState(false, "starting…");
@@ -759,6 +818,82 @@ function switchBackend() {
   lastSourceAttempt = at;
   lastSinkAttempt = at;
   lastScanAt = at + RECONNECT_MS;
+}
+
+// --- USB backend ------------------------------------------------------------
+
+function usbLog(line) {
+  const log = $("usb-log");
+  log.textContent += (log.textContent ? "\n" : "") + line;
+  log.scrollTop = log.scrollHeight;
+}
+
+function buildUsb() {
+  dropUsb();
+  $("usb-log").textContent = "";
+  try {
+    usb = new WebA2dpSink($("usb-url").value.trim(), "simble-speaker");
+    $("usb-stage").textContent = "connecting to the bridge…";
+    sinkHead.setState(false, "connecting…");
+  } catch (e) {
+    usb = null;
+    $("usb-stage").textContent = String(e);
+  }
+}
+
+/// A player at the stream's own rate — see lc3-player.js for why the graph
+/// must run at the stream rate rather than resampling per batch. A2DP rates
+/// are unknown until Set_Configuration, so the player is (re)built on first
+/// PCM; the gate's sticky user activation carries over to the new context.
+function ensureUsbPlayer(rate) {
+  if (usbPlayer && usbRate === rate) return;
+  try {
+    usbPlayer?.close();
+  } catch (_) {
+    /* already closed */
+  }
+  usbPlayer = createSduPlayer({ sampleRate: rate });
+  usbRate = rate;
+  if (soundOn) usbPlayer.enable();
+  usbPlayer.setVolume(Number(slider.value), false);
+}
+
+/// Interleaved stereo to mono. The shared player schedules one mono channel;
+/// averaging is the downmix that cannot clip.
+function downmixToMono(pcm) {
+  const mono = new Int16Array(pcm.length >> 1);
+  for (let i = 0; i < mono.length; i++) {
+    mono[i] = (pcm[2 * i] + pcm[2 * i + 1]) >> 1;
+  }
+  return mono;
+}
+
+function tickUsb() {
+  if (!usb) return;
+  try {
+    usb.tick();
+  } catch (e) {
+    showError(e);
+    return;
+  }
+  const st = JSON.parse(usb.status_json(usbLogLen));
+  usbLogLen = st.log_len;
+  for (const line of st.log) usbLog(line);
+  const detail = st.frames
+    ? ` · ${st.frames} SBC frames` +
+      (st.sample_rate ? ` · ${st.sample_rate} Hz × ${st.channels}` : "") +
+      (st.undecodable_bytes ? ` · ${st.undecodable_bytes} undecodable bytes` : "")
+    : "";
+  $("usb-stage").textContent = st.stage + detail;
+  sinkHead.setState(st.stage === "streaming", st.stage);
+  $("status").textContent = st.stage;
+  if (st.failure) return;
+  const pcm = usb.take_pcm();
+  if (pcm.length) {
+    ensureUsbPlayer(usb.sample_rate() || 44100);
+    const mono = (usb.channels() || 2) === 2 ? downmixToMono(pcm) : pcm;
+    usbPlayer.play([mono], null);
+  }
 }
 
 // --- the one timer ---------------------------------------------------------
@@ -933,7 +1068,9 @@ function tickInPage(now) {
 function loop() {
   const now = performance.now();
   try {
-    if (mode === "websocket") {
+    if (mode === "usb") {
+      tickUsb();
+    } else if (mode === "websocket") {
       tickSource(now);
       tickSink(now);
       tickScanner(now);
@@ -1267,6 +1404,30 @@ const TEMPLATE = `
   <section class="panel">
       <div id="source-head"></div>
 
+      <div id="usb-card" hidden>
+        <p class="hint">
+          A real phone is the source here. This half of the page owns a
+          <strong>physical dongle</strong> through the <code>simble --usb</code> bridge and runs a
+          Classic <strong>A2DP sink</strong> on it — the phone pairs with it, streams SBC over
+          real radio, and the decoded PCM plays on the right.
+        </p>
+        <pre class="hint" style="user-select:all">simble --usb 02.3.1 --ws 32323</pre>
+        <label class="field" for="usb-url">Bridge</label>
+        <div class="row">
+          <input type="text" id="usb-url" value="ws://127.0.0.1:32323/" spellcheck="false"
+                 aria-label="the simble --usb bridge URL">
+          <button id="usb-connect" class="primary">connect</button>
+        </div>
+        <div class="readout" id="usb-stage">not connected</div>
+        <pre id="usb-log" class="readout" style="max-height:14rem;overflow-y:auto;white-space:pre-wrap"></pre>
+        <p class="hint">
+          The sink appears to the phone as <strong>simble-speaker</strong>, Class of Device
+          Loudspeaker. Its link keys live in this tab: reconnecting after a reload means
+          <em>Forget</em> the device on the phone first, then pair again.
+        </p>
+      </div>
+
+      <div id="le-source">
       <label id="drop" class="drop" for="file">
         ${WAVEFORM}
         <span class="drop-title">Drop an audio file here</span>
@@ -1310,6 +1471,7 @@ const TEMPLATE = `
         SDU, 100 SDUs a second — and the CIS is set up with <code>Max_SDU = 40</code>. Raw PCM at
         the same rate would be 320 octets a frame and the controller would refuse it.
       </p>
+      </div>
     </section>
 
   <section class="panel">
@@ -1493,6 +1655,7 @@ export function mount(container) {
   lastCounter = -1;
   sinkOpenedOnce = false;
   lastRenderAt = 0;
+  soundOn = false;
 
   // A gentle ramp, 55% to 100%, not the old 20% to 95%. The steep version put
   // two variables on one quantity -- the bars got taller *and* they lit up --
@@ -1803,12 +1966,16 @@ function wireControls() {
     lastScanAt = 0;
   });
 
+  $("usb-connect").addEventListener("click", buildUsb);
+
   // This handler must stay a real click: see the note on the page. Creating the
   // context from script yields a suspended one, which counts and schedules SDUs
   // in perfect silence.
   $("sound").addEventListener("click", (event) => {
     if (!player) return;
     player.enable();
+    soundOn = true;
+    usbPlayer?.enable();
     const gate = event.currentTarget;
     gate.innerHTML = ICON.check;
     gate.classList.replace("primary", "on");
@@ -1819,7 +1986,14 @@ function wireControls() {
 
   // The slider sends Set Absolute Volume, the same command a phone's volume UI
   // sends — it does not poke the state characteristic.
-  slider.addEventListener("input", () => setAbsolute(Number(slider.value)));
+  slider.addEventListener("input", () => {
+    if (mode === "usb") {
+      usbPlayer?.setVolume(Number(slider.value), false);
+      $("vol-num").textContent = slider.value;
+      return;
+    }
+    setAbsolute(Number(slider.value));
+  });
   for (const button of root.querySelectorAll(".ops button")) {
     button.addEventListener("click", () => sendOp(Number(button.dataset.op)));
   }

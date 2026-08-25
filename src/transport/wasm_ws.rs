@@ -5133,6 +5133,285 @@ mod web {
 
     // -- end Car page ------------------------------------------------------
 
+    // -- USB speaker (Audio page, "USB dongle" controller) -------------------
+
+    /// A Classic A2DP sink over the `simble --usb` WebSocket bridge: the
+    /// browser half of a *real* speaker. The bridge owns a physical dongle
+    /// and relays raw HCI both ways, so the phone that pairs with this is a
+    /// real phone on real radio — the same ladder `examples/a2dp_sink.rs`
+    /// climbs natively, driven from a page that can actually play the PCM.
+    ///
+    /// The LE devices on the Audio page each own a netsim socket; this owns
+    /// the bridge socket, which serves ONE client at a time — the page must
+    /// not also point a scanner or a source at it.
+    #[wasm_bindgen]
+    pub struct WebA2dpSink {
+        transport: WasmWsTransport,
+        channel: HciChannel,
+        host: crate::device::ClassicHost,
+        /// Decoded interleaved PCM awaiting `take_pcm()`.
+        pcm: Vec<i16>,
+        decoded_frames: usize,
+        undecodable_bytes: usize,
+        /// Milestone lines, appended once each; the page renders `log[since..]`.
+        log: Vec<String>,
+        avdtp_reported: usize,
+        said_connected: bool,
+        said_paired: bool,
+        said_encrypted: bool,
+        // The same encryption dance the native example does, for the same
+        // reason: a phone will not open an A2DP media channel on an
+        // unencrypted link, and after a re-bond it does not always start
+        // encryption itself. Authentication first — Set Connection
+        // Encryption is only valid on an authenticated link.
+        asked_for_authentication: bool,
+        asked_for_encryption: bool,
+        saw_authentication_complete: bool,
+        failure: Option<String>,
+    }
+
+    #[wasm_bindgen]
+    impl WebA2dpSink {
+        /// Connects to the bridge at `url` (e.g. `ws://127.0.0.1:32323/`)
+        /// and queues the whole bring-up: reset, event masks, name, Class of
+        /// Device `0x240414` (Loudspeaker), SSP, inquiry + page scan, and an
+        /// EIR carrying `name` and the Audio Sink service class. The queue
+        /// drains once the socket opens.
+        #[wasm_bindgen(constructor)]
+        pub fn new(url: &str, name: &str) -> Result<WebA2dpSink, JsValue> {
+            use crate::classic::a2dp::make_audio_sink_service_sdp_records;
+            use crate::classic::sdp::SdpServer;
+            use crate::device::a2dp::A2dpSink;
+            use crate::device::classic_host::{
+                authentication_requirements, io_capability, scan_enable,
+            };
+            use crate::device::{ClassicHost, SdpHandler};
+
+            install_panic_hook();
+            const AUDIO_SINK_SERVICE_UUID: u16 = 0x110B;
+            const SINK_SERVICE_RECORD_HANDLE: u32 = 0x0001_000B;
+
+            let transport = WasmWsTransport::connect(url)?;
+            let mut host = ClassicHost::new(name, [0x14, 0x04, 0x24]);
+            // A speaker has no display and no keypad; claiming otherwise
+            // escalates SSP to Numeric Comparison against a box that cannot
+            // show the number.
+            host.set_io_capability(
+                io_capability::NO_INPUT_NO_OUTPUT,
+                authentication_requirements::GENERAL_BONDING,
+            );
+            let mut sdp = SdpHandler::new(SdpServer::new());
+            sdp.server_mut().service_records.insert(
+                SINK_SERVICE_RECORD_HANDLE,
+                make_audio_sink_service_sdp_records(SINK_SERVICE_RECORD_HANDLE, None),
+            );
+            host.register_handler(Box::new(sdp)).map_err(js_error)?;
+            host.register_handler(Box::new(A2dpSink::new()))
+                .map_err(js_error)?;
+
+            let channel = HciChannel::new();
+            for packet in host
+                .start_commands()
+                .into_iter()
+                .chain(host.set_scan_enable(scan_enable::INQUIRY_AND_PAGE))
+                .chain(host.set_extended_inquiry_response(name, &[AUDIO_SINK_SERVICE_UUID]))
+            {
+                channel.inject_host_packet(packet).map_err(js_error)?;
+            }
+            Ok(Self {
+                transport,
+                channel,
+                host,
+                pcm: Vec::new(),
+                decoded_frames: 0,
+                undecodable_bytes: 0,
+                log: vec![format!(
+                    "sink up as {name:?}, waiting for the bridge socket"
+                )],
+                avdtp_reported: 0,
+                said_connected: false,
+                said_paired: false,
+                said_encrypted: false,
+                asked_for_authentication: false,
+                asked_for_encryption: false,
+                saw_authentication_complete: false,
+                failure: None,
+            })
+        }
+
+        /// One pump of both directions plus the security drive. Call from
+        /// the page's timer.
+        pub fn tick(&mut self) {
+            use crate::classic::avdtp::AvdtpEvent;
+            use crate::device::a2dp::A2dpSink;
+
+            if self.failure.is_some() {
+                return;
+            }
+            if let Err(e) = self.transport.pump(&self.channel) {
+                self.fail(format!("bridge socket: {e:?}"));
+                return;
+            }
+            while let Some(packet) = self.channel.poll_controller_packet() {
+                // Authentication Complete (Vol 4, Part E, 7.7.6): the link
+                // key was actually used, as opposed to merely existing.
+                if packet.len() > 2 && packet[0] == 0x04 && packet[1] == 0x06 {
+                    self.saw_authentication_complete = true;
+                }
+                match self.host.handle_packet(&packet) {
+                    Ok(outgoing) => {
+                        for out in outgoing {
+                            let _ = self.channel.inject_host_packet(out);
+                        }
+                    }
+                    Err(e) => self.log.push(format!("host: {e}")),
+                }
+            }
+            for packet in self.host.poll() {
+                let _ = self.channel.inject_host_packet(packet);
+            }
+
+            if !self.said_connected
+                && let Some((handle, peer)) = self.host.connection()
+            {
+                self.log.push(format!(
+                    "the phone paged us; ACL up with {peer} on handle {handle:#06x}"
+                ));
+                self.said_connected = true;
+            }
+            let security = self.host.security();
+            if !self.said_paired {
+                if let Some(status) = security.pairing_status.filter(|s| *s != 0x00) {
+                    self.fail(format!(
+                        "pairing failed: Simple Pairing Complete status {status:#04x}"
+                    ));
+                    return;
+                }
+                if security.authenticated {
+                    self.log.push("bonded".to_string());
+                    self.said_paired = true;
+                }
+            }
+            if self.said_paired && !self.asked_for_authentication {
+                self.asked_for_authentication = true;
+                for packet in self.host.authenticate() {
+                    let _ = self.channel.inject_host_packet(packet);
+                }
+            }
+            if self.saw_authentication_complete && !self.asked_for_encryption {
+                self.asked_for_encryption = true;
+                for packet in self.host.encrypt(true) {
+                    let _ = self.channel.inject_host_packet(packet);
+                }
+            }
+            if !self.said_encrypted && self.host.security().encrypted {
+                self.log.push("encrypted".to_string());
+                self.said_encrypted = true;
+            }
+
+            let Some(sink) = self.host.handler_mut::<A2dpSink>() else {
+                self.fail("the sink handler vanished".to_string());
+                return;
+            };
+            while self.avdtp_reported < sink.events().len() {
+                let line = match &sink.events()[self.avdtp_reported] {
+                    AvdtpEvent::StreamConfigured { seid } => format!("SEID {seid} configured"),
+                    AvdtpEvent::StreamOpened { seid } => format!("SEID {seid} open"),
+                    AvdtpEvent::StreamStarted { seid } => format!("SEID {seid} streaming"),
+                    AvdtpEvent::StreamSuspended { seid } => format!("SEID {seid} suspended"),
+                    AvdtpEvent::StreamClosed { seid } => format!("SEID {seid} closed"),
+                    other => format!("{other:?}"),
+                };
+                self.log.push(format!("avdtp: {line}"));
+                self.avdtp_reported += 1;
+            }
+            let frames = sink.take_frames();
+            if !frames.is_empty() {
+                let audio = A2dpSink::decode(&frames);
+                self.decoded_frames += audio.frames;
+                self.undecodable_bytes += audio.undecodable_bytes;
+                self.pcm.extend_from_slice(&audio.pcm);
+            }
+        }
+
+        /// The decoded samples that arrived since the last call, interleaved
+        /// `i16` at [`Self::sample_rate`] × [`Self::channels`]. The page owns
+        /// playback: a wasm module cannot start an `AudioContext`.
+        pub fn take_pcm(&mut self) -> Vec<i16> {
+            std::mem::take(&mut self.pcm)
+        }
+
+        /// The negotiated sampling rate in Hz, or 0 before Set_Configuration.
+        pub fn sample_rate(&self) -> u32 {
+            use crate::classic::a2dp::sbc::sampling_frequency as sf;
+            let Some(configuration) = self.configuration() else {
+                return 0;
+            };
+            match configuration.sampling_frequency {
+                x if x == sf::SF_16000 => 16000,
+                x if x == sf::SF_32000 => 32000,
+                x if x == sf::SF_44100 => 44100,
+                x if x == sf::SF_48000 => 48000,
+                _ => 0,
+            }
+        }
+
+        /// Channels in the interleaved PCM: 1 for mono, 2 otherwise, 0
+        /// before configuration.
+        pub fn channels(&self) -> u32 {
+            use crate::classic::a2dp::sbc::channel_mode;
+            match self.configuration() {
+                None => 0,
+                Some(c) if c.channel_mode == channel_mode::MONO => 1,
+                Some(_) => 2,
+            }
+        }
+
+        /// Render-ready state. `since` is how many log lines the page has
+        /// already appended; only later ones are included.
+        pub fn status_json(&self, since: f64) -> String {
+            let since = (since.max(0.0) as usize).min(self.log.len());
+            let stage = if self.failure.is_some() {
+                "failed"
+            } else if self.decoded_frames > 0 {
+                "streaming"
+            } else if self.said_encrypted {
+                "encrypted"
+            } else if self.said_paired {
+                "paired"
+            } else if self.said_connected {
+                "connected"
+            } else if self.transport.is_open() {
+                "waiting"
+            } else {
+                "connecting"
+            };
+            serde_json::json!({
+                "stage": stage,
+                "socket_open": self.transport.is_open(),
+                "frames": self.decoded_frames,
+                "undecodable_bytes": self.undecodable_bytes,
+                "sample_rate": self.sample_rate(),
+                "channels": self.channels(),
+                "failure": self.failure,
+                "log": self.log[since..],
+                "log_len": self.log.len(),
+            })
+            .to_string()
+        }
+
+        fn configuration(&self) -> Option<crate::classic::a2dp::SbcMediaCodecInformation> {
+            self.host
+                .handler::<crate::device::a2dp::A2dpSink>()?
+                .configuration()
+        }
+
+        fn fail(&mut self, reason: String) {
+            self.log.push(format!("FAIL: {reason}"));
+            self.failure = Some(reason);
+        }
+    }
+
     /// The default HRM script, so the page needs no separate fetch.
     ///
     /// Despite the name this builds a *thermometer* — the Playground serves it
