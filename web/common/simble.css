@@ -70,7 +70,7 @@ button, .btn {
   cursor: pointer; text-decoration: none; display: inline-block;
 }
 button:hover, .btn:hover { border-color: var(--dim); }
-button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.primary, .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 button:disabled { opacity: 0.5; cursor: default; }
 select {
   background: var(--panel2); color: var(--text); border: 1px solid var(--border);
@@ -145,8 +145,6 @@ pre.code, .mono {
 }
 .suggest .chip:hover { border-color: var(--accent); }
 .suggest .chip.active { border-color: var(--accent); color: var(--accent); }
-#req-echo { margin-top: 0.45rem; font-size: var(--fs-label); color: var(--dim); }
-#req-echo b { color: var(--text); font-weight: 500; }
 details { margin-top: 0.75rem; }
 details summary { cursor: pointer; color: var(--dim); font-size: var(--fs-body); }
 details pre {

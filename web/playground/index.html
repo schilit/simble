@@ -93,23 +93,9 @@
     <div id="script-error" class="error"></div>
     </div>
 
-    <section class="panel ai-panel">
-      <h2>Generate a device with AI</h2>
-      <div class="row">
-        <span class="hint">Describe a device, generate the Rhai with an LLM, paste it above, press Run:</span>
-        <a id="ai-claude" class="btn" target="_blank" rel="noopener">Open in Claude</a>
-        <a id="ai-chatgpt" class="btn" target="_blank" rel="noopener">Open in ChatGPT</a>
-        <button id="ai-gemini">Gemini</button>
-        <button id="ai-copy">Copy prompt</button>
-      </div>
-      <div class="suggest" id="suggest"></div>
-      <div id="req-echo"></div>
-      <div id="ai-hint" class="hint"></div>
-      <details>
-        <summary>view the AI prompt</summary>
-        <pre id="ai-prompt-view"></pre>
-      </details>
-    </section>
+    <!-- The AI panel (common/ai.js) mounts here and replaces this placeholder,
+         so the grid child is the panel itself. -->
+    <div id="ai-panel"></div>
   </div>
 
   <div class="cols">

@@ -7,7 +7,7 @@
 
 import init, { WebPeripheral, WebLink, default_heart_rate_script } from "../pkg/simble.js";
 import { renderGatt } from "../common/viewer.js";
-import { wireAi } from "../common/ai.js";
+import { createAiPanel } from "../common/ai.js";
 import { encodeScript, decodeScript } from "../common/share.js";
 import { attachHighlightedEditor } from "../common/highlight.js";
 import { createControllerBar } from "../common/controller-bar.js";
@@ -365,7 +365,19 @@ $("reset").addEventListener("click", () => {
   log("Reset to the default script — press Run.");
 });
 wireExamples();
-wireAi();
+// The AI panel hands a generated script to the page; the page treats it the
+// way it treats an Examples pick — into the editor, device stopped, Run is
+// the user's call — so a generated device and a canned one behave identically.
+$("ai-panel").replaceWith(
+  createAiPanel({
+    onScript: (script) => {
+      editor.value = script; // the highlight overlay intercepts this setter
+      showScriptError(null);
+      stop();
+      log("AI-generated script loaded into the editor — press Run.");
+    },
+  }).el,
+);
 
 // Controller backend: "in-page" (a wasm WebLink in this tab, no netsim) or
 // "websocket" (a real netsim scene). Switching resets to the stopped state.
