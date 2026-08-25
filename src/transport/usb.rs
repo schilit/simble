@@ -527,6 +527,10 @@ fn in_transfer_len(max_packet_size: usize, desired: usize) -> usize {
 #[derive(Debug, Default)]
 struct AclInReassembler {
     buffer: Vec<u8>,
+    /// H4-typed bulk framing: each packet on the wire begins with its H4
+    /// type byte (ACL or ISO), so the length field's offset moves by one
+    /// and the emitted packet keeps the type it arrived with.
+    typed: bool,
 }
 
 /// ACL data packet header length: 2-byte handle/flags + 2-byte data length
@@ -539,6 +543,27 @@ impl AclInReassembler {
     }
 
     fn next_packet(&mut self) -> Option<Vec<u8>> {
+        if self.typed {
+            // [type | handle(2) | len(2) | payload]: ACL carries a plain
+            // 16-bit length; ISO keeps two flag bits in the top of its
+            // length field (Vol 4, Part E, Section 5.4.5).
+            if self.buffer.len() < 1 + ACL_HEADER_LEN {
+                return None;
+            }
+            let raw = u16::from_le_bytes([self.buffer[3], self.buffer[4]]) as usize;
+            let payload_len = if self.buffer[0] == h4_type::HCI_ISO_DATA {
+                raw & 0x3FFF
+            } else {
+                raw
+            };
+            let total_len = 1 + ACL_HEADER_LEN + payload_len;
+            if self.buffer.len() < total_len {
+                return None;
+            }
+            let packet = self.buffer[..total_len].to_vec();
+            self.buffer.drain(..total_len);
+            return Some(packet);
+        }
         if self.buffer.len() < ACL_HEADER_LEN {
             return None;
         }
@@ -700,6 +725,12 @@ fn discard_stale_traffic(endpoints: &mut impl UsbEndpoints) -> Result<(), Simble
 pub struct UsbTransport {
     endpoints: Box<dyn UsbEndpoints>,
     acl_reassembler: AclInReassembler,
+    /// H4-typed bulk framing: every bulk packet begins with its H4 type
+    /// byte, which is how ISO data gets a USB path at all — the standard
+    /// class has none. Opted into by firmware that names itself for it
+    /// (our patched Zephyr `hci_usb` reads "H4-bulk" in its product
+    /// string); a standard dongle never sees a prefixed byte.
+    typed_bulk: bool,
     /// The controller's command budget. Real dongles drop commands sent past
     /// it without complaining — see [`CommandCredits`].
     credits: CommandCredits,
@@ -890,7 +921,11 @@ impl UsbTransport {
             acl_transfer_len,
         };
         discard_stale_traffic(&mut endpoints)?;
-        Ok(Self::with_endpoints(Box::new(endpoints)))
+        let typed_bulk = info.product_string().is_some_and(|p| p.contains("H4-bulk"));
+        let mut transport = Self::with_endpoints(Box::new(endpoints));
+        transport.typed_bulk = typed_bulk;
+        transport.acl_reassembler.typed = typed_bulk;
+        Ok(transport)
     }
 
     fn with_endpoints(endpoints: Box<dyn UsbEndpoints>) -> Self {
@@ -899,6 +934,7 @@ impl UsbTransport {
             acl_reassembler: AclInReassembler::default(),
             credits: CommandCredits::new(),
             flow_control: true,
+            typed_bulk: false,
         }
     }
 
@@ -959,10 +995,16 @@ impl UsbTransport {
                         let cid = u16::from_le_bytes([payload[6], payload[7]]);
                         eprintln!("host -> ctlr  ACL cid={cid:#06x} {:02X?}", &payload[8..]);
                     }
-                    self.endpoints.send_acl(payload)?
+                    if self.typed_bulk {
+                        self.endpoints.send_acl(&packet)? // type byte and all
+                    } else {
+                        self.endpoints.send_acl(payload)?
+                    }
                 }
-                // SCO/ISO would need interface 1's isochronous endpoints,
-                // which this transport does not claim.
+                // ISO data has a USB path only in the typed-bulk dialect;
+                // SCO would need interface 1's isochronous endpoints, which
+                // this transport does not claim.
+                h4_type::HCI_ISO_DATA if self.typed_bulk => self.endpoints.send_acl(&packet)?,
                 other => {
                     return Err(SimbleError::Transport(format!(
                         "H4 packet type {other:#04x} is not supported over the USB transport"
