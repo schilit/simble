@@ -29,7 +29,7 @@ import { LE_AUDIO_SINK_SCRIPT as DEFAULT_SCRIPT } from "../common/le-audio-sink.
 import { createGattView } from "../common/gatt-view.js";
 import { createDeviceHeader } from "../common/device-header.js";
 import { attachHighlightedEditor } from "../common/highlight.js";
-import { currentController } from "../common/controller-bar.js";
+import { currentController, usbBridgeHttp, usbBridgeUrl } from "../common/controller-bar.js";
 import { createAboutBox } from "../common/about-box.js";
 
 /// Which controllers this domain can run on. The shell's controller bar
@@ -750,8 +750,9 @@ function applyMode() {
   $("ident-addr").disabled = isUsb;
   $("ident-addr").title = isUsb ? "a dongle's address belongs to its silicon" : "";
   // One verb: connect applies the name, so a second Apply button is a
-  // second way to do the same thing standing somewhere else.
-  $("ident-apply").hidden = isUsb;
+  // second way to do the same thing standing somewhere else. (`hidden`
+  // loses to the ident grid's explicit display, so say display directly.)
+  $("ident-apply").style.display = isUsb ? "none" : "";
   if (isUsb) {
     $("mode-hint").textContent =
       "USB dongle — a Classic A2DP sink on real silicon; the phone is the source.";
@@ -879,7 +880,7 @@ function onRadioMessage({ data: m }) {
 
 /// The bridge's own list of what is plugged in, for the device picker.
 async function loadDongleList() {
-  const base = $("usb-url").value.trim().replace(/^ws/, "http").replace(/\/?$/, "");
+  const base = usbBridgeHttp();
   const pick = $("usb-device");
   try {
     const { devices } = await (await fetch(`${base}/devices`)).json();
@@ -902,7 +903,7 @@ function buildUsb() {
   $("usb-log").textContent = "";
   $("usb-stage").textContent = "connecting to the bridge…";
   sinkHead.setState(false, "connecting…");
-  const base = $("usb-url").value.trim().replace(/\/$/, "");
+  const base = usbBridgeUrl().trim().replace(/\/+$/, "");
   const device = $("usb-device").value;
   const url = device ? `${base}/?device=${encodeURIComponent(device)}` : `${base}/`;
   // One speaker identity: the same Name field that names the LE sink names
@@ -1550,16 +1551,11 @@ const TEMPLATE = `
 
       <div id="usb-card" hidden>
         <p class="hint">
-          This speaker is running on a <strong>physical dongle</strong>, owned through the
-          <code>simble --usb</code> bridge below: a Classic <strong>A2DP sink</strong> on real
-          radio. Whatever pairs with it and streams — your phone — is the source, and the
-          decoded PCM plays here.
+          This speaker is running on a <strong>physical dongle</strong> through the
+          <code>simble --usb</code> bridge named in the controller bar: a Classic
+          <strong>A2DP sink</strong> on real radio. Whatever pairs with it and streams —
+          your phone — is the source, and the decoded PCM plays here.
         </p>
-        <label class="field" for="usb-url">Bridge</label>
-        <div class="row">
-          <input type="text" id="usb-url" value="ws://127.0.0.1:32323/" spellcheck="false"
-                 aria-label="the simble --usb bridge URL">
-        </div>
         <label class="field" for="usb-device">Dongle</label>
         <div class="row">
           <select id="usb-device" aria-label="which dongle hosts the speaker"></select>

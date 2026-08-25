@@ -38,9 +38,26 @@ export const CONTROLLERS = [
 /// the sentence.
 const NOT_WIRED = "this page has not been wired for it yet";
 
-/// Where a `simble --usb` bridge answers if one is running. Only the badge
-/// below reads it — picking a dongle is each domain's business.
-const USB_BRIDGE_DEVICES = "http://127.0.0.1:32323/devices";
+/// Where the `simble --usb` bridge answers. The URL is controller
+/// configuration, so it lives here in the bar with the rest of the
+/// controller choice — a domain asks [`usbBridgeUrl`] rather than growing
+/// its own field. Picking a *dongle* stays each domain's business.
+const BRIDGE_KEY = "simble-usb-bridge";
+const BRIDGE_DEFAULT = "ws://127.0.0.1:32323/";
+
+/// The bridge WebSocket URL as configured in the bar (persisted per origin).
+export function usbBridgeUrl() {
+  try {
+    return localStorage.getItem(BRIDGE_KEY) || BRIDGE_DEFAULT;
+  } catch (e) {
+    return BRIDGE_DEFAULT;
+  }
+}
+
+/// The bridge's HTTP side, where /devices answers.
+export function usbBridgeHttp() {
+  return usbBridgeUrl().trim().replace(/^ws/, "http").replace(/\/+$/, "");
+}
 
 /// Decorates the USB option's label with how many dongles the bridge sees,
 /// e.g. "USB dongle (3)" — and when no bridge answers, says how to start
@@ -49,7 +66,7 @@ const USB_BRIDGE_DEVICES = "http://127.0.0.1:32323/devices";
 /// appears only when it is needed.
 async function decorateUsbCount(nameEl, whyEl) {
   try {
-    const { devices } = await (await fetch(USB_BRIDGE_DEVICES)).json();
+    const { devices } = await (await fetch(`${usbBridgeHttp()}/devices`)).json();
     if (Array.isArray(devices)) nameEl.textContent = `USB dongle (${devices.length})`;
   } catch (_) {
     const hint = " USB dongle needs its bridge: run simble --usb --ws 32323.";
@@ -154,7 +171,31 @@ export function createControllerBar({ supports, onChange }) {
       pick.className = "controller-pick";
       const name = document.createElement("b");
       name.textContent = c.label;
-      if (c.id === "usb") decorateUsbCount(name, why);
+      if (c.id === "usb") {
+        decorateUsbCount(name, why);
+        // The bridge URL sits beside the option it configures. Editing it
+        // re-probes the dongle count, so the badge always describes the
+        // bridge the field names.
+        const bridge = document.createElement("input");
+        bridge.className = "controller-bridge";
+        bridge.value = usbBridgeUrl();
+        bridge.spellcheck = false;
+        bridge.setAttribute("aria-label", "the simble --usb bridge URL");
+        bridge.style.cssText =
+          "margin-left:0.5rem;font-family:monospace;font-size:0.8em;width:13.5rem;" +
+          "padding:0.1rem 0.3rem";
+        bridge.addEventListener("change", () => {
+          try {
+            localStorage.setItem(BRIDGE_KEY, bridge.value.trim());
+          } catch (e) {
+            /* applies this session only */
+          }
+          decorateUsbCount(name, why);
+        });
+        // Appended after the radio and label land in `pick` (below), so the
+        // field reads as belonging to the option, not to its neighbour.
+        queueMicrotask(() => pick.append(bridge));
+      }
 
       radio.addEventListener("change", () => {
         if (!radio.checked) return;
