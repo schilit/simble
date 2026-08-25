@@ -5156,6 +5156,13 @@ mod web {
         /// Milestone lines, appended once each; the page renders `log[since..]`.
         log: Vec<String>,
         avdtp_reported: usize,
+        /// Per-layer tallies, so a lossy run names the layer that lost:
+        /// H4 packets in from the socket, split by type; media SDUs that
+        /// reached the AVDTP handler; host-level parse rejections.
+        events_in: usize,
+        acl_in: usize,
+        media_sdus: usize,
+        host_errors: usize,
         said_connected: bool,
         said_paired: bool,
         said_encrypted: bool,
@@ -5229,6 +5236,10 @@ mod web {
                     "sink up as {name:?}, waiting for the bridge socket"
                 )],
                 avdtp_reported: 0,
+                events_in: 0,
+                acl_in: 0,
+                media_sdus: 0,
+                host_errors: 0,
                 said_connected: false,
                 said_paired: false,
                 said_encrypted: false,
@@ -5253,6 +5264,11 @@ mod web {
                 return;
             }
             while let Some(packet) = self.channel.poll_controller_packet() {
+                match packet.first() {
+                    Some(&0x04) => self.events_in += 1,
+                    Some(&0x02) => self.acl_in += 1,
+                    _ => {}
+                }
                 // Authentication Complete (Vol 4, Part E, 7.7.6): the link
                 // key was actually used, as opposed to merely existing.
                 if packet.len() > 2 && packet[0] == 0x04 && packet[1] == 0x06 {
@@ -5264,7 +5280,10 @@ mod web {
                             let _ = self.channel.inject_host_packet(out);
                         }
                     }
-                    Err(e) => self.log.push(format!("host: {e}")),
+                    Err(e) => {
+                        self.host_errors += 1;
+                        self.log.push(format!("host: {e}"));
+                    }
                 }
             }
             for packet in self.host.poll() {
@@ -5327,6 +5346,7 @@ mod web {
             }
             let frames = sink.take_frames();
             if !frames.is_empty() {
+                self.media_sdus += frames.len();
                 let audio = A2dpSink::decode(&frames);
                 self.decoded_frames += audio.frames;
                 self.undecodable_bytes += audio.undecodable_bytes;
@@ -5391,6 +5411,10 @@ mod web {
                 "socket_open": self.transport.is_open(),
                 "frames": self.decoded_frames,
                 "undecodable_bytes": self.undecodable_bytes,
+                "events_in": self.events_in,
+                "acl_in": self.acl_in,
+                "media_sdus": self.media_sdus,
+                "host_errors": self.host_errors,
                 "sample_rate": self.sample_rate(),
                 "channels": self.channels(),
                 "failure": self.failure,

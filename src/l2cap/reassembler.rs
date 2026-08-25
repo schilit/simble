@@ -33,6 +33,19 @@ impl AclReassembler {
                     "First ACL fragment too short to contain L2CAP header".into(),
                 ));
             }
+            // A new frame starting over a half-assembled one means the rest
+            // of that frame is never coming — bytes were lost between the
+            // radio and here. Silently replacing the buffer is how a
+            // truncated media stream looks like no media at all; saying so
+            // is how it gets found.
+            if let Some((expected, partial)) = self.buffers.remove(&handle) {
+                return Err(SimbleError::PacketParseError(format!(
+                    "New L2CAP frame began on connection {handle:#06x} while {} of {} bytes \
+                     were still pending — the remainder of that frame was lost in transit",
+                    partial.len(),
+                    expected,
+                )));
+            }
 
             let len = u16::from_le_bytes([fragment[0], fragment[1]]) as usize;
             let expected_total_len = 4 + len;
@@ -84,6 +97,24 @@ mod tests {
 
         let result = reassembler.push_fragment(0x0001, true, &l2cap).unwrap();
         assert_eq!(result, Some(l2cap));
+    }
+
+    #[test]
+    fn test_a_frame_starting_over_a_pending_one_reports_the_loss() {
+        let mut reassembler = AclReassembler::new();
+        let payload = vec![0xEE; 100];
+        let l2cap = L2capHeader::serialize(cid::ATT, &payload);
+        assert_eq!(
+            reassembler
+                .push_fragment(0x0001, true, &l2cap[..20])
+                .unwrap(),
+            None,
+            "a partial frame is pending"
+        );
+        let err = reassembler
+            .push_fragment(0x0001, true, &l2cap)
+            .expect_err("the pending frame's tail is never coming, and silence here is loss");
+        assert!(err.to_string().contains("lost"), "{err}");
     }
 
     #[test]

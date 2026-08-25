@@ -63,15 +63,17 @@ function pump() {
   if (st.log.length || key !== lastKey || now - lastPostAt > 200) {
     lastKey = key;
     lastPostAt = now;
+    // The whole status object rides along: the sink's per-layer counters
+    // (acl_in, media_sdus, host_errors, …) are the tracing surface now that
+    // every controller path crosses this worker, and filtering them here is
+    // how a lossy run stays unexplained.
     postMessage({
       op: "status",
-      stage: st.stage,
+      ...st,
       frames: st.frames,
       undecodable: st.undecodable_bytes,
       rate: st.sample_rate,
       channels: st.channels,
-      failure: st.failure,
-      log: st.log,
     });
   }
   const pcm = sink.take_pcm();

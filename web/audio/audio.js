@@ -843,6 +843,7 @@ function ensureWorker() {
 }
 
 function onRadioMessage({ data: m }) {
+  if (m.op === "status") window.__usbStatus = m; // the tracing surface, inspectable
   if (mode !== "usb") return; // a late message after switching controllers
   if (m.op === "error") {
     $("usb-stage").textContent = m.message;

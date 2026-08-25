@@ -61,6 +61,9 @@ mod opcode {
     /// Write Extended Inquiry Response: the 240 octets an inquiring peer
     /// gets *with* the inquiry result, before it has connected to anything.
     pub const WRITE_EXTENDED_INQUIRY_RESPONSE: [u8; 2] = [0x52, 0x0C];
+    /// Read Buffer Size: how large an ACL packet the controller accepts and
+    /// how many it can hold — the two numbers outbound ACL must obey.
+    pub const READ_BUFFER_SIZE: [u8; 2] = [0x05, 0x10];
 
     // --- security ---------------------------------------------------------
     //
@@ -317,6 +320,11 @@ fn command(opcode: [u8; 2], params: &[u8]) -> Vec<u8> {
 }
 
 /// Wraps an L2CAP PDU in an H4 ACL packet for `handle`.
+///
+/// One packet, whatever the size — callers whose PDUs can exceed the
+/// controller's ACL buffer use [`acl_packets`] instead. The signalling
+/// PDUs built through this are tens of bytes; no controller's buffer is
+/// that small.
 fn acl_packet(handle: u16, l2cap: &[u8]) -> Vec<u8> {
     use crate::l2cap::{AclPacketBoundary, HciAclHeader};
     let header = HciAclHeader::new(
@@ -329,6 +337,38 @@ fn acl_packet(handle: u16, l2cap: &[u8]) -> Vec<u8> {
     packet.extend_from_slice(header.as_bytes());
     packet.extend_from_slice(l2cap);
     packet
+}
+
+/// Fragments an L2CAP PDU across as many HCI ACL packets as the
+/// controller's `mtu` (HC_ACL_Data_Packet_Length) requires: the first
+/// carries the boundary flag saying so, the rest say Continuing.
+///
+/// A controller does not transmit an ACL packet larger than the buffer it
+/// declared in Read Buffer Size, and it does not report the discard. The
+/// symptom is a stream that "reached STREAMING" and delivered almost
+/// nothing — see [`ClassicHost::handle_acl`] for the receive-side mirror
+/// of the same lesson.
+fn acl_packets(handle: u16, l2cap: &[u8], mtu: usize) -> Vec<Vec<u8>> {
+    use crate::l2cap::{AclPacketBoundary, HciAclHeader};
+    if l2cap.len() <= mtu {
+        return vec![acl_packet(handle, l2cap)];
+    }
+    let mut out = Vec::with_capacity(l2cap.len().div_ceil(mtu));
+    let mut boundary = AclPacketBoundary::FirstNonFlushable;
+    let mut rest = l2cap;
+    while !rest.is_empty() {
+        let take = rest.len().min(mtu);
+        let (chunk, remaining) = rest.split_at(take);
+        let header = HciAclHeader::new(handle, boundary, chunk.len() as u16);
+        let mut packet = Vec::with_capacity(5 + chunk.len());
+        packet.push(crate::transport::h4_type::HCI_ACL_DATA);
+        packet.extend_from_slice(header.as_bytes());
+        packet.extend_from_slice(chunk);
+        out.push(packet);
+        boundary = AclPacketBoundary::Continuing;
+        rest = remaining;
+    }
+    out
 }
 
 /// Wraps a call-audio payload in an H4 synchronous (SCO) packet for
@@ -1363,6 +1403,23 @@ pub struct ClassicHost {
     /// several HCI ACL packets. See [`Self::handle_acl`] for why a Classic
     /// host cannot do without one.
     acl_reassembler: AclReassembler,
+    /// The controller's HC_ACL_Data_Packet_Length, learned from Read Buffer
+    /// Size. Outbound L2CAP frames larger than this are fragmented across
+    /// HCI ACL packets; sending one oversized packet instead is how 1390
+    /// RTP media packets became 5 decoded SBC frames on a CSR8510 — the
+    /// controller cannot transmit what does not fit its buffer, and it does
+    /// not say so. `usize::MAX` until learned, which every simulated
+    /// controller effectively has.
+    acl_mtu: usize,
+    /// HC_Total_Num_ACL_Data_Packets: how many ACL packets the controller
+    /// can hold at once. The other half of the same lesson: a real
+    /// controller drops what it has no buffer for, silently.
+    acl_credits_total: usize,
+    /// ACL packets sent and not yet returned by Number Of Completed Packets.
+    acl_in_flight: usize,
+    /// Outbound ACL packets awaiting credit. Filled by [`Self::poll`]'s
+    /// channel-output path (the only firehose); drained as credits return.
+    pending_acl: std::collections::VecDeque<Vec<u8>>,
 }
 
 impl ClassicHost {
@@ -1402,6 +1459,10 @@ impl ClassicHost {
             security: LinkSecurity::default(),
             announced_cids: Vec::new(),
             acl_reassembler: AclReassembler::new(),
+            acl_mtu: usize::MAX,
+            acl_credits_total: usize::MAX,
+            acl_in_flight: 0,
+            pending_acl: std::collections::VecDeque::new(),
         }
     }
 
@@ -1657,6 +1718,7 @@ impl ClassicHost {
             // controller rejects the whole command for setting them (see
             // `host::EVENT_MASK_ALL`).
             command(opcode::SET_EVENT_MASK, &crate::device::host::EVENT_MASK_ALL),
+            command(opcode::READ_BUFFER_SIZE, &[]),
             command(opcode::WRITE_LOCAL_NAME, &name_param),
             command(opcode::WRITE_CLASS_OF_DEVICE, &self.class_of_device),
             command(opcode::WRITE_SIMPLE_PAIRING_MODE, &[0x01]),
@@ -1863,6 +1925,43 @@ impl ClassicHost {
                 self.security = LinkSecurity::default();
                 self.acl_reassembler
                     .on_disconnected(complete.connection_handle.get());
+                Vec::new()
+            }
+            HciEvent::CommandComplete {
+                header,
+                return_parameters,
+            } if header.command_opcode.get() == u16::from_le_bytes(opcode::READ_BUFFER_SIZE) => {
+                // status(1) acl_len(2) sco_len(1) acl_num(2) sco_num(2) —
+                // Vol 4, Part E, Section 7.4.5.
+                if return_parameters.len() >= 8 && return_parameters[0] == 0x00 {
+                    let acl_len =
+                        u16::from_le_bytes([return_parameters[1], return_parameters[2]]) as usize;
+                    let acl_num =
+                        u16::from_le_bytes([return_parameters[4], return_parameters[5]]) as usize;
+                    if acl_len > 0 {
+                        self.acl_mtu = acl_len;
+                    }
+                    if acl_num > 0 {
+                        self.acl_credits_total = acl_num;
+                    }
+                }
+                Vec::new()
+            }
+            // Number Of Completed Packets (Vol 4, Part E, Section 7.7.19):
+            // the controller returning the buffers our sends occupied. The
+            // only thing that lets a media stream outrun neither the radio
+            // nor the buffer pool.
+            HciEvent::Other {
+                code: 0x13,
+                parameters,
+            } => {
+                let mut released = 0usize;
+                if let Some((&count, rest)) = parameters.split_first() {
+                    for pair in rest.as_chunks::<4>().0.iter().take(count as usize) {
+                        released += u16::from_le_bytes([pair[2], pair[3]]) as usize;
+                    }
+                }
+                self.acl_in_flight = self.acl_in_flight.saturating_sub(released);
                 Vec::new()
             }
             HciEvent::EncryptionChange(change) => {
@@ -2567,7 +2666,6 @@ impl ClassicHost {
             }
         }
 
-        let mut out = Vec::new();
         for (channel, peer_cid) in open {
             let Some(handler) = Self::handler_for(&mut self.handlers, channel.psm) else {
                 continue;
@@ -2576,8 +2674,23 @@ impl ClassicHost {
                 if sdu.is_empty() {
                     continue;
                 }
-                out.push(acl_packet(handle, &L2capHeader::serialize(peer_cid, &sdu)));
+                self.pending_acl.extend(acl_packets(
+                    handle,
+                    &L2capHeader::serialize(peer_cid, &sdu),
+                    self.acl_mtu,
+                ));
             }
+        }
+        // Release queued packets only up to the buffers the controller has
+        // free. This queue is the media firehose; a Number Of Completed
+        // Packets event opens it further on a later poll.
+        let mut out = Vec::new();
+        while self.acl_in_flight < self.acl_credits_total {
+            let Some(packet) = self.pending_acl.pop_front() else {
+                break;
+            };
+            self.acl_in_flight += 1;
+            out.push(packet);
         }
         out.extend(self.open_requested_channels());
         out

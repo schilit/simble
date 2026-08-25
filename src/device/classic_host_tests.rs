@@ -1371,3 +1371,74 @@ fn test_a_stray_continuation_fragment_is_refused_rather_than_guessed_at() {
         "a continuation with nothing to continue must be reported",
     );
 }
+
+/// Read Buffer Size is how a host learns what a real controller can carry:
+/// these are the CSR8510's actual numbers (ACL 310 bytes, 10 buffers). A
+/// 612-byte RTP media packet written as one HCI ACL packet simply never
+/// leaves that dongle — 1390 packets "sent", 5 SBC frames decoded on the
+/// other radio, no error anywhere. Both halves of the answer are learned
+/// from this one Command Complete.
+#[test]
+fn test_read_buffer_size_teaches_the_host_what_fits() {
+    let mut host = host();
+    assert_eq!(host.acl_mtu, usize::MAX, "unconstrained until learned");
+    let event = crate::test_support::command_complete(
+        u16::from_le_bytes(opcode::READ_BUFFER_SIZE),
+        &[0x00, 0x36, 0x01, 0x40, 0x0A, 0x00, 0x08, 0x00],
+    );
+    host.handle_packet(&event).expect("parses");
+    assert_eq!(host.acl_mtu, 0x0136, "HC_ACL_Data_Packet_Length, 310");
+    assert_eq!(
+        host.acl_credits_total, 0x000A,
+        "HC_Total_Num_ACL_Data_Packets"
+    );
+}
+
+/// Number Of Completed Packets returns the buffers our sends occupied.
+#[test]
+fn test_number_of_completed_packets_releases_credits() {
+    let mut host = host();
+    host.acl_in_flight = 5;
+    // 04 | 13 05 | one handle | handle 0x0048 | 3 completed
+    let event = [0x04, 0x13, 0x05, 0x01, 0x48, 0x00, 0x03, 0x00];
+    let out = host.handle_packet(&event).expect("parses");
+    assert!(out.is_empty());
+    assert_eq!(host.acl_in_flight, 2);
+}
+
+/// An L2CAP frame larger than the controller's ACL buffer goes out as
+/// several HCI ACL packets — and the receive side reassembles exactly the
+/// frame that was fragmented, which is the property that matters.
+#[test]
+fn test_outbound_fragments_survive_reassembly() {
+    use crate::l2cap::{AclReassembler, HciAclHeader};
+    let mut frame = Vec::new();
+    let sdu = vec![0xAB; 700];
+    frame.extend_from_slice(&(sdu.len() as u16).to_le_bytes());
+    frame.extend_from_slice(&0x0041u16.to_le_bytes());
+    frame.extend_from_slice(&sdu);
+
+    let packets = acl_packets(0x0048, &frame, 310);
+    assert_eq!(packets.len(), 3, "704 bytes at 310 per packet");
+
+    let mut reassembler = AclReassembler::new();
+    let mut delivered = None;
+    for packet in &packets {
+        let (header, payload) = HciAclHeader::parse(&packet[1..]).expect("valid ACL");
+        if let Some(complete) = reassembler
+            .push_fragment(header.handle(), header.is_first_fragment(), payload)
+            .expect("clean stream")
+        {
+            delivered = Some(complete);
+        }
+    }
+    assert_eq!(delivered.as_deref(), Some(frame.as_slice()));
+}
+
+/// A frame that fits goes out whole: fragmentation is not a tax on the
+/// simulators, whose controllers carry any SDU in one piece.
+#[test]
+fn test_a_frame_within_the_mtu_is_not_fragmented() {
+    let frame = [0x03, 0x00, 0x40, 0x00, 0xFF, 0x00, 0x00];
+    assert_eq!(acl_packets(0x0048, &frame, usize::MAX).len(), 1);
+}
