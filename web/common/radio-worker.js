@@ -193,7 +193,7 @@ self.onmessage = async (e) => {
     // in the same breath fails against our own abandoned session.
     setTimeout(() => {
       try {
-        sink = new WebA2dpSink(m.url, m.name);
+        sink = new WebA2dpSink(m.url, m.name, m.keys || "");
         ensureTimer();
       } catch (err) {
         postMessage({ op: "error", message: String(err) });

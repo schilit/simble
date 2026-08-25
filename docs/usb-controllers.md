@@ -120,6 +120,11 @@ CONFIG_BT_ISO_BROADCASTER=y
 CONFIG_BT_ISO_SYNC_RECEIVER=y
 CONFIG_BT_CTLR_ADV_ISO=y
 CONFIG_BT_CTLR_SYNC_ISO=y
+# Without this the periodic-advertising data buffer is the stock 31 bytes
+# and a real Auracast BASE (~46 bytes) is refused with Command Disallowed —
+# measured on the flashed dongle: 31 accepted, 32 refused. LE_Create_BIG
+# itself is present either way; the buffer is the blocker.
+CONFIG_BT_CTLR_ADV_DATA_LEN_MAX=191
 ```
 
 Flash usage roughly doubles (121 KB → 216 KB), which is a quick way to confirm

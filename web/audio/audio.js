@@ -956,6 +956,13 @@ function onRadioMessage({ data: m }) {
     return;
   }
   if (m.op === "status") {
+    if (m.link_keys?.length) {
+      try {
+        localStorage.setItem("simble-a2dp-bonds", JSON.stringify(m.link_keys));
+      } catch (e) {
+        /* private window: bonds live only as long as the page */
+      }
+    }
     if (m.bd_addr) sinkHead.setAddress(m.bd_addr);
     for (const line of m.log) usbLog(line);
     const detail = m.frames
@@ -1009,7 +1016,16 @@ function buildUsb() {
   // this one. Two radios advertising two different names is how a phone
   // ends up seeing speakers nobody asked for.
   const name = (sinkName || "webspeaker").trim();
-  ensureWorker().postMessage({ op: "sink-start", url, name });
+  // Restore the bonds from this speaker's earlier lives. The phone kept its
+  // half of every key; a sink that forgets its half on each rebuild asks
+  // the person to pair again every time the page so much as reloads.
+  let keys = "";
+  try {
+    keys = localStorage.getItem("simble-a2dp-bonds") || "";
+  } catch (e) {
+    /* private window: bonds live only as long as the page */
+  }
+  ensureWorker().postMessage({ op: "sink-start", url, name, keys });
   usbSinkUp = true;
   sinkHead.setName(name); // the phone will see this; the header should too
   sinkHead.setRunning(true);

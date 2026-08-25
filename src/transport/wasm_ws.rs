@@ -5330,15 +5330,20 @@ mod web {
         /// Device `0x240414` (Loudspeaker), SSP, inquiry + page scan, and an
         /// EIR carrying `name` and the Audio Sink service class. The queue
         /// drains once the socket opens.
+        /// `keys_json` restores bonds from an earlier life of this sink:
+        /// `[{"peer":"AA:BB:..","key":"32 hex chars","key_type":4}, …]`. A
+        /// key store that died with the page made every reload a stranger
+        /// to the phone that kept its half — an endless pair-again loop.
         #[wasm_bindgen(constructor)]
-        pub fn new(url: &str, name: &str) -> Result<WebA2dpSink, JsValue> {
+        pub fn new(url: &str, name: &str, keys_json: &str) -> Result<WebA2dpSink, JsValue> {
             use crate::classic::a2dp::make_audio_sink_service_sdp_records;
             use crate::classic::sdp::SdpServer;
             use crate::device::a2dp::A2dpSink;
             use crate::device::classic_host::{
-                authentication_requirements, io_capability, scan_enable,
+                LinkKey, authentication_requirements, io_capability, scan_enable,
             };
             use crate::device::{ClassicHost, SdpHandler};
+            use std::str::FromStr as _;
 
             install_panic_hook();
             const AUDIO_SINK_SERVICE_UUID: u16 = 0x110B;
@@ -5361,6 +5366,41 @@ mod web {
             host.register_handler(Box::new(sdp)).map_err(js_error)?;
             host.register_handler(Box::new(A2dpSink::new()))
                 .map_err(js_error)?;
+            if !keys_json.trim().is_empty()
+                && let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(keys_json)
+            {
+                for entry in entries {
+                    let (Some(peer), Some(hex), Some(key_type)) = (
+                        entry["peer"].as_str(),
+                        entry["key"].as_str(),
+                        entry["key_type"].as_u64(),
+                    ) else {
+                        continue;
+                    };
+                    let Ok(peer) = Address::from_str(peer) else {
+                        continue;
+                    };
+                    let mut value = [0u8; 16];
+                    if hex.len() == 32
+                        && (0..16).all(|i| {
+                            u8::from_str_radix(&hex[2 * i..2 * i + 2], 16)
+                                .map(|b| {
+                                    value[i] = b;
+                                    true
+                                })
+                                .unwrap_or(false)
+                        })
+                    {
+                        host.insert_link_key(
+                            peer,
+                            LinkKey {
+                                value,
+                                key_type: key_type as u8,
+                            },
+                        );
+                    }
+                }
+            }
 
             let channel = HciChannel::new();
             for packet in host
@@ -5567,6 +5607,13 @@ mod web {
                 // The silicon's own answer to Read BD_ADDR — the address a
                 // phone actually sees, which no page-side constant is.
                 "bd_addr": self.host.local_address().map(|a| a.to_string()),
+                "link_keys": self.host.all_link_keys().iter().map(|(peer, key)| {
+                    serde_json::json!({
+                        "peer": peer.to_string(),
+                        "key": key.value.iter().map(|b| format!("{b:02x}")).collect::<String>(),
+                        "key_type": key.key_type,
+                    })
+                }).collect::<Vec<_>>(),
                 "log": self.log[since..],
                 "log_len": self.log.len(),
             })

@@ -1519,6 +1519,14 @@ impl ClassicHost {
     }
 
     /// Forgets the bond with `peer`. The next connection to it pairs again.
+    /// Every stored bond, for a caller that persists them. A link key store
+    /// that dies with the process makes every restart look like a stranger
+    /// to a phone that faithfully kept its half — which surfaces as an
+    /// endless "pair again?" loop.
+    pub fn all_link_keys(&self) -> &[(Address, LinkKey)] {
+        &self.link_keys
+    }
+
     pub fn remove_link_key(&mut self, peer: Address) -> bool {
         let before = self.link_keys.len();
         self.link_keys.retain(|(a, _)| *a != peer);
