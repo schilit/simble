@@ -1051,7 +1051,9 @@ function ensureUsbPlayer(rate) {
   } catch (_) {
     /* already closed */
   }
-  usbPlayer = createSduPlayer({ sampleRate: rate });
+  // Full-scale at max: this player carries a person's actual music, and
+  // "phone and speaker both at max" must not come out at -16 dB.
+  usbPlayer = createSduPlayer({ sampleRate: rate, maxGain: 0.95 });
   usbRate = rate;
   if (soundOn) usbPlayer.enable();
   usbPlayer.setVolume(usbVolume, usbMuted);

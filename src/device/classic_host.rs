@@ -1527,6 +1527,7 @@ impl ClassicHost {
         &self.link_keys
     }
 
+    /// Forgets the bond with `peer`, if one is stored.
     pub fn remove_link_key(&mut self, peer: Address) -> bool {
         let before = self.link_keys.len();
         self.link_keys.retain(|(a, _)| *a != peer);

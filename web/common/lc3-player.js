@@ -27,7 +27,10 @@ const RESTART_GAP_S = 0.5;
 
 /// Creates a player for one stream configuration. `decode` turns one SDU into
 /// an Int16Array of PCM; pass null to treat SDUs as raw 16-bit PCM.
-export function createSduPlayer({ sampleRate }) {
+/// `maxGain` is the output level at full volume: the LE demo keeps its
+/// deliberately-quiet 0.16 default, but a speaker playing a person's music
+/// at "max volume" must actually mean it.
+export function createSduPlayer({ sampleRate, maxGain = 0.16 }) {
   let audio = null;
   let gain = null;
   let cursor = 0;
@@ -103,7 +106,7 @@ export function createSduPlayer({ sampleRate }) {
     /// the speakers. Deliberately quiet at the top.
     setVolume(volume, muted) {
       if (!audio) return;
-      const level = muted ? 0 : 0.16 * Math.pow(volume / 255, 2);
+      const level = muted ? 0 : maxGain * Math.pow(volume / 255, 2);
       gain.gain.setTargetAtTime(level, audio.currentTime, 0.05);
     },
 
