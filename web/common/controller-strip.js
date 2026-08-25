@@ -22,7 +22,7 @@ function injectStyles() {
   style.id = STYLE_ID;
   style.textContent = `
   .ctl-strip { display:flex; align-items:center; gap:0.6rem; flex-wrap:wrap;
-    padding:0.3rem 0.6rem; margin-bottom:0.55rem; font-size:0.78rem;
+    padding:0.3rem 0.6rem; margin-bottom:0.3rem; font-size:0.78rem;
     color:var(--muted,#667); background:var(--panel-2,rgba(127,127,127,0.06));
     border:1px solid var(--border,#e3e5e8); border-radius:6px; }
   .ctl-strip .strip-label { font-weight:600; letter-spacing:0.06em;
