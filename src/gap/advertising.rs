@@ -87,6 +87,13 @@ pub struct AdvertisingData {
     /// JSON written before this field existed still parses.
     #[serde(default)]
     pub resolvable_set_identifier: Option<Vec<u8>>,
+    /// Whether `complete_name` is actually a truncation, emitted as Shortened
+    /// Local Name (`0x08`). Set by [`fit_within_legacy_limit`] when it trims;
+    /// a trimmed name emitted as *Complete* is a lie two AD structures wide,
+    /// because the scan response still carries the whole name and a scanner
+    /// then watches the "complete" name disagree with itself.
+    #[serde(default)]
+    pub name_is_shortened: bool,
 }
 
 impl AdvertisingData {
@@ -104,6 +111,15 @@ impl AdvertisingData {
     /// Sets the complete device local name.
     pub fn with_name(mut self, name: impl Into<String>) -> Self {
         self.complete_name = Some(name.into());
+        self.name_is_shortened = false;
+        self
+    }
+
+    /// Sets the local name with its truthful AD type: Complete (`0x09`) when
+    /// `complete`, Shortened (`0x08`) when the caller had to trim it.
+    pub fn with_name_on_air(mut self, name: impl Into<String>, complete: bool) -> Self {
+        self.complete_name = Some(name.into());
+        self.name_is_shortened = !complete;
         self
     }
 
@@ -172,7 +188,11 @@ impl AdvertisingData {
         {
             let name_bytes = name.as_bytes();
             bytes.push((1 + name_bytes.len()) as u8);
-            bytes.push(ad_type::COMPLETE_LOCAL_NAME);
+            bytes.push(if self.name_is_shortened {
+                ad_type::SHORTENED_LOCAL_NAME
+            } else {
+                ad_type::COMPLETE_LOCAL_NAME
+            });
             bytes.extend_from_slice(name_bytes);
         }
 
@@ -231,7 +251,9 @@ impl AdvertisingData {
 /// fit, trim the name one character at a time down to nothing — the name is a
 /// device's identity, so it survives longest.
 ///
-/// `build(name, keep_optional)` re-encodes the payload for each step. What
+/// `build(name, name_complete, keep_optional)` re-encodes the payload for
+/// each step; `name_complete` is false once the name has been trimmed, so the
+/// builder can label it Shortened Local Name rather than Complete. What
 /// "optional" means is the caller's choice (a caller-supplied UUID list, a
 /// beacon's manufacturer data); what is *not* optional is anything a script
 /// asked for explicitly, which is why the extras path passes those through
@@ -245,17 +267,17 @@ impl AdvertisingData {
 /// that looks nothing like the overflow that caused it.
 pub(crate) fn fit_within_legacy_limit(
     name: &str,
-    build: impl Fn(&str, bool) -> Vec<u8>,
+    build: impl Fn(&str, bool, bool) -> Vec<u8>,
 ) -> Result<Vec<u8>, SimbleError> {
-    let mut bytes = build(name, true);
+    let mut bytes = build(name, true, true);
     if bytes.len() > MAX_ADV_LEN {
-        bytes = build(name, false);
+        bytes = build(name, true, false);
     }
     // `String::pop` removes a whole `char`, so a multi-byte name is never cut
     // mid-codepoint into an AD structure no scanner can decode.
     let mut trimmed = name.to_string();
     while bytes.len() > MAX_ADV_LEN && trimmed.pop().is_some() {
-        bytes = build(&trimmed, false);
+        bytes = build(&trimmed, false, false);
     }
     if bytes.len() > MAX_ADV_LEN {
         return Err(SimbleError::InvalidParameter(format!(
@@ -271,10 +293,10 @@ pub(crate) fn fit_within_legacy_limit(
 /// local name) that fits the legacy 31-byte limit, dropping the UUID list
 /// and then trimming the name if needed.
 pub fn build_adv_payload(name: &str, service_uuids: &[u16]) -> Result<Vec<u8>, SimbleError> {
-    fit_within_legacy_limit(name, |name, keep_uuids| {
+    fit_within_legacy_limit(name, |name, complete, keep_uuids| {
         let mut ad = AdvertisingData::new()
             .with_flags(flags::LE_GENERAL_DISCOVERABLE | flags::BR_EDR_NOT_SUPPORTED)
-            .with_name(name);
+            .with_name_on_air(name, complete);
         if keep_uuids {
             for &uuid in service_uuids {
                 ad = ad.with_service_uuid_16(uuid);
@@ -301,11 +323,11 @@ pub fn build_adv_payload_with_extras(
     // An empty name is omitted entirely (no zero-length AD structure), so a
     // large service-data payload can occupy the whole packet — real beacons
     // (Quick Share, Eddystone) carry no name at all.
-    fit_within_legacy_limit(name, |name, keep_uuids| {
+    fit_within_legacy_limit(name, |name, complete, keep_uuids| {
         let mut ad = AdvertisingData::new()
             .with_flags(flags::LE_GENERAL_DISCOVERABLE | flags::BR_EDR_NOT_SUPPORTED);
-        // `with_name` already drops an empty name, so no special case here.
-        ad = ad.with_name(name);
+        // An empty name is dropped at encode time, so no special case here.
+        ad = ad.with_name_on_air(name, complete);
         if keep_uuids {
             for &uuid in service_uuids {
                 ad = ad.with_service_uuid_16(uuid);

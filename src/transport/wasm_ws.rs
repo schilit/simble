@@ -257,7 +257,7 @@ pub fn build_demo_adv_payload(
     mfg_company: u16,
     mfg_data: &[u8],
 ) -> Result<Vec<u8>, SimbleError> {
-    fit_within_legacy_limit(name, |name, keep_extras| {
+    fit_within_legacy_limit(name, |name, complete, keep_extras| {
         let mut ad = AdvertisingData::new()
             .with_flags(flags::LE_GENERAL_DISCOVERABLE | flags::BR_EDR_NOT_SUPPORTED);
         if keep_extras {
@@ -268,7 +268,7 @@ pub fn build_demo_adv_payload(
                 ad = ad.with_manufacturer_data(mfg_company, mfg_data);
             }
         }
-        ad.with_name(name).to_bytes()
+        ad.with_name_on_air(name, complete).to_bytes()
     })
 }
 

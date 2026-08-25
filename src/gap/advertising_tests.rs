@@ -202,7 +202,56 @@ fn test_every_builder_path_trims_rather_than_overflowing() {
             payload.windows(9).any(|w| w == b"a-device-"),
             "the name is trimmed from the tail, and what is left is real"
         );
+        assert!(
+            payload.contains(&ad_type::SHORTENED_LOCAL_NAME),
+            "a trimmed name must be labelled Shortened Local Name (0x08): \
+             the scan response still carries the whole name, and emitting the \
+             stump as Complete makes the two on-air names contradict each \
+             other rather than nest"
+        );
+        assert!(
+            !payload.contains(&[0x09u8][0]) || {
+                // 0x09 may appear as a data byte; assert no *AD structure*
+                // of type Complete Local Name survives.
+                let mut i = 0;
+                let mut found = false;
+                while i < payload.len() {
+                    let len = payload[i] as usize;
+                    if len == 0 { break; }
+                    if payload.get(i + 1) == Some(&ad_type::COMPLETE_LOCAL_NAME) {
+                        found = true;
+                    }
+                    i += 1 + len;
+                }
+                !found
+            },
+            "and no Complete Local Name structure remains beside it"
+        );
     }
+}
+
+#[test]
+fn test_an_untrimmed_name_is_still_a_complete_local_name() {
+    let payload = build_adv_payload("short", &[]).expect("fits");
+    // Walk the AD structures: the name must be there, typed Complete.
+    let mut i = 0;
+    let mut name_type = None;
+    while i < payload.len() {
+        let len = payload[i] as usize;
+        if len == 0 {
+            break;
+        }
+        let ad = payload[i + 1];
+        if ad == ad_type::COMPLETE_LOCAL_NAME || ad == ad_type::SHORTENED_LOCAL_NAME {
+            name_type = Some(ad);
+        }
+        i += 1 + len;
+    }
+    assert_eq!(
+        name_type,
+        Some(ad_type::COMPLETE_LOCAL_NAME),
+        "a name that fits whole is Complete — 0x08 is only for a stump"
+    );
 }
 
 #[test]

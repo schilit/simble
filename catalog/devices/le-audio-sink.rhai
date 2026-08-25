@@ -2,7 +2,7 @@
 // The control-point idiom: a peer WRITES a command opcode, and the device
 // applies it, updates its state and bumps the change counter. Nothing writes
 // the volume directly. Android reaches this through `BluetoothVolumeControl`.
-let server = android::BluetoothGattServer("web-speaker");
+let server = android::BluetoothGattServer("webspeaker");
 
 // A real LE Audio sink: PACS declares what this device can decode and
 // ASCS carries the endpoint a peer configures. Without them a phone (or
