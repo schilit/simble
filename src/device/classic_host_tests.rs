@@ -1269,3 +1269,105 @@ fn a_refused_page_is_reported_rather_than_dropped() {
     );
     assert_eq!(host.connection(), None, "and no link was established");
 }
+
+use crate::l2cap::AclPacketBoundary;
+
+/// One HCI ACL fragment with the boundary flag spelled out. The sibling
+/// `acl_packet` always says "first", which is the whole story only while
+/// nothing is ever split.
+fn acl_fragment(handle: u16, boundary: AclPacketBoundary, payload: &[u8]) -> Vec<u8> {
+    use crate::l2cap::HciAclHeader;
+    let header = HciAclHeader::new(handle, boundary, payload.len() as u16);
+    let mut packet = Vec::with_capacity(5 + payload.len());
+    packet.push(crate::transport::h4_type::HCI_ACL_DATA);
+    packet.extend_from_slice(header.as_bytes());
+    packet.extend_from_slice(payload);
+    packet
+}
+
+/// An L2CAP frame larger than the controller's ACL data packet length
+/// arrives as several HCI ACL packets, and only the first carries the L2CAP
+/// header. Reading each one as a fresh frame turns a continuation
+/// fragment's payload bytes into a length and a CID.
+///
+/// This is the exact shape of a real failure: a Pixel 9 Pro streaming A2DP
+/// into a CSR8510 fragmented its first media packet, and the two SBC bytes
+/// that happened to land at the front of the continuation were read as
+/// `cid=0xdbb6`. Not a dropped packet — a *fabricated* one, routed to a
+/// channel that does not exist, while the audio never reached the sink.
+///
+/// Both simulated controllers carry a 672-byte SDU whole, so nothing in this
+/// tree exercised the fragmented path until hardware did.
+#[test]
+fn test_an_l2cap_frame_split_across_acl_packets_is_reassembled_before_routing() {
+    let handle = 0x0048;
+    let mut host = host();
+    let addr = [0x11; 6];
+    host.handle_packet(&connection_request_event(addr)).unwrap();
+    host.handle_packet(&connection_complete_event(handle, addr))
+        .unwrap();
+    let local_cid = open_server_channel(&mut host, handle, SDP_PSM, 0x0040);
+
+    // A malformed SDP request, which the server answers with an error — the
+    // same one the unfragmented test uses. What is under test is whether it
+    // arrives at all, not what it says.
+    let sdu = [0xFFu8, 0x00, 0x00];
+    let mut frame = Vec::new();
+    frame.extend_from_slice(&(sdu.len() as u16).to_le_bytes());
+    frame.extend_from_slice(&local_cid.to_le_bytes());
+    frame.extend_from_slice(&sdu);
+
+    // Split inside the SDU: the first packet carries the L2CAP header and
+    // one payload byte, the second the remaining two. Those two bytes are
+    // what the old code read as a length and a CID.
+    let first = acl_fragment(handle, AclPacketBoundary::FirstAutoFlushable, &frame[..5]);
+    let rest = acl_fragment(handle, AclPacketBoundary::Continuing, &frame[5..]);
+
+    let out = host.handle_packet(&first).expect("first fragment accepted");
+    assert!(
+        out.is_empty(),
+        "half a frame is not a frame — it must produce no reply; it produced {out:?}",
+    );
+    let out = host
+        .handle_packet(&rest)
+        .expect("the continuation completes the frame");
+    assert_eq!(
+        out.len(),
+        1,
+        "the reassembled SDP request must be answered — before the fix the \
+         continuation was parsed as a fresh frame on an invented CID and the \
+         request was lost",
+    );
+    assert_eq!(
+        out[0][9], 0x01,
+        "and the answer is the SDP server's, i.e. the frame reached it whole",
+    );
+    let reply_cid = u16::from_le_bytes([out[0][7], out[0][8]]);
+    assert_eq!(
+        reply_cid, 0x0040,
+        "the reply belongs to the channel the *first* fragment named",
+    );
+}
+
+/// A continuation fragment with no first fragment is a protocol error, not
+/// something to guess at. Saying so beats silently accumulating bytes into
+/// whichever frame happens to come next.
+#[test]
+fn test_a_stray_continuation_fragment_is_refused_rather_than_guessed_at() {
+    let handle = 0x0048;
+    let mut host = host();
+    let addr = [0x11; 6];
+    host.handle_packet(&connection_request_event(addr)).unwrap();
+    host.handle_packet(&connection_complete_event(handle, addr))
+        .unwrap();
+
+    let stray = acl_fragment(
+        handle,
+        AclPacketBoundary::Continuing,
+        &[0x77, 0x6D, 0xB6, 0xDD],
+    );
+    assert!(
+        host.handle_packet(&stray).is_err(),
+        "a continuation with nothing to continue must be reported",
+    );
+}

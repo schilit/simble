@@ -23,7 +23,7 @@ use crate::classic::sdp::{
     DataElement, SDP_PSM, SdpServer, SdpUuid, Service, ServiceAttribute, attribute_id,
 };
 use crate::l2cap::classic::ClassicChannelManager;
-use crate::l2cap::{L2capHeader, cid};
+use crate::l2cap::{AclReassembler, L2capHeader, cid};
 use crate::packets::{
     ConfigurationRequestHeader, ConfigurationResponseHeader, ConnectionRequestHeader,
     ConnectionResponseHeader, HciEvent, L2capSignalingHeader, signaling_code,
@@ -58,6 +58,9 @@ mod opcode {
     /// Write Inquiry Mode: choose which of the three inquiry-result event
     /// forms the controller reports with.
     pub const WRITE_INQUIRY_MODE: [u8; 2] = [0x45, 0x0C];
+    /// Write Extended Inquiry Response: the 240 octets an inquiring peer
+    /// gets *with* the inquiry result, before it has connected to anything.
+    pub const WRITE_EXTENDED_INQUIRY_RESPONSE: [u8; 2] = [0x52, 0x0C];
 
     // --- security ---------------------------------------------------------
     //
@@ -1356,6 +1359,10 @@ pub struct ClassicHost {
     /// open when it is created — it opens when both sides have configured —
     /// and there is no event for that, only a state the poll loop notices.
     announced_cids: Vec<u16>,
+    /// Reassembles inbound L2CAP frames that the controller split across
+    /// several HCI ACL packets. See [`Self::handle_acl`] for why a Classic
+    /// host cannot do without one.
+    acl_reassembler: AclReassembler,
 }
 
 impl ClassicHost {
@@ -1394,6 +1401,7 @@ impl ClassicHost {
             passkey: None,
             security: LinkSecurity::default(),
             announced_cids: Vec::new(),
+            acl_reassembler: AclReassembler::new(),
         }
     }
 
@@ -1853,6 +1861,8 @@ impl ClassicHost {
                 // "is this encrypted?" and be told about a connection that
                 // has already ended.
                 self.security = LinkSecurity::default();
+                self.acl_reassembler
+                    .on_disconnected(complete.connection_handle.get());
                 Vec::new()
             }
             HciEvent::EncryptionChange(change) => {
@@ -1879,7 +1889,7 @@ impl ClassicHost {
                 self.sco_received.clear();
                 Vec::new()
             }
-            HciEvent::DisconnectionComplete(_) => {
+            HciEvent::DisconnectionComplete(ended) => {
                 self.connection = None;
                 // The audio rode the ACL and cannot outlive it.
                 self.sco = None;
@@ -1888,6 +1898,10 @@ impl ClassicHost {
                 // are not: they outlive the connection, which is what makes
                 // them a bond rather than a session.
                 self.security = LinkSecurity::default();
+                // A frame half-reassembled when the link dropped must not be
+                // completed by the next link's first fragment.
+                self.acl_reassembler
+                    .on_disconnected(ended.connection_handle.get());
                 // The ACL is gone, so every channel riding it is gone too —
                 // and a profile holding session state must be told, or it
                 // meets the next peer still believing the last one is there.
@@ -2228,13 +2242,78 @@ impl ClassicHost {
         vec![command(opcode::WRITE_INQUIRY_MODE, &[mode])]
     }
 
+    /// HCI Write Extended Inquiry Response: publish this device's name and
+    /// the service classes it offers *in the inquiry result itself*.
+    ///
+    /// Without one, an inquiry result carries an address and a Class of
+    /// Device and nothing else — a peer must page and run a Remote Name
+    /// Request to learn the name, and an SDP query to learn the services.
+    /// Phones do not wait for that to decide what to show: a device is
+    /// offered as an audio device largely on its Class of Device and the
+    /// service-class UUID list in its EIR, both of which are readable before
+    /// any connection exists. A speaker that publishes neither is a nameless
+    /// row in a scan list.
+    ///
+    /// `uuids` are 16-bit service class UUIDs — 0x110B for A2DP Audio Sink.
+    /// The payload is the same AD-structure encoding LE advertising uses
+    /// (Core Vol 3, Part C, §8), zero-padded to the 240 octets the command
+    /// always carries. FEC is requested, which is the usual choice: the
+    /// payload here is far short of the size where the encoding cost bites.
+    ///
+    /// Not part of [`Self::start_commands`] — a device that only ever
+    /// initiates has no inquiry response to shape, and the service list is
+    /// the caller's to know.
+    pub fn set_extended_inquiry_response(&self, name: &str, uuids: &[u16]) -> Vec<Vec<u8>> {
+        /// Vol 4, Part E, §7.3.56: FEC_Required(1) then a fixed 240 octets.
+        const EIR_DATA_LEN: usize = 240;
+        let mut data = crate::gap::advertising::AdvertisingData::new().with_name(name);
+        for uuid in uuids {
+            data = data.with_service_uuid_16(*uuid);
+        }
+        let mut parameters = vec![0x01];
+        let mut payload = data.to_bytes();
+        // A name long enough to overflow is truncated by the builder, not
+        // here; anything still over length would make the controller reject
+        // the whole command, which would cost the name *and* the services.
+        payload.truncate(EIR_DATA_LEN);
+        payload.resize(EIR_DATA_LEN, 0x00);
+        parameters.extend_from_slice(&payload);
+        vec![command(
+            opcode::WRITE_EXTENDED_INQUIRY_RESPONSE,
+            &parameters,
+        )]
+    }
+
+    /// One inbound HCI ACL packet, reassembled into an L2CAP frame and
+    /// routed to the channel it belongs to.
+    ///
+    /// The reassembly is not optional. An L2CAP frame larger than the
+    /// controller's ACL data packet length arrives as several HCI ACL
+    /// packets: the first carries the L2CAP header and the rest are bare
+    /// continuation bytes, told apart only by the header's Packet Boundary
+    /// flag. This used to parse *every* ACL packet as a fresh L2CAP frame,
+    /// which reads a continuation fragment's audio bytes as a length and a
+    /// CID and routes the result to a channel that does not exist.
+    ///
+    /// Nothing in the test suite could see it. Both simulated controllers
+    /// carry a 672-byte A2DP media SDU in one piece, so the fragmented path
+    /// never ran. A CSR8510 with a real phone streaming into it fragments on
+    /// the first media packet, and the symptom is not a dropped packet but a
+    /// *corrupt* one: `cid=0xdbb6`, invented out of two bytes of SBC.
     fn handle_acl(&mut self, packet: &[u8]) -> Result<Vec<Vec<u8>>, SimbleError> {
         use crate::l2cap::HciAclHeader;
         let Some((header, payload)) = HciAclHeader::parse(&packet[1..]) else {
             return Err(SimbleError::PacketParseError("Invalid ACL header".into()));
         };
         let handle = header.handle();
-        let Some((l2cap_header, body)) = L2capHeader::ref_from_prefix(payload).ok() else {
+        let is_first = header.is_first_fragment();
+        let Some(frame) = self
+            .acl_reassembler
+            .push_fragment(handle, is_first, payload)?
+        else {
+            return Ok(Vec::new());
+        };
+        let Some((l2cap_header, body)) = L2capHeader::ref_from_prefix(frame.as_slice()).ok() else {
             return Ok(Vec::new());
         };
         let channel_id = l2cap_header.cid.get();

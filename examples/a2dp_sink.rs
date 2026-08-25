@@ -38,7 +38,7 @@ use simble::classic::a2dp::make_audio_sink_service_sdp_records;
 use simble::classic::avdtp::AvdtpEvent;
 use simble::classic::sdp::SdpServer;
 use simble::device::a2dp::A2dpSink;
-use simble::device::classic_host::scan_enable;
+use simble::device::classic_host::{authentication_requirements, io_capability, scan_enable};
 use simble::device::{ClassicHost, SdpHandler};
 use simble::transport::{HciChannel, HciTransport, LiveTransport};
 use simble::types::Address;
@@ -46,10 +46,31 @@ use simble::types::Address;
 /// SDP record handle for the Audio Sink record this speaker publishes.
 const SINK_SERVICE_RECORD_HANDLE: u32 = 0x0001_000B;
 
+/// A2DP Audio Sink service class (Assigned Numbers). The number a phone
+/// looks for to decide this device can receive audio.
+const AUDIO_SINK_SERVICE_UUID: u16 = 0x110B;
+
 /// Class of Device 0x240414: Audio/Video major class, Loudspeaker minor
-/// class, Audio + Rendering service bits — what a phone renders as a
-/// speaker, and what makes this device recognisably the *rendering* side.
+/// class, Audio + Rendering service bits.
+///
+/// The minor class is the part a phone acts on before any SDP query, and it
+/// decides the *category*, not just the offer: a Wearable Headset minor
+/// class (0x240404) pairs and streams identically but Android files the
+/// device under headphones, and a thing named `simble-speaker` then does not
+/// appear in "Speakers and displays" — measured on a Pixel, which is the
+/// sort of thing only a real phone can settle. `SIMBLE_COD` overrides it.
 const SPEAKER_CLASS_OF_DEVICE: [u8; 3] = [0x14, 0x04, 0x24];
+
+/// Parses `0x240404` (or `240404`) into the three octets a Class of Device
+/// occupies on the wire, least-significant first.
+fn parse_class_of_device(text: &str) -> Option<[u8; 3]> {
+    let cleaned = text
+        .trim()
+        .trim_start_matches("0x")
+        .trim_start_matches("0X");
+    let value = u32::from_str_radix(cleaned, 16).ok()?;
+    (value <= 0xFF_FFFF).then_some([value as u8, (value >> 8) as u8, (value >> 16) as u8])
+}
 
 fn env_usize(key: &str, default: usize) -> usize {
     std::env::var(key)
@@ -60,7 +81,14 @@ fn env_usize(key: &str, default: usize) -> usize {
 
 fn main() {
     let want_frames = env_usize("A2DP_EXPECT_FRAMES", 20);
-    let timeout = Duration::from_secs(env_usize("A2DP_TIMEOUT_SECS", 30) as u64);
+    // Long enough that a person can pick the speaker out of a phone's
+    // pairing list, tap through a prompt and start a track. The interop
+    // script exits on success, so a generous ceiling costs it nothing.
+    let timeout = Duration::from_secs(env_usize("A2DP_TIMEOUT_SECS", 180) as u64);
+    let class_of_device = std::env::var("SIMBLE_COD")
+        .ok()
+        .and_then(|text| parse_class_of_device(&text))
+        .unwrap_or(SPEAKER_CLASS_OF_DEVICE);
     let name = std::env::var("SIMBLE_NAME").unwrap_or_else(|_| "simble-speaker".to_string());
     let address = std::env::var("SIMBLE_ADDR").unwrap_or_else(|_| "F0:DE:C0:00:0C:0B".to_string());
     let local = Address::from_str(&address).unwrap_or(Address::ANY);
@@ -82,9 +110,41 @@ fn main() {
         println!("btsnoop capture: {path}");
     }
     let backend = transport.describe();
-    println!("connected over {backend} as {name} ({local}); waiting for a source");
+    // On a dongle the *controller* owns the identity: `local` was never sent
+    // anywhere, and the address the phone will show is the silicon's. Saying
+    // the wrong one here sends a person hunting for a device that is not in
+    // the list under that name.
+    let on_air = match &mut transport {
+        LiveTransport::Usb(usb) => match usb.read_bd_addr() {
+            Ok(real) => real,
+            Err(e) => {
+                eprintln!("could not read the dongle's BD_ADDR ({e})");
+                local
+            }
+        },
+        _ => local,
+    };
+    println!(
+        "connected over {backend} as {name:?} at {on_air}, class {:#08x}",
+        u32::from_le_bytes([
+            class_of_device[0],
+            class_of_device[1],
+            class_of_device[2],
+            0
+        ])
+    );
+    println!("discoverable and connectable — pair with {name:?} from the phone, then play audio");
 
-    let mut host = ClassicHost::new(&name, SPEAKER_CLASS_OF_DEVICE);
+    let mut host = ClassicHost::new(&name, class_of_device);
+    // A speaker has no display and no keypad. Claiming otherwise is what
+    // escalates SSP from Just Works to Numeric Comparison and makes a phone
+    // ask a person to compare six digits with a box that cannot show them —
+    // `ClassicHost` defaults to DisplayYesNo, which is right for a phone and
+    // wrong for this.
+    host.set_io_capability(
+        io_capability::NO_INPUT_NO_OUTPUT,
+        authentication_requirements::GENERAL_BONDING,
+    );
     let mut sdp = SdpHandler::new(SdpServer::new());
     sdp.server_mut().service_records.insert(
         SINK_SERVICE_RECORD_HANDLE,
@@ -103,11 +163,31 @@ fn main() {
             .inject_host_packet(packet)
             .expect("queue scan enable");
     }
+    // Publish the name and the Audio Sink service class in the inquiry
+    // response itself. A phone decides what to *offer* from the Class of
+    // Device and this list, both readable before it has connected to
+    // anything — without it we are a nameless row that has to be paged
+    // before it can say what it is.
+    for packet in host.set_extended_inquiry_response(&name, &[AUDIO_SINK_SERVICE_UUID]) {
+        channel.inject_host_packet(packet).expect("queue EIR");
+    }
 
     let mut decoded_frames = 0usize;
     let mut reported = Vec::new();
     let mut failure: Option<String> = None;
     let deadline = Instant::now() + timeout;
+    // Each milestone announced once. A live run spends most of its time
+    // waiting for a person, and silence between "waiting for a source" and
+    // the first AVDTP event cannot be told from a dead radio.
+    let mut said_connected = false;
+    let mut said_paired = false;
+    let mut said_encrypted = false;
+    // A2DP over an unencrypted link is a link a phone will not stream on.
+    // See the `asked_for_authentication` use below for why this side has to
+    // ask rather than wait.
+    let mut asked_for_authentication = false;
+    let mut asked_for_encryption = false;
+    let mut saw_authentication_complete = false;
 
     while decoded_frames < want_frames && failure.is_none() {
         if Instant::now() > deadline {
@@ -121,6 +201,14 @@ fn main() {
             break;
         }
         while let Some(packet) = channel.poll_controller_packet() {
+            // Authentication Complete (Vol 4, Part E, 7.7.6) is the event
+            // that says the link key has actually been used to authenticate
+            // this link, as opposed to merely existing. `LinkSecurity`
+            // reports both through one `authenticated` flag, so the two are
+            // told apart here rather than there.
+            if packet.len() > 2 && packet[0] == 0x04 && packet[1] == 0x06 {
+                saw_authentication_complete = true;
+            }
             match host.handle_packet(&packet) {
                 Ok(outgoing) => {
                     for out in outgoing {
@@ -132,6 +220,69 @@ fn main() {
         }
         for packet in host.poll() {
             let _ = channel.inject_host_packet(packet);
+        }
+
+        if !said_connected && let Some((handle, peer)) = host.connection() {
+            println!("link: the phone paged us; ACL up with {peer} on handle {handle:#06x}");
+            said_connected = true;
+        }
+        let security = host.security();
+        if !said_paired {
+            if let Some(status) = security.pairing_status.filter(|s| *s != 0x00) {
+                failure = Some(format!(
+                    "the phone's pairing failed: Simple Pairing Complete status {status:#04x}"
+                ));
+                break;
+            }
+            if security.authenticated {
+                if let Some(capability) = security.peer_io_capability {
+                    println!("link: the phone's IO capability is {capability:#04x}");
+                }
+                if let Some((_, peer)) = host.connection()
+                    && let Some(key) = host.link_key(peer)
+                {
+                    println!(
+                        "link: bonded, link key type {:#04x} ({})",
+                        key.key_type,
+                        if key.is_authenticated() {
+                            "authenticated"
+                        } else {
+                            "unauthenticated"
+                        }
+                    );
+                }
+                said_paired = true;
+            }
+        }
+        // Having a link key is not having an encrypted link, and a phone
+        // will not open an A2DP media channel on an unencrypted one. Which
+        // side starts encryption is not fixed: normally the initiator does,
+        // but a Pixel that has just re-bonded after asking us for a key we
+        // did not have never gets round to it, and both sides then wait —
+        // the phone showing "connecting" until it times out. A real headset
+        // does not wait, and neither does this: once bonded, ask.
+        //
+        // Authentication first, because Set Connection Encryption is only
+        // valid on a link that has been authenticated. Asking for it uses
+        // the key the pairing just produced, which arrives back here as a
+        // Link Key Request that `ClassicHost` answers from its store.
+        if said_paired && !asked_for_authentication {
+            asked_for_authentication = true;
+            println!("link: asking for authentication so the link can be encrypted");
+            for packet in host.authenticate() {
+                let _ = channel.inject_host_packet(packet);
+            }
+        }
+        if saw_authentication_complete && !asked_for_encryption {
+            asked_for_encryption = true;
+            println!("link: authenticated; asking for encryption");
+            for packet in host.encrypt(true) {
+                let _ = channel.inject_host_packet(packet);
+            }
+        }
+        if !said_encrypted && security.encrypted {
+            println!("link: encrypted");
+            said_encrypted = true;
         }
 
         let Some(sink) = host.handler_mut::<A2dpSink>() else {
