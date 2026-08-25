@@ -74,9 +74,19 @@ const EVT_LE_META: u8 = 0x3E;
 const SUB_LE_CONNECTION_COMPLETE: u8 = 0x01;
 const SUB_LE_ADVERTISING_REPORT: u8 = 0x02;
 
-/// The name the advertiser puts in its AD, and the scanner looks for. Long
-/// enough that a stray advertiser in the room cannot collide with it.
-const ADV_NAME: &str = "SimbleWire";
+/// The name the advertiser puts in its AD, and the scanner looks for.
+///
+/// It says what it is because **these tests transmit on real RF**, and a
+/// phone in the room will see them. A passer-by should be able to tell from
+/// the name alone that this is a test fixture that exists for a second or
+/// two, not a device worth pairing with. Long enough, too, that a stray
+/// advertiser cannot collide with it.
+///
+/// 23 characters: with the Flags structure that is 28 of the 31 legacy
+/// advertising bytes, so it fits without being truncated. Anything longer
+/// would be trimmed *and still labelled Complete* — see
+/// `fit_within_legacy_limit` in `gap/advertising.rs`.
+const ADV_NAME: &str = "simble-test-do-not-pair";
 
 /// The bring-up every controller gets, in order.
 const BRING_UP: [[u8; 2]; 5] = [
@@ -845,7 +855,7 @@ fn contains_complete_local_name(ad: &[u8], name: &str) -> bool {
 
 /// The peripheral dongle A hosts: the catalog's Heart Rate device, unchanged.
 const PERIPHERAL_SCRIPT: &str = r#"
-let server = android::BluetoothGattServer("SimbleWire");
+let server = android::BluetoothGattServer("simble-test-do-not-pair");
 let hrs = android::BluetoothGattService(uuid::HEART_RATE_SERVICE, android::SERVICE_TYPE_PRIMARY);
 let hr = android::BluetoothGattCharacteristic(uuid::HEART_RATE_MEASUREMENT,
     android::PROPERTY_READ | android::PROPERTY_NOTIFY, android::PERMISSION_READ);
