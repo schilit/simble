@@ -749,6 +749,9 @@ function applyMode() {
   }
   $("ident-addr").disabled = isUsb;
   $("ident-addr").title = isUsb ? "a dongle's address belongs to its silicon" : "";
+  // One verb: connect applies the name, so a second Apply button is a
+  // second way to do the same thing standing somewhere else.
+  $("ident-apply").hidden = isUsb;
   if (isUsb) {
     $("mode-hint").textContent =
       "USB dongle — a Classic A2DP sink on real silicon; the phone is the source.";
@@ -922,7 +925,15 @@ function disconnectUsb() {
 /// back left the dongle advertising until the tab closed.
 function toggleUsb() {
   if ($("usb-connect").textContent === "disconnect") disconnectUsb();
-  else buildUsb();
+  else buildUsb(); // "connect" and "reconnect" both mean: apply and go
+}
+
+/// Editing the name while connected turns the button into "reconnect" —
+/// the same button, saying what pressing it will now do.
+function onUsbNameEdited() {
+  if (mode !== "usb") return;
+  const button = $("usb-connect");
+  if (button.textContent === "disconnect") button.textContent = "reconnect";
 }
 
 /// A player at the stream's own rate — see lc3-player.js for why the graph
@@ -2041,6 +2052,7 @@ function wireControls() {
   });
 
   $("usb-connect").addEventListener("click", toggleUsb);
+  $("ident-name").addEventListener("input", onUsbNameEdited);
 
   // This handler must stay a real click: see the note on the page. Creating the
   // context from script yields a suspended one, which counts and schedules SDUs
