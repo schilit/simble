@@ -15,11 +15,16 @@
 
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::sync::mpsc;
 
 use super::hci_adapter::HciChannel;
 use super::rootcanal::H4FrameReader;
 use crate::types::SimbleError;
+
+/// How long a write waits out backpressure before calling the controller
+/// wedged. Generous next to any real drain, short next to a person waiting.
+const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// H4 over a tty. Writes go straight to the device; reads arrive via a
 /// blocking reader thread, because a portable non-blocking tty read needs
@@ -42,22 +47,45 @@ impl SerialTransport {
     pub fn open(path: &str) -> Result<Self, SimbleError> {
         // macOS gives every serial device two nodes: /dev/tty.* is the
         // dial-IN device and blocks in open(2) until carrier detect — which
-        // for a CDC-ACM gadget never comes, so the process simply hangs with
-        // no error to report. /dev/cu.* is the call-out node and opens at
-        // once. Taking the cu form silently is right because they are the
-        // same device, and a caller who names the tty node means the device,
-        // not the dial-in semantics.
+        // for a CDC-ACM gadget never comes. /dev/cu.* is the call-out node.
+        // The two are the same device, and a caller naming the tty node
+        // means the device, not the dial-in semantics.
         let path = &if cfg!(target_os = "macos") {
             path.replace("/dev/tty.", "/dev/cu.")
         } else {
             path.to_string()
         };
+
+        // O_NONBLOCK at open, for two reasons. It sidesteps the carrier wait
+        // that hangs open(2) on some CDC gadgets even via the call-out node,
+        // and it turns a controller that has stopped draining into a
+        // reported error rather than a process parked forever in write(2) —
+        // which is exactly how an over-run ISO stream first presented.
+        const O_NONBLOCK: i32 = if cfg!(target_os = "macos") {
+            0x0004
+        } else {
+            0o4000
+        };
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(O_NONBLOCK)
+            .open(path)
+            .map_err(|e| SimbleError::Transport(format!("opening {path}: {e}")))?;
+
+        // Raw mode, or the line discipline cooks binary H4: echo alone would
+        // write every received byte back at the controller. `stty` is shelled
+        // out rather than binding termios because this crate takes no FFI —
+        // and it is handed the ALREADY-OPEN descriptor as its stdin, because
+        // `stty -f <path>` opens the device itself and blocks doing so.
+        let stty_stdin = file
+            .try_clone()
+            .map_err(|e| SimbleError::Transport(format!("cloning {path}: {e}")))?;
         let stty = std::process::Command::new("stty")
-            .args(if cfg!(target_os = "macos") {
-                ["-f", path, "raw", "-echo"]
-            } else {
-                ["-F", path, "raw", "-echo"]
-            })
+            .args(["raw", "-echo"])
+            .stdin(std::process::Stdio::from(stty_stdin))
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status()
             .map_err(|e| SimbleError::Transport(format!("running stty for {path}: {e}")))?;
         if !stty.success() {
@@ -66,11 +94,7 @@ impl SerialTransport {
             )));
         }
 
-        let writer = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .map_err(|e| SimbleError::Transport(format!("opening {path}: {e}")))?;
+        let writer = file;
         let mut reader = writer
             .try_clone()
             .map_err(|e| SimbleError::Transport(format!("cloning {path}: {e}")))?;
@@ -105,6 +129,11 @@ impl SerialTransport {
                                 }
                             }
                         }
+                        // Nothing to read yet: the descriptor is non-blocking,
+                        // so this is the idle case, not a failure.
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(std::time::Duration::from_millis(1));
+                        }
                         Err(e) => {
                             let _ = err_tx.send(format!("serial read: {e}"));
                             return;
@@ -120,6 +149,39 @@ impl SerialTransport {
             errors,
         })
     }
+
+    /// Writes one whole packet, waiting out short-term backpressure but
+    /// giving up rather than parking forever. A controller with its buffers
+    /// full stops reading the line; a host that blocks there stops being
+    /// able to say so.
+    fn write_packet(&mut self, packet: &[u8]) -> Result<(), SimbleError> {
+        let deadline = std::time::Instant::now() + WRITE_TIMEOUT;
+        let mut written = 0;
+        while written < packet.len() {
+            match self.writer.write(&packet[written..]) {
+                Ok(0) => {
+                    return Err(SimbleError::Transport(
+                        "serial write accepted nothing — the controller is not draining".into(),
+                    ));
+                }
+                Ok(n) => written += n,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() > deadline {
+                        return Err(SimbleError::Transport(format!(
+                            "serial write stalled for {WRITE_TIMEOUT:?} with {} of {} bytes out — \
+                             the controller has stopped draining (its buffers are full, or it \
+                             is wedged)",
+                            written,
+                            packet.len()
+                        )));
+                    }
+                    std::thread::sleep(std::time::Duration::from_micros(200));
+                }
+                Err(e) => return Err(SimbleError::Transport(format!("serial write: {e}"))),
+            }
+        }
+        Ok(())
+    }
 }
 
 impl super::HciTransport for SerialTransport {
@@ -132,9 +194,7 @@ impl super::HciTransport for SerialTransport {
             if trace {
                 eprintln!("host -> ctlr  {:02X?}", packet);
             }
-            self.writer
-                .write_all(&packet)
-                .map_err(|e| SimbleError::Transport(format!("serial write: {e}")))?;
+            self.write_packet(&packet)?;
         }
         while let Ok(packet) = self.inbound.try_recv() {
             if trace {

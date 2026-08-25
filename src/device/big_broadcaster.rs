@@ -244,6 +244,11 @@ pub enum BroadcastState {
     Failed(u8),
 }
 
+/// ISO buffers to assume before the controller says otherwise. A stock
+/// Zephyr build has eight; guessing high wedges the transport, guessing low
+/// only paces the stream more tightly than it must be.
+const DEFAULT_ISO_CREDITS: usize = 8;
+
 /// The transmit side of a Broadcast Isochronous Group.
 #[derive(Debug)]
 pub struct BigBroadcaster {
@@ -255,6 +260,12 @@ pub struct BigBroadcaster {
     data_paths_open: usize,
     /// One packet sequence number per BIS.
     tx_sequence: Vec<u16>,
+    /// ISO packets sent and not yet returned by Number Of Completed Packets.
+    iso_in_flight: usize,
+    /// The controller's ISO buffer count, from LE Read Buffer Size V2 when
+    /// the caller supplies it. Conservative until then: eight is what a
+    /// stock Zephyr build has, and overrunning it wedges the transport.
+    iso_credits_total: usize,
     /// Whether an [`Self::update_metadata`] re-publish is awaiting its
     /// Command Complete. Only ever set while [`BroadcastState::Streaming`],
     /// which is why it cannot be confused with the setup sequence's own
@@ -273,6 +284,8 @@ impl BigBroadcaster {
             bis_handles: Vec::new(),
             data_paths_open: 0,
             tx_sequence: Vec::new(),
+            iso_in_flight: 0,
+            iso_credits_total: DEFAULT_ISO_CREDITS,
             update_in_flight: false,
             last_update_status: None,
         }
@@ -307,6 +320,21 @@ impl BigBroadcaster {
                 code: hci_event_code::LE_META,
                 parameters,
             } => self.on_le_meta(parameters),
+            // Number Of Completed Packets (Vol 4, Part E, 7.7.19): the
+            // controller returning the ISO buffers our SDUs occupied.
+            HciEvent::Other {
+                code: 0x13,
+                parameters,
+            } => {
+                let mut released = 0usize;
+                if let Some((&count, rest)) = parameters.split_first() {
+                    for pair in rest.as_chunks::<4>().0.iter().take(count as usize) {
+                        released += u16::from_le_bytes([pair[2], pair[3]]) as usize;
+                    }
+                }
+                self.iso_in_flight = self.iso_in_flight.saturating_sub(released);
+                Vec::new()
+            }
             _ => Vec::new(),
         }
     }
@@ -553,17 +581,37 @@ impl BigBroadcaster {
     }
 
     /// Wraps one SDU for BIS index `bis_index` (1-based, as in the BASE), or
-    /// `None` if the data path is not open — audio written early is dropped by
-    /// the controller, so this refuses rather than pretending to send.
+    /// `None` if the data path is not open **or the controller has no ISO
+    /// buffer free**.
+    ///
+    /// The credit half is not optional on real silicon. A controller with
+    /// its ISO buffers full stops reading the transport, and a blocking
+    /// writer then parks forever: measured on an nRF52840 with eight ISO TX
+    /// buffers, a 200-SDU/s stream wedged the H4 link inside a second and
+    /// the process sat at 0% CPU with the BIG still advertising. Audio
+    /// written early is dropped by the controller too, so this refuses in
+    /// both cases rather than pretending to send.
     pub fn send_sdu(&mut self, bis_index: u8, sdu: &[u8]) -> Option<Vec<u8>> {
         if self.state != BroadcastState::Streaming || bis_index == 0 {
+            return None;
+        }
+        if self.iso_in_flight >= self.iso_credits_total {
             return None;
         }
         let slot = usize::from(bis_index - 1);
         let handle = *self.bis_handles.get(slot)?;
         let sequence = *self.tx_sequence.get(slot)?;
         self.tx_sequence[slot] = sequence.wrapping_add(1);
+        self.iso_in_flight += 1;
         Some(build_iso_packet(handle, sequence, sdu))
+    }
+
+    /// How many ISO packets are sent and not yet returned by
+    /// Number Of Completed Packets, and the controller's total. A caller
+    /// pacing audio can watch the gap close rather than discovering
+    /// backpressure by hanging.
+    pub fn iso_credits(&self) -> (usize, usize) {
+        (self.iso_in_flight, self.iso_credits_total)
     }
 
     /// Re-publishes the BASE with new subgroup metadata, without disturbing
