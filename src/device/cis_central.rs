@@ -273,12 +273,10 @@ impl CisCentral {
 mod tests {
     use super::*;
 
-    /// Builds a Command Complete H4 packet for `opcode` with `params`.
+    /// Type adapter: this module names opcodes as `[u8; 2]` byte pairs, the
+    /// shared builder takes the `u16` the packet carries.
     fn command_complete(opcode: [u8; 2], params: &[u8]) -> Vec<u8> {
-        let mut packet = vec![0x04, 0x0E, (3 + params.len()) as u8, 0x01];
-        packet.extend_from_slice(&opcode);
-        packet.extend_from_slice(params);
-        packet
+        crate::test_support::command_complete(u16::from_le_bytes(opcode), params)
     }
 
     /// LE CIS Established, as the controller reports it.

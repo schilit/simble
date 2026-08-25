@@ -53,10 +53,11 @@ pub fn address(last: u8) -> Address {
 /// `params` is the whole return-parameter block including the status byte, so
 /// a plain success is `&[0x00]`.
 pub fn command_complete(opcode: [u8; 2], params: &[u8]) -> Vec<u8> {
-    let mut packet = vec![0x04, 0x0E, (3 + params.len()) as u8, 0x01];
-    packet.extend_from_slice(&opcode);
-    packet.extend_from_slice(params);
-    packet
+    // Type adapter over the crate's builder: integration tests name opcodes as
+    // byte pairs, the packet carries a u16. `cargo test` turns on the
+    // `testing` feature via the self-dev-dependency, so `test_support` is
+    // reachable from here.
+    simble::test_support::command_complete(u16::from_le_bytes(opcode), params)
 }
 
 /// A set of devices on one simulated medium that can be advanced a step at a

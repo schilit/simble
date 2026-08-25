@@ -1,10 +1,9 @@
 use super::*;
 
+/// Type adapter: this module holds opcodes as `OpCode`, the shared builder
+/// takes the `u16` the packet carries.
 fn command_complete(opcode: OpCode, params: &[u8]) -> Vec<u8> {
-    let mut packet = vec![0x04, 0x0E, (3 + params.len()) as u8, 0x01];
-    packet.extend_from_slice(&opcode.get().to_le_bytes());
-    packet.extend_from_slice(params);
-    packet
+    crate::test_support::command_complete(opcode.get(), params)
 }
 
 fn create_big_complete(status: u8, handles: &[u16]) -> Vec<u8> {
@@ -39,7 +38,10 @@ fn run_to_streaming(handles: &[u16]) -> BigBroadcaster {
             "unexpected command in the setup sequence"
         );
         // Extended Advertising Parameters returns status + TX power.
-        next = b.on_packet(&command_complete(expected, &[0x00, 0x00]));
+        next = b.on_packet(&crate::test_support::command_complete(
+            expected.get(),
+            &[0x00, 0x00],
+        ));
     }
     assert_eq!(
         u16::from_le_bytes([next[0][1], next[0][2]]),
@@ -188,7 +190,10 @@ fn run_to_create_big() -> BigBroadcaster {
         ext_adv_opcode::LE_SET_EXTENDED_ADVERTISING_ENABLE,
         ext_adv_opcode::LE_SET_PERIODIC_ADVERTISING_ENABLE,
     ] {
-        next = b.on_packet(&command_complete(expected, &[0x00, 0x00]));
+        next = b.on_packet(&crate::test_support::command_complete(
+            expected.get(),
+            &[0x00, 0x00],
+        ));
     }
     let _ = next;
     b

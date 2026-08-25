@@ -71,6 +71,9 @@ pub mod android;
 pub mod api;
 pub mod classic;
 pub mod client;
+#[cfg(any(test, feature = "testing"))]
+pub mod test_support;
+
 pub mod controller;
 pub mod cs;
 pub mod device;

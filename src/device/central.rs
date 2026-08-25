@@ -1129,11 +1129,10 @@ mod tests {
     use super::*;
     use crate::device::host::opcode;
 
+    /// Type adapter: this module names opcodes as `[u8; 2]` byte pairs, the
+    /// shared builder takes the `u16` the packet carries.
     fn command_complete(opcode: [u8; 2], params: &[u8]) -> Vec<u8> {
-        let mut packet = vec![h4_type::HCI_EVENT, 0x0E, (3 + params.len()) as u8, 0x01];
-        packet.extend_from_slice(&opcode);
-        packet.extend_from_slice(params);
-        packet
+        crate::test_support::command_complete(u16::from_le_bytes(opcode), params)
     }
 
     /// One LE Advertising Report event for `address` with `address_type`.

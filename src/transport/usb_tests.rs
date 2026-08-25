@@ -344,7 +344,12 @@ fn test_acl_reassembler_handles_zero_length_payload() {
 // --- command flow control over the transport --------------------------------
 
 /// One Command Complete, bare (no H4 type byte), granting `credits`.
-fn command_complete(opcode: [u8; 2], credits: u8) -> Vec<u8> {
+/// A Command Complete carrying a *credit count* rather than return
+/// parameters, and deliberately **not** H4-framed: this is what the transport
+/// hands the credit accounting, below the point where the H4 byte is added.
+/// Distinct from [`crate::test_support::command_complete`] despite the family
+/// resemblance — different shape, different layer.
+fn command_complete_granting(opcode: [u8; 2], credits: u8) -> Vec<u8> {
     vec![0x0E, 0x04, credits, opcode[0], opcode[1], 0x00]
 }
 
@@ -374,7 +379,7 @@ fn test_pump_sends_one_command_until_the_controller_grants_more() {
     state
         .borrow_mut()
         .events_in
-        .push_back(command_complete([0x00, 0x0C], 1));
+        .push_back(command_complete_granting([0x00, 0x0C], 1));
     transport.pump(&channel).unwrap();
     assert_eq!(state.borrow().commands.len(), 2);
     assert_eq!(transport.command_backlog(), (0, 5));
@@ -383,7 +388,7 @@ fn test_pump_sends_one_command_until_the_controller_grants_more() {
     state
         .borrow_mut()
         .events_in
-        .push_back(command_complete([0x01, 0x0C], 4));
+        .push_back(command_complete_granting([0x01, 0x0C], 4));
     transport.pump(&channel).unwrap();
     assert_eq!(state.borrow().commands.len(), 6);
     assert_eq!(transport.command_backlog(), (0, 1));
@@ -403,7 +408,7 @@ fn test_a_credit_arriving_releases_a_command_in_the_same_pump() {
     state
         .borrow_mut()
         .events_in
-        .push_back(command_complete([0x03, 0x0C], 1));
+        .push_back(command_complete_granting([0x03, 0x0C], 1));
     transport.pump(&channel).unwrap();
 
     assert_eq!(state.borrow().commands.len(), 2);
@@ -458,13 +463,16 @@ fn test_the_event_carrying_a_credit_is_still_delivered() {
     state
         .borrow_mut()
         .events_in
-        .push_back(command_complete([0x03, 0x0C], 4));
+        .push_back(command_complete_granting([0x03, 0x0C], 4));
 
     transport.pump(&channel).unwrap();
 
     let packet = channel.poll_controller_packet().expect("event delivered");
     assert_eq!(packet[0], h4_type::HCI_EVENT);
-    assert_eq!(&packet[1..], &command_complete([0x03, 0x0C], 4)[..]);
+    assert_eq!(
+        &packet[1..],
+        &command_complete_granting([0x03, 0x0C], 4)[..]
+    );
 }
 
 /// Whatever the previous owner of a dongle left in its buffers is thrown
@@ -476,7 +484,7 @@ fn test_stale_traffic_is_discarded_before_the_session_starts() {
     state
         .borrow_mut()
         .events_in
-        .push_back(command_complete([0x09, 0x10], 1));
+        .push_back(command_complete_granting([0x09, 0x10], 1));
     state
         .borrow_mut()
         .acl_in

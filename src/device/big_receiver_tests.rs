@@ -4,13 +4,6 @@ use crate::packets::big::LeBigInfoAdvertisingReportEvent as BigInfo;
 use crate::packets::build_iso_packet;
 use crate::packets::ext_adv::ExtendedAdvertisingReportHeader;
 
-fn command_complete(opcode: u16, params: &[u8]) -> Vec<u8> {
-    let mut packet = vec![0x04, 0x0E, (3 + params.len()) as u8, 0x01];
-    packet.extend_from_slice(&opcode.to_le_bytes());
-    packet.extend_from_slice(params);
-    packet
-}
-
 fn le_meta(subevent: u8, params: &[u8]) -> Vec<u8> {
     let mut packet = vec![0x04, 0x3E, (1 + params.len()) as u8, subevent];
     packet.extend_from_slice(params);
@@ -117,7 +110,7 @@ fn run_to_receiving(config: ReceiverConfig) -> BigReceiver {
         u16::from_le_bytes([next[0][1], next[0][2]]),
         ext_adv_opcode::LE_SET_EXTENDED_SCAN_PARAMETERS.get()
     );
-    let next = r.on_packet(&command_complete(
+    let next = r.on_packet(&crate::test_support::command_complete(
         ext_adv_opcode::LE_SET_EXTENDED_SCAN_PARAMETERS.get(),
         &[0x00],
     ));
@@ -126,7 +119,7 @@ fn run_to_receiving(config: ReceiverConfig) -> BigReceiver {
         ext_adv_opcode::LE_SET_EXTENDED_SCAN_ENABLE.get()
     );
     assert!(
-        r.on_packet(&command_complete(
+        r.on_packet(&crate::test_support::command_complete(
             ext_adv_opcode::LE_SET_EXTENDED_SCAN_ENABLE.get(),
             &[0x00]
         ))
@@ -174,7 +167,7 @@ fn run_to_receiving(config: ReceiverConfig) -> BigReceiver {
             &crate::device::host::opcode::LE_SETUP_ISO_DATA_PATH
         );
         assert_eq!(next[0][6], iso_data_path::OUTPUT, "a sink opens Output");
-        next = r.on_packet(&command_complete(
+        next = r.on_packet(&crate::test_support::command_complete(
             u16::from_le_bytes(crate::device::host::opcode::LE_SETUP_ISO_DATA_PATH),
             &[0x00],
         ));
@@ -234,7 +227,7 @@ fn test_leaving_the_big_is_reflected_in_the_state() {
         big_opcode::LE_BIG_TERMINATE_SYNC.get()
     );
     assert!(
-        r.on_packet(&command_complete(
+        r.on_packet(&crate::test_support::command_complete(
             big_opcode::LE_BIG_TERMINATE_SYNC.get(),
             &[0x00, 0x00]
         ))
@@ -259,11 +252,11 @@ fn test_a_broadcast_id_filter_skips_other_sources() {
         ..Default::default()
     });
     r.start();
-    r.on_packet(&command_complete(
+    r.on_packet(&crate::test_support::command_complete(
         ext_adv_opcode::LE_SET_EXTENDED_SCAN_PARAMETERS.get(),
         &[0x00],
     ));
-    r.on_packet(&command_complete(
+    r.on_packet(&crate::test_support::command_complete(
         ext_adv_opcode::LE_SET_EXTENDED_SCAN_ENABLE.get(),
         &[0x00],
     ));
@@ -283,11 +276,11 @@ fn test_fragmented_periodic_reports_are_reassembled() {
     let (first, second) = data.split_at(20);
     let mut r = BigReceiver::new(ReceiverConfig::default());
     r.start();
-    r.on_packet(&command_complete(
+    r.on_packet(&crate::test_support::command_complete(
         ext_adv_opcode::LE_SET_EXTENDED_SCAN_PARAMETERS.get(),
         &[0x00],
     ));
-    r.on_packet(&command_complete(
+    r.on_packet(&crate::test_support::command_complete(
         ext_adv_opcode::LE_SET_EXTENDED_SCAN_ENABLE.get(),
         &[0x00],
     ));
@@ -309,11 +302,11 @@ fn test_a_truncated_periodic_report_is_discarded() {
     let source = BroadcastConfig::default();
     let mut r = BigReceiver::new(ReceiverConfig::default());
     r.start();
-    r.on_packet(&command_complete(
+    r.on_packet(&crate::test_support::command_complete(
         ext_adv_opcode::LE_SET_EXTENDED_SCAN_PARAMETERS.get(),
         &[0x00],
     ));
-    r.on_packet(&command_complete(
+    r.on_packet(&crate::test_support::command_complete(
         ext_adv_opcode::LE_SET_EXTENDED_SCAN_ENABLE.get(),
         &[0x00],
     ));
@@ -333,11 +326,11 @@ fn test_an_encrypted_source_without_a_code_is_refused() {
     let source = BroadcastConfig::default();
     let mut r = BigReceiver::new(ReceiverConfig::default());
     r.start();
-    r.on_packet(&command_complete(
+    r.on_packet(&crate::test_support::command_complete(
         ext_adv_opcode::LE_SET_EXTENDED_SCAN_PARAMETERS.get(),
         &[0x00],
     ));
-    r.on_packet(&command_complete(
+    r.on_packet(&crate::test_support::command_complete(
         ext_adv_opcode::LE_SET_EXTENDED_SCAN_ENABLE.get(),
         &[0x00],
     ));
