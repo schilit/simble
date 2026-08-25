@@ -98,6 +98,10 @@ export function createDeviceHeader(options) {
     // grew an address *field* ended up with two, and a reader asked which
     // one was real.
     onAddressEdit = null,
+    // Same contract for the device's name: the header displays it, so the
+    // header edits it. The ident rows that grew beside cards were the name
+    // in a second place.
+    onNameEdit = null,
     dotMeans = "",
     script = null,
     run = null,
@@ -193,23 +197,32 @@ export function createDeviceHeader(options) {
   }
 
   // --- run / stop ----------------------------------------------------------
-  let runBtn = null;
+  // The dot IS the control: the state light doubles as the start/stop
+  // toggle, coloured by what the device is doing. A separate ▶/■ beside it
+  // was the same state drawn twice — the light saying "running" and a
+  // button saying "press to stop" are one fact.
+  let stopDisabled = false;
   let whyEl = null;
   let running = run ? Boolean(run.running) : false;
 
   if (run) {
-    runBtn = document.createElement("button");
-    runBtn.className = "dev-icon";
-    runBtn.addEventListener("click", () => {
-      if (runBtn.disabled) return;
+    dot.classList.add("toggle");
+    dot.setAttribute("role", "button");
+    dot.tabIndex = 0;
+    const activate = () => {
+      if (stopDisabled) return;
       if (running) run.onStop?.();
       else run.onRun?.();
+    };
+    dot.addEventListener("click", activate);
+    dot.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        activate();
+      }
     });
     whyEl = document.createElement("span");
     whyEl.className = "dev-why";
-    // The toggle sits on the top row; its explanation gets its own row below,
-    // where a long reason cannot shove the address anywhere.
-    main.append(runBtn);
     el.append(whyEl);
     setStopCapability({ disabled: Boolean(run.disabled), reason: run.reason || "" });
     setRunning(running);
@@ -220,40 +233,68 @@ export function createDeviceHeader(options) {
   addrEl.className = "dev-addr";
   el.append(addrEl);
   setAddress(address, addressNote);
-  if (onAddressEdit) {
-    addrEl.style.cursor = "text";
-    addrEl.tabIndex = 0;
+  /// In-place editing for an identity span: Enter commits, Escape reverts,
+  /// a refusal string from `commit` reverts and becomes the tooltip.
+  function editable(el, hint, normalize, commit) {
+    el.style.cursor = "text";
+    el.tabIndex = 0;
     let before = "";
-    addrEl.addEventListener("focus", () => {
-      before = addrEl.textContent;
-      addrEl.contentEditable = "plaintext-only";
-      addrEl.title = "type the on-air address · Enter commits · Escape reverts";
+    el.addEventListener("focus", () => {
+      before = el.textContent;
+      el.contentEditable = "plaintext-only";
+      el.title = hint;
     });
-    addrEl.addEventListener("click", () => addrEl.focus());
-    addrEl.addEventListener("keydown", (event) => {
+    el.addEventListener("click", () => el.focus());
+    el.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
-        addrEl.blur();
+        el.blur();
       } else if (event.key === "Escape") {
-        addrEl.textContent = before;
-        addrEl.blur();
+        el.textContent = before;
+        el.blur();
       }
     });
-    addrEl.addEventListener("blur", () => {
-      addrEl.contentEditable = "false";
-      const next = addrEl.textContent.trim().toUpperCase();
+    el.addEventListener("blur", () => {
+      el.contentEditable = "false";
+      const next = normalize(el.textContent.trim());
       if (next === before) {
-        addrEl.textContent = before;
+        el.textContent = before;
         return;
       }
-      const refusal = onAddressEdit(next);
+      const refusal = commit(next, before);
       if (refusal) {
-        addrEl.textContent = before;
-        addrEl.title = refusal;
-      } else {
-        setAddress(next);
+        el.textContent = before;
+        el.title = refusal;
       }
     });
+  }
+
+  if (onAddressEdit) {
+    editable(
+      addrEl,
+      "type the on-air address · Enter commits · Escape reverts",
+      (text) => text.toUpperCase(),
+      (next) => {
+        const refusal = onAddressEdit(next);
+        if (!refusal) setAddress(next);
+        return refusal;
+      },
+    );
+  }
+  if (onNameEdit) {
+    editable(
+      nameEl,
+      "type the device's name · Enter commits · Escape reverts",
+      (text) => text,
+      (next, before) => {
+        const refusal = onNameEdit(next);
+        if (refusal) return refusal;
+        if (!nameEl.textContent || nameEl.textContent === before) {
+          nameEl.textContent = next;
+        }
+        return null;
+      },
+    );
   }
 
   // --- behaviour -----------------------------------------------------------
@@ -275,14 +316,17 @@ export function createDeviceHeader(options) {
     stateEl.className = "dev-state" + (tone ? ` ${tone}` : "");
   }
 
-  /** Flips the toggle's glyph. The caller owns whether the device is running;
-   *  this only reports it. */
+  /** Flips the toggle's meaning. The caller owns whether the device is
+   *  running; this only reports it — as the dot's colour and its promise. */
   function setRunning(on) {
     running = Boolean(on);
-    if (!runBtn) return;
-    runBtn.textContent = running ? "■" : "▶";
-    if (!runBtn.disabled) {
-      runBtn.title = running ? `Stop ${name}` : `Run ${name}`;
+    if (!run) return;
+    dot.classList.toggle("running", running);
+    if (!stopDisabled) {
+      dot.title =
+        (running ? `Stop ${name}` : `Run ${name}`) +
+        (dotMeans ? ` · filled when: ${dotMeans}` : "");
+      dot.setAttribute("aria-label", running ? `Stop ${name}` : `Run ${name}`);
     }
   }
 
@@ -293,12 +337,13 @@ export function createDeviceHeader(options) {
    * WebLink, no remove).
    */
   function setStopCapability({ disabled, reason = "" }) {
-    if (!runBtn) return;
-    runBtn.disabled = Boolean(disabled);
+    if (!run) return;
+    stopDisabled = Boolean(disabled);
+    dot.classList.toggle("held", stopDisabled);
     whyEl.textContent = disabled ? reason : "";
     whyEl.hidden = !disabled || !reason;
     if (disabled) {
-      runBtn.title = reason
+      dot.title = reason
         ? `Cannot stop this device on its own — ${reason}`
         : "Cannot stop this device on its own";
     } else {

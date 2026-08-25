@@ -31,6 +31,7 @@ import { createDeviceHeader } from "../common/device-header.js";
 import { attachHighlightedEditor } from "../common/highlight.js";
 import { currentController, usbBridgeHttp, usbBridgeUrl } from "../common/controller-bar.js";
 import { createAboutBox } from "../common/about-box.js";
+import { createControllerStrip } from "../common/controller-strip.js";
 
 /// Which controllers this domain can run on. The shell's controller bar
 /// reads this: an option mapped to a string is offered disabled, with that
@@ -173,7 +174,17 @@ let root = null;
 let generation = 0; // guards async boot against an unmount that beat it
 let timer = 0;
 
-let mode = "in-page"; // "in-page" (a wasm WebLink) | "websocket" (netsim) | "usb" (bridge)
+// Each device rides its own controller; the page-level bar is only the
+// default a fresh mount starts from. "in-page" is the one paired choice —
+// the in-page radio is a single WebLink hosting both devices, so picking it
+// on either side brings the other along (its strip says so).
+let srcCtl = { kind: "in-page", device: "" };
+let snkCtl = { kind: "in-page", device: "" };
+let srcStrip = null;
+let snkStrip = null;
+const srcUsb = () => srcCtl.kind === "usb";
+const snkUsb = () => snkCtl.kind === "usb";
+const bothInPage = () => srcCtl.kind === "in-page" && snkCtl.kind === "in-page";
 
 // --- USB mode state ---------------------------------------------------------
 // The radio itself lives in a Worker (see common/radio-worker.js for why a
@@ -185,6 +196,7 @@ let mode = "in-page"; // "in-page" (a wasm WebLink) | "websocket" (netsim) | "us
 let radioWorker = null;
 let usbPlayer = null;
 let usbRate = 0;
+let usbSinkUp = false; // the worker holds a live sink for us
 let soundOn = false; // the gate was clicked; a later-created player may enable itself
 // There is no Volume Control Service on the Classic path — the phone runs
 // AVRCP absolute volume at *its* end, and this end's volume is simply the
@@ -197,6 +209,9 @@ let usbMuted = false;
 let usbSrcPcm = null;
 let usbSrcCursor = 0;
 let usbSrcRunning = false;
+// The one decoded copy of the picked file, whichever radio streams it: LE
+// renders it to 16 kHz mono LC3, A2DP to 44.1 kHz stereo SBC.
+let decodedAudio = null;
 let lc3 = null;
 let player = null;
 
@@ -280,6 +295,7 @@ async function loadFile(file) {
   node.buffer = decoded;
   node.connect(offline.destination);
   node.start();
+  decodedAudio = decoded;
   const rendered = await offline.startRendering();
   const samples = rendered.getChannelData(0);
 
@@ -333,7 +349,7 @@ function stop() {
 // nowhere for it to go yet — over netsim the CIS may still be opening, and the
 // in-page central may still be connecting.
 function sendSdu(sdu) {
-  if (mode === "websocket") {
+  if (srcCtl.kind === "websocket") {
     if (!source || !source.is_streaming()) return false;
     source.send_audio(sdu);
     return true;
@@ -454,7 +470,7 @@ function renderMeter() {
   // on whether this loop ran before or after play(), which is not something a
   // display should care about. A timestamp settles it either way.
   let peak = 0;
-  const active = mode === "usb" ? usbPlayer : player;
+  const active = snkUsb() ? usbPlayer : player;
   if (active && !lastMuted && active.state === "running") {
     const age = performance.now() - (active.stats.peakAt || 0);
     if (age < PEAK_FRESH_MS) peak = active.stats.peak;
@@ -468,13 +484,13 @@ function renderMeter() {
 }
 
 function renderSinkStats() {
-  const active = mode === "usb" ? usbPlayer : player;
+  const active = snkUsb() ? usbPlayer : player;
   if (!active) {
     $("sink-stats").textContent = "no media yet · audio off";
     return;
   }
   const stats = active.stats;
-  const batches = mode === "usb" ? "batches" : "SDUs";
+  const batches = snkUsb() ? "batches" : "SDUs";
   $("sink-stats").textContent =
     `${stats.received} ${batches} received` +
     (stats.received ? ` · ${stats.underruns} underruns` : "") +
@@ -487,7 +503,7 @@ function renderSinkStats() {
 function writeControlPoint(bytes) {
   const value = new Uint8Array(bytes);
   try {
-    if (mode === "websocket") sink?.set_value(VOLUME_CONTROL_POINT, value);
+    if (snkCtl.kind === "websocket") sink?.set_value(VOLUME_CONTROL_POINT, value);
     else if (link && linkSink >= 0) link.peripheral_set_value(linkSink, VOLUME_CONTROL_POINT, value);
   } catch (e) {
     showScriptError(e);
@@ -571,7 +587,48 @@ function setTarget(address) {
   $("progress").style.width = "0";
   // A source is aimed at one peer for its lifetime — the connection, the ASE
   // and the CIS all belong to that peer — so retargeting means a new one.
-  if (mode === "websocket") dropSource(performance.now());
+  if (srcCtl.kind === "websocket") dropSource(performance.now());
+}
+
+// --- per-device controller strips -------------------------------------------
+// The page-level bar is the default a mount starts from; each strip is that
+// device's override. "in-page" is the one paired choice: the in-page radio
+// is a single WebLink hosting both devices, so picking it on either side
+// brings the other along, and leaving it on either side moves both.
+
+function buildStrips(defaultKind) {
+  const kind = defaultKind === "usb" ? "usb" : defaultKind;
+  srcCtl = { kind, device: "" };
+  snkCtl = { kind, device: "" };
+  srcStrip = createControllerStrip({
+    value: srcCtl,
+    onChange: (next) => onStripChange("source", next),
+  });
+  snkStrip = createControllerStrip({
+    value: snkCtl,
+    onChange: (next) => onStripChange("sink", next),
+  });
+  $("source-head").before(srcStrip.el);
+  $("sink-head").before(snkStrip.el);
+  if (kind === "usb") loadDongleList();
+}
+
+function onStripChange(side, next) {
+  const mine = side === "source" ? srcCtl : snkCtl;
+  const theirs = side === "source" ? snkCtl : srcCtl;
+  const theirStrip = side === "source" ? snkStrip : srcStrip;
+  const paired = next.kind === "in-page" || theirs.kind === "in-page";
+  Object.assign(mine, next);
+  if (paired && theirs.kind !== next.kind) {
+    // One WebLink, both devices: in-page is entered and left together.
+    Object.assign(theirs, { kind: next.kind, device: theirs.device });
+    theirStrip.set(theirs);
+    theirStrip.setWhy(
+      "in-page is one shared link for both devices — moving one moves both",
+    );
+  }
+  switchBackend();
+  return null;
 }
 
 // --- backends --------------------------------------------------------------
@@ -672,7 +729,7 @@ function startSink() {
 /// stopped alone there. The capability follows the backend rather than being
 /// decided once at mount.
 function applyStopCapability() {
-  const shared = mode === "in-page"
+  const shared = bothInPage()
     ? { disabled: true, reason: "one in-page link — the devices stop together" }
     : { disabled: false };
   sourceHead.setStopCapability(shared);
@@ -726,6 +783,7 @@ function dropUsb() {
 
 function teardown() {
   dropUsb();
+  usbSinkUp = false;
   radioWorker?.terminate();
   radioWorker = null;
   freeNetsim();
@@ -742,48 +800,51 @@ function teardown() {
 // What the page says about itself in each mode. The in-page controller is not
 // a lesser netsim: it is a different thing, and the difference that matters
 // here is the CIS.
-function applyMode() {
-  const inPage = mode === "in-page";
-  const isUsb = mode === "usb";
-  // The USB card replaces the LE source outright, and strips the sink card
-  // down to the parts that still mean something: the speaker face, the meter,
-  // the gate and the volume. The script editor, identity fields and VCS
-  // controls all describe the LE peripheral, which is not on the air here.
-  $("usb-card").hidden = !isUsb;
-  $("usb-source-note").hidden = !isUsb;
-  $("le-source").hidden = isUsb;
-  // The Name field stays: one speaker identity, whichever radio hosts it.
-  // The address does not — on a dongle the silicon owns the address, and the
-  // dongle picker is how one is chosen.
+function applySides() {
+  const sinkIsUsb = snkUsb();
+  const srcIsUsb = srcUsb();
+  const inPage = bothInPage();
+
+  // --- the sink card: LE bits vs the bridge card --------------------------
+  $("usb-card").hidden = !sinkIsUsb;
   for (const el of [$("sink-script"), $("air-note")]) {
-    if (el) el.hidden = isUsb;
+    if (el) el.hidden = sinkIsUsb;
   }
-  // One verb: connect applies the name, so a second Apply button is a
-  // second way to do the same thing standing somewhere else. (`hidden`
-  // loses to the ident grid's explicit display, so say display directly.)
-  $("ident-apply").style.display = isUsb ? "none" : "";
-  if (isUsb) {
-    $("mode-hint").textContent =
-      "USB dongle — a Classic A2DP sink on real silicon; the phone is the source.";
-    $("status").textContent = "waiting for the bridge";
-    loadDongleList();
+
+  if (sinkIsUsb) {
     setUsbVolume(usbVolume, usbMuted);
-    return;
+    // A speaker is a peripheral: it comes up on its own, exactly as the LE
+    // sink always has. Requiring a press here is how a person "loses" the
+    // sink after a reload — measured on a real user within the hour.
+    loadDongleList().then(() => {
+      if (snkUsb() && !usbSinkUp && snkCtl.device) buildUsb();
+    });
   }
+
+  // --- the source card: one card, its target row per radio ----------------
+  $("le-target").hidden = srcIsUsb;
+  $("usb-target").hidden = !srcIsUsb;
+  $("le-hints").hidden = srcIsUsb;
+  $("stages").classList.toggle("off", inPage || srcIsUsb);
+  // The drop zone serves every radio; a source with no file has a melody.
+  $("play").disabled = srcIsUsb ? false : !frames.length;
+  if (srcIsUsb && !decodedAudio) {
+    $("track").textContent = "no file loaded — the test melody plays";
+  }
+
   $("sink-pick").disabled = inPage;
   $("rescan").disabled = inPage;
   $("sink-addr").hidden = true;
-  $("stages").classList.toggle("off", inPage);
-  $("mode-hint").textContent = inPage
-    ? "In-browser controller — the sink, the source and the radio between them all run in this tab."
-    : "";
   $("scan-note").textContent = inPage
     ? "The in-page controller hosts exactly one sink, so there is nothing to choose and nothing to scan."
     : "scanning netsim for LE Audio sinks…";
+  $("mode-hint").textContent = inPage
+    ? "In-browser controller — the sink, the source and the radio between them all run in this tab."
+    : "";
   $("status").textContent = inPage
     ? "not applicable — the in-page controller has no CIS; SDUs ride the connection handle"
-    : "offline";
-  if (inPage) {
+    : sinkIsUsb ? "waiting for the bridge" : "offline";
+  if (inPage || srcIsUsb) {
     for (const item of root.querySelectorAll(".stages li")) {
       item.classList.remove("done", "active");
     }
@@ -804,21 +865,15 @@ function switchBackend() {
   sinkOpenedOnce = false;
   sourceStopped = false;
   sinkStopped = false;
-  sourceHead.setRunning(true);
-  sinkHead.setRunning(true);
   applyStopCapability();
   $("setup").classList.remove("visible");
   target = sinkAddr;
   renderSinkOptions();
-  applyMode();
-  if (mode === "usb") {
-    sourceHead.setRunning(false);
-    sourceHead.setState(false, "stopped — press play, or use any source in the room");
-    sinkHead.setRunning(false);
-    sinkHead.setState(false, "USB bridge — not connected");
-    return; // the headers' run controls build the devices
-  }
-  if (mode === "in-page") {
+  applySides();
+
+  if (bothInPage()) {
+    sourceHead.setRunning(true);
+    sinkHead.setRunning(true);
     sourceHead.setState(false, "connecting…");
     sinkHead.setState(false, "starting…");
     try {
@@ -828,15 +883,26 @@ function switchBackend() {
     }
     return;
   }
-  sourceHead.setState(false, "starting…");
-  sinkHead.setState(false, "starting…");
-  // Nothing was open on first load, so connect at once; coming back from the
-  // in-page controller means netsim is still holding the sockets we just
-  // closed, and reconnecting into those is what the backoff above avoids.
+
+  // Each side independently, on its own radio.
   const at = hadSockets ? now : now - RECONNECT_MS;
-  lastSourceAttempt = at;
-  lastSinkAttempt = at;
-  lastScanAt = at + RECONNECT_MS;
+  if (snkUsb()) {
+    sinkHead.setRunning(false);
+    sinkHead.setState(false, "USB bridge — not connected");
+  } else {
+    sinkHead.setRunning(true);
+    sinkHead.setState(false, "starting…");
+    lastSinkAttempt = at;
+  }
+  if (srcUsb()) {
+    sourceHead.setRunning(false);
+    sourceHead.setState(false, "stopped — press play, or use any source in the room");
+  } else {
+    sourceHead.setRunning(true);
+    sourceHead.setState(false, "starting…");
+    lastSourceAttempt = at;
+    lastScanAt = at + RECONNECT_MS;
+  }
 }
 
 // --- USB backend ------------------------------------------------------------
@@ -865,7 +931,9 @@ function ensureWorker() {
 function onRadioMessage({ data: m }) {
   if (m.op === "status") window.__usbStatus = m; // the tracing surface, inspectable
   if (m.op === "source-status") window.__usbSourceStatus = m;
-  if (mode !== "usb") return; // a late message after switching controllers
+  const forSource = m.op.startsWith("source-");
+  if (forSource && !srcUsb()) return; // late messages after a strip change
+  if (!forSource && !snkUsb()) return;
   if (m.op === "source-need-pcm") {
     feedSourcePcm();
     return;
@@ -887,6 +955,7 @@ function onRadioMessage({ data: m }) {
     $("usb-stage").textContent = m.message;
     sinkHead.setState(false, "error");
     sinkHead.setRunning(false);
+    usbSinkUp = false;
     return;
   }
   if (m.op === "status") {
@@ -909,30 +978,27 @@ function onRadioMessage({ data: m }) {
   }
 }
 
-/// The bridge's own list of what is plugged in, for the device picker.
-async function loadDongleList() {
-  const base = usbBridgeHttp();
-  const pick = $("usb-device");
+/// The bridge's own list of what is plugged in, for both strips' pickers.
+/// Different halves want different dongles: the sink defaults to the first,
+/// the source to the second.
+function loadDongleList() {
+  return (async () => {
   try {
-    const { devices } = await (await fetch(`${base}/devices`)).json();
-    for (const target of [pick, $("usb-src-device")]) {
-      target.innerHTML = "";
-      for (const d of devices) {
-        const option = document.createElement("option");
-        option.value = d.selector;
-        option.textContent = `${d.selector} — ${d.product}`;
-        target.append(option);
-      }
-      target.disabled = devices.length === 0;
+    const { devices } = await (await fetch(`${usbBridgeHttp()}/devices`)).json();
+    snkStrip?.setDongles(devices);
+    srcStrip?.setDongles(devices);
+    if (devices.length) {
+      if (!snkCtl.device) snkCtl.device = devices[0].selector;
+      if (!srcCtl.device) srcCtl.device = devices[Math.min(1, devices.length - 1)].selector;
+      snkStrip?.set(snkCtl);
+      srcStrip?.set(srcCtl);
+    } else {
+      $("usb-stage").textContent = "the bridge reports no dongles";
     }
-    // Different halves want different dongles: default the source to the
-    // second one, since the sink took the first.
-    if (devices.length > 1) $("usb-src-device").selectedIndex = 1;
-    if (!devices.length) $("usb-stage").textContent = "the bridge reports no dongles";
   } catch (e) {
-    pick.innerHTML = "<option value=''>bridge not reachable</option>";
-    pick.disabled = true;
+    $("usb-stage").textContent = "bridge not reachable — see the controller bar";
   }
+  })();
 }
 
 function buildUsb() {
@@ -940,19 +1006,22 @@ function buildUsb() {
   $("usb-stage").textContent = "connecting to the bridge…";
   sinkHead.setState(false, "connecting…");
   const base = usbBridgeUrl().trim().replace(/\/+$/, "");
-  const device = $("usb-device").value;
+  const device = snkCtl.device;
   const url = device ? `${base}/?device=${encodeURIComponent(device)}` : `${base}/`;
   // One speaker identity: the same Name field that names the LE sink names
   // this one. Two radios advertising two different names is how a phone
   // ends up seeing speakers nobody asked for.
-  const name = $("ident-name").value.trim() || "webspeaker";
+  const name = (sinkName || "webspeaker").trim();
   ensureWorker().postMessage({ op: "sink-start", url, name });
+  usbSinkUp = true;
+  sinkHead.setName(name); // the phone will see this; the header should too
   sinkHead.setRunning(true);
 }
 
 function disconnectUsb() {
   dropUsb(); // sink-stop: the worker frees the sink, closing the socket —
   // and the bridge resets the dongle, so nothing keeps advertising.
+  usbSinkUp = false;
   $("usb-stage").textContent = "not connected";
   sinkHead.setRunning(false);
   sinkHead.setState(false, "USB bridge — not connected");
@@ -1017,14 +1086,10 @@ function renderMelody() {
   return pcm;
 }
 
-/// Decodes a picked file to interleaved 44.1 kHz stereo i16 — the format the
-/// stream is negotiated at. (The LE path resamples to 16 kHz mono for LC3;
-/// this is deliberately a separate pipeline.)
-async function decodeForA2dp(file) {
-  const bytes = await file.arrayBuffer();
-  const probe = new AudioContext();
-  const decoded = await probe.decodeAudioData(bytes);
-  probe.close();
+/// Renders the shared decoded file to interleaved 44.1 kHz stereo i16 — the
+/// format the A2DP stream is negotiated at. (The LE path renders the same
+/// buffer to 16 kHz mono for LC3; one file, two radios.)
+async function renderForA2dp(decoded) {
   const offline = new OfflineAudioContext(2, Math.ceil(decoded.duration * SRC_RATE), SRC_RATE);
   const node = offline.createBufferSource();
   node.buffer = decoded;
@@ -1043,6 +1108,7 @@ async function decodeForA2dp(file) {
 
 function usbSrcLog(line) {
   const log = $("usb-src-log");
+  log.hidden = false;
   log.textContent += (log.textContent ? "\n" : "") + line;
   log.scrollTop = log.scrollHeight;
 }
@@ -1063,17 +1129,16 @@ function feedSourcePcm() {
 
 async function startUsbSource() {
   const base = usbBridgeUrl().trim().replace(/\/+$/, "");
-  const device = $("usb-src-device").value;
+  const device = srcCtl.device;
   if (!device) {
-    $("usb-src-stage").textContent = "no dongle picked";
+    $("usb-src-stage").textContent = "no dongle picked — see the strip above";
     return;
   }
   $("usb-src-log").textContent = "";
   $("usb-src-stage").textContent = "connecting to the bridge…";
-  const file = $("usb-src-file").files[0];
   try {
-    usbSrcPcm = file ? await decodeForA2dp(file) : renderMelody();
-    if (!file) usbSrcPcm.isMelody = true;
+    usbSrcPcm = decodedAudio ? await renderForA2dp(decodedAudio) : renderMelody();
+    if (!decodedAudio) usbSrcPcm.isMelody = true;
   } catch (e) {
     $("usb-src-stage").textContent = `could not decode: ${e}`;
     return;
@@ -1279,14 +1344,15 @@ function tickInPage(now) {
 function loop() {
   const now = performance.now();
   try {
-    if (mode === "usb") {
-      // nothing: the worker radios and pushes; the page renders on message
-    } else if (mode === "websocket") {
-      tickSource(now);
-      tickSink(now);
-      tickScanner(now);
-    } else {
+    if (bothInPage()) {
       tickInPage(now);
+    } else {
+      // A usb side lives in the worker and needs no tick from here.
+      if (srcCtl.kind === "websocket") {
+        tickSource(now);
+        tickScanner(now);
+      }
+      if (snkCtl.kind === "websocket") tickSink(now);
     }
   } catch (e) {
     showError(e);
@@ -1301,7 +1367,7 @@ function loop() {
 function onKeyDown(event) {
   if (event.target === slider || event.target === editor) return;
   if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
-  const send = mode === "usb" ? usbOp : sendOp;
+  const send = snkUsb() ? usbOp : sendOp;
   if (event.key === "ArrowUp") {
     send(OP_UP);
     event.preventDefault();
@@ -1509,24 +1575,6 @@ function injectStyles() {
     padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: 6px; width: 14rem; }
   .audio-page #sink-pick { max-width: 100%; }
 
-  /* The sink's identity, on one wrapping row: two labelled fields and the one
-     button that commits both. One button rather than two because both edits
-     are the same operation underneath -- stand the device up again -- and two
-     Apply buttons a centimetre apart invite the reader to wonder which does
-     which. The name is elastic and the address is not: an address is a fixed
-     17 characters, so it gets exactly that and the name takes the slack. */
-  .audio-page .ident { display: flex; flex-wrap: wrap; align-items: center;
-    gap: 0.4rem 0.55rem; margin: 0.65rem 0 0.45rem; }
-  .audio-page .ident-label { font-size: var(--fs-label); color: var(--dim); }
-  .audio-page .ident input[type=text] { width: auto; }
-  .audio-page .ident #ident-name { flex: 1 1 7rem; min-width: 6rem; }
-  /* An address is exactly 17 characters in a monospace face, so the field is
-     sized to hold all of them -- a box that clips its own contents is the one
-     thing a field showing an identity must not do. */
-  /* Disabled is the honest state while a stream is up, so it has to LOOK
-     disabled -- the browser greys the control, and the line underneath says
-     why rather than leaving the reader to guess it is broken. */
-  .audio-page .ident input:disabled, .audio-page .ident button:disabled { opacity: 0.5; }
   /* The air readout is a claim about the wire, so it is mono like every other
      readout on the page; it turns warn only when the two names differ. */
   .audio-page #air-note { margin-top: 0; font-size: var(--fs-meta); }
@@ -1655,30 +1703,6 @@ const TEMPLATE = `
   <section class="panel">
       <div id="source-head"></div>
 
-      <div id="usb-source-note" hidden>
-        <p class="hint">
-          <strong>Anything can be the source.</strong> This card puts one on a second
-          dongle: it inquires, pairs, reads the speaker's SDP, negotiates SBC and streams a
-          file over real radio — to this page's own speaker or any real one in pairing
-          mode. Or skip it and stream from a phone, a laptop, anything that speaks A2DP,
-          at the speaker named on the right.
-        </p>
-        <label class="field" for="usb-src-device">Source dongle</label>
-        <div class="row">
-          <select id="usb-src-device" aria-label="which dongle hosts the source"></select>
-        </div>
-        <label class="field" for="usb-src-target">Speaker address</label>
-        <input type="text" id="usb-src-target" spellcheck="false"
-               placeholder="empty = first speaker the inquiry finds"
-               aria-label="the target speaker's address, or empty to inquire">
-        <label id="usb-src-drop" class="field" for="usb-src-file"
-               style="margin-top:0.5rem">Audio file (else a test melody)</label>
-        <input type="file" id="usb-src-file" accept="audio/*">
-        <div class="readout" id="usb-src-stage">not started</div>
-        <pre id="usb-src-log" class="readout"
-             style="max-height:12rem;overflow-y:auto;white-space:pre-wrap"></pre>
-      </div>
-
       <div id="le-source">
       <label id="drop" class="drop" for="file">
         ${WAVEFORM}
@@ -1688,14 +1712,25 @@ const TEMPLATE = `
         <input type="file" id="file" accept="audio/*">
       </label>
 
-      <label class="field" for="sink-pick">Stream to</label>
-      <div class="row">
-        <select id="sink-pick"></select>
-        <button id="rescan" title="scan netsim for LE Audio sinks">⟳ rescan</button>
+      <div id="le-target">
+        <label class="field" for="sink-pick">Stream to</label>
+        <div class="row">
+          <select id="sink-pick"></select>
+          <button id="rescan" title="scan netsim for LE Audio sinks">⟳ rescan</button>
+        </div>
+        <input type="text" id="sink-addr" hidden placeholder="CC:1E:57:00:00:06"
+               aria-label="another sink address to stream to">
+        <div class="readout" id="scan-note">—</div>
       </div>
-      <input type="text" id="sink-addr" hidden placeholder="CC:1E:57:00:00:06"
-             aria-label="another sink address to stream to">
-      <div class="readout" id="scan-note">—</div>
+      <div id="usb-target" hidden>
+        <label class="field" for="usb-src-target">Stream to (speaker address)</label>
+        <input type="text" id="usb-src-target" spellcheck="false"
+               placeholder="empty = first speaker the inquiry finds"
+               aria-label="the target speaker's address, or empty to inquire">
+        <div class="readout" id="usb-src-stage">not started</div>
+        <pre id="usb-src-log" class="readout" hidden
+             style="max-height:10rem;overflow-y:auto;white-space:pre-wrap"></pre>
+      </div>
 
       <div class="row">
         <button id="play" class="primary" disabled>▶ stream</button>
@@ -1710,6 +1745,7 @@ const TEMPLATE = `
       </div>
       <div id="error" class="error"></div>
 
+      <div id="le-hints">
       <p class="hint" style="margin-top:1rem">
         This half of the page is a <strong>Unicast Client</strong>. It connects to the sink,
         writes <code>Config Codec</code>, <code>Config QoS</code> and <code>Enable</code> to its
@@ -1724,20 +1760,12 @@ const TEMPLATE = `
         the same rate would be 320 octets a frame and the controller would refuse it.
       </p>
       </div>
+      </div>
     </section>
 
   <section class="panel">
       <div id="sink-head"></div>
 
-      <!-- What the sink calls itself and where it sits, above the script that
-           defines it, because the name field IS a shortcut into that script's
-           first line and the reader should see the two next to each other. -->
-      <div class="ident">
-        <label class="ident-label" for="ident-name">Name</label>
-        <input type="text" id="ident-name" maxlength="60" spellcheck="false"
-               aria-label="the name the sink advertises">
-        <button id="ident-apply">apply</button>
-      </div>
       <div class="readout" id="air-note"></div>
       <div class="warn-line" id="ident-locked" hidden>
         ⚠ The sink's identity is fixed while a stream is running: changing either
@@ -1751,10 +1779,6 @@ const TEMPLATE = `
           <strong>A2DP sink</strong> on real radio. Whatever pairs with it and streams —
           your phone — is the source, and the decoded PCM plays here.
         </p>
-        <label class="field" for="usb-device">Dongle</label>
-        <div class="row">
-          <select id="usb-device" aria-label="which dongle hosts the speaker"></select>
-        </div>
         <div class="readout" id="usb-stage">not connected</div>
         <pre id="usb-log" class="readout" style="max-height:14rem;overflow-y:auto;white-space:pre-wrap"></pre>
         <p class="hint">
@@ -1911,7 +1935,6 @@ export function mount(container) {
   // are filled from the same two places it is built from: the script for the
   // name, the socket URL for the address.
   sinkName = scriptName(editor.value);
-  $("ident-name").value = sinkName;
   renderAirNote();
   applyIdentityLock();
   prevValues = new Map();
@@ -1948,7 +1971,7 @@ export function mount(container) {
     lc3 = new WebLc3(PCM_RATE, SDU_INTERVAL_MS * 1000);
     player = createSduPlayer({ sampleRate: PCM_RATE });
     renderSinkOptions();
-    mode = currentController();
+    buildStrips(currentController());
     switchBackend();
     timer = setInterval(loop, 20);
   })();
@@ -2009,8 +2032,8 @@ function buildHeaders() {
     // dongle. A second connect button beside it was the same verb twice.
     run: {
       running: true,
-      onRun: () => (mode === "usb" ? startUsbSource() : startSource()),
-      onStop: () => (mode === "usb" ? stopUsbSource() : stopSource()),
+      onRun: () => (srcUsb() ? startUsbSource() : startSource()),
+      onStop: () => (srcUsb() ? stopUsbSource() : stopSource()),
     },
   });
   $("source-head").append(sourceHead.el);
@@ -2021,6 +2044,7 @@ function buildHeaders() {
     accent: "good",
     address: sinkAddr,
     onAddressEdit: onSinkAddressEdit,
+    onNameEdit: onSinkNameEdit,
     dotMeans: "the sink is on the air",
     script: {
       text: DEFAULT_SCRIPT,
@@ -2033,8 +2057,8 @@ function buildHeaders() {
     },
     run: {
       running: true,
-      onRun: () => (mode === "usb" ? buildUsb() : startSink()),
-      onStop: () => (mode === "usb" ? disconnectUsb() : stopSink()),
+      onRun: () => (snkUsb() ? buildUsb() : startSink()),
+      onStop: () => (snkUsb() ? disconnectUsb() : stopSink()),
     },
   });
   $("sink-head").append(sinkHead.el);
@@ -2059,7 +2083,7 @@ function buildHeaders() {
 function applySinkScript() {
   showScriptError(null);
   try {
-    if (mode === "in-page") buildInPage();
+    if (bothInPage()) buildInPage();
     else if (sink) {
       sink.run_script(editor.value);
       runStart = performance.now();
@@ -2094,7 +2118,7 @@ function applySinkScript() {
 /// in step — the field, the on-air line, and the source's chooser.
 function syncSinkName() {
   sinkName = scriptName(editor.value);
-  if (document.activeElement !== $("ident-name")) $("ident-name").value = sinkName;
+  sinkHead.setName(onAir(sinkName));
   renderAirNote();
   renderSinkOptions();
 }
@@ -2104,7 +2128,7 @@ function syncSinkName() {
 /// knows why the next name gets cut, which a message that only ever appears
 /// after the damage never tells them.
 function renderAirNote() {
-  const typed = $("ident-name").value;
+  const typed = sinkName;
   const air = onAir(typed);
   const note = $("air-note");
   note.classList.toggle("trimmed", air !== typed);
@@ -2124,7 +2148,7 @@ function applySinkAddress(next) {
   const wasTargeted = target === sinkAddr;
   sinkAddr = next;
   sinkHead.setAddress(sinkAddr);
-  if (mode === "in-page") {
+  if (bothInPage()) {
     // One link hosts both devices, so rebuilding moves them together.
     try {
       buildInPage();
@@ -2149,38 +2173,36 @@ function applySinkAddress(next) {
 /// Commits whichever of the two fields changed. Nothing is applied while a
 /// stream is running — both edits rebuild the device and would drop the CIS —
 /// and the controls are disabled to say so, with this as the backstop.
-function applyIdentity() {
-  if (playing) return;
-  showScriptError(null);
-  showError("");
-  if (mode === "usb") {
+/// The header's name edit lands here — the same one-place contract as the
+/// address. Returns a refusal string or null.
+function onSinkNameEdit(name) {
+  if (playing) return "the identity is fixed while a stream is running";
+  if (!name) return "a speaker needs a name";
+  if (snkUsb()) {
     // The name is the only identity a page can give a dongle-hosted
-    // speaker; applying it rebuilds the sink under the new name.
+    // speaker; committing it rebuilds the sink under the new name.
+    sinkName = name;
+    renderAirNote();
     buildUsb();
-    return;
+    return null;
   }
-
-  const name = $("ident-name").value;
-  if (name !== sinkName) {
-    if (!nameFitsScript(name)) {
-      showScriptError('a name cannot contain " or \\ — it goes into a string literal in the script');
-      return;
-    }
-    const next = withScriptName(editor.value, name);
-    if (next === null) {
-      showScriptError("this script builds no BluetoothGattServer(\"…\"), so it has no name to set");
-      return;
-    }
-    editor.value = next;
-    editor.dispatchEvent(new Event("input", { bubbles: true })); // repaint the highlighter
-    applySinkScript(); // syncs sinkName and re-renders the chooser
+  if (!nameFitsScript(name)) {
+    return 'a name cannot contain " or \\ — it goes into a string literal in the script';
   }
+  const next = withScriptName(editor.value, name);
+  if (next === null) {
+    return 'this script builds no BluetoothGattServer("…"), so it has no name to set';
+  }
+  editor.value = next;
+  editor.dispatchEvent(new Event("input", { bubbles: true })); // repaint the highlighter
+  applySinkScript(); // syncs sinkName and re-renders the chooser
+  return null;
 }
 
 /// The header's address edit lands here: one address, one place. Returns a
 /// refusal string (the header reverts and shows it) or null to accept.
 function onSinkAddressEdit(address) {
-  if (mode === "usb") return "a dongle's address belongs to its silicon";
+  if (snkUsb()) return "a dongle's address belongs to its silicon";
   if (playing) return "the identity is fixed while a stream is running";
   if (!/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(address)) {
     return `"${address}" is not a Bluetooth address (AA:BB:CC:DD:EE:FF)`;
@@ -2198,7 +2220,6 @@ function onSinkAddressEdit(address) {
 /// did nothing, or one that took the stream down without warning, are both
 /// worse than a disabled control with the reason beside it.
 function applyIdentityLock() {
-  for (const id of ["ident-name", "ident-apply"]) $(id).disabled = playing;
   $("ident-locked").hidden = !playing;
 }
 
@@ -2226,16 +2247,12 @@ function wireControls() {
     if (file) loadFile(file).catch((e) => showError(`could not decode: ${e}`));
   });
 
-  $("play").addEventListener("click", start);
-  $("stop").addEventListener("click", stop);
+  $("play").addEventListener("click", () => (srcUsb() ? startUsbSource() : start()));
+  $("stop").addEventListener("click", () => (srcUsb() ? stopUsbSource() : stop()));
 
   // The on-air line follows the field as it is typed, so the budget is visible
   // before the name is committed rather than as a surprise afterwards.
-  $("ident-name").addEventListener("input", renderAirNote);
-  $("ident-apply").addEventListener("click", applyIdentity);
-  $("ident-name").addEventListener("keydown", (event) => {
-    if (event.key === "Enter") applyIdentity();
-  });
+
 
   $("sink-pick").addEventListener("change", (event) => {
     const value = event.target.value;
@@ -2275,7 +2292,7 @@ function wireControls() {
   // The slider sends Set Absolute Volume, the same command a phone's volume UI
   // sends — it does not poke the state characteristic.
   slider.addEventListener("input", () => {
-    if (mode === "usb") {
+    if (snkUsb()) {
       setUsbVolume(Number(slider.value), usbMuted);
       return;
     }
@@ -2284,7 +2301,7 @@ function wireControls() {
   for (const button of root.querySelectorAll(".ops button")) {
     button.addEventListener("click", () => {
       const op = Number(button.dataset.op);
-      if (mode === "usb") return usbOp(op);
+      if (snkUsb()) return usbOp(op);
       sendOp(op);
     });
   }
