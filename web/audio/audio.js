@@ -380,6 +380,7 @@ function applySpeaker(volume, muted, changeCounter) {
     $(id).setAttribute("opacity", !muted && volume >= threshold ? "1" : "0");
   });
   lastMuted = muted;
+  syncMuteToggle(muted);
   $("muteMark").setAttribute("opacity", muted ? "1" : "0");
   $("cone").setAttribute("fill", muted ? ART_MUTED : ART_LIVE);
   // Terser than it was, and still every field of the characteristic: the
@@ -1290,15 +1291,34 @@ const WAVEFORM =
 const OPS = [
   { op: OP_DOWN, name: "Relative Volume Down", icon: "down" },
   { op: OP_UP, name: "Relative Volume Up", icon: "up" },
-  { op: OP_MUTE, name: "Mute", icon: "mute", group: true },
-  { op: OP_UNMUTE, name: "Unmute", icon: "unmute" },
+  // Mute and Unmute are two opcodes but one *state*, and a device never
+  // accepts both at once — so they share one toggle button whose opcode
+  // follows the state (see syncMuteToggle). Two adjacent buttons where one
+  // is always a no-op read as a broken pair, and were asked about exactly
+  // that way.
+  { op: OP_MUTE, name: "Mute", icon: "mute", group: true, id: "mute-toggle" },
   { op: OP_UNMUTE_UP, name: "Unmute / Relative Volume Up", icon: "unmuteUp" },
 ];
 
 const opButton = (o) =>
-  `<button class="icon-btn${o.group ? " grouped" : ""}" data-op="${o.op}"` +
+  `<button class="icon-btn${o.group ? " grouped" : ""}"${o.id ? ` id="${o.id}"` : ""}` +
+  ` data-op="${o.op}"` +
   ` title="0x${o.op.toString(16).padStart(2, "0").toUpperCase()} · ${o.name}"` +
   ` aria-label="${o.name}">${ICON[o.icon]}</button>`;
+
+/// Points the mute toggle at the opcode that currently applies: Mute on a
+/// live speaker, Unmute on a muted one. The hover title keeps teaching the
+/// control-point idiom — it names the opcode this press will write.
+function syncMuteToggle(muted) {
+  const toggle = $("mute-toggle");
+  if (!toggle) return;
+  const op = muted ? OP_UNMUTE : OP_MUTE;
+  const name = muted ? "Unmute" : "Mute";
+  toggle.dataset.op = op;
+  toggle.title = `0x${op.toString(16).padStart(2, "0").toUpperCase()} · ${name}`;
+  toggle.setAttribute("aria-label", name);
+  toggle.innerHTML = ICON[muted ? "unmute" : "mute"];
+}
 
 const STYLE_ID = "simble-audio-style";
 
