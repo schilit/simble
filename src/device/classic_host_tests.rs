@@ -1234,3 +1234,38 @@ fn test_an_rfcomm_record_still_yields_its_server_channel() {
         "and the L2CAP layer underneath it is now read too",
     );
 }
+
+/// A refused page is reported, not silently dropped.
+///
+/// The Connection Complete arm used to match only `status == 0x00`, so a
+/// failure fell through to the catch-all and vanished. The host then waited
+/// on a connection that was never coming, and the only evidence was that
+/// nothing happened. These are the real bytes a CSR8510 sent when it paged a
+/// dongle that was still page-scanning under a host that had died: status
+/// `0x10`, Connection Accept Timeout.
+#[test]
+fn a_refused_page_is_reported_rather_than_dropped() {
+    let mut host = host();
+    let peer = Address::from_be_bytes([0x00, 0x16, 0xA4, 0x6F, 0xA5, 0x19]);
+    host.create_connection(peer);
+    assert_eq!(
+        host.connection_failure(),
+        None,
+        "a fresh page has no verdict"
+    );
+
+    // 04 | 03 0B | status 0x10 | handle | bd_addr (LE) | link type | encryption
+    let refused = [
+        0x04, 0x03, 0x0B, 0x10, 0x48, 0x00, 0x19, 0xA5, 0x6F, 0xA4, 0x16, 0x00, 0x01, 0x00,
+    ];
+    let out = host.handle_packet(&refused).expect("the event parses");
+
+    assert!(out.is_empty(), "a refused page owes the controller nothing");
+    assert_eq!(
+        host.connection_failure(),
+        Some(0x10),
+        "the status must survive: 0x10 is Connection Accept Timeout, and \
+         without it the symptom is twenty seconds of silence"
+    );
+    assert_eq!(host.connection(), None, "and no link was established");
+}

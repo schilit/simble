@@ -1299,6 +1299,16 @@ pub struct ClassicHost {
     handlers: Vec<Box<dyn ProtocolHandler>>,
     /// The current ACL connection, if any.
     connection: Option<(u16, Address)>,
+    /// Why the last paging attempt failed, if it did.
+    ///
+    /// A Connection Complete carrying a non-zero status used to be dropped on
+    /// the floor: the arm below matched only `status == 0x00`, so a refused
+    /// page left `connection` as `None` forever and the only symptom was a
+    /// host that waited. Found on real hardware, where a dongle still
+    /// page-scanning under a dead host answered with `0x10`, Connection
+    /// Accept Timeout — twenty seconds of silence that should have been one
+    /// line.
+    connection_failure: Option<u8>,
     /// Next signalling identifier to use for host-initiated requests.
     next_identifier: u8,
     /// Local CIDs this host has accepted or opened, so channel state can be
@@ -1359,6 +1369,7 @@ impl ClassicHost {
             channels: ClassicChannelManager::new(),
             handlers: Vec::new(),
             connection: None,
+            connection_failure: None,
             next_identifier: 1,
             local_cids: Vec::new(),
             discovered: Vec::new(),
@@ -1513,6 +1524,13 @@ impl ClassicHost {
         self.handlers
             .iter_mut()
             .find_map(|handler| (handler.as_mut() as &mut dyn std::any::Any).downcast_mut::<T>())
+    }
+
+    /// The status of the last failed paging attempt, if the last one failed.
+    /// Cleared when a new page starts.
+    #[must_use]
+    pub fn connection_failure(&self) -> Option<u8> {
+        self.connection_failure
     }
 
     /// The current ACL connection as `(handle, peer address)`, if any.
@@ -1684,7 +1702,10 @@ impl ClassicHost {
     /// The answer is a Command Status, and then — much later — a Connection
     /// Complete once the peer's host has accepted. Nothing here waits for it;
     /// [`Self::connection`] becomes `Some` when it arrives.
-    pub fn create_connection(&self, address: Address) -> Vec<Vec<u8>> {
+    pub fn create_connection(&mut self, address: Address) -> Vec<Vec<u8>> {
+        // A new attempt clears the last one's verdict, so a stale failure
+        // cannot be read as this page's outcome.
+        self.connection_failure = None;
         let mut params = address.as_slice().to_vec();
         params.extend_from_slice(&[
             0x18, 0xCC, // Packet_Type: the usual DM1/DH1/DM3/DH3/DM5/DH5 set
@@ -1815,7 +1836,13 @@ impl ClassicHost {
                 params.push(0x01);
                 vec![command(opcode::ACCEPT_CONNECTION_REQUEST, &params)]
             }
-            HciEvent::ConnectionComplete(complete) if complete.status == 0x00 => {
+            // A refused page is reported, not discarded. See
+            // `connection_failure`.
+            HciEvent::ConnectionComplete(complete) if complete.status != 0x00 => {
+                self.connection_failure = Some(complete.status);
+                Vec::new()
+            }
+            HciEvent::ConnectionComplete(complete) => {
                 self.connection = Some((
                     complete.connection_handle.get(),
                     Address::new(complete.bd_addr),
