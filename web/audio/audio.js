@@ -326,7 +326,7 @@ async function loadFile(file) {
   $("track").textContent =
     `${file.name} — ${seconds.toFixed(1)}s, ${frames.length} LC3 frames ` +
     `(${PCM_RATE / 1000} kHz, ${LC3_FRAME_BYTES} octets/frame)`;
-  $("play").disabled = false;
+  setStreamToggle(false);
 }
 
 // --- the stream ------------------------------------------------------------
@@ -337,15 +337,13 @@ function start() {
   startedAt = 0;
   playing = true;
   player.reset(); // the counters below describe this stream, not the page's history
-  $("play").disabled = true;
-  $("stop").disabled = false;
+  setStreamToggle(true);
   applyIdentityLock();
 }
 
 function stop() {
   playing = false;
-  $("play").disabled = !frames.length;
-  $("stop").disabled = true;
+  setStreamToggle(false);
   $("hidden-warning").hidden = true;
   applyIdentityLock();
 }
@@ -825,7 +823,7 @@ function applySides() {
   $("le-hints").hidden = srcIsUsb;
   $("stages").classList.toggle("off", inPage || srcIsUsb);
   // The drop zone serves every radio; a source with no file has a melody.
-  $("play").disabled = srcIsUsb ? false : !frames.length;
+  setStreamToggle(srcIsUsb ? usbSrcRunning : playing);
   if (srcIsUsb && !decodedAudio) {
     $("track").textContent = "no file loaded — the test melody plays";
   }
@@ -940,6 +938,7 @@ function onRadioMessage({ data: m }) {
     $("usb-src-stage").textContent = m.message;
     sourceHead.setRunning(false);
     usbSrcRunning = false;
+    setStreamToggle(false);
     return;
   }
   if (m.op === "source-status") {
@@ -1104,6 +1103,15 @@ async function renderForA2dp(decoded) {
   return pcm;
 }
 
+/// The stream button's two faces. Disabled only when there is nothing it
+/// could do (LE with no file loaded; the melody means USB always has
+/// something).
+function setStreamToggle(active) {
+  const button = $("play");
+  button.textContent = active ? "■ stop" : "▶ stream";
+  button.disabled = !active && !srcUsb() && !frames.length;
+}
+
 function usbSrcLog(line) {
   const log = $("usb-src-log");
   log.hidden = false;
@@ -1150,6 +1158,7 @@ async function startUsbSource() {
     target: $("usb-src-target").value.trim(),
   });
   sourceHead.setRunning(true);
+  setStreamToggle(true);
 }
 
 function stopUsbSource() {
@@ -1158,6 +1167,7 @@ function stopUsbSource() {
   $("usb-src-stage").textContent = "stopped";
   sourceHead.setRunning(false);
   sourceHead.setState(false, "stopped");
+  setStreamToggle(false);
 }
 
 /// Interleaved stereo to mono. The shared player schedules one mono channel;
@@ -1732,7 +1742,6 @@ const TEMPLATE = `
 
       <div class="row">
         <button id="play" class="primary" disabled>▶ stream</button>
-        <button id="stop" disabled>■ stop</button>
       </div>
 
       <div class="bar"><div id="progress"></div></div>
@@ -2245,8 +2254,16 @@ function wireControls() {
     if (file) loadFile(file).catch((e) => showError(`could not decode: ${e}`));
   });
 
-  $("play").addEventListener("click", () => (srcUsb() ? startUsbSource() : start()));
-  $("stop").addEventListener("click", () => (srcUsb() ? stopUsbSource() : stop()));
+  // One button, one verb at a time — the same rule the header pill and the
+  // mute toggle already follow. Its label says what pressing it will do.
+  $("play").addEventListener("click", () => {
+    const active = srcUsb() ? usbSrcRunning : playing;
+    if (active) {
+      if (srcUsb()) stopUsbSource();
+      else stop();
+    } else if (srcUsb()) startUsbSource();
+    else start();
+  });
 
   // The on-air line follows the field as it is typed, so the budget is visible
   // before the name is committed rather than as a surprise afterwards.
