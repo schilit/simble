@@ -23,7 +23,7 @@
 // it created. Anything left running would be a leak here and a ghost device on
 // netsim, which does not synthesize a disconnect when a socket goes away.
 
-import init, { WebSource, WebPeripheral, WebLink, WebLc3, WebScanner, WebA2dpSink } from "../pkg/simble.js";
+import init, { WebSource, WebPeripheral, WebLink, WebLc3, WebScanner } from "../pkg/simble.js";
 import { createSduPlayer } from "../common/lc3-player.js";
 import { LE_AUDIO_SINK_SCRIPT as DEFAULT_SCRIPT } from "../common/le-audio-sink.js";
 import { createGattView } from "../common/gatt-view.js";
@@ -176,14 +176,15 @@ let timer = 0;
 let mode = "in-page"; // "in-page" (a wasm WebLink) | "websocket" (netsim) | "usb" (bridge)
 
 // --- USB mode state ---------------------------------------------------------
-// One WebA2dpSink over the `simble --usb` bridge, and its own player: A2DP is
-// 44.1/48 kHz stereo where the LE player is 16 kHz mono, and a player's rate
-// is fixed at creation. The phone is the source, so the LE source, scanner
-// and script editor all stand down in this mode.
-let usb = null;
+// The radio itself lives in a Worker (see common/radio-worker.js for why a
+// page timer must not drive a radio protocol). The page holds only the
+// worker handle, its own player — A2DP is 44.1/48 kHz stereo where the LE
+// player is 16 kHz mono, and a player's rate is fixed at creation — and the
+// render targets. The phone is the source, so the LE source, scanner and
+// script editor all stand down in this mode.
+let radioWorker = null;
 let usbPlayer = null;
 let usbRate = 0;
-let usbLogLen = 0;
 let soundOn = false; // the gate was clicked; a later-created player may enable itself
 let lc3 = null;
 let player = null;
@@ -702,13 +703,7 @@ function buildInPage() {
 }
 
 function dropUsb() {
-  try {
-    usb?.free();
-  } catch (_) {
-    /* already gone */
-  }
-  usb = null;
-  usbLogLen = 0;
+  radioWorker?.postMessage({ op: "sink-stop" });
   try {
     usbPlayer?.close();
   } catch (_) {
@@ -720,6 +715,8 @@ function dropUsb() {
 
 function teardown() {
   dropUsb();
+  radioWorker?.terminate();
+  radioWorker = null;
   freeNetsim();
   try {
     link?.free();
@@ -752,6 +749,7 @@ function applyMode() {
     $("mode-hint").textContent =
       "USB dongle — a Classic A2DP sink on real silicon; the phone is the source.";
     $("status").textContent = "waiting for the bridge";
+    loadDongleList();
     return;
   }
   $("sink-pick").disabled = inPage;
@@ -822,6 +820,9 @@ function switchBackend() {
 }
 
 // --- USB backend ------------------------------------------------------------
+// The page renders; the worker radios. postMessage delivery is not
+// visibility-throttled, so this keeps working with the tab in the background
+// — which is exactly where the tab is while a person pairs their phone.
 
 function usbLog(line) {
   const log = $("usb-log");
@@ -829,17 +830,73 @@ function usbLog(line) {
   log.scrollTop = log.scrollHeight;
 }
 
-function buildUsb() {
-  dropUsb();
-  $("usb-log").textContent = "";
-  try {
-    usb = new WebA2dpSink($("usb-url").value.trim(), "simble-speaker");
-    $("usb-stage").textContent = "connecting to the bridge…";
-    sinkHead.setState(false, "connecting…");
-  } catch (e) {
-    usb = null;
-    $("usb-stage").textContent = String(e);
+function ensureWorker() {
+  if (radioWorker) return radioWorker;
+  radioWorker = new Worker(new URL("../common/radio-worker.js", import.meta.url), {
+    type: "module",
+  });
+  radioWorker.onmessage = onRadioMessage;
+  radioWorker.onerror = (e) => {
+    $("usb-stage").textContent = `worker failed: ${e.message ?? "see console"}`;
+  };
+  return radioWorker;
+}
+
+function onRadioMessage({ data: m }) {
+  if (mode !== "usb") return; // a late message after switching controllers
+  if (m.op === "error") {
+    $("usb-stage").textContent = m.message;
+    sinkHead.setState(false, "error");
+    return;
   }
+  if (m.op === "status") {
+    for (const line of m.log) usbLog(line);
+    const detail = m.frames
+      ? ` · ${m.frames} SBC frames` +
+        (m.rate ? ` · ${m.rate} Hz × ${m.channels}` : "") +
+        (m.undecodable ? ` · ${m.undecodable} undecodable bytes` : "")
+      : "";
+    $("usb-stage").textContent = m.stage + detail;
+    sinkHead.setState(m.stage === "streaming", m.stage);
+    $("status").textContent = m.stage;
+    return;
+  }
+  if (m.op === "pcm") {
+    ensureUsbPlayer(m.rate);
+    const mono = m.channels === 2 ? downmixToMono(m.pcm) : m.pcm;
+    usbPlayer.play([mono], null);
+  }
+}
+
+/// The bridge's own list of what is plugged in, for the device picker.
+async function loadDongleList() {
+  const base = $("usb-url").value.trim().replace(/^ws/, "http").replace(/\/?$/, "");
+  const pick = $("usb-device");
+  try {
+    const { devices } = await (await fetch(`${base}/devices`)).json();
+    pick.innerHTML = "";
+    for (const d of devices) {
+      const option = document.createElement("option");
+      option.value = d.selector;
+      option.textContent = `${d.selector} — ${d.product}`;
+      pick.append(option);
+    }
+    pick.disabled = devices.length === 0;
+    if (!devices.length) $("usb-stage").textContent = "the bridge reports no dongles";
+  } catch (e) {
+    pick.innerHTML = "<option value=''>bridge not reachable</option>";
+    pick.disabled = true;
+  }
+}
+
+function buildUsb() {
+  $("usb-log").textContent = "";
+  $("usb-stage").textContent = "connecting to the bridge…";
+  sinkHead.setState(false, "connecting…");
+  const base = $("usb-url").value.trim().replace(/\/$/, "");
+  const device = $("usb-device").value;
+  const url = device ? `${base}/?device=${encodeURIComponent(device)}` : `${base}/`;
+  ensureWorker().postMessage({ op: "sink-start", url, name: "simble-speaker" });
 }
 
 /// A player at the stream's own rate — see lc3-player.js for why the graph
@@ -867,34 +924,6 @@ function downmixToMono(pcm) {
     mono[i] = (pcm[2 * i] + pcm[2 * i + 1]) >> 1;
   }
   return mono;
-}
-
-function tickUsb() {
-  if (!usb) return;
-  try {
-    usb.tick();
-  } catch (e) {
-    showError(e);
-    return;
-  }
-  const st = JSON.parse(usb.status_json(usbLogLen));
-  usbLogLen = st.log_len;
-  for (const line of st.log) usbLog(line);
-  const detail = st.frames
-    ? ` · ${st.frames} SBC frames` +
-      (st.sample_rate ? ` · ${st.sample_rate} Hz × ${st.channels}` : "") +
-      (st.undecodable_bytes ? ` · ${st.undecodable_bytes} undecodable bytes` : "")
-    : "";
-  $("usb-stage").textContent = st.stage + detail;
-  sinkHead.setState(st.stage === "streaming", st.stage);
-  $("status").textContent = st.stage;
-  if (st.failure) return;
-  const pcm = usb.take_pcm();
-  if (pcm.length) {
-    ensureUsbPlayer(usb.sample_rate() || 44100);
-    const mono = (usb.channels() || 2) === 2 ? downmixToMono(pcm) : pcm;
-    usbPlayer.play([mono], null);
-  }
 }
 
 // --- the one timer ---------------------------------------------------------
@@ -1070,7 +1099,7 @@ function loop() {
   const now = performance.now();
   try {
     if (mode === "usb") {
-      tickUsb();
+      // nothing: the worker radios and pushes; the page renders on message
     } else if (mode === "websocket") {
       tickSource(now);
       tickSink(now);
@@ -1494,6 +1523,10 @@ const TEMPLATE = `
         <div class="row">
           <input type="text" id="usb-url" value="ws://127.0.0.1:32323/" spellcheck="false"
                  aria-label="the simble --usb bridge URL">
+        </div>
+        <label class="field" for="usb-device">Dongle</label>
+        <div class="row">
+          <select id="usb-device" aria-label="which dongle hosts the speaker"></select>
           <button id="usb-connect" class="primary">connect</button>
         </div>
         <div class="readout" id="usb-stage">not connected</div>

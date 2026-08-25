@@ -541,6 +541,16 @@ pub fn accept_inbound(mut stream: TcpStream) -> Result<Inbound, SimbleError> {
         return Ok(Inbound::Request { method, target });
     }
     let query = finish_server_handshake(&mut stream, &request)?;
+    // Non-blocking is not an optimisation here, it is what `poll_messages`
+    // is written against: it drains until `WouldBlock`, so on a blocking
+    // socket it swallows the client's first burst of frames and then parks
+    // in `read()` forever with those frames buffered but never decoded. The
+    // `WsServerConn::accept` path always set this; this path forgot, and the
+    // `--usb` bridge answered every client with a session that said
+    // "bridging" and then never moved one packet.
+    stream
+        .set_nonblocking(true)
+        .map_err(|e| SimbleError::Transport(e.to_string()))?;
     Ok(Inbound::WebSocket(WsServerConn::new(stream), query))
 }
 

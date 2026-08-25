@@ -38,6 +38,22 @@ export const CONTROLLERS = [
 /// the sentence.
 const NOT_WIRED = "this page has not been wired for it yet";
 
+/// Where a `simble --usb` bridge answers if one is running. Only the badge
+/// below reads it — picking a dongle is each domain's business.
+const USB_BRIDGE_DEVICES = "http://127.0.0.1:32323/devices";
+
+/// Decorates the USB option's label with how many dongles the bridge sees,
+/// e.g. "USB dongle (3)". Silence on any failure: a bar must render whether
+/// or not a bridge is running, and "USB dongle" undecorated is already true.
+async function decorateUsbCount(nameEl) {
+  try {
+    const { devices } = await (await fetch(USB_BRIDGE_DEVICES)).json();
+    if (Array.isArray(devices)) nameEl.textContent = `USB dongle (${devices.length})`;
+  } catch (_) {
+    /* no bridge, no badge */
+  }
+}
+
 /// Reads the current choice. A stored value the caller cannot honour is not
 /// this module's problem to fix — the caller decides what to fall back to.
 export function currentController() {
@@ -135,6 +151,7 @@ export function createControllerBar({ supports, onChange }) {
       pick.className = "controller-pick";
       const name = document.createElement("b");
       name.textContent = c.label;
+      if (c.id === "usb") decorateUsbCount(name);
 
       radio.addEventListener("change", () => {
         if (!radio.checked) return;

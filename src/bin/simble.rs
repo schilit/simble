@@ -510,6 +510,7 @@ fn serve(mut stream: TcpStream, fallback: &UsbSelector) -> Result<(), String> {
             };
             let response = format!(
                 "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
+                 Access-Control-Allow-Origin: *\r\n\
                  Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             );
@@ -535,11 +536,33 @@ fn serve(mut stream: TcpStream, fallback: &UsbSelector) -> Result<(), String> {
     eprintln!("  bridging — the dongle is now this client's controller");
 
     let channel = HciChannel::new();
-    loop {
-        ws.pump(&channel).map_err(|e| e.to_string())?; // WebSocket host <-> channel
-        dongle.pump(&channel).map_err(|e| e.to_string())?; // channel <-> dongle (controller)
+    let session: Result<(), String> = loop {
+        if let Err(e) = ws.pump(&channel) {
+            break Err(e.to_string()); // WebSocket host <-> channel
+        }
+        if let Err(e) = dongle.pump(&channel) {
+            break Err(e.to_string()); // channel <-> dongle (controller)
+        }
         std::thread::sleep(POLL_INTERVAL);
+    };
+    // The session is over, however it ended — silence the dongle. A
+    // controller outlives its host: without this, a dead session leaves the
+    // dongle discoverable as a device nobody is behind, and the next phone
+    // to try it gets an unexplained pairing failure.
+    let quiet = HciChannel::new();
+    if quiet.send_command(&[0x03, 0x0C, 0x00]).is_ok() {
+        for _ in 0..200 {
+            if dongle.pump(&quiet).is_err() {
+                break;
+            }
+            if quiet.poll_controller_packet().is_some() {
+                eprintln!("  session over — dongle reset");
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
     }
+    session
 }
 
 #[cfg(test)]
