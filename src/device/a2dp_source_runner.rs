@@ -16,10 +16,10 @@
 //!   `wasm32-unknown-unknown`, so every step takes `now_ms` from the caller
 //!   — the same clock-passing shape `CarKit::tick` uses.
 //! - **No `println!`.** Progress lands in a log the caller drains
-//!   ([`Self::take_log`]); the example prints it, the worker posts it.
+//!   ([`A2dpSourceRunner::take_log`]); the example prints it, the worker posts it.
 //! - **No built-in melody.** PCM comes from the caller via
-//!   [`Self::queue_pcm`] and is metered out at real time by
-//!   [`Self::feed`], because a source that dumps its whole track at once
+//!   [`A2dpSourceRunner::queue_pcm`] and is metered out at real time by
+//!   [`A2dpSourceRunner::feed`], because a source that dumps its whole track at once
 //!   hands the controller more ACL data than its buffers hold.
 
 use std::collections::VecDeque;

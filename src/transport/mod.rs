@@ -17,6 +17,7 @@ pub(crate) mod netsim;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod rootcanal;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod serial;
 pub mod usb;
 pub mod wasm_ws;
 // Shared hand-rolled RFC 6455 codec + the WebSocket server end (`usb-ble-ws`).

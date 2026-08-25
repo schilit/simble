@@ -88,7 +88,7 @@ pub struct AdvertisingData {
     #[serde(default)]
     pub resolvable_set_identifier: Option<Vec<u8>>,
     /// Whether `complete_name` is actually a truncation, emitted as Shortened
-    /// Local Name (`0x08`). Set by [`fit_within_legacy_limit`] when it trims;
+    /// Local Name (`0x08`). Set by the crate's legacy-limit fitter when it trims;
     /// a trimmed name emitted as *Complete* is a lie two AD structures wide,
     /// because the scan response still carries the whole name and a scanner
     /// then watches the "complete" name disagree with itself.

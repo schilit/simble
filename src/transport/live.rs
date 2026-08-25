@@ -40,6 +40,7 @@
 //! than a model's, and every hardware session so far has found bugs in this
 //! stack that no simulator could have.
 
+use super::serial::SerialTransport;
 use super::usb::UsbSelector;
 use super::{
     HciChannel, HciTransport, NETSIM_WS_URL, NetsimTransport, RootcanalTransport, UsbTransport,
@@ -59,6 +60,9 @@ pub enum LiveTransport {
     /// Any controller speaking bare H4 over TCP — rootcanal's own test port,
     /// or a Bumble `Controller` published with `tcp-server:`.
     Tcp(RootcanalTransport<TcpStream>),
+    /// H4 over a serial tty (Zephyr `hci_uart` over CDC-ACM): the physical
+    /// backend that also carries ISO data.
+    Serial(crate::transport::serial::SerialTransport),
     /// A real USB dongle, opened directly. The only backend whose radio is
     /// physical, and so the only one that can reach consumer kit — a
     /// Bluetooth speaker answers a BR/EDR inquiry from here and from nowhere
@@ -77,6 +81,10 @@ pub enum Backend {
     Tcp(String),
     /// A USB dongle, named by any of [`UsbSelector`]'s forms.
     Usb(UsbSelector),
+    /// H4 over a serial device — a Zephyr `hci_uart` build behind CDC-ACM.
+    /// The transport that carries ISO data, which the USB Bluetooth class
+    /// cannot.
+    Serial(String),
 }
 
 /// Resolves `spec` to the backend it names. See [`LiveTransport::open`] for
@@ -105,11 +113,15 @@ pub fn resolve(spec: &str, name: &str, address: Address) -> Result<Backend, Simb
             if let Some(selector) = spec.strip_prefix("usb:") {
                 return Ok(Backend::Usb(UsbSelector::parse(selector)?));
             }
+            if let Some(path) = spec.strip_prefix("serial:") {
+                return Ok(Backend::Serial(path.to_string()));
+            }
             match spec.strip_prefix("tcp:") {
                 Some(addr) => Ok(Backend::Tcp(addr.to_string())),
                 None => Err(SimbleError::Transport(format!(
                     "unrecognized {HCI_SPEC_ENV} spec {spec:?} — expected \"netsim\", \
-                     a ws:// URL, \"tcp:HOST:PORT\", or \"usb\" / \"usb:SELECTOR\""
+                     a ws:// URL, \"tcp:HOST:PORT\", \"serial:/dev/tty…\", or \
+                     \"usb\" / \"usb:SELECTOR\""
                 ))),
             }
         }
@@ -140,6 +152,7 @@ impl LiveTransport {
             Backend::Netsim(url) => Ok(Self::Netsim(NetsimTransport::connect(&url)?)),
             Backend::Tcp(addr) => Ok(Self::Tcp(RootcanalTransport::connect(&addr)?)),
             Backend::Usb(selector) => Ok(Self::Usb(UsbTransport::open_selected(&selector)?)),
+            Backend::Serial(path) => Ok(Self::Serial(SerialTransport::open(&path)?)),
         }
     }
 
@@ -158,7 +171,7 @@ impl LiveTransport {
     pub fn set_trace(&mut self, file: std::fs::File) -> bool {
         match self {
             Self::Netsim(transport) => transport.set_trace(file).is_ok(),
-            Self::Tcp(_) | Self::Usb(_) => false,
+            Self::Tcp(_) | Self::Usb(_) | Self::Serial(_) => false,
         }
     }
 
@@ -168,6 +181,7 @@ impl LiveTransport {
             Self::Netsim(_) => "netsim",
             Self::Tcp(_) => "H4/TCP",
             Self::Usb(_) => "USB",
+            Self::Serial(_) => "H4/serial",
         }
     }
 }
@@ -187,6 +201,7 @@ impl HciTransport for LiveTransport {
             Self::Netsim(transport) => transport.pump(channel),
             Self::Tcp(transport) => transport.pump(channel),
             Self::Usb(transport) => transport.pump(channel),
+            Self::Serial(transport) => transport.pump(channel),
         }
     }
 }
