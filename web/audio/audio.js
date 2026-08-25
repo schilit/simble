@@ -191,6 +191,12 @@ let soundOn = false; // the gate was clicked; a later-created player may enable 
 // page's gain. The same buttons, slider and keys drive it, through here.
 let usbVolume = 128;
 let usbMuted = false;
+// The source half: decoded 44.1 kHz stereo PCM waiting for the worker's
+// need-pcm credit asks, sent one ~5 s slice at a time so a whole song is
+// not one 30 MB postMessage.
+let usbSrcPcm = null;
+let usbSrcCursor = 0;
+let usbSrcRunning = false;
 let lc3 = null;
 let player = null;
 
@@ -858,7 +864,24 @@ function ensureWorker() {
 
 function onRadioMessage({ data: m }) {
   if (m.op === "status") window.__usbStatus = m; // the tracing surface, inspectable
+  if (m.op === "source-status") window.__usbSourceStatus = m;
   if (mode !== "usb") return; // a late message after switching controllers
+  if (m.op === "source-need-pcm") {
+    feedSourcePcm();
+    return;
+  }
+  if (m.op === "source-error") {
+    $("usb-src-stage").textContent = m.message;
+    $("usb-src-connect").textContent = "start";
+    usbSrcRunning = false;
+    return;
+  }
+  if (m.op === "source-status") {
+    for (const line of m.log) usbSrcLog(line);
+    $("usb-src-stage").textContent =
+      m.failure ?? `${m.stage}${m.packets_sent ? ` · ${m.packets_sent} RTP packets` : ""}`;
+    return;
+  }
   if (m.op === "error") {
     $("usb-stage").textContent = m.message;
     sinkHead.setState(false, "error");
@@ -890,14 +913,19 @@ async function loadDongleList() {
   const pick = $("usb-device");
   try {
     const { devices } = await (await fetch(`${base}/devices`)).json();
-    pick.innerHTML = "";
-    for (const d of devices) {
-      const option = document.createElement("option");
-      option.value = d.selector;
-      option.textContent = `${d.selector} — ${d.product}`;
-      pick.append(option);
+    for (const target of [pick, $("usb-src-device")]) {
+      target.innerHTML = "";
+      for (const d of devices) {
+        const option = document.createElement("option");
+        option.value = d.selector;
+        option.textContent = `${d.selector} — ${d.product}`;
+        target.append(option);
+      }
+      target.disabled = devices.length === 0;
     }
-    pick.disabled = devices.length === 0;
+    // Different halves want different dongles: default the source to the
+    // second one, since the sink took the first.
+    if (devices.length > 1) $("usb-src-device").selectedIndex = 1;
     if (!devices.length) $("usb-stage").textContent = "the bridge reports no dongles";
   } catch (e) {
     pick.innerHTML = "<option value=''>bridge not reachable</option>";
@@ -970,6 +998,120 @@ function setUsbVolume(volume, muted) {
   $("vol-num").textContent = usbVolume;
   usbPlayer?.setVolume(usbVolume, usbMuted);
   applySpeaker(usbVolume, usbMuted, "—");
+}
+
+// --- the USB source ---------------------------------------------------------
+
+const SRC_RATE = 44100;
+
+/// The example's melody, in JS: a major arpeggio up and down. A deliberate
+/// tune says "frames arrived in order and decoded" the way a steady test
+/// tone cannot — a stuck buffer also hums.
+function renderMelody() {
+  const notes = [[440, 260], [554.37, 260], [659.25, 260], [880, 420],
+                 [659.25, 260], [554.37, 260], [440, 520], [0, 360]];
+  const total = notes.reduce((n, [, ms]) => n + Math.round(SRC_RATE * ms / 1000), 0);
+  const pcm = new Int16Array(total * 2);
+  let at = 0;
+  for (const [f, ms] of notes) {
+    const samples = Math.round(SRC_RATE * ms / 1000);
+    const fade = Math.max(1, Math.min(SRC_RATE / 200, samples / 4));
+    for (let n = 0; n < samples; n++) {
+      let a = 0;
+      if (f > 0) {
+        const env = n < fade ? n / fade : n + fade >= samples ? (samples - n) / fade : 1;
+        a = Math.sin(2 * Math.PI * f * n / SRC_RATE) * env * 0.35;
+      }
+      const sample = Math.max(-32768, Math.min(32767, Math.round(a * 32767)));
+      pcm[at++] = sample;
+      pcm[at++] = sample;
+    }
+  }
+  return pcm;
+}
+
+/// Decodes a picked file to interleaved 44.1 kHz stereo i16 — the format the
+/// stream is negotiated at. (The LE path resamples to 16 kHz mono for LC3;
+/// this is deliberately a separate pipeline.)
+async function decodeForA2dp(file) {
+  const bytes = await file.arrayBuffer();
+  const probe = new AudioContext();
+  const decoded = await probe.decodeAudioData(bytes);
+  probe.close();
+  const offline = new OfflineAudioContext(2, Math.ceil(decoded.duration * SRC_RATE), SRC_RATE);
+  const node = offline.createBufferSource();
+  node.buffer = decoded;
+  node.connect(offline.destination);
+  node.start();
+  const rendered = await offline.startRendering();
+  const left = rendered.getChannelData(0);
+  const right = rendered.getChannelData(rendered.numberOfChannels > 1 ? 1 : 0);
+  const pcm = new Int16Array(left.length * 2);
+  for (let i = 0; i < left.length; i++) {
+    pcm[2 * i] = Math.max(-32768, Math.min(32767, Math.round(left[i] * 32767)));
+    pcm[2 * i + 1] = Math.max(-32768, Math.min(32767, Math.round(right[i] * 32767)));
+  }
+  return pcm;
+}
+
+function usbSrcLog(line) {
+  const log = $("usb-src-log");
+  log.textContent += (log.textContent ? "\n" : "") + line;
+  log.scrollTop = log.scrollHeight;
+}
+
+/// Feeds the worker's credit ask: one ~5 s slice per ask, looping the
+/// melody but playing a file once through.
+function feedSourcePcm() {
+  if (!usbSrcRunning || !usbSrcPcm) return;
+  const slice = SRC_RATE * 2 * 5;
+  if (usbSrcCursor >= usbSrcPcm.length) {
+    if (usbSrcPcm.isMelody) usbSrcCursor = 0; // the melody loops
+    else return; // the file played through; the runner drains what is left
+  }
+  const chunk = usbSrcPcm.slice(usbSrcCursor, usbSrcCursor + slice);
+  usbSrcCursor += chunk.length;
+  radioWorker?.postMessage({ op: "source-pcm", pcm: chunk }, [chunk.buffer]);
+}
+
+async function startUsbSource() {
+  const base = usbBridgeUrl().trim().replace(/\/+$/, "");
+  const device = $("usb-src-device").value;
+  if (!device) {
+    $("usb-src-stage").textContent = "no dongle picked";
+    return;
+  }
+  $("usb-src-log").textContent = "";
+  $("usb-src-stage").textContent = "connecting to the bridge…";
+  const file = $("usb-src-file").files[0];
+  try {
+    usbSrcPcm = file ? await decodeForA2dp(file) : renderMelody();
+    if (!file) usbSrcPcm.isMelody = true;
+  } catch (e) {
+    $("usb-src-stage").textContent = `could not decode: ${e}`;
+    return;
+  }
+  usbSrcCursor = 0;
+  usbSrcRunning = true;
+  const url = `${base}/?device=${encodeURIComponent(device)}`;
+  ensureWorker().postMessage({
+    op: "source-start",
+    url,
+    target: $("usb-src-target").value.trim(),
+  });
+  $("usb-src-connect").textContent = "stop";
+}
+
+function stopUsbSource() {
+  usbSrcRunning = false;
+  radioWorker?.postMessage({ op: "source-stop" });
+  $("usb-src-stage").textContent = "stopped";
+  $("usb-src-connect").textContent = "start";
+}
+
+function toggleUsbSource() {
+  if ($("usb-src-connect").textContent === "stop") stopUsbSource();
+  else startUsbSource();
 }
 
 /// Interleaved stereo to mono. The shared player schedules one mono channel;
@@ -1533,11 +1675,27 @@ const TEMPLATE = `
 
       <div id="usb-source-note" hidden>
         <p class="hint">
-          <strong>Your phone is the source.</strong> Pair it with
-          <strong>simble-speaker</strong> (Settings → Pair new device), pick it as the audio
-          output, and play anything. What arrives lands on the speaker to the right — over
-          real radio, through a physical dongle.
+          <strong>Your phone can be the source</strong> — pair it with the speaker named on
+          the right and play anything. Or put the source on a <strong>second dongle</strong>
+          below: it inquires, pairs, reads the speaker's SDP, negotiates SBC and streams a
+          file — the same ladder as a phone, over real radio, to a real speaker in pairing
+          mode or to this page's own speaker.
         </p>
+        <label class="field" for="usb-src-device">Source dongle</label>
+        <div class="row">
+          <select id="usb-src-device" aria-label="which dongle hosts the source"></select>
+          <button id="usb-src-connect" class="primary">start</button>
+        </div>
+        <label class="field" for="usb-src-target">Speaker address</label>
+        <input type="text" id="usb-src-target" spellcheck="false"
+               placeholder="empty = first speaker the inquiry finds"
+               aria-label="the target speaker's address, or empty to inquire">
+        <label id="usb-src-drop" class="field" for="usb-src-file"
+               style="margin-top:0.5rem">Audio file (else a test melody)</label>
+        <input type="file" id="usb-src-file" accept="audio/*">
+        <div class="readout" id="usb-src-stage">not started</div>
+        <pre id="usb-src-log" class="readout"
+             style="max-height:12rem;overflow-y:auto;white-space:pre-wrap"></pre>
       </div>
 
       <div id="le-source">
@@ -2107,6 +2265,7 @@ function wireControls() {
   });
 
   $("usb-connect").addEventListener("click", toggleUsb);
+  $("usb-src-connect").addEventListener("click", toggleUsbSource);
   $("ident-name").addEventListener("input", onUsbNameEdited);
 
   // This handler must stay a real click: see the note on the page. Creating the

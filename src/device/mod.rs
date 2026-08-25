@@ -4,6 +4,7 @@
 //! Virtual Bluetooth Device state machine and packet processor.
 
 pub mod a2dp;
+pub mod a2dp_source_runner;
 pub(crate) mod att_server;
 pub mod avrcp;
 pub mod big_broadcaster;

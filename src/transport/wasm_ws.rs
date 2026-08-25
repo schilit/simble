@@ -5135,6 +5135,152 @@ mod web {
 
     // -- USB speaker (Audio page, "USB dongle" controller) -------------------
 
+    /// The other half: a Classic A2DP **source** on a second dongle,
+    /// walking the same ladder `examples/a2dp_source.rs` climbs —
+    /// [`crate::device::a2dp_source_runner::A2dpSourceRunner`] is that
+    /// ladder, extracted — with the page supplying PCM and reading the log.
+    /// Point it at a real speaker in pairing mode, or at this page's own
+    /// [`WebA2dpSink`] on the other dongle for a full loop over real RF.
+    #[wasm_bindgen]
+    pub struct WebA2dpSource {
+        transport: WasmWsTransport,
+        channel: HciChannel,
+        runner: crate::device::a2dp_source_runner::A2dpSourceRunner,
+        inquiry_length: u8,
+        log: Vec<String>,
+        failure: Option<String>,
+    }
+
+    #[wasm_bindgen]
+    impl WebA2dpSource {
+        /// Connects to the bridge at `url` (with `?device=` picking the
+        /// dongle). `target` is the speaker's address, or empty to inquire
+        /// and take the first Audio/Video device that answers.
+        #[wasm_bindgen(constructor)]
+        pub fn new(url: &str, target: &str) -> Result<WebA2dpSource, JsValue> {
+            use crate::device::a2dp_source_runner::A2dpSourceRunner;
+            use crate::device::classic_host::{inquiry_mode, io_capability, scan_enable};
+            use std::str::FromStr as _;
+
+            install_panic_hook();
+            let target = if target.trim().is_empty() {
+                None
+            } else {
+                Some(Address::from_str(target.trim()).map_err(js_error)?)
+            };
+            let transport = WasmWsTransport::connect(url)?;
+            let runner = A2dpSourceRunner::new(target, io_capability::NO_INPUT_NO_OUTPUT, true);
+            let channel = HciChannel::new();
+            for packet in runner
+                .host()
+                .start_commands()
+                .into_iter()
+                // A source is neither discoverable nor connectable: it does
+                // the finding.
+                .chain(runner.host().set_scan_enable(scan_enable::NONE))
+                // Extended inquiry results carry the peer's name in EIR,
+                // which is what the page's target picker lists.
+                .chain(runner.host().set_inquiry_mode(inquiry_mode::WITH_EXTENDED))
+            {
+                channel.inject_host_packet(packet).map_err(js_error)?;
+            }
+            Ok(Self {
+                transport,
+                channel,
+                runner,
+                inquiry_length: 8,
+                log: vec!["source up, waiting for the bridge socket".to_string()],
+                failure: None,
+            })
+        }
+
+        /// One pump plus one ladder step. `now_ms` is the worker's clock.
+        pub fn tick(&mut self, now_ms: f64) {
+            if self.failure.is_some() {
+                return;
+            }
+            if let Err(e) = self.transport.pump(&self.channel) {
+                self.fail(format!("bridge socket: {e:?}"));
+                return;
+            }
+            while let Some(packet) = self.channel.poll_controller_packet() {
+                match self.runner.handle_packet(&packet) {
+                    Ok(outgoing) => {
+                        for out in outgoing {
+                            let _ = self.channel.inject_host_packet(out);
+                        }
+                    }
+                    Err(e) => self.log.push(format!("host: {e}")),
+                }
+            }
+            match self.runner.step(now_ms, self.inquiry_length) {
+                Ok(packets) => {
+                    for packet in packets {
+                        let _ = self.channel.inject_host_packet(packet);
+                    }
+                }
+                Err(e) => {
+                    self.fail(e);
+                    return;
+                }
+            }
+            self.log.extend(self.runner.take_log());
+            self.runner.feed(now_ms);
+            for packet in self.runner.poll() {
+                let _ = self.channel.inject_host_packet(packet);
+            }
+        }
+
+        /// Interleaved stereo PCM at 44 100 Hz for the stream; the runner
+        /// meters it out at real time.
+        pub fn queue_pcm(&mut self, samples: &[i16]) {
+            self.runner.queue_pcm(samples);
+        }
+
+        /// Samples queued and not yet sent — the page's low-water mark.
+        pub fn pending_samples(&self) -> u32 {
+            self.runner.pending_samples() as u32
+        }
+
+        /// Ends the run.
+        pub fn finish(&mut self) {
+            self.runner.finish();
+        }
+
+        /// Render-ready state; `since` counts log lines already rendered.
+        pub fn status_json(&self, since: f64) -> String {
+            let since = (since.max(0.0) as usize).min(self.log.len());
+            serde_json::json!({
+                "stage": self.runner.rung().label(),
+                "highest": self.runner.highest().label(),
+                "socket_open": self.transport.is_open(),
+                "packets_sent": self.runner.packets_sent(),
+                "negotiated": self.runner.negotiated(),
+                "failure": self.failure,
+                "discovered": self.runner.discovered().iter().map(|d| {
+                    serde_json::json!({
+                        "address": d.address.to_string(),
+                        "name": d.name,
+                        "class": u32::from_le_bytes([
+                            d.class_of_device[0],
+                            d.class_of_device[1],
+                            d.class_of_device[2],
+                            0,
+                        ]),
+                    })
+                }).collect::<Vec<_>>(),
+                "log": self.log[since..],
+                "log_len": self.log.len(),
+            })
+            .to_string()
+        }
+
+        fn fail(&mut self, reason: String) {
+            self.log.push(format!("FAIL: {reason}"));
+            self.failure = Some(reason);
+        }
+    }
+
     /// A Classic A2DP sink over the `simble --usb` WebSocket bridge: the
     /// browser half of a *real* speaker. The bridge owns a physical dongle
     /// and relays raw HCI both ways, so the phone that pairs with this is a

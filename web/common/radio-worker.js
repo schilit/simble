@@ -22,11 +22,16 @@
 //   { op: "pcm", pcm: Int16Array, rate, channels }   (buffer transferred)
 //   { op: "error", message }
 
-import init, { WebA2dpSink } from "../pkg/simble.js";
+import init, { WebA2dpSink, WebA2dpSource } from "../pkg/simble.js";
 
 let sink = null;
+let source = null;
 let timer = 0;
 let logLen = 0;
+let srcLogLen = 0;
+let srcLastPostAt = 0;
+let srcLastKey = "";
+let lastNeedAskAt = 0;
 let lastPostAt = 0;
 let lastKey = "";
 // Decoded PCM is accumulated and posted in ~100 ms batches, not per pump.
@@ -39,9 +44,31 @@ let pcmSamples = 0;
 
 const ready = init();
 
+/// One interval serves both devices; it runs while either exists.
+function ensureTimer() {
+  if (!timer) timer = setInterval(pump, 20);
+}
+
+function maybeStopTimer() {
+  if (!sink && !source && timer) {
+    clearInterval(timer);
+    timer = 0;
+  }
+}
+
+function stopSource() {
+  try {
+    source?.free();
+  } catch (_) {
+    /* already gone */
+  }
+  source = null;
+  srcLogLen = 0;
+  srcLastKey = "";
+  maybeStopTimer();
+}
+
 function stopSink() {
-  if (timer) clearInterval(timer);
-  timer = 0;
   flushPcm(); // the tail of the stream still deserves to play
   try {
     sink?.free(); // Drop closes the socket, releasing the bridge session
@@ -51,6 +78,7 @@ function stopSink() {
   sink = null;
   logLen = 0;
   lastKey = "";
+  maybeStopTimer();
 }
 
 function flushPcm() {
@@ -69,6 +97,37 @@ function flushPcm() {
 }
 
 function pump() {
+  pumpSource();
+  pumpSink();
+}
+
+function pumpSource() {
+  if (!source) return;
+  try {
+    source.tick(performance.now());
+  } catch (e) {
+    postMessage({ op: "source-error", message: String(e) });
+    stopSource();
+    return;
+  }
+  const st = JSON.parse(source.status_json(srcLogLen));
+  srcLogLen = st.log_len;
+  const key = `${st.stage}|${st.packets_sent}|${st.failure ?? ""}`;
+  const now = Date.now();
+  if (st.log.length || key !== srcLastKey || now - srcLastPostAt > 250) {
+    srcLastKey = key;
+    srcLastPostAt = now;
+    postMessage({ op: "source-status", ...st });
+  }
+  // Ask the page for more PCM before the runner runs dry — one ask per
+  // second, so a page with nothing left is not nagged fifty times a tick.
+  if (source.pending_samples() < 88200 * 2 && now - lastNeedAskAt > 1000) {
+    lastNeedAskAt = now;
+    postMessage({ op: "source-need-pcm" });
+  }
+}
+
+function pumpSink() {
   if (!sink) return;
   try {
     sink.tick();
@@ -111,7 +170,23 @@ function pump() {
 self.onmessage = async (e) => {
   const m = e.data;
   await ready;
-  if (m.op === "sink-start") {
+  if (m.op === "source-start") {
+    stopSource();
+    setTimeout(() => {
+      try {
+        source = new WebA2dpSource(m.url, m.target || "");
+        ensureTimer();
+      } catch (err) {
+        postMessage({ op: "source-error", message: String(err) });
+      }
+    }, 300);
+  } else if (m.op === "source-stop") {
+    stopSource();
+  } else if (m.op === "source-pcm") {
+    source?.queue_pcm(m.pcm);
+  } else if (m.op === "source-finish") {
+    source?.finish();
+  } else if (m.op === "sink-start") {
     stopSink();
     // The drop above closes the previous socket, but the bridge releases
     // the dongle only on its next pump (and then resets it); claiming again
@@ -119,7 +194,7 @@ self.onmessage = async (e) => {
     setTimeout(() => {
       try {
         sink = new WebA2dpSink(m.url, m.name);
-        timer = setInterval(pump, 20);
+        ensureTimer();
       } catch (err) {
         postMessage({ op: "error", message: String(err) });
       }
