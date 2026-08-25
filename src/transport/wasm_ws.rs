@@ -5309,6 +5309,11 @@ mod web {
         acl_in: usize,
         media_sdus: usize,
         host_errors: usize,
+        /// RTP sequence tracking: packets that never arrived leave no bytes
+        /// to count as undecodable — a click in the audio is their only
+        /// trace unless the sequence numbers are watched.
+        last_rtp_seq: Option<u16>,
+        lost_packets: usize,
         said_connected: bool,
         said_paired: bool,
         said_encrypted: bool,
@@ -5426,6 +5431,8 @@ mod web {
                 acl_in: 0,
                 media_sdus: 0,
                 host_errors: 0,
+                last_rtp_seq: None,
+                lost_packets: 0,
                 said_connected: false,
                 said_paired: false,
                 said_encrypted: false,
@@ -5533,6 +5540,17 @@ mod web {
             let frames = sink.take_frames();
             if !frames.is_empty() {
                 self.media_sdus += frames.len();
+                for frame in &frames {
+                    if let Some(last) = self.last_rtp_seq {
+                        let gap = frame.sequence_number.wrapping_sub(last).wrapping_sub(1);
+                        // A retransmission or wrap glitch looks like a huge
+                        // "gap"; count only plausible runs of loss.
+                        if gap > 0 && gap < 1000 {
+                            self.lost_packets += gap as usize;
+                        }
+                    }
+                    self.last_rtp_seq = Some(frame.sequence_number);
+                }
                 let audio = A2dpSink::decode(&frames);
                 self.decoded_frames += audio.frames;
                 self.undecodable_bytes += audio.undecodable_bytes;
@@ -5601,6 +5619,7 @@ mod web {
                 "acl_in": self.acl_in,
                 "media_sdus": self.media_sdus,
                 "host_errors": self.host_errors,
+                "lost_packets": self.lost_packets,
                 "sample_rate": self.sample_rate(),
                 "channels": self.channels(),
                 "failure": self.failure,

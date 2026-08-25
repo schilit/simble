@@ -968,7 +968,8 @@ function onRadioMessage({ data: m }) {
     const detail = m.frames
       ? ` · ${m.frames} SBC frames` +
         (m.rate ? ` · ${m.rate} Hz × ${m.channels}` : "") +
-        (m.undecodable ? ` · ${m.undecodable} undecodable bytes` : "")
+        (m.undecodable ? ` · ${m.undecodable} undecodable bytes` : "") +
+        (m.lost_packets ? ` · ${m.lost_packets} RTP packets lost` : "")
       : "";
     $("usb-stage").textContent = m.stage + detail;
     sinkHead.setState(m.stage === "streaming", m.stage);

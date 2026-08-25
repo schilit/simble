@@ -183,7 +183,7 @@ details pre {
 .dev-head .dev-dot.on { background: var(--good); }
 /* The start/stop pill: a visible verb beside the state. Green-tinted while
    running so the button and the dot agree without saying it twice. */
-.dev-head .dev-run { font-size: 0.72rem; padding: 0.1rem 0.55rem;
+.dev-head .dev-run { font-size: 0.72rem; padding: 0.24rem 0.6rem;
   border: 1px solid var(--border); border-radius: 999px; cursor: pointer;
   background: var(--panel, transparent); color: var(--text); white-space: nowrap;
   display: inline-flex; align-items: center; gap: 0.32rem; line-height: 1; }
