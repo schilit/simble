@@ -367,7 +367,11 @@ export function createDeviceHeader(options) {
     if (next) {
       addrEl.textContent = next;
       addrEl.classList.remove("none");
-      addrEl.title = "the address this device is on the air as";
+      // An editable address keeps saying so — every status update calls
+      // this, and each one was stamping the affordance back out.
+      addrEl.title = onAddressEdit
+        ? "click to edit the address"
+        : "the address this device is on the air as";
     } else {
       addrEl.textContent = "no address";
       addrEl.classList.add("none");
