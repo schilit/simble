@@ -43,14 +43,17 @@ const NOT_WIRED = "this page has not been wired for it yet";
 const USB_BRIDGE_DEVICES = "http://127.0.0.1:32323/devices";
 
 /// Decorates the USB option's label with how many dongles the bridge sees,
-/// e.g. "USB dongle (3)". Silence on any failure: a bar must render whether
-/// or not a bridge is running, and "USB dongle" undecorated is already true.
-async function decorateUsbCount(nameEl) {
+/// e.g. "USB dongle (3)" — and when no bridge answers, says how to start
+/// one, here where the choice is offered rather than on some page's card.
+/// Instructions for a thing that is already running are noise; the sentence
+/// appears only when it is needed.
+async function decorateUsbCount(nameEl, whyEl) {
   try {
     const { devices } = await (await fetch(USB_BRIDGE_DEVICES)).json();
     if (Array.isArray(devices)) nameEl.textContent = `USB dongle (${devices.length})`;
   } catch (_) {
-    /* no bridge, no badge */
+    const hint = " USB dongle needs its bridge: run simble --usb --ws 32323.";
+    if (!whyEl.textContent.includes("needs its bridge")) whyEl.textContent += hint;
   }
 }
 
@@ -151,7 +154,7 @@ export function createControllerBar({ supports, onChange }) {
       pick.className = "controller-pick";
       const name = document.createElement("b");
       name.textContent = c.label;
-      if (c.id === "usb") decorateUsbCount(name);
+      if (c.id === "usb") decorateUsbCount(name, why);
 
       radio.addEventListener("change", () => {
         if (!radio.checked) return;

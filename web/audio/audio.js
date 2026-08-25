@@ -741,10 +741,14 @@ function applyMode() {
   $("usb-card").hidden = !isUsb;
   $("usb-source-note").hidden = !isUsb;
   $("le-source").hidden = isUsb;
-  for (const el of [root.querySelector(".ident"), $("sink-script"),
-                    root.querySelector(".ops"), $("readout"), $("air-note")]) {
+  // The Name field stays: one speaker identity, whichever radio hosts it.
+  // The address does not — on a dongle the silicon owns the address, and the
+  // dongle picker is how one is chosen.
+  for (const el of [$("sink-script"), root.querySelector(".ops"), $("readout"), $("air-note")]) {
     if (el) el.hidden = isUsb;
   }
+  $("ident-addr").disabled = isUsb;
+  $("ident-addr").title = isUsb ? "a dongle's address belongs to its silicon" : "";
   if (isUsb) {
     $("mode-hint").textContent =
       "USB dongle — a Classic A2DP sink on real silicon; the phone is the source.";
@@ -848,6 +852,7 @@ function onRadioMessage({ data: m }) {
   if (m.op === "error") {
     $("usb-stage").textContent = m.message;
     sinkHead.setState(false, "error");
+    $("usb-connect").textContent = "connect";
     return;
   }
   if (m.op === "status") {
@@ -897,7 +902,27 @@ function buildUsb() {
   const base = $("usb-url").value.trim().replace(/\/$/, "");
   const device = $("usb-device").value;
   const url = device ? `${base}/?device=${encodeURIComponent(device)}` : `${base}/`;
-  ensureWorker().postMessage({ op: "sink-start", url, name: "simble-speaker" });
+  // One speaker identity: the same Name field that names the LE sink names
+  // this one. Two radios advertising two different names is how a phone
+  // ends up seeing speakers nobody asked for.
+  const name = $("ident-name").value.trim() || "webspeaker";
+  ensureWorker().postMessage({ op: "sink-start", url, name });
+  $("usb-connect").textContent = "disconnect";
+}
+
+function disconnectUsb() {
+  dropUsb(); // sink-stop: the worker frees the sink, closing the socket —
+  // and the bridge resets the dongle, so nothing keeps advertising.
+  $("usb-stage").textContent = "not connected";
+  sinkHead.setState(false, "USB bridge — not connected");
+  $("usb-connect").textContent = "connect";
+}
+
+/// One button, two meanings: its label says which. A connect with no way
+/// back left the dongle advertising until the tab closed.
+function toggleUsb() {
+  if ($("usb-connect").textContent === "disconnect") disconnectUsb();
+  else buildUsb();
 }
 
 /// A player at the stream's own rate — see lc3-player.js for why the graph
@@ -1519,7 +1544,6 @@ const TEMPLATE = `
           radio. Whatever pairs with it and streams — your phone — is the source, and the
           decoded PCM plays here.
         </p>
-        <pre class="hint" style="user-select:all">simble --usb 02.3.1 --ws 32323</pre>
         <label class="field" for="usb-url">Bridge</label>
         <div class="row">
           <input type="text" id="usb-url" value="ws://127.0.0.1:32323/" spellcheck="false"
@@ -1533,9 +1557,9 @@ const TEMPLATE = `
         <div class="readout" id="usb-stage">not connected</div>
         <pre id="usb-log" class="readout" style="max-height:14rem;overflow-y:auto;white-space:pre-wrap"></pre>
         <p class="hint">
-          The sink appears to the phone as <strong>simble-speaker</strong>, Class of Device
-          Loudspeaker. Its link keys live in this tab: reconnecting after a reload means
-          <em>Forget</em> the device on the phone first, then pair again.
+          The sink appears to the phone under the <strong>Name</strong> above, Class of
+          Device Loudspeaker. Its link keys live in this tab: reconnecting after a reload
+          means <em>Forget</em> the device on the phone first, then pair again.
         </p>
       </div>
 
@@ -1917,6 +1941,12 @@ function applyIdentity() {
   if (playing) return;
   showScriptError(null);
   showError("");
+  if (mode === "usb") {
+    // The name is the only identity a page can give a dongle-hosted
+    // speaker; applying it rebuilds the sink under the new name.
+    buildUsb();
+    return;
+  }
 
   const address = $("ident-addr").value.trim().toUpperCase();
   if (!/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(address)) {
@@ -2010,7 +2040,7 @@ function wireControls() {
     lastScanAt = 0;
   });
 
-  $("usb-connect").addEventListener("click", buildUsb);
+  $("usb-connect").addEventListener("click", toggleUsb);
 
   // This handler must stay a real click: see the note on the page. Creating the
   // context from script yields a suspended one, which counts and schedules SDUs
