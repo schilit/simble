@@ -232,9 +232,9 @@ export function createDeviceHeader(options) {
   setAddress(address, addressNote);
   /// In-place editing for an identity span: Enter commits, Escape reverts,
   /// a refusal string from `commit` reverts and becomes the tooltip.
-  function editable(el, hint, normalize, commit) {
+  function editable(el, restHint, hint, normalize, commit) {
     el.classList.add("dev-editable");
-    el.title = hint;
+    el.title = restHint;
     el.style.cursor = "text";
     el.tabIndex = 0;
     let before = "";
@@ -258,12 +258,15 @@ export function createDeviceHeader(options) {
       const next = normalize(el.textContent.trim());
       if (next === before) {
         el.textContent = before;
+        el.title = restHint;
         return;
       }
       const refusal = commit(next, before);
       if (refusal) {
         el.textContent = before;
         el.title = refusal;
+      } else {
+        el.title = restHint;
       }
     });
   }
@@ -271,6 +274,7 @@ export function createDeviceHeader(options) {
   if (onAddressEdit) {
     editable(
       addrEl,
+      "click to edit the address",
       "type the on-air address · Enter commits · Escape reverts",
       (text) => text.toUpperCase(),
       (next) => {
@@ -283,6 +287,7 @@ export function createDeviceHeader(options) {
   if (onNameEdit) {
     editable(
       nameEl,
+      "click to edit the name",
       "type the device's name · Enter commits · Escape reverts",
       (text) => text,
       (next, before) => {
@@ -320,7 +325,15 @@ export function createDeviceHeader(options) {
   function setRunning(on) {
     running = Boolean(on);
     if (!runBtn) return;
-    runBtn.textContent = running ? "■ stop" : "▶ start";
+    // Glyph and word are separate flex items, centred against each other —
+    // as one text node the triangle sat on the baseline and looked sunk.
+    runBtn.replaceChildren(
+      Object.assign(document.createElement("span"), {
+        textContent: running ? "■" : "▶",
+        style: "font-size:0.85em",
+      }),
+      document.createTextNode(running ? "stop" : "start"),
+    );
     runBtn.classList.toggle("running", running);
     if (!stopDisabled) {
       runBtn.title =

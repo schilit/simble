@@ -178,13 +178,18 @@ let timer = 0;
 // default a fresh mount starts from. "in-page" is the one paired choice —
 // the in-page radio is a single WebLink hosting both devices, so picking it
 // on either side brings the other along (its strip says so).
-let srcCtl = { kind: "in-page", device: "" };
-let snkCtl = { kind: "in-page", device: "" };
+let srcCtl = { kind: "sim", device: "" };
+let snkCtl = { kind: "sim", device: "" };
 let srcStrip = null;
 let snkStrip = null;
 const srcUsb = () => srcCtl.kind === "usb";
 const snkUsb = () => snkCtl.kind === "usb";
-const bothInPage = () => srcCtl.kind === "in-page" && snkCtl.kind === "in-page";
+// "sim" resolves through the page-level bar: in-page vs netsim is a page
+// choice, not a per-device one — nobody splits devices across simulators.
+const simKind = () => (currentController() === "in-page" ? "in-page" : "websocket");
+const srcKind = () => (srcUsb() ? "usb" : simKind());
+const snkKind = () => (snkUsb() ? "usb" : simKind());
+const bothInPage = () => !srcUsb() && !snkUsb() && simKind() === "in-page";
 
 // --- USB mode state ---------------------------------------------------------
 // The radio itself lives in a Worker (see common/radio-worker.js for why a
@@ -349,7 +354,7 @@ function stop() {
 // nowhere for it to go yet — over netsim the CIS may still be opening, and the
 // in-page central may still be connecting.
 function sendSdu(sdu) {
-  if (srcCtl.kind === "websocket") {
+  if (srcKind() === "websocket") {
     if (!source || !source.is_streaming()) return false;
     source.send_audio(sdu);
     return true;
@@ -503,7 +508,7 @@ function renderSinkStats() {
 function writeControlPoint(bytes) {
   const value = new Uint8Array(bytes);
   try {
-    if (snkCtl.kind === "websocket") sink?.set_value(VOLUME_CONTROL_POINT, value);
+    if (snkKind() === "websocket") sink?.set_value(VOLUME_CONTROL_POINT, value);
     else if (link && linkSink >= 0) link.peripheral_set_value(linkSink, VOLUME_CONTROL_POINT, value);
   } catch (e) {
     showScriptError(e);
@@ -587,7 +592,7 @@ function setTarget(address) {
   $("progress").style.width = "0";
   // A source is aimed at one peer for its lifetime — the connection, the ASE
   // and the CIS all belong to that peer — so retargeting means a new one.
-  if (srcCtl.kind === "websocket") dropSource(performance.now());
+  if (srcKind() === "websocket") dropSource(performance.now());
 }
 
 // --- per-device controller strips -------------------------------------------
@@ -597,36 +602,32 @@ function setTarget(address) {
 // brings the other along, and leaving it on either side moves both.
 
 function buildStrips(defaultKind) {
-  const kind = defaultKind === "usb" ? "usb" : defaultKind;
-  srcCtl = { kind, device: "" };
-  snkCtl = { kind, device: "" };
+  // The strips exist only when the page default is the USB dongle: while
+  // everything is simulated there is one controller story and the top bar
+  // already tells it. USB is where per-device assignment starts meaning
+  // something — which dongle, and whether one side stays simulated.
+  const usbDefault = defaultKind === "usb";
+  srcCtl = { kind: usbDefault ? "usb" : "sim", device: "" };
+  snkCtl = { kind: usbDefault ? "usb" : "sim", device: "" };
+  if (!usbDefault) return;
+  const simLabel = "simulated — netsim";
   srcStrip = createControllerStrip({
     value: srcCtl,
+    simLabel,
     onChange: (next) => onStripChange("source", next),
   });
   snkStrip = createControllerStrip({
     value: snkCtl,
+    simLabel,
     onChange: (next) => onStripChange("sink", next),
   });
   $("source-head").before(srcStrip.el);
   $("sink-head").before(snkStrip.el);
-  if (kind === "usb") loadDongleList();
+  loadDongleList();
 }
 
 function onStripChange(side, next) {
-  const mine = side === "source" ? srcCtl : snkCtl;
-  const theirs = side === "source" ? snkCtl : srcCtl;
-  const theirStrip = side === "source" ? snkStrip : srcStrip;
-  const paired = next.kind === "in-page" || theirs.kind === "in-page";
-  Object.assign(mine, next);
-  if (paired && theirs.kind !== next.kind) {
-    // One WebLink, both devices: in-page is entered and left together.
-    Object.assign(theirs, { kind: next.kind, device: theirs.device });
-    theirStrip.set(theirs);
-    theirStrip.setWhy(
-      "in-page is one shared link for both devices — moving one moves both",
-    );
-  }
+  Object.assign(side === "source" ? srcCtl : snkCtl, next);
   switchBackend();
   return null;
 }
@@ -1348,11 +1349,11 @@ function loop() {
       tickInPage(now);
     } else {
       // A usb side lives in the worker and needs no tick from here.
-      if (srcCtl.kind === "websocket") {
+      if (srcKind() === "websocket") {
         tickSource(now);
         tickScanner(now);
       }
-      if (snkCtl.kind === "websocket") tickSink(now);
+      if (snkKind() === "websocket") tickSink(now);
     }
   } catch (e) {
     showError(e);

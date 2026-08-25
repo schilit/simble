@@ -1,16 +1,18 @@
 // Copyright 2026 Bill Schilit — SPDX-License-Identifier: Apache-2.0
 //
 // A per-device controller strip: the slim line above a device card that says
-// which controller THIS device rides. One dropdown, with each plugged-in
-// dongle as its own first-class entry:
+// which controller THIS device rides. One dropdown, two kinds of entry:
+// the page's simulator (whichever the top bar picked — in-page or netsim),
+// or a named USB dongle:
 //
 //   CONTROLLER [ usb: 02.3.1 — CSR8510 ▾ ]
 //
-// Three radios plus a dongle select repeated per card was the same choice
-// drawn twice and asked about once. The page-level bar remains the default a
-// device starts on; the strip is that device's override — which earns its
-// pixels the moment two devices ride different radios: a sink on real
-// silicon answering a phone while a source streams into netsim.
+// The simulator is deliberately ONE entry, not two. In-page vs netsim is a
+// page-level choice: in-page is a single link hosting both devices, and a
+// netsim/in-page split leaves the two with nobody to talk to — nobody would
+// split devices across simulators, and the strip should not offer it. What
+// devices genuinely split across is simulated vs real: a sink on silicon
+// answering a phone while the source streams into netsim.
 
 const STYLE_ID = "simble-ctl-strip-style";
 
@@ -30,24 +32,32 @@ function injectStyles() {
   document.head.append(style);
 }
 
-/// `value` ↔ option encoding: in-page and websocket are themselves; a usb
-/// choice is "usb:<selector>".
-const encode = (v) => (v.kind === "usb" ? `usb:${v.device ?? ""}` : v.kind);
+/// `value` ↔ option encoding: the simulator is "sim"; a usb choice is
+/// "usb:<selector>".
+const encode = (v) => (v.kind === "usb" ? `usb:${v.device ?? ""}` : "sim");
 const decode = (text) =>
   text.startsWith("usb:")
     ? { kind: "usb", device: text.slice(4) }
-    : { kind: text, device: "" };
+    : { kind: "sim", device: "" };
 
 /**
  * @param {object} options
  * @param {{kind:string, device:string}} options.value  initial choice
+ * @param {string} [options.simLabel] what the one simulator entry is called
+ *        (e.g. "simulated — netsim"); follows the page-level bar.
  * @param {Array<{selector:string, product:string}>} [options.dongles]
  * @param {(value:{kind:string,device:string}) => ?string} options.onChange
  *        return a string to refuse (shown on the strip's why line), or
  *        null/undefined to accept.
  * @param {string} [options.why] a standing note under the choice
  */
-export function createControllerStrip({ value, dongles = [], onChange, why = "" }) {
+export function createControllerStrip({
+  value,
+  simLabel = "simulated",
+  dongles = [],
+  onChange,
+  why = "",
+}) {
   injectStyles();
   const el = document.createElement("div");
   el.className = "ctl-strip";
@@ -76,8 +86,7 @@ export function createControllerStrip({ value, dongles = [], onChange, why = "" 
       option.textContent = text;
       pick.append(option);
     };
-    add("in-page", "in-page");
-    add("websocket", "netsim");
+    add("sim", simLabel);
     for (const d of known) add(`usb:${d.selector}`, `usb: ${d.selector} — ${d.product}`);
     // A stored usb choice whose dongle is not (yet) listed still renders,
     // so a slow /devices answer cannot silently rewrite the choice.
@@ -113,6 +122,10 @@ export function createControllerStrip({ value, dongles = [], onChange, why = "" 
     set,
     setDongles: (list) => {
       known = list;
+      renderOptions();
+    },
+    setSimLabel: (text) => {
+      simLabel = text;
       renderOptions();
     },
     value: () => ({ ...current }),
