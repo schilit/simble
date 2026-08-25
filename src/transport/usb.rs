@@ -731,6 +731,32 @@ impl UsbTransport {
         Self::open_selected(&UsbSelector::VidPid(vid, pid))
     }
 
+    /// Asks the controller for its own `BD_ADDR`, blocking until it answers.
+    ///
+    /// A dongle's public address lives in ROM, so it is the address a peer
+    /// actually sees — and therefore the one SMP must compute with. Reading it
+    /// is the only way to know it: nothing the host configures can change it
+    /// while `own_address_type` is public.
+    pub fn read_bd_addr(&mut self) -> Result<crate::types::Address, SimbleError> {
+        let channel = super::HciChannel::new();
+        channel.send_command(&[0x09, 0x10, 0x00])?;
+        for _ in 0..2000 {
+            self.pump(&channel)?;
+            while let Some(p) = channel.poll_controller_packet() {
+                // Command Complete for Read_BD_ADDR: 04 0E 0A 01 09 10 status addr[6]
+                if p.len() >= 13 && p[1] == 0x0E && p[4] == 0x09 && p[5] == 0x10 && p[6] == 0x00 {
+                    let mut bytes = [0u8; 6];
+                    bytes.copy_from_slice(&p[7..13]);
+                    return Ok(crate::types::Address::new(bytes));
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        Err(SimbleError::Transport(
+            "the controller never answered Read_BD_ADDR".to_string(),
+        ))
+    }
+
     /// Opens the one dongle `selector` names, or fails saying what else it
     /// could have meant. See [`UsbSelector`] for the forms and their
     /// trade-offs.
@@ -912,14 +938,29 @@ impl UsbTransport {
     /// from `channel` may sit here for several pumps before it goes out. ACL
     /// data is not affected — it has its own buffer accounting.
     pub fn pump(&mut self, channel: &super::HciChannel) -> Result<(), SimbleError> {
+        // `SIMBLE_HCI_LOG=1` traces every packet in both directions. A real
+        // controller's misbehaviour is usually silent — a command discarded
+        // for want of credit, a parameter refused, an event never raised —
+        // and without a trace the symptom is only ever "nothing happened".
+        let trace = std::env::var_os("SIMBLE_HCI_LOG").is_some();
         while let Some(packet) = channel.poll_host_packet() {
+            if trace {
+                eprintln!("host -> ctlr  {:02X?}", packet);
+            }
             let Some((&packet_type, payload)) = packet.split_first() else {
                 return Err(SimbleError::Transport("empty H4 packet".to_string()));
             };
             match packet_type {
                 h4_type::HCI_COMMAND if self.flow_control => self.credits.queue(payload.to_vec()),
                 h4_type::HCI_COMMAND => self.endpoints.send_command(payload)?,
-                h4_type::HCI_ACL_DATA => self.endpoints.send_acl(payload)?,
+                h4_type::HCI_ACL_DATA => {
+                    if trace && payload.len() > 8 {
+                        // L2CAP CID 0x0006 is the SMP fixed channel, 0x0004 ATT.
+                        let cid = u16::from_le_bytes([payload[6], payload[7]]);
+                        eprintln!("host -> ctlr  ACL cid={cid:#06x} {:02X?}", &payload[8..]);
+                    }
+                    self.endpoints.send_acl(payload)?
+                }
                 // SCO/ISO would need interface 1's isochronous endpoints,
                 // which this transport does not claim.
                 other => {
@@ -935,6 +976,9 @@ impl UsbTransport {
             // Before the event is handed on, not after: the credit it carries
             // is what releases the next command in the same pump.
             self.credits.observe_event(&event);
+            if trace {
+                eprintln!("ctlr -> host  [04] {:02X?}", event);
+            }
             let mut packet = Vec::with_capacity(1 + event.len());
             packet.push(h4_type::HCI_EVENT);
             packet.extend_from_slice(&event);
@@ -943,6 +987,10 @@ impl UsbTransport {
         self.send_permitted_commands()?;
 
         while let Some(chunk) = self.endpoints.try_recv_acl()? {
+            if trace && chunk.len() > 8 {
+                let cid = u16::from_le_bytes([chunk[6], chunk[7]]);
+                eprintln!("ctlr -> host  ACL cid={cid:#06x} {:02X?}", &chunk[8..]);
+            }
             self.acl_reassembler.feed(&chunk);
             while let Some(packet) = self.acl_reassembler.next_packet() {
                 channel.receive_from_controller(packet)?;
@@ -1027,12 +1075,27 @@ impl UsbScene {
             // Event ever arrives, so the peripheral advertises into the void
             // and never learns anyone connected.
             peripheral.set_le_event_mask(crate::device::host::LE_EVENT_MASK_CORE_4_0);
-            UsbTransport::open_selected(&device).map_err(|e| {
+            let mut transport = UsbTransport::open_selected(&device).map_err(|e| {
                 format!(
                     "{e} — is a Bluetooth dongle plugged in and free? \
                      (the OS Bluetooth stack usually claims the built-in adapter)"
                 )
-            })
+            })?;
+            // Re-stamp the identity with the address the *controller* will
+            // actually advertise. A public address lives in ROM, so the
+            // caller's choice never reaches the air — and SMP computes its
+            // confirm value over the responder address, so a peer that saw the
+            // dongle's address and a host that used the caller's disagree and
+            // pairing dies with 0x04, Confirm Value Failed. That is not a
+            // hypothetical: it is what a phone does to this scene.
+            match transport.read_bd_addr() {
+                Ok(real) => peripheral.set_identity(real),
+                Err(e) => eprintln!(
+                    "simble: could not read the controller's BD_ADDR ({e}); \
+                     SMP will compute with an address the peer never saw"
+                ),
+            }
+            Ok(transport)
         })
     }
 
