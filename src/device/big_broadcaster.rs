@@ -69,6 +69,15 @@ pub struct BroadcastConfig {
     pub advertising_handle: u8,
     /// Advertising Set ID published in the extended advertisement.
     pub advertising_sid: u8,
+    /// The address the broadcast advertises from, when the caller wants to
+    /// choose it. `None` uses the controller's own public address.
+    ///
+    /// Choosing matters for more than tidiness: a Zephyr controller has no
+    /// public address at all (Read BD_ADDR answers all zeros), so a
+    /// broadcast that inherits one advertises from 00:00:00:00:00:00 — and
+    /// an out-of-band join, where a QR code names the advertiser address,
+    /// cannot name an address the source does not really have.
+    pub advertiser_address: Option<crate::types::Address>,
     /// Identifier the host assigns to the BIG.
     pub big_handle: u8,
     /// 24-bit Broadcast_ID, the value a receiver filters on.
@@ -111,6 +120,7 @@ impl Default for BroadcastConfig {
         Self {
             advertising_handle: 0,
             advertising_sid: 0,
+            advertiser_address: None,
             big_handle: 0,
             broadcast_id: 0x0000_0001,
             broadcast_name: "Simble Auracast".to_string(),
@@ -299,7 +309,20 @@ impl BigBroadcaster {
     /// Begins the setup sequence, returning the first command to send.
     pub fn start(&mut self) -> Vec<Vec<u8>> {
         self.state = BroadcastState::SettingAdvertisingParameters;
-        vec![self.extended_advertising_parameters()]
+        let mut out = vec![self.extended_advertising_parameters()];
+        // LE Set Advertising Set Random Address must follow the parameters
+        // (the set has to exist) and precede enabling it. Sent in the same
+        // batch, so the sequence's Command Complete bookkeeping — which
+        // counts on the parameters' answer — is undisturbed.
+        if let Some(address) = self.config.advertiser_address {
+            let mut params = vec![self.config.advertising_handle];
+            params.extend_from_slice(address.as_slice());
+            out.push(hci_command(
+                ext_adv_opcode::LE_SET_ADVERTISING_SET_RANDOM_ADDRESS,
+                &params,
+            ));
+        }
+        out
     }
 
     /// Feeds one HCI packet in, and returns the commands to send back.
@@ -514,7 +537,9 @@ impl BigBroadcaster {
             primary_advertising_interval_min: U24::new(self.config.primary_advertising_interval),
             primary_advertising_interval_max: U24::new(self.config.primary_advertising_interval),
             primary_advertising_channel_map: 0x07,
-            own_address_type: 0x00, // Public.
+            // Random when the caller named an address (it is set on the
+            // advertising set below), public otherwise.
+            own_address_type: u8::from(self.config.advertiser_address.is_some()),
             peer_address_type: 0x00,
             peer_address: [0; 6],
             advertising_filter_policy: 0x00,

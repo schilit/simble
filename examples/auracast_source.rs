@@ -78,6 +78,13 @@ fn main() {
     let config = BroadcastConfig {
         broadcast_id,
         broadcast_name: "Simble Auracast".to_string(),
+        // A chosen address, so an out-of-band join (a QR code naming the
+        // advertiser) can name it — and because a Zephyr controller has no
+        // public address of its own to inherit.
+        advertiser_address: Some(
+            simble::types::Address::from_str("CC:1E:57:00:0B:01")
+                .unwrap_or(simble::types::Address::ANY),
+        ),
         ..Default::default()
     };
     let sdu_bytes = config.max_sdu as usize;
@@ -98,7 +105,14 @@ fn main() {
     let mut last_state = BroadcastState::Idle;
 
     #[cfg(feature = "lc3")]
-    let mut encoder = simble::audio::lc3::Lc3Encode::new(48_000, 10_000).expect("48 kHz / 10 ms");
+    // One encoder PER BIS. An LC3 encoder carries state between frames (the
+    // MDCT overlap, among other things), so feeding one instance two
+    // different channels in turn corrupts both — each frame is predicted
+    // from the other channel's tail. The symptom is a stream that syncs,
+    // decodes, and sounds wrong or silent.
+    let mut encoders: Vec<simble::audio::lc3::Lc3Encode> = (0..num_bis)
+        .map(|_| simble::audio::lc3::Lc3Encode::new(48_000, 10_000).expect("48 kHz / 10 ms"))
+        .collect();
     #[cfg(not(feature = "lc3"))]
     println!(
         "WARNING: built without --features lc3. The SDUs carry a byte pattern, \
@@ -134,6 +148,7 @@ fn main() {
                     let hz = if bis == 1 { 440.0 } else { 554.37 };
                     #[cfg(feature = "lc3")]
                     let payload = {
+                        let encoder = &mut encoders[usize::from(bis - 1)];
                         let samples = tone(sample_index, encoder.samples_per_frame(), hz);
                         encoder.encode(&samples, sdu_bytes).expect("encode")
                     };
