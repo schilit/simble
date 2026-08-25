@@ -134,7 +134,11 @@ export function createDeviceHeader(options) {
   // a device's name or state line happens to be.
   const main = document.createElement("div");
   main.className = "dev-main";
-  main.append(dot, nameEl, kindEl, stateEl);
+  // With a run control the pill IS the state light and stands leftmost,
+  // where the dot stood; a dot beside a coloured pill was the same state
+  // twice, at twice the width. Passive devices keep the plain dot.
+  if (run) main.append(nameEl, kindEl, stateEl);
+  else main.append(dot, nameEl, kindEl, stateEl);
   el.append(main);
 
   // --- the script, and the pen that reveals it -----------------------------
@@ -213,7 +217,7 @@ export function createDeviceHeader(options) {
       if (running) run.onStop?.();
       else run.onRun?.();
     });
-    main.append(runBtn);
+    main.prepend(runBtn);
     whyEl = document.createElement("span");
     whyEl.className = "dev-why";
     el.append(whyEl);
@@ -306,7 +310,7 @@ export function createDeviceHeader(options) {
 
   /** The dot and the live label. `on` is the device's real state, not a mood. */
   function setState(on, label = "", tone = "") {
-    dot.classList.toggle("on", Boolean(on));
+    (runBtn ?? dot).classList.toggle("on", Boolean(on));
     stateEl.textContent = label;
     stateEl.className = "dev-state" + (tone ? ` ${tone}` : "");
   }
@@ -319,7 +323,9 @@ export function createDeviceHeader(options) {
     runBtn.textContent = running ? "■ stop" : "▶ start";
     runBtn.classList.toggle("running", running);
     if (!stopDisabled) {
-      runBtn.title = running ? `Stop ${name}` : `Start ${name}`;
+      runBtn.title =
+        (running ? `Stop ${name}` : `Start ${name}`) +
+        (dotMeans ? ` · filled when: ${dotMeans}` : "");
     }
   }
 

@@ -189,6 +189,10 @@ details pre {
 .dev-head .dev-run:hover:not(:disabled) { border-color: var(--good); }
 .dev-head .dev-run.running { color: var(--good); border-color: var(--good); }
 .dev-head.accent-accent .dev-run.running { color: var(--accent); border-color: var(--accent); }
+/* Filled when the device is actually doing its job — the pill is the state
+   light now, so it inherits the dot's third state. */
+.dev-head .dev-run.on { background: var(--good); border-color: var(--good); color: #fff; }
+.dev-head.accent-accent .dev-run.on { background: var(--accent); border-color: var(--accent); }
 .dev-head .dev-run:disabled { opacity: 0.55; cursor: not-allowed; }
 /* An identity you can edit must look editable: the dashed underline is the
    affordance, and it firms up under the pointer. "Where did the name go?"
