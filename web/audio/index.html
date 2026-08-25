@@ -40,8 +40,18 @@
 </footer>
 
 <script type="module">
-  import { mount } from "./audio.js";
-  mount(document.querySelector("main"));
+  import { mount, SUPPORTS } from "./audio.js";
+  import { createControllerBar } from "../common/controller-bar.js";
+  // The same bar the Devices shell shows. Without it this URL was stuck on
+  // whatever controller was last chosen elsewhere, with nothing on screen
+  // saying so — and no way to reach the USB dongle at all.
+  const main = document.querySelector("main");
+  const bar = createControllerBar({
+    supports: SUPPORTS,
+    onChange: () => mount(main), // remount on the new controller
+  });
+  main.before(bar.el);
+  mount(main);
 </script>
 </body>
 </html>

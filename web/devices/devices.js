@@ -25,7 +25,7 @@ import { createControllerBar } from "../common/controller-bar.js";
 const DOMAINS = [
   { id: "generic", label: "Generic", module: "../dual/dual.js",
     blurb: "Plain GATT: a server's own database beside what a client discovers" },
-  { id: "media", label: "Media", module: "../audio/audio.js",
+  { id: "media", label: "Audio", module: "../audio/audio.js",
     blurb: "LE Audio: a source streaming LC3 to a sink over a real CIS" },
   { id: "broadcast", label: "Broadcast", module: "../broadcast/broadcast.js",
     blurb: "Auracast: one source, many listeners, no connection at all" },

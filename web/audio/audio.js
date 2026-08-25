@@ -1484,10 +1484,10 @@ const TEMPLATE = `
 
       <div id="usb-card" hidden>
         <p class="hint">
-          A real phone is the source here. This half of the page owns a
-          <strong>physical dongle</strong> through the <code>simble --usb</code> bridge and runs a
-          Classic <strong>A2DP sink</strong> on it — the phone pairs with it, streams SBC over
-          real radio, and the decoded PCM plays on the right.
+          This speaker is running on a <strong>physical dongle</strong>, owned through the
+          <code>simble --usb</code> bridge below: a Classic <strong>A2DP sink</strong> on real
+          radio. Whatever pairs with it and streams — your phone — is the source, and the
+          decoded PCM plays here.
         </p>
         <pre class="hint" style="user-select:all">simble --usb 02.3.1 --ws 32323</pre>
         <label class="field" for="usb-url">Bridge</label>
