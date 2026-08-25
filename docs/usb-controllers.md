@@ -125,6 +125,33 @@ CONFIG_BT_CTLR_SYNC_ISO=y
 # measured on the flashed dongle: 31 accepted, 32 refused. LE_Create_BIG
 # itself is present either way; the buffer is the blocker.
 CONFIG_BT_CTLR_ADV_DATA_LEN_MAX=191
+# Two BIS per BIG (stereo): the controller default is ONE stream, and
+# Num_BIS=2 answers Invalid Parameters.
+CONFIG_BT_ISO_MAX_CHAN=4
+CONFIG_BT_CTLR_ADV_ISO_STREAM_MAX=2
+CONFIG_BT_CTLR_ADV_ISO_STREAM_COUNT=4
+# The quiet killer: the default ISO TX buffer is NINE bytes, which caps
+# every BIS PDU below any usable size — and it does not fail as a length
+# error; it surfaces as LE_Create_BIG refusing every parameter set with
+# Invalid Parameters, because the scheduler math is downstream of the cap.
+CONFIG_BT_CTLR_ISO_TX_BUFFERS=8
+CONFIG_BT_CTLR_ISO_TX_BUFFER_SIZE=255
+CONFIG_BT_ISO_TX_BUF_COUNT=8
+# One ISO-AL source serves one BIS; the second data path answers Command
+# Disallowed without more.
+CONFIG_BT_CTLR_ISOAL_SOURCES=4
+CONFIG_BT_CTLR_ISOAL_SINKS=4
+
+# And one thing no overlay fixes: Zephyr's USB HCI class has **no
+# host-to-controller ISO data path at all** — bulk OUT is hardwired to ACL
+# and the descriptor's isochronous endpoints are zero-bandwidth SCO
+# placeholders. SimBLE's answer is an opt-in framing deviation patched into
+# the class (CONFIG_USBD_BT_HCI_H4_BULK): every bulk packet carries its H4
+# type byte, the firmware says "H4-bulk" in its USB product string, and
+# `UsbTransport` switches dialect on that string. A standard dongle never
+# sees a prefixed byte. ADV_RESERVE_MAX must also be off (a local Kconfig
+# default flip — the fragment assignment is ignored) or worst-case
+# advertising reservations eat the whole ISO interval.
 ```
 
 Flash usage roughly doubles (121 KB → 216 KB), which is a quick way to confirm
