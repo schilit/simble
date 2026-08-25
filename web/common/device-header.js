@@ -197,30 +197,23 @@ export function createDeviceHeader(options) {
   }
 
   // --- run / stop ----------------------------------------------------------
-  // The dot IS the control: the state light doubles as the start/stop
-  // toggle, coloured by what the device is doing. A separate ▶/■ beside it
-  // was the same state drawn twice — the light saying "running" and a
-  // button saying "press to stop" are one fact.
+  // A visible verb, not a hot dot: the toggle briefly lived inside the
+  // state light and was — measured on a real user — far too subtle. The dot
+  // stays a pure light; the pill beside the state says the action in words.
   let stopDisabled = false;
   let whyEl = null;
+  let runBtn = null;
   let running = run ? Boolean(run.running) : false;
 
   if (run) {
-    dot.classList.add("toggle");
-    dot.setAttribute("role", "button");
-    dot.tabIndex = 0;
-    const activate = () => {
+    runBtn = document.createElement("button");
+    runBtn.className = "dev-run";
+    runBtn.addEventListener("click", () => {
       if (stopDisabled) return;
       if (running) run.onStop?.();
       else run.onRun?.();
-    };
-    dot.addEventListener("click", activate);
-    dot.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        activate();
-      }
     });
+    main.append(runBtn);
     whyEl = document.createElement("span");
     whyEl.className = "dev-why";
     el.append(whyEl);
@@ -236,6 +229,8 @@ export function createDeviceHeader(options) {
   /// In-place editing for an identity span: Enter commits, Escape reverts,
   /// a refusal string from `commit` reverts and becomes the tooltip.
   function editable(el, hint, normalize, commit) {
+    el.classList.add("dev-editable");
+    el.title = hint;
     el.style.cursor = "text";
     el.tabIndex = 0;
     let before = "";
@@ -316,17 +311,15 @@ export function createDeviceHeader(options) {
     stateEl.className = "dev-state" + (tone ? ` ${tone}` : "");
   }
 
-  /** Flips the toggle's meaning. The caller owns whether the device is
-   *  running; this only reports it — as the dot's colour and its promise. */
+  /** Flips the pill's verb. The caller owns whether the device is running;
+   *  this only reports it. */
   function setRunning(on) {
     running = Boolean(on);
-    if (!run) return;
-    dot.classList.toggle("running", running);
+    if (!runBtn) return;
+    runBtn.textContent = running ? "■ stop" : "▶ start";
+    runBtn.classList.toggle("running", running);
     if (!stopDisabled) {
-      dot.title =
-        (running ? `Stop ${name}` : `Run ${name}`) +
-        (dotMeans ? ` · filled when: ${dotMeans}` : "");
-      dot.setAttribute("aria-label", running ? `Stop ${name}` : `Run ${name}`);
+      runBtn.title = running ? `Stop ${name}` : `Start ${name}`;
     }
   }
 
@@ -337,13 +330,13 @@ export function createDeviceHeader(options) {
    * WebLink, no remove).
    */
   function setStopCapability({ disabled, reason = "" }) {
-    if (!run) return;
+    if (!runBtn) return;
     stopDisabled = Boolean(disabled);
-    dot.classList.toggle("held", stopDisabled);
+    runBtn.disabled = stopDisabled;
     whyEl.textContent = disabled ? reason : "";
     whyEl.hidden = !disabled || !reason;
     if (disabled) {
-      dot.title = reason
+      runBtn.title = reason
         ? `Cannot stop this device on its own — ${reason}`
         : "Cannot stop this device on its own";
     } else {
