@@ -325,15 +325,13 @@ export function createDeviceHeader(options) {
   function setRunning(on) {
     running = Boolean(on);
     if (!runBtn) return;
-    // Glyph and word are separate flex items, centred against each other —
-    // as one text node the triangle sat on the baseline and looked sunk.
-    runBtn.replaceChildren(
-      Object.assign(document.createElement("span"), {
-        textContent: running ? "■" : "▶",
-        style: "font-size:0.85em",
-      }),
-      document.createTextNode(running ? "stop" : "start"),
-    );
+    // The glyphs are drawn, not typed: ▶ and ■ carry font-specific ink
+    // offsets inside their em boxes, so as text they never truly centre
+    // against the word no matter the flex settings.
+    const icon = running
+      ? '<svg width="0.62em" height="0.62em" viewBox="0 0 10 10" aria-hidden="true"><rect width="10" height="10" fill="currentColor"/></svg>'
+      : '<svg width="0.7em" height="0.7em" viewBox="0 0 10 10" aria-hidden="true"><polygon points="1,0 9,5 1,10" fill="currentColor"/></svg>';
+    runBtn.innerHTML = `${icon}<span>${running ? "stop" : "start"}</span>`;
     runBtn.classList.toggle("running", running);
     if (!stopDisabled) {
       runBtn.title =

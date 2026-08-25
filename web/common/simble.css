@@ -186,7 +186,8 @@ details pre {
 .dev-head .dev-run { font-size: 0.72rem; padding: 0.1rem 0.55rem;
   border: 1px solid var(--border); border-radius: 999px; cursor: pointer;
   background: var(--panel, transparent); color: var(--text); white-space: nowrap;
-  display: inline-flex; align-items: center; gap: 0.3rem; line-height: 1; }
+  display: inline-flex; align-items: center; gap: 0.32rem; line-height: 1; }
+.dev-head .dev-run svg { display: block; }
 .dev-head .dev-run:hover:not(:disabled) { border-color: var(--good); }
 .dev-head .dev-run.running { color: var(--good); border-color: var(--good); }
 .dev-head.accent-accent .dev-run.running { color: var(--accent); border-color: var(--accent); }
