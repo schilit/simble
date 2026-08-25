@@ -129,7 +129,10 @@ const TARGETS = {
     title: "opens chatgpt.com in a new tab with the full prompt prefilled",
   },
   gemini: {
-    label: "Gemini", kind: "copy-open", go: "Copy + open Gemini ↗",
+    // The go-label matches its siblings; that this click also copies the
+    // prompt is said where it matters — the tooltip before, the status
+    // line after — not stretched across the button.
+    label: "Gemini", kind: "copy-open", go: "Open Gemini ↗",
     url: () => "https://gemini.google.com/app",
     title: "Gemini has no prefill URL — the prompt is copied, paste it there",
   },
