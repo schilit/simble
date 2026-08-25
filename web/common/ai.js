@@ -99,17 +99,17 @@ MY DEVICE REQUEST:
 // rest). One is picked at random on load so a first-time visitor always has an
 // interesting, non-default device to generate in a single click.
 export const SUGGESTIONS = [
-  { label: "🔋 battery monitor",
+  { label: "🔋 battery",
     request: "a battery monitor: a Battery Service with a Battery Level characteristic (uuid::BATTERY_LEVEL, notify + a CCCD) whose percentage slowly drains from 100 toward 5 and then jumps back to full." },
-  { label: "🚴 cycling speed sensor",
+  { label: "🚴 cycling",
     request: "a cycling speed and cadence sensor: service uuid::of(\"1816\") with a CSC Measurement characteristic uuid::of(\"2A5B\") (notify + a CCCD) whose cumulative wheel revolutions increase steadily over time." },
-  { label: "💡 RGB smart light",
+  { label: "💡 light",
     request: "an RGB smart light: a custom 128-bit service via uuid::of(\"f0000001-1234-5678-1234-56789abcdef0\") with a writable+notify color characteristic holding [R, G, B] bytes that cycle through the rainbow over time." },
-  { label: "❤️ heart-rate monitor",
+  { label: "❤️ heart rate",
     request: "a heart-rate monitor whose bpm rises and falls like exercise intervals (uuid::HEART_RATE_MEASUREMENT, notify + a CCCD, payload [0x00, bpm])." },
-  { label: "🌫 humidity sensor",
+  { label: "🌫 humidity",
     request: "a humidity sensor: Environmental Sensing service uuid::of(\"181A\") with a Humidity characteristic uuid::of(\"2A6F\") (notify + a CCCD), an unsigned 16-bit little-endian value in hundredths of a percent drifting around 45%." },
-  { label: "🎲 surprise me",
+  { label: "🎲 surprise",
     request: "a surprising, fun made-up BLE device of your choice — pick something delightful and make its values animate over time." },
 ];
 

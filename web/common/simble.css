@@ -136,11 +136,14 @@ pre.code, .mono {
 .setup code { color: var(--good); }
 .setup a { color: var(--accent); }
 
-/* AI suggestion chips */
-.suggest { margin-top: 0.5rem; }
+/* AI suggestion chips: a grid rather than a ragged inline row, so every
+   pill is the same size and the set reads as one control. */
+.suggest { margin-top: 0.5rem; display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr)); gap: 0.35rem; }
 .suggest .chip {
-  display: inline-block; border: 1px solid var(--border); border-radius: 1rem;
-  padding: 0.15rem 0.7rem; margin: 0.2rem 0.3rem 0 0; font-size: var(--fs-meta);
+  border: 1px solid var(--border); border-radius: 1rem;
+  padding: 0.25rem 0.7rem; font-size: var(--fs-meta); text-align: center;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   cursor: pointer; background: var(--panel2); color: var(--text);
 }
 .suggest .chip:hover { border-color: var(--accent); }
