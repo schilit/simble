@@ -742,6 +742,7 @@ function applyMode() {
   // the gate and the volume. The script editor, identity fields and VCS
   // controls all describe the LE peripheral, which is not on the air here.
   $("usb-card").hidden = !isUsb;
+  $("usb-source-note").hidden = !isUsb;
   $("le-source").hidden = isUsb;
   for (const el of [root.querySelector(".ident"), $("sink-script"),
                     root.querySelector(".ops"), $("readout"), $("air-note")]) {
@@ -1404,26 +1405,12 @@ const TEMPLATE = `
   <section class="panel">
       <div id="source-head"></div>
 
-      <div id="usb-card" hidden>
+      <div id="usb-source-note" hidden>
         <p class="hint">
-          A real phone is the source here. This half of the page owns a
-          <strong>physical dongle</strong> through the <code>simble --usb</code> bridge and runs a
-          Classic <strong>A2DP sink</strong> on it — the phone pairs with it, streams SBC over
-          real radio, and the decoded PCM plays on the right.
-        </p>
-        <pre class="hint" style="user-select:all">simble --usb 02.3.1 --ws 32323</pre>
-        <label class="field" for="usb-url">Bridge</label>
-        <div class="row">
-          <input type="text" id="usb-url" value="ws://127.0.0.1:32323/" spellcheck="false"
-                 aria-label="the simble --usb bridge URL">
-          <button id="usb-connect" class="primary">connect</button>
-        </div>
-        <div class="readout" id="usb-stage">not connected</div>
-        <pre id="usb-log" class="readout" style="max-height:14rem;overflow-y:auto;white-space:pre-wrap"></pre>
-        <p class="hint">
-          The sink appears to the phone as <strong>simble-speaker</strong>, Class of Device
-          Loudspeaker. Its link keys live in this tab: reconnecting after a reload means
-          <em>Forget</em> the device on the phone first, then pair again.
+          <strong>Your phone is the source.</strong> Pair it with
+          <strong>simble-speaker</strong> (Settings → Pair new device), pick it as the audio
+          output, and play anything. What arrives lands on the speaker to the right — over
+          real radio, through a physical dongle.
         </p>
       </div>
 
@@ -1493,6 +1480,29 @@ const TEMPLATE = `
       <div class="warn-line" id="ident-locked" hidden>
         ⚠ The sink's identity is fixed while a stream is running: changing either
         field rebuilds the device, which would drop the CIS underneath it.
+      </div>
+
+      <div id="usb-card" hidden>
+        <p class="hint">
+          A real phone is the source here. This half of the page owns a
+          <strong>physical dongle</strong> through the <code>simble --usb</code> bridge and runs a
+          Classic <strong>A2DP sink</strong> on it — the phone pairs with it, streams SBC over
+          real radio, and the decoded PCM plays on the right.
+        </p>
+        <pre class="hint" style="user-select:all">simble --usb 02.3.1 --ws 32323</pre>
+        <label class="field" for="usb-url">Bridge</label>
+        <div class="row">
+          <input type="text" id="usb-url" value="ws://127.0.0.1:32323/" spellcheck="false"
+                 aria-label="the simble --usb bridge URL">
+          <button id="usb-connect" class="primary">connect</button>
+        </div>
+        <div class="readout" id="usb-stage">not connected</div>
+        <pre id="usb-log" class="readout" style="max-height:14rem;overflow-y:auto;white-space:pre-wrap"></pre>
+        <p class="hint">
+          The sink appears to the phone as <strong>simble-speaker</strong>, Class of Device
+          Loudspeaker. Its link keys live in this tab: reconnecting after a reload means
+          <em>Forget</em> the device on the phone first, then pair again.
+        </p>
       </div>
 
       <div id="sink-script"></div>
