@@ -93,3 +93,55 @@ fn test_a_malformed_tcp_spec_is_refused_when_dialed() {
         "a tcp: spec that is not host:port has nowhere to connect"
     );
 }
+
+#[test]
+fn test_a_bare_usb_spec_selects_the_first_dongle() {
+    assert_eq!(
+        resolve("usb", "ignored", address()).unwrap(),
+        Backend::Usb(UsbSelector::First),
+    );
+}
+
+#[test]
+fn test_a_usb_spec_carries_every_selector_form_through_unchanged() {
+    // Each of these names a dongle differently, and the differences matter
+    // on a bench with four plugged in: only the bus.port form survives a
+    // re-plug. `resolve` must not flatten them into one.
+    for (spec, expected) in [
+        ("usb:#1", UsbSelector::Index(1)),
+        ("usb:0a12:0001", UsbSelector::VidPid(0x0A12, 0x0001)),
+        (
+            "usb:02/4",
+            UsbSelector::BusAddress {
+                bus_id: "02".to_string(),
+                device_address: 4,
+            },
+        ),
+        (
+            "usb:02.3.4",
+            UsbSelector::BusPort {
+                bus_id: "02".to_string(),
+                port_chain: vec![3, 4],
+            },
+        ),
+    ] {
+        assert_eq!(
+            resolve(spec, "ignored", address()).unwrap(),
+            Backend::Usb(expected),
+            "{spec} should reach the dongle it names",
+        );
+    }
+}
+
+#[test]
+fn test_a_malformed_usb_selector_is_refused_by_resolve_rather_than_at_dial_time() {
+    // Unlike `tcp:`, a dongle selector *is* parsed here — `UsbSelector::parse`
+    // is pure, and its error lists the accepted forms. Reporting it before
+    // touching USB is what keeps a typo from looking like absent hardware.
+    let error = resolve("usb:nonsense", "ignored", address()).expect_err("no separator");
+    let message = error.to_string();
+    assert!(
+        message.contains("nonsense"),
+        "the error should name the offending selector: {message}"
+    );
+}

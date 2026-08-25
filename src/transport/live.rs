@@ -1,8 +1,8 @@
 // Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
-//! Picking a live controller at run time: netsim, or any H4-over-TCP
-//! controller.
+//! Picking a live controller at run time: netsim, any H4-over-TCP
+//! controller, or a real USB dongle.
 //!
 //! The interop examples all did the same thing — build a netsim WebSocket URL
 //! out of a name and an address, connect, optionally start a btsnoop trace.
@@ -31,8 +31,19 @@
 //! This enum is therefore additive: the same example binary reaches either
 //! controller, netsim stays the default, and a script that needs something
 //! only rootcanal models says so and skips rather than pretending.
+//!
+//! The third backend is the one neither of those can be: a **USB dongle**,
+//! whose radio is physical. Both simulated controllers model only the peers
+//! a test also owns, so nothing built on them can meet consumer kit — a
+//! Bluetooth speaker answers an inquiry from `usb:` and from nowhere else
+//! here. That makes it the only backend whose failures are the peer's rather
+//! than a model's, and every hardware session so far has found bugs in this
+//! stack that no simulator could have.
 
-use super::{HciChannel, HciTransport, NETSIM_WS_URL, NetsimTransport, RootcanalTransport};
+use super::usb::UsbSelector;
+use super::{
+    HciChannel, HciTransport, NETSIM_WS_URL, NetsimTransport, RootcanalTransport, UsbTransport,
+};
 use crate::types::{Address, SimbleError};
 use std::net::TcpStream;
 
@@ -48,6 +59,11 @@ pub enum LiveTransport {
     /// Any controller speaking bare H4 over TCP — rootcanal's own test port,
     /// or a Bumble `Controller` published with `tcp-server:`.
     Tcp(RootcanalTransport<TcpStream>),
+    /// A real USB dongle, opened directly. The only backend whose radio is
+    /// physical, and so the only one that can reach consumer kit — a
+    /// Bluetooth speaker answers a BR/EDR inquiry from here and from nowhere
+    /// else in this enum.
+    Usb(UsbTransport),
 }
 
 /// Where a spec resolved to, before anything is dialed. Separated from
@@ -59,6 +75,8 @@ pub enum Backend {
     Netsim(String),
     /// Bare H4 over TCP, at this `host:port`.
     Tcp(String),
+    /// A USB dongle, named by any of [`UsbSelector`]'s forms.
+    Usb(UsbSelector),
 }
 
 /// Resolves `spec` to the backend it names. See [`LiveTransport::open`] for
@@ -77,13 +95,24 @@ pub fn resolve(spec: &str, name: &str, address: Address) -> Result<Backend, Simb
         url if url.starts_with("ws://") || url.starts_with("wss://") => {
             Ok(Backend::Netsim(url.to_string()))
         }
-        spec => match spec.strip_prefix("tcp:") {
-            Some(addr) => Ok(Backend::Tcp(addr.to_string())),
-            None => Err(SimbleError::Transport(format!(
-                "unrecognized {HCI_SPEC_ENV} spec {spec:?} — expected \"netsim\", \
-                 a ws:// URL, or \"tcp:HOST:PORT\""
-            ))),
-        },
+        // A bare "usb" takes the only dongle on the machine, which is
+        // unambiguous exactly when there is one. Anything after the colon is
+        // a `UsbSelector`, so every form that names a *particular* dongle —
+        // `#0`, `0a12:0001`, `02/4`, `02.3.4` — works here unchanged, and
+        // its parse errors already list the candidates.
+        "usb" => Ok(Backend::Usb(UsbSelector::First)),
+        spec => {
+            if let Some(selector) = spec.strip_prefix("usb:") {
+                return Ok(Backend::Usb(UsbSelector::parse(selector)?));
+            }
+            match spec.strip_prefix("tcp:") {
+                Some(addr) => Ok(Backend::Tcp(addr.to_string())),
+                None => Err(SimbleError::Transport(format!(
+                    "unrecognized {HCI_SPEC_ENV} spec {spec:?} — expected \"netsim\", \
+                     a ws:// URL, \"tcp:HOST:PORT\", or \"usb\" / \"usb:SELECTOR\""
+                ))),
+            }
+        }
     }
 }
 
@@ -101,10 +130,16 @@ impl LiveTransport {
     /// - `"tcp:HOST:PORT"` — bare H4 over TCP. `name` and `address` are
     ///   *unused*: on this transport the controller owns the identity, and
     ///   the host sets its address with HCI like it would on real silicon.
+    /// - `"usb"` — the only Bluetooth-class dongle on the machine.
+    /// - `"usb:SELECTOR"` — a particular dongle, in any form
+    ///   [`UsbSelector::parse`] accepts: `usb:#0`, `usb:0a12:0001`,
+    ///   `usb:02/4`, `usb:02.3.4`. `name` and `address` are unused here for
+    ///   the same reason as `tcp:` — the silicon owns its identity.
     pub fn open(spec: &str, name: &str, address: Address) -> Result<Self, SimbleError> {
         match resolve(spec, name, address)? {
             Backend::Netsim(url) => Ok(Self::Netsim(NetsimTransport::connect(&url)?)),
             Backend::Tcp(addr) => Ok(Self::Tcp(RootcanalTransport::connect(&addr)?)),
+            Backend::Usb(selector) => Ok(Self::Usb(UsbTransport::open_selected(&selector)?)),
         }
     }
 
@@ -123,7 +158,7 @@ impl LiveTransport {
     pub fn set_trace(&mut self, file: std::fs::File) -> bool {
         match self {
             Self::Netsim(transport) => transport.set_trace(file).is_ok(),
-            Self::Tcp(_) => false,
+            Self::Tcp(_) | Self::Usb(_) => false,
         }
     }
 
@@ -132,6 +167,7 @@ impl LiveTransport {
         match self {
             Self::Netsim(_) => "netsim",
             Self::Tcp(_) => "H4/TCP",
+            Self::Usb(_) => "USB",
         }
     }
 }
@@ -150,6 +186,7 @@ impl HciTransport for LiveTransport {
         match self {
             Self::Netsim(transport) => transport.pump(channel),
             Self::Tcp(transport) => transport.pump(channel),
+            Self::Usb(transport) => transport.pump(channel),
         }
     }
 }

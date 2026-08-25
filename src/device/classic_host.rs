@@ -569,6 +569,15 @@ impl ProtocolHandler for SdpHandler {
     }
 }
 
+/// One record's worth of what [`SdpQueryHandler::read_record`] understood.
+/// Private: [`SdpQueryResults`] is the public shape.
+struct ReadRecord {
+    psm: Option<u16>,
+    channel: Option<u8>,
+    classes: Vec<SdpUuid>,
+    version: Option<u16>,
+}
+
 /// What an [`SdpQueryHandler`] learned from a peer's SDP server.
 #[derive(Debug, Default)]
 pub struct SdpQueryResults {
@@ -581,6 +590,11 @@ pub struct SdpQueryResults {
     pub error: Option<u16>,
     /// RFCOMM server channel numbers advertised, with their service classes.
     pub rfcomm_channels: Vec<(u8, Vec<SdpUuid>)>,
+    /// L2CAP PSMs advertised, with their service classes. This is where a
+    /// profile that runs straight over L2CAP rather than over RFCOMM shows
+    /// up — A2DP, AVRCP, HID — and such a record contributes nothing to
+    /// `rfcomm_channels`, so a caller looking for one must look here.
+    pub l2cap_psms: Vec<(u16, Vec<SdpUuid>)>,
     /// The peer kept asking us to continue past the watchdog, so what is in
     /// `rfcomm_channels` is a prefix of the answer rather than the answer.
     /// Reported rather than hidden: a truncated SDP answer looks exactly
@@ -609,6 +623,17 @@ impl SdpQueryResults {
             .iter()
             .find(|(_, classes)| classes.contains(&uuid))
             .map(|(channel, _)| *channel)
+    }
+
+    /// The L2CAP PSM of the service advertising `uuid`, if any — the AVDTP
+    /// PSM for an Audio Sink, the AVCTP PSM for a remote control. The
+    /// counterpart of [`Self::channel_for`] for profiles that do not use
+    /// RFCOMM.
+    pub fn psm_for(&self, uuid: SdpUuid) -> Option<u16> {
+        self.l2cap_psms
+            .iter()
+            .find(|(_, classes)| classes.contains(&uuid))
+            .map(|(psm, _)| *psm)
     }
 }
 
@@ -712,27 +737,48 @@ impl SdpQueryHandler {
         .to_bytes()
     }
 
-    /// Pulls the RFCOMM server channel, service classes and profile version
-    /// out of one
-    /// record's attribute list. The protocol descriptor is
-    /// `[[L2CAP], [RFCOMM, channel]]`, so the channel is the second element
-    /// of the second layer; the profile descriptor is `[[UUID, version]]`.
-    fn read_record(attributes: &[ServiceAttribute]) -> Option<(u8, Vec<SdpUuid>, Option<u16>)> {
+    /// Pulls the L2CAP PSM, RFCOMM server channel, service classes and
+    /// profile version out of one record's attribute list.
+    ///
+    /// A ProtocolDescriptorList is a sequence of layers, each `[UUID,
+    /// parameters…]`. Layers are identified **by their UUID, not by their
+    /// position**: this used to read "the second element of the second
+    /// layer" and call it an RFCOMM channel, which is only true for a record
+    /// that happens to stack RFCOMM over L2CAP. An A2DP record stacks AVDTP
+    /// instead — `[[L2CAP, PSM], [AVDTP, version]]` — so the positional read
+    /// reported the *AVDTP version's* low byte as an RFCOMM server channel
+    /// (0x0103 became "channel 3"), and the PSM the record exists to publish
+    /// was never read at all. Both halves of that mattered: a caller looking
+    /// for an Audio Sink found a plausible-looking wrong number, and a
+    /// caller looking for the AVDTP PSM found nothing.
+    fn read_record(attributes: &[ServiceAttribute]) -> Option<ReadRecord> {
+        let mut psm = None;
         let mut channel = None;
         let mut classes = Vec::new();
         let mut version = None;
         for attribute in attributes {
             match attribute.id {
                 attribute_id::PROTOCOL_DESCRIPTOR_LIST => {
-                    if let Some(rfcomm) = attribute
-                        .value
-                        .as_sequence()
-                        .and_then(|layers| layers.get(1))
-                        .and_then(DataElement::as_sequence)
-                        && let Some((value, _)) =
-                            rfcomm.get(1).and_then(DataElement::as_unsigned_integer)
-                    {
-                        channel = Some(value as u8);
+                    let Some(layers) = attribute.value.as_sequence() else {
+                        continue;
+                    };
+                    for layer in layers {
+                        let Some(items) = layer.as_sequence() else {
+                            continue;
+                        };
+                        let Some(protocol) = items.first().and_then(DataElement::as_uuid) else {
+                            continue;
+                        };
+                        let Some((value, _)) =
+                            items.get(1).and_then(DataElement::as_unsigned_integer)
+                        else {
+                            continue;
+                        };
+                        if protocol == SdpUuid::BT_L2CAP_PROTOCOL_ID {
+                            psm = Some(value as u16);
+                        } else if protocol == SdpUuid::BT_RFCOMM_PROTOCOL_ID {
+                            channel = Some(value as u8);
+                        }
                     }
                 }
                 attribute_id::SERVICE_CLASS_ID_LIST => {
@@ -755,7 +801,18 @@ impl SdpQueryHandler {
                 _ => {}
             }
         }
-        channel.map(|channel| (channel, classes, version))
+        // A record with neither a PSM nor a channel names nothing openable,
+        // so there is nothing to report. Either one alone is enough: an
+        // A2DP sink publishes only a PSM.
+        if psm.is_none() && channel.is_none() {
+            return None;
+        }
+        Some(ReadRecord {
+            psm,
+            channel,
+            classes,
+            version,
+        })
     }
 }
 
@@ -808,9 +865,16 @@ impl ProtocolHandler for SdpQueryHandler {
                         continue;
                     };
                     let attributes = ServiceAttribute::list_from_data_elements(items);
-                    if let Some((channel, classes, version)) = Self::read_record(&attributes) {
-                        results.rfcomm_channels.push((channel, classes));
-                        results.profile_version = results.profile_version.or(version);
+                    if let Some(record) = Self::read_record(&attributes) {
+                        if let Some(channel) = record.channel {
+                            results
+                                .rfcomm_channels
+                                .push((channel, record.classes.clone()));
+                        }
+                        if let Some(psm) = record.psm {
+                            results.l2cap_psms.push((psm, record.classes));
+                        }
+                        results.profile_version = results.profile_version.or(record.version);
                     }
                 }
             }

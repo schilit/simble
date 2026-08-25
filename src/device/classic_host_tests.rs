@@ -1106,3 +1106,131 @@ fn test_a_single_psm_handler_still_sees_the_old_callbacks() {
         "an SDP error response is the honest answer to a malformed PDU"
     );
 }
+
+/// An A2DP Audio Sink record publishes an L2CAP PSM and no RFCOMM channel
+/// at all. The SDP client used to read a ProtocolDescriptorList
+/// *positionally* — "the second element of the second layer is the RFCOMM
+/// server channel" — which is true only for a record that stacks RFCOMM
+/// over L2CAP. A sink stacks AVDTP: `[[L2CAP, 0x0019], [AVDTP, 0x0103]]`.
+/// So the old reader reported the AVDTP *version's* low byte as RFCOMM
+/// server channel 3, and never read the PSM the record exists to publish.
+///
+/// Both halves are asserted here, because both bit: a phone looking for a
+/// speaker got a plausible wrong number, and a phone looking for the AVDTP
+/// PSM got nothing.
+#[test]
+fn test_an_a2dp_audio_sink_record_yields_its_psm_and_no_phantom_rfcomm_channel() {
+    use crate::classic::a2dp::make_audio_sink_service_sdp_records;
+    use crate::classic::avdtp::AVDTP_PSM;
+    use crate::classic::sdp::SdpPdu;
+
+    const AUDIO_SINK: SdpUuid = SdpUuid::Uuid16(0x110B);
+
+    let (mut query, results) = SdpQueryHandler::searching(AUDIO_SINK);
+    assert_eq!(query.poll_output(672).len(), 1, "the query goes out once");
+
+    // The record a real speaker publishes, built by the same code that
+    // serves one — so a change to the record shape breaks this test rather
+    // than silently changing what a client can read.
+    let attributes = make_audio_sink_service_sdp_records(0x0001_000B, None);
+    let flattened: Vec<DataElement> = attributes
+        .iter()
+        .flat_map(|attribute| {
+            [
+                DataElement::unsigned_integer_16(attribute.id),
+                attribute.value.clone(),
+            ]
+        })
+        .collect();
+    let response = SdpPdu::ServiceSearchAttributeResponse {
+        transaction_id: 1,
+        attribute_lists: DataElement::sequence(vec![DataElement::sequence(flattened)]).to_bytes(),
+        continuation_state: vec![0x00],
+    }
+    .to_bytes();
+    assert!(
+        query.on_data(&response, 672).is_empty(),
+        "a final response needs no follow-up request"
+    );
+
+    let results = results.lock().expect("results readable");
+    assert!(results.answered);
+    assert_eq!(
+        results.psm_for(AUDIO_SINK),
+        Some(AVDTP_PSM),
+        "the Audio Sink record's L2CAP PSM is what a source must open",
+    );
+    assert!(
+        results.rfcomm_channels.is_empty(),
+        "a record with no RFCOMM layer must contribute no RFCOMM channel; it \
+         offered {:?}",
+        results.rfcomm_channels,
+    );
+    assert_eq!(
+        results.channel_for(AUDIO_SINK),
+        None,
+        "and asking for an RFCOMM channel by that service class must say no",
+    );
+}
+
+/// The counterpart: an RFCOMM record still reports its channel, and now
+/// also reports the PSM RFCOMM itself runs on. Identifying layers by UUID
+/// must not have cost the case the positional reader got right.
+#[test]
+fn test_an_rfcomm_record_still_yields_its_server_channel() {
+    use crate::classic::sdp::SdpPdu;
+
+    const SERIAL_PORT: SdpUuid = SdpUuid::Uuid16(0x1101);
+    const RFCOMM_PSM: u16 = 0x0003;
+
+    let (mut query, results) = SdpQueryHandler::searching(SERIAL_PORT);
+    let _ = query.poll_output(672);
+
+    let attributes = [
+        ServiceAttribute::new(
+            attribute_id::SERVICE_CLASS_ID_LIST,
+            DataElement::sequence(vec![DataElement::uuid(SERIAL_PORT)]),
+        ),
+        ServiceAttribute::new(
+            attribute_id::PROTOCOL_DESCRIPTOR_LIST,
+            DataElement::sequence(vec![
+                DataElement::sequence(vec![
+                    DataElement::uuid(SdpUuid::BT_L2CAP_PROTOCOL_ID),
+                    DataElement::unsigned_integer_16(RFCOMM_PSM),
+                ]),
+                DataElement::sequence(vec![
+                    DataElement::uuid(SdpUuid::Uuid16(0x0003)),
+                    DataElement::unsigned_integer_8(7),
+                ]),
+            ]),
+        ),
+    ];
+    let flattened: Vec<DataElement> = attributes
+        .iter()
+        .flat_map(|attribute| {
+            [
+                DataElement::unsigned_integer_16(attribute.id),
+                attribute.value.clone(),
+            ]
+        })
+        .collect();
+    let response = SdpPdu::ServiceSearchAttributeResponse {
+        transaction_id: 1,
+        attribute_lists: DataElement::sequence(vec![DataElement::sequence(flattened)]).to_bytes(),
+        continuation_state: vec![0x00],
+    }
+    .to_bytes();
+    query.on_data(&response, 672);
+
+    let results = results.lock().expect("results readable");
+    assert_eq!(
+        results.channel_for(SERIAL_PORT),
+        Some(7),
+        "the RFCOMM layer's parameter is still the server channel",
+    );
+    assert_eq!(
+        results.psm_for(SERIAL_PORT),
+        Some(RFCOMM_PSM),
+        "and the L2CAP layer underneath it is now read too",
+    );
+}

@@ -3,10 +3,11 @@
 > **Reference, kept current.** If an example listed here no longer builds or
 > runs as described, this file is a bug.
 
-Fifteen programs that are really **two different things**, and it matters
+Seventeen programs that are really **two different things**, and it matters
 which one you are looking at: four are self-contained demos you can run right
 now, and seven are the simble half of an interop test — a binary that only
-makes sense when a Python script on the other side is driving it.
+makes sense when a Python script on the other side is driving it. The
+remaining six need a controller or a radio that is not in this repo.
 
 ## Self-contained — `cargo run --example NAME`, nothing else needed
 
@@ -41,7 +42,18 @@ them, which need a live `netsimd`, and which run against Bumble alone.
 | `netsim_smoke`, `netsim_two_devices` | a running `netsimd` |
 | `classic_discoverable` | `netsimd` plus an Android emulator to page it |
 | `usb_hrm` | a real USB Bluetooth dongle |
+| `a2dp_source` | a **dual-mode** dongle and a real Bluetooth speaker in pairing mode |
 | `usb_list` | nothing — it says what dongles are plugged in, and names each |
+
+`a2dp_source` is the only example whose peer is consumer kit rather than
+software: it inquires, pairs, reads the speaker's Audio Sink record for the
+AVDTP PSM, negotiates SBC against what the speaker actually offers, and
+streams a short melody. It reports which rung of that ladder it reached, and
+prints the peer's SDP and AVDTP capability bytes whether or not it got past
+them — a stall with the speaker's real bytes in hand is the useful outcome.
+A2DP is Classic, so an LE-only controller (a Zephyr `hci_usb` nRF52840)
+cannot run it at all; `cargo test --test a2dp_hardware_test -- --nocapture`
+says whether this machine has a dongle that can, and why not when it cannot.
 
 With two dongles of the same model plugged in, a `vid:pid` names **both** and
 is refused rather than guessed at. `usb_list` prints every selector each one
