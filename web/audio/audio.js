@@ -40,11 +40,86 @@ export const SUPPORTS = { "in-page": true, "websocket": true };
 
 // Each device gets its own socket, which is to say its own controller, exactly
 // as three separate machines would have.
-const SINK_ADDR = "CC:1E:57:00:00:08";
+//
+// Only the sink's address is a page control. The source is a central: it never
+// advertises, so it has no advertising details to surface, and its address is
+// visible in its header where a reader would look for it. The scanner is
+// plumbing — it exists so the picker below has something to list — and an
+// address field for a device that is never on anyone's screen is a knob for
+// its own sake.
+const DEFAULT_SINK_ADDR = "CC:1E:57:00:00:08";
 const SOURCE_ADDR = "CC:1E:57:00:00:07";
 const SCANNER_ADDR = "CC:1E:57:00:00:09";
 const ws = (node, address) =>
   `ws://localhost:7681/v1/websocket/bt?name=${encodeURIComponent(node)}&address=${address}`;
+
+// --- what the sink calls itself, and what the air can carry -----------------
+//
+// The name is the sink's *script* talking: `android::BluetoothGattServer(name)`
+// is where a scripted device's name comes from, so the field on the page edits
+// that literal and re-runs the script rather than keeping a second name beside
+// it. One source of truth, and the change is visible in the editor.
+//
+// The budget is the part that has to be said out loud. A legacy advertisement
+// is 31 octets, and `gap::advertising::fit_within_legacy_limit` fits a name
+// into whatever is left by TRIMMING it — while still labelling the result a
+// *Complete* Local Name, and while the scan response carries the full name
+// untrimmed. A scanner therefore shows the name flickering between two forms
+// and neither the device nor the page says a thing about it.
+//
+// This sink's advertisement, read off the air:
+//
+//   02 01 06                                     flags            3
+//   0B 09 "web-speake"                           complete name    2 + 10
+//   05 03 5018 4E18                              PACS + ASCS      6
+//   09 16 4E18 010600000000                      ASCS announcement 10
+//                                                                 -- = 31
+//
+// which is to say the shipped name `web-speaker` is ALREADY one octet over and
+// goes out as `web-speake`. So the page shows the trimmed form everywhere it
+// shows a name, and says when it trimmed. The overhead below mirrors the
+// `advertise_service_uuid` / `advertise_service_data` lines of
+// `catalog/devices/le-audio-sink.rhai`; edit those and this needs editing too,
+// which is why the readout states the budget rather than hiding it.
+const MAX_ADV_LEN = 31;
+const SINK_ADV_OVERHEAD = 19; // flags 3 + the two 16-bit UUIDs 6 + service data 10
+const NAME_BUDGET = MAX_ADV_LEN - SINK_ADV_OVERHEAD - 2; // less the name AD's own length+type
+
+const utf8 = new TextEncoder();
+const NAME_IN_SCRIPT = /(BluetoothGattServer\s*\(\s*")([^"]*)(")/;
+
+/// The name a script's primary server is built with, or "" if it names none.
+const scriptName = (text) => (NAME_IN_SCRIPT.exec(text) || [, , ""])[2];
+
+/// The same script with that name replaced. Returns null when there is no
+/// `BluetoothGattServer("…")` to edit — a script the field cannot honour, which
+/// is worth saying rather than silently doing nothing.
+///
+/// The replacement is a FUNCTION, not a `$1…$3` template: a name is arbitrary
+/// text a person typed, and `String.replace` reads `$&`, `$1` and `$'` inside a
+/// template string as references to the match. Someone naming their speaker
+/// `$1` would have got the whole `BluetoothGattServer("` prefix spliced into
+/// its own name, and the corruption would have shown up as a Rhai parse error
+/// pointing at a line they never edited.
+const withScriptName = (text, name) =>
+  NAME_IN_SCRIPT.test(text)
+    ? text.replace(NAME_IN_SCRIPT, (_, open, __, close) => open + name + close)
+    : null;
+
+/// A name a Rhai string literal can hold as typed. A quote would close the
+/// literal and a backslash would start an escape, so both are refused up front
+/// rather than escaped: this field's job is to name a speaker, and a name that
+/// needs escaping is one the script editor below can be used for directly.
+const nameFitsScript = (name) => !/["\\]/.test(name);
+
+/// What a name actually goes out as: trimmed to the budget a whole `char` at a
+/// time, exactly as `fit_within_legacy_limit` does, so a multi-byte name is
+/// never cut mid-codepoint.
+function onAir(name) {
+  let trimmed = String(name ?? "");
+  while (utf8.encode(trimmed).length > NAME_BUDGET) trimmed = [...trimmed].slice(0, -1).join("");
+  return trimmed;
+}
 
 // LE Audio's 16_2 configuration. These must match what the sink's PAC record
 // advertises and what the ASE is configured with, or the sink decodes noise
@@ -116,7 +191,15 @@ let link = null;
 let linkSink = -1;
 let linkCentral = -1;
 
-let target = SINK_ADDR;
+// The sink's identity, both halves of it editable from the page. The address
+// lives in the socket URL (netsim reads it off the query string), so changing
+// it means a new socket; the name lives in the script, so changing it means a
+// re-run. Neither is a constant any more, and `sinkName` is kept beside the
+// script only so the page can tell an applied name from a typed one.
+let sinkAddr = DEFAULT_SINK_ADDR;
+let sinkName = "";
+
+let target = sinkAddr;
 let runStart = 0;
 let lastRenderAt = 0;
 let lastCounter = -1; // the sink's change counter, echoed back with commands
@@ -212,6 +295,7 @@ function start() {
   player.reset(); // the counters below describe this stream, not the page's history
   $("play").disabled = true;
   $("stop").disabled = false;
+  applyIdentityLock();
 }
 
 function stop() {
@@ -219,6 +303,7 @@ function stop() {
   $("play").disabled = !frames.length;
   $("stop").disabled = true;
   $("hidden-warning").hidden = true;
+  applyIdentityLock();
 }
 
 // Hands one SDU to whichever media plane is live. Returns false when there is
@@ -294,8 +379,12 @@ function applySpeaker(volume, muted, changeCounter) {
 // — including the volume the audio is played at — is read back out of the live
 // characteristic values, never from a variable the UI kept on the side.
 function renderSink(status) {
-  // The name is the one the sink's own GATT server advertises.
-  sinkHead.setName(status.name);
+  // The name is the one the sink's own GATT server advertises -- and
+  // *advertises* is meant literally: `status.name` is what the script asked to
+  // be called, which is not necessarily what fits in the advertisement. The
+  // header showed the asked-for name and the air carried a shorter one, so the
+  // page and a scanner beside it disagreed with no way to tell which was lying.
+  sinkHead.setName(onAir(status.name));
   if (status.address) sinkHead.setAddress(status.address);
   $("dev-conn").textContent = status.connected
     ? `connected to ${status.peer}`
@@ -377,11 +466,18 @@ const counter = () => (lastCounter < 0 ? 0 : lastCounter);
 const sendOp = (op) => writeControlPoint([op, counter()]);
 const setAbsolute = (volume) => writeControlPoint([OP_SET_ABSOLUTE, counter(), volume & 0xff]);
 
-// --- picking a sink --------------------------------------------------------
+// --- the source's chooser: which sink to stream to --------------------------
 // The built-in sink is always offered; anything else comes off the air. A
 // scanner on netsim is the honest way to fill this list — the same advertising
 // reports a phone would use to find a pair of earbuds — and a typed address is
 // the fallback for a device that is not advertising while you look.
+//
+// Devices are listed BY NAME, because that is how a person identifies one: you
+// name the sink in the panel opposite and then pick it here. The address is
+// still shown, subordinate, and is still what the option's value is keyed on —
+// two sinks can advertise the same name and only the address tells them apart,
+// which is exactly what the Earbud L / Earbud R pair elsewhere in this project
+// does. A name is a label; an address is an identity.
 
 function isAudioSink(report) {
   return (
@@ -391,21 +487,35 @@ function isAudioSink(report) {
   );
 }
 
+const escapeHtml = (text) =>
+  String(text).replace(
+    /[&<>"]/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c],
+  );
+
 function renderSinkOptions() {
   const select = $("sink-pick");
   const keep = select.value;
+  // The built-in sink is named by what it puts on the air, not by what its
+  // script asked to be called -- see onAir(). An unnamed device is said to be
+  // unnamed rather than being labelled with its address twice.
+  const label = (name, address, note) =>
+    `${escapeHtml(name || "(no name advertised)")} — ${address}${note ? ` · ${note}` : ""}`;
   const options = [
-    `<option value="${SINK_ADDR}">Built-in sink on this page — ${SINK_ADDR}</option>`,
+    `<option value="${sinkAddr}">${label(onAir(sinkName), sinkAddr, "on this page")}</option>`,
   ];
   if (discovered.size) {
-    const entries = [...discovered.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    // Sorted by name so the list reads the way it is now labelled, with the
+    // address breaking ties between sinks that share one.
+    const entries = [...discovered.entries()].sort(
+      (a, b) =>
+        (a[1].name || "￿").localeCompare(b[1].name || "￿") ||
+        a[0].localeCompare(b[0]),
+    );
     options.push(
       `<optgroup label="Advertising an LE Audio sink">` +
         entries
-          .map(([address, info]) => {
-            const label = info.name ? `${info.name} — ${address}` : address;
-            return `<option value="${address}">${label}</option>`;
-          })
+          .map(([address, info]) => `<option value="${address}">${label(info.name, address)}</option>`)
           .join("") +
         `</optgroup>`,
     );
@@ -413,7 +523,7 @@ function renderSinkOptions() {
   options.push(`<option value="__other">Another address…</option>`);
   select.innerHTML = options.join("");
   // Rebuilding the list must not silently retarget a stream in flight.
-  select.value = [...select.options].some((o) => o.value === keep) ? keep : SINK_ADDR;
+  select.value = [...select.options].some((o) => o.value === keep) ? keep : sinkAddr;
 }
 
 function setTarget(address) {
@@ -470,7 +580,7 @@ function createSource() {
 
 function createSink() {
   try {
-    sink = new WebPeripheral(ws("web-audio-sink", SINK_ADDR), editor.value);
+    sink = new WebPeripheral(ws("web-audio-sink", sinkAddr), editor.value);
     runStart = performance.now();
   } catch (e) {
     sink = null;
@@ -546,7 +656,7 @@ function buildInPage() {
   const next = new WebLink();
   let sinkIndex;
   try {
-    sinkIndex = next.add_peripheral(SINK_ADDR, editor.value);
+    sinkIndex = next.add_peripheral(sinkAddr, editor.value);
   } catch (e) {
     try {
       next.free();
@@ -557,7 +667,7 @@ function buildInPage() {
   }
   let central = -1;
   try {
-    central = next.add_central(SOURCE_ADDR, SINK_ADDR);
+    central = next.add_central(SOURCE_ADDR, sinkAddr);
   } catch (_) {
     /* streaming stays unavailable; the speaker still works */
   }
@@ -627,7 +737,7 @@ function switchBackend() {
   sinkHead.setRunning(true);
   applyStopCapability();
   $("setup").classList.remove("visible");
-  target = SINK_ADDR;
+  target = sinkAddr;
   renderSinkOptions();
   applyMode();
   if (mode === "in-page") {
@@ -774,9 +884,17 @@ function tickScanner(now) {
   if (scanner.ready_state() !== 1) return;
   let found = false;
   for (const report of JSON.parse(scanner.tick())) {
+    // Advertisements only. A device's two on-air names need not agree -- the
+    // advertisement carries a name trimmed to the 31-octet budget, the scan
+    // response carries the full one -- and taking whichever arrived last is
+    // what makes a name flicker between its two forms in a list. The
+    // advertisement is the one a scanner sees without asking, so it wins.
+    // (isAudioSink already rejects most scan responses, which carry no service
+    // UUIDs; that is a side effect of the filter, not a decision, so say it.)
+    if (report.scan_response) continue;
     if (!isAudioSink(report)) continue;
     const address = report.address.toUpperCase();
-    if (address === SINK_ADDR) continue; // already the first option
+    if (address === sinkAddr) continue; // already the first option
     const known = discovered.get(address);
     if (known && (!report.name || known.name === report.name)) continue;
     discovered.set(address, { name: report.name || known?.name || null });
@@ -1002,6 +1120,31 @@ function injectStyles() {
     padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: 6px; width: 14rem; }
   .audio-page #sink-pick { max-width: 100%; }
 
+  /* The sink's identity, on one wrapping row: two labelled fields and the one
+     button that commits both. One button rather than two because both edits
+     are the same operation underneath -- stand the device up again -- and two
+     Apply buttons a centimetre apart invite the reader to wonder which does
+     which. The name is elastic and the address is not: an address is a fixed
+     17 characters, so it gets exactly that and the name takes the slack. */
+  .audio-page .ident { display: flex; flex-wrap: wrap; align-items: center;
+    gap: 0.4rem 0.55rem; margin: 0.65rem 0 0.45rem; }
+  .audio-page .ident-label { font-size: var(--fs-label); color: var(--dim); }
+  .audio-page .ident input[type=text] { width: auto; }
+  .audio-page .ident #ident-name { flex: 1 1 7rem; min-width: 6rem; }
+  /* An address is exactly 17 characters in a monospace face, so the field is
+     sized to hold all of them -- a box that clips its own contents is the one
+     thing a field showing an identity must not do. */
+  .audio-page .ident #ident-addr { flex: 0 0 auto; width: 17ch; box-sizing: content-box; }
+  /* Disabled is the honest state while a stream is up, so it has to LOOK
+     disabled -- the browser greys the control, and the line underneath says
+     why rather than leaving the reader to guess it is broken. */
+  .audio-page .ident input:disabled, .audio-page .ident button:disabled { opacity: 0.5; }
+  /* The air readout is a claim about the wire, so it is mono like every other
+     readout on the page; it turns warn only when the two names differ. */
+  .audio-page #air-note { margin-top: 0; font-size: var(--fs-meta); }
+  .audio-page #air-note.trimmed { color: var(--warn); }
+  .audio-page #air-note b { color: var(--text); }
+
   .audio-page .stages { list-style: none; padding: 0; margin: 0.2rem 0 0; }
   .audio-page .stages li { padding: 0.32rem 0 0.32rem 1.5rem; position: relative;
     color: var(--dim); font-size: var(--fs-body); }
@@ -1138,7 +1281,7 @@ const TEMPLATE = `
         <button id="rescan" title="scan netsim for LE Audio sinks">⟳ rescan</button>
       </div>
       <input type="text" id="sink-addr" hidden placeholder="CC:1E:57:00:00:06"
-             aria-label="sink address">
+             aria-label="another sink address to stream to">
       <div class="readout" id="scan-note">—</div>
 
       <div class="row">
@@ -1171,6 +1314,25 @@ const TEMPLATE = `
 
   <section class="panel">
       <div id="sink-head"></div>
+
+      <!-- What the sink calls itself and where it sits, above the script that
+           defines it, because the name field IS a shortcut into that script's
+           first line and the reader should see the two next to each other. -->
+      <div class="ident">
+        <label class="ident-label" for="ident-name">Name</label>
+        <input type="text" id="ident-name" maxlength="60" spellcheck="false"
+               aria-label="the name the sink advertises">
+        <label class="ident-label" for="ident-addr">Address</label>
+        <input type="text" id="ident-addr" spellcheck="false"
+               placeholder="CC:1E:57:00:00:08" aria-label="the sink's on-air address">
+        <button id="ident-apply">apply</button>
+      </div>
+      <div class="readout" id="air-note"></div>
+      <div class="warn-line" id="ident-locked" hidden>
+        ⚠ The sink's identity is fixed while a stream is running: changing either
+        field rebuilds the device, which would drop the CIS underneath it.
+      </div>
+
       <div id="sink-script"></div>
       <div class="sink-face">
         <div class="sink-visual">
@@ -1310,8 +1472,18 @@ export function mount(container) {
   const gen = ++generation;
 
   slider = $("vol");
+  sinkAddr = DEFAULT_SINK_ADDR;
+  target = sinkAddr;
   buildHeaders();
   editor = sinkHead.textarea;
+  // The identity fields describe the device that is about to be built, so they
+  // are filled from the same two places it is built from: the script for the
+  // name, the socket URL for the address.
+  $("ident-addr").value = sinkAddr;
+  sinkName = scriptName(editor.value);
+  $("ident-name").value = sinkName;
+  renderAirNote();
+  applyIdentityLock();
   prevValues = new Map();
   discovered = new Map();
   frames = [];
@@ -1409,7 +1581,7 @@ function buildHeaders() {
     name: "Audio Sink",
     kind: "peripheral",
     accent: "good",
-    address: SINK_ADDR,
+    address: sinkAddr,
     dotMeans: "the sink is on the air",
     script: {
       text: DEFAULT_SCRIPT,
@@ -1450,6 +1622,10 @@ function applySinkScript() {
       runStart = performance.now();
     } else createSink();
     prevValues.clear();
+    // The script is the name's home, so editing it through the pen must move
+    // the field and the picker with it rather than leaving them describing the
+    // device that used to be here.
+    syncSinkName();
     sinkHead.setApplyState("device rebuilt from script");
     setTimeout(() => {
       if (root) sinkHead.setApplyState("");
@@ -1457,6 +1633,120 @@ function applySinkScript() {
   } catch (e) {
     showScriptError(e);
   }
+}
+
+// --- the sink's identity ---------------------------------------------------
+// Two fields, one Apply, and a line that says what actually leaves the device.
+//
+// What is deliberately NOT here: the codec. The header comment above warns
+// that what the sink advertises and what its ASE is configured with have to
+// agree or the sink decodes noise, and that agreement is the 16_2 numbers —
+// PCM_RATE, SDU_INTERVAL_MS, LC3_FRAME_BYTES, the PAC record and the CIS's
+// Max_SDU, five values that are one decision. A control for any one of them
+// would be a control for breaking the other four silently, which is the exact
+// failure the warning describes. The name and the address are not in that
+// knot: nothing decodes them.
+
+/// Re-reads the name out of the live script and puts every display of it back
+/// in step — the field, the on-air line, and the source's chooser.
+function syncSinkName() {
+  sinkName = scriptName(editor.value);
+  if (document.activeElement !== $("ident-name")) $("ident-name").value = sinkName;
+  renderAirNote();
+  renderSinkOptions();
+}
+
+/// What the name in the field will actually go out as. The budget is stated in
+/// both cases, not only when it is exceeded: a reader watching the count climb
+/// knows why the next name gets cut, which a message that only ever appears
+/// after the damage never tells them.
+function renderAirNote() {
+  const typed = $("ident-name").value;
+  const air = onAir(typed);
+  const note = $("air-note");
+  note.classList.toggle("trimmed", air !== typed);
+  note.innerHTML =
+    air === typed
+      ? `advertised as <b>${escapeHtml(air || "(no name)")}</b> · ` +
+        `${utf8.encode(air).length}/${NAME_BUDGET} bytes`
+      : `advertised as <b>${escapeHtml(air)}</b> — trimmed to the ${NAME_BUDGET} bytes ` +
+        `this advertisement leaves for a name. The scan response still carries it whole.`;
+}
+
+/// Moves the sink to a new address: a new socket over netsim, a new link
+/// in-page. The source is aimed at one peer for its lifetime, so a source that
+/// was pointed at the old address is re-aimed rather than left calling an
+/// address nothing answers to.
+function applySinkAddress(next) {
+  const wasTargeted = target === sinkAddr;
+  sinkAddr = next;
+  sinkHead.setAddress(sinkAddr);
+  if (mode === "in-page") {
+    // One link hosts both devices, so rebuilding moves them together.
+    try {
+      buildInPage();
+    } catch (e) {
+      showScriptError(e);
+    }
+  } else {
+    try {
+      sink?.free();
+    } catch (_) {
+      /* already gone */
+    }
+    sink = null;
+    sinkOpenedOnce = false;
+    lastSinkAttempt = performance.now() - RECONNECT_MS; // stand it back up next tick
+  }
+  discovered.delete(sinkAddr); // it is the built-in sink now, not a stranger
+  if (wasTargeted) setTarget(sinkAddr);
+  renderSinkOptions();
+}
+
+/// Commits whichever of the two fields changed. Nothing is applied while a
+/// stream is running — both edits rebuild the device and would drop the CIS —
+/// and the controls are disabled to say so, with this as the backstop.
+function applyIdentity() {
+  if (playing) return;
+  showScriptError(null);
+  showError("");
+
+  const address = $("ident-addr").value.trim().toUpperCase();
+  if (!/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(address)) {
+    showScriptError(`"${$("ident-addr").value}" is not a Bluetooth address (AA:BB:CC:DD:EE:FF)`);
+    return;
+  }
+  if (address === target && address !== sinkAddr) {
+    // The source is already aimed at that address, so handing it to the sink
+    // would point the source at itself by a different route.
+    showScriptError(`${address} is what the source is streaming to — pick another for the sink`);
+    return;
+  }
+
+  const name = $("ident-name").value;
+  if (name !== sinkName) {
+    if (!nameFitsScript(name)) {
+      showScriptError('a name cannot contain " or \\ — it goes into a string literal in the script');
+      return;
+    }
+    const next = withScriptName(editor.value, name);
+    if (next === null) {
+      showScriptError("this script builds no BluetoothGattServer(\"…\"), so it has no name to set");
+      return;
+    }
+    editor.value = next;
+    editor.dispatchEvent(new Event("input", { bubbles: true })); // repaint the highlighter
+    applySinkScript(); // syncs sinkName and re-renders the chooser
+  }
+  if (address !== sinkAddr) applySinkAddress(address);
+}
+
+/// The identity is fixed for as long as a stream is up. A field that silently
+/// did nothing, or one that took the stream down without warning, are both
+/// worse than a disabled control with the reason beside it.
+function applyIdentityLock() {
+  for (const id of ["ident-name", "ident-addr", "ident-apply"]) $(id).disabled = playing;
+  $("ident-locked").hidden = !playing;
 }
 
 function wireControls() {
@@ -1485,6 +1775,16 @@ function wireControls() {
 
   $("play").addEventListener("click", start);
   $("stop").addEventListener("click", stop);
+
+  // The on-air line follows the field as it is typed, so the budget is visible
+  // before the name is committed rather than as a surprise afterwards.
+  $("ident-name").addEventListener("input", renderAirNote);
+  $("ident-apply").addEventListener("click", applyIdentity);
+  for (const id of ["ident-name", "ident-addr"]) {
+    $(id).addEventListener("keydown", (event) => {
+      if (event.key === "Enter") applyIdentity();
+    });
+  }
 
   $("sink-pick").addEventListener("change", (event) => {
     const value = event.target.value;
