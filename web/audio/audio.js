@@ -758,8 +758,6 @@ function applyMode() {
   for (const el of [$("sink-script"), $("air-note")]) {
     if (el) el.hidden = isUsb;
   }
-  $("ident-addr").disabled = isUsb;
-  $("ident-addr").title = isUsb ? "a dongle's address belongs to its silicon" : "";
   // One verb: connect applies the name, so a second Apply button is a
   // second way to do the same thing standing somewhere else. (`hidden`
   // loses to the ident grid's explicit display, so say display directly.)
@@ -814,9 +812,11 @@ function switchBackend() {
   renderSinkOptions();
   applyMode();
   if (mode === "usb") {
-    sourceHead.setState(false, "the phone is the source");
+    sourceHead.setRunning(false);
+    sourceHead.setState(false, "stopped — press play, or use any source in the room");
+    sinkHead.setRunning(false);
     sinkHead.setState(false, "USB bridge — not connected");
-    return; // the connect button builds the sink; nothing to do until then
+    return; // the headers' run controls build the devices
   }
   if (mode === "in-page") {
     sourceHead.setState(false, "connecting…");
@@ -872,7 +872,7 @@ function onRadioMessage({ data: m }) {
   }
   if (m.op === "source-error") {
     $("usb-src-stage").textContent = m.message;
-    $("usb-src-connect").textContent = "start";
+    sourceHead.setRunning(false);
     usbSrcRunning = false;
     return;
   }
@@ -880,15 +880,17 @@ function onRadioMessage({ data: m }) {
     for (const line of m.log) usbSrcLog(line);
     $("usb-src-stage").textContent =
       m.failure ?? `${m.stage}${m.packets_sent ? ` · ${m.packets_sent} RTP packets` : ""}`;
+    sourceHead.setState(m.stage.startsWith("5."), m.failure ? "failed" : m.stage);
     return;
   }
   if (m.op === "error") {
     $("usb-stage").textContent = m.message;
     sinkHead.setState(false, "error");
-    $("usb-connect").textContent = "connect";
+    sinkHead.setRunning(false);
     return;
   }
   if (m.op === "status") {
+    if (m.bd_addr) sinkHead.setAddress(m.bd_addr);
     for (const line of m.log) usbLog(line);
     const detail = m.frames
       ? ` · ${m.frames} SBC frames` +
@@ -945,30 +947,15 @@ function buildUsb() {
   // ends up seeing speakers nobody asked for.
   const name = $("ident-name").value.trim() || "webspeaker";
   ensureWorker().postMessage({ op: "sink-start", url, name });
-  $("usb-connect").textContent = "disconnect";
+  sinkHead.setRunning(true);
 }
 
 function disconnectUsb() {
   dropUsb(); // sink-stop: the worker frees the sink, closing the socket —
   // and the bridge resets the dongle, so nothing keeps advertising.
   $("usb-stage").textContent = "not connected";
+  sinkHead.setRunning(false);
   sinkHead.setState(false, "USB bridge — not connected");
-  $("usb-connect").textContent = "connect";
-}
-
-/// One button, two meanings: its label says which. A connect with no way
-/// back left the dongle advertising until the tab closed.
-function toggleUsb() {
-  if ($("usb-connect").textContent === "disconnect") disconnectUsb();
-  else buildUsb(); // "connect" and "reconnect" both mean: apply and go
-}
-
-/// Editing the name while connected turns the button into "reconnect" —
-/// the same button, saying what pressing it will now do.
-function onUsbNameEdited() {
-  if (mode !== "usb") return;
-  const button = $("usb-connect");
-  if (button.textContent === "disconnect") button.textContent = "reconnect";
 }
 
 /// A player at the stream's own rate — see lc3-player.js for why the graph
@@ -1099,19 +1086,15 @@ async function startUsbSource() {
     url,
     target: $("usb-src-target").value.trim(),
   });
-  $("usb-src-connect").textContent = "stop";
+  sourceHead.setRunning(true);
 }
 
 function stopUsbSource() {
   usbSrcRunning = false;
   radioWorker?.postMessage({ op: "source-stop" });
   $("usb-src-stage").textContent = "stopped";
-  $("usb-src-connect").textContent = "start";
-}
-
-function toggleUsbSource() {
-  if ($("usb-src-connect").textContent === "stop") stopUsbSource();
-  else startUsbSource();
+  sourceHead.setRunning(false);
+  sourceHead.setState(false, "stopped");
 }
 
 /// Interleaved stereo to mono. The shared player schedules one mono channel;
@@ -1540,7 +1523,6 @@ function injectStyles() {
   /* An address is exactly 17 characters in a monospace face, so the field is
      sized to hold all of them -- a box that clips its own contents is the one
      thing a field showing an identity must not do. */
-  .audio-page .ident #ident-addr { flex: 0 0 auto; width: 17ch; box-sizing: content-box; }
   /* Disabled is the honest state while a stream is up, so it has to LOOK
      disabled -- the browser greys the control, and the line underneath says
      why rather than leaving the reader to guess it is broken. */
@@ -1675,16 +1657,15 @@ const TEMPLATE = `
 
       <div id="usb-source-note" hidden>
         <p class="hint">
-          <strong>Your phone can be the source</strong> — pair it with the speaker named on
-          the right and play anything. Or put the source on a <strong>second dongle</strong>
-          below: it inquires, pairs, reads the speaker's SDP, negotiates SBC and streams a
-          file — the same ladder as a phone, over real radio, to a real speaker in pairing
-          mode or to this page's own speaker.
+          <strong>Anything can be the source.</strong> This card puts one on a second
+          dongle: it inquires, pairs, reads the speaker's SDP, negotiates SBC and streams a
+          file over real radio — to this page's own speaker or any real one in pairing
+          mode. Or skip it and stream from a phone, a laptop, anything that speaks A2DP,
+          at the speaker named on the right.
         </p>
         <label class="field" for="usb-src-device">Source dongle</label>
         <div class="row">
           <select id="usb-src-device" aria-label="which dongle hosts the source"></select>
-          <button id="usb-src-connect" class="primary">start</button>
         </div>
         <label class="field" for="usb-src-target">Speaker address</label>
         <input type="text" id="usb-src-target" spellcheck="false"
@@ -1755,9 +1736,6 @@ const TEMPLATE = `
         <label class="ident-label" for="ident-name">Name</label>
         <input type="text" id="ident-name" maxlength="60" spellcheck="false"
                aria-label="the name the sink advertises">
-        <label class="ident-label" for="ident-addr">Address</label>
-        <input type="text" id="ident-addr" spellcheck="false"
-               placeholder="CC:1E:57:00:00:08" aria-label="the sink's on-air address">
         <button id="ident-apply">apply</button>
       </div>
       <div class="readout" id="air-note"></div>
@@ -1776,7 +1754,6 @@ const TEMPLATE = `
         <label class="field" for="usb-device">Dongle</label>
         <div class="row">
           <select id="usb-device" aria-label="which dongle hosts the speaker"></select>
-          <button id="usb-connect" class="primary">connect</button>
         </div>
         <div class="readout" id="usb-stage">not connected</div>
         <pre id="usb-log" class="readout" style="max-height:14rem;overflow-y:auto;white-space:pre-wrap"></pre>
@@ -1933,7 +1910,6 @@ export function mount(container) {
   // The identity fields describe the device that is about to be built, so they
   // are filled from the same two places it is built from: the script for the
   // name, the socket URL for the address.
-  $("ident-addr").value = sinkAddr;
   sinkName = scriptName(editor.value);
   $("ident-name").value = sinkName;
   renderAirNote();
@@ -2028,7 +2004,14 @@ function buildHeaders() {
     accent: "accent",
     address: SOURCE_ADDR,
     dotMeans: "a stream to the sink is open and SDUs can go out",
-    run: { running: true, onRun: startSource, onStop: stopSource },
+    // The header's run control is the device's one start/stop, whichever
+    // radio it is on: the LE central over netsim, or the A2DP source on a
+    // dongle. A second connect button beside it was the same verb twice.
+    run: {
+      running: true,
+      onRun: () => (mode === "usb" ? startUsbSource() : startSource()),
+      onStop: () => (mode === "usb" ? stopUsbSource() : stopSource()),
+    },
   });
   $("source-head").append(sourceHead.el);
 
@@ -2037,6 +2020,7 @@ function buildHeaders() {
     kind: "peripheral",
     accent: "good",
     address: sinkAddr,
+    onAddressEdit: onSinkAddressEdit,
     dotMeans: "the sink is on the air",
     script: {
       text: DEFAULT_SCRIPT,
@@ -2047,7 +2031,11 @@ function buildHeaders() {
         "Applying rebuilds the device on the same socket or link.",
       onApply: applySinkScript,
     },
-    run: { running: true, onRun: startSink, onStop: stopSink },
+    run: {
+      running: true,
+      onRun: () => (mode === "usb" ? buildUsb() : startSink()),
+      onStop: () => (mode === "usb" ? disconnectUsb() : stopSink()),
+    },
   });
   $("sink-head").append(sinkHead.el);
   $("sink-script").append(sinkHead.panel);
@@ -2172,18 +2160,6 @@ function applyIdentity() {
     return;
   }
 
-  const address = $("ident-addr").value.trim().toUpperCase();
-  if (!/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(address)) {
-    showScriptError(`"${$("ident-addr").value}" is not a Bluetooth address (AA:BB:CC:DD:EE:FF)`);
-    return;
-  }
-  if (address === target && address !== sinkAddr) {
-    // The source is already aimed at that address, so handing it to the sink
-    // would point the source at itself by a different route.
-    showScriptError(`${address} is what the source is streaming to — pick another for the sink`);
-    return;
-  }
-
   const name = $("ident-name").value;
   if (name !== sinkName) {
     if (!nameFitsScript(name)) {
@@ -2199,14 +2175,30 @@ function applyIdentity() {
     editor.dispatchEvent(new Event("input", { bubbles: true })); // repaint the highlighter
     applySinkScript(); // syncs sinkName and re-renders the chooser
   }
+}
+
+/// The header's address edit lands here: one address, one place. Returns a
+/// refusal string (the header reverts and shows it) or null to accept.
+function onSinkAddressEdit(address) {
+  if (mode === "usb") return "a dongle's address belongs to its silicon";
+  if (playing) return "the identity is fixed while a stream is running";
+  if (!/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/.test(address)) {
+    return `"${address}" is not a Bluetooth address (AA:BB:CC:DD:EE:FF)`;
+  }
+  if (address === target && address !== sinkAddr) {
+    // The source is already aimed there, so handing it to the sink would
+    // point the source at itself by a different route.
+    return `${address} is what the source is streaming to — pick another`;
+  }
   if (address !== sinkAddr) applySinkAddress(address);
+  return null;
 }
 
 /// The identity is fixed for as long as a stream is up. A field that silently
 /// did nothing, or one that took the stream down without warning, are both
 /// worse than a disabled control with the reason beside it.
 function applyIdentityLock() {
-  for (const id of ["ident-name", "ident-addr", "ident-apply"]) $(id).disabled = playing;
+  for (const id of ["ident-name", "ident-apply"]) $(id).disabled = playing;
   $("ident-locked").hidden = !playing;
 }
 
@@ -2241,11 +2233,9 @@ function wireControls() {
   // before the name is committed rather than as a surprise afterwards.
   $("ident-name").addEventListener("input", renderAirNote);
   $("ident-apply").addEventListener("click", applyIdentity);
-  for (const id of ["ident-name", "ident-addr"]) {
-    $(id).addEventListener("keydown", (event) => {
-      if (event.key === "Enter") applyIdentity();
-    });
-  }
+  $("ident-name").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") applyIdentity();
+  });
 
   $("sink-pick").addEventListener("change", (event) => {
     const value = event.target.value;
@@ -2264,9 +2254,7 @@ function wireControls() {
     lastScanAt = 0;
   });
 
-  $("usb-connect").addEventListener("click", toggleUsb);
-  $("usb-src-connect").addEventListener("click", toggleUsbSource);
-  $("ident-name").addEventListener("input", onUsbNameEdited);
+
 
   // This handler must stay a real click: see the note on the page. Creating the
   // context from script yields a suspended one, which counts and schedules SDUs

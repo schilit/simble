@@ -64,6 +64,9 @@ mod opcode {
     /// Read Buffer Size: how large an ACL packet the controller accepts and
     /// how many it can hold — the two numbers outbound ACL must obey.
     pub const READ_BUFFER_SIZE: [u8; 2] = [0x05, 0x10];
+    /// Read BD_ADDR: the identity is the silicon's, and anything a UI shows
+    /// that is not this answer is an invented address.
+    pub const READ_BD_ADDR: [u8; 2] = [0x09, 0x10];
 
     // --- security ---------------------------------------------------------
     //
@@ -1420,6 +1423,8 @@ pub struct ClassicHost {
     /// Outbound ACL packets awaiting credit. Filled by [`Self::poll`]'s
     /// channel-output path (the only firehose); drained as credits return.
     pending_acl: std::collections::VecDeque<Vec<u8>>,
+    /// The controller's own BD_ADDR, from Read BD_ADDR at bring-up.
+    local_address: Option<Address>,
 }
 
 impl ClassicHost {
@@ -1463,6 +1468,7 @@ impl ClassicHost {
             acl_credits_total: usize::MAX,
             acl_in_flight: 0,
             pending_acl: std::collections::VecDeque::new(),
+            local_address: None,
         }
     }
 
@@ -1595,6 +1601,11 @@ impl ClassicHost {
             .find_map(|handler| (handler.as_mut() as &mut dyn std::any::Any).downcast_mut::<T>())
     }
 
+    /// The controller's own BD_ADDR, once Read BD_ADDR has answered.
+    pub fn local_address(&self) -> Option<Address> {
+        self.local_address
+    }
+
     /// The status of the last failed paging attempt, if the last one failed.
     /// Cleared when a new page starts.
     #[must_use]
@@ -1719,6 +1730,7 @@ impl ClassicHost {
             // `host::EVENT_MASK_ALL`).
             command(opcode::SET_EVENT_MASK, &crate::device::host::EVENT_MASK_ALL),
             command(opcode::READ_BUFFER_SIZE, &[]),
+            command(opcode::READ_BD_ADDR, &[]),
             command(opcode::WRITE_LOCAL_NAME, &name_param),
             command(opcode::WRITE_CLASS_OF_DEVICE, &self.class_of_device),
             command(opcode::WRITE_SIMPLE_PAIRING_MODE, &[0x01]),
@@ -1944,6 +1956,18 @@ impl ClassicHost {
                     if acl_num > 0 {
                         self.acl_credits_total = acl_num;
                     }
+                }
+                Vec::new()
+            }
+            HciEvent::CommandComplete {
+                header,
+                return_parameters,
+            } if header.command_opcode.get() == u16::from_le_bytes(opcode::READ_BD_ADDR) => {
+                // status(1) then the six address octets, LSB first.
+                if return_parameters.len() >= 7 && return_parameters[0] == 0x00 {
+                    let mut bytes = [0u8; 6];
+                    bytes.copy_from_slice(&return_parameters[1..7]);
+                    self.local_address = Some(Address::new(bytes));
                 }
                 Vec::new()
             }

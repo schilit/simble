@@ -5564,6 +5564,9 @@ mod web {
                 "sample_rate": self.sample_rate(),
                 "channels": self.channels(),
                 "failure": self.failure,
+                // The silicon's own answer to Read BD_ADDR — the address a
+                // phone actually sees, which no page-side constant is.
+                "bd_addr": self.host.local_address().map(|a| a.to_string()),
                 "log": self.log[since..],
                 "log_len": self.log.len(),
             })

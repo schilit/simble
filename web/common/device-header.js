@@ -91,6 +91,13 @@ export function createDeviceHeader(options) {
     accent = "",
     address = null,
     addressNote = "",
+    // When given, the address is editable in place: click (or focus) it,
+    // type, Enter commits, Escape reverts. The callback returns an error
+    // string to refuse the edit — the header reverts and shows why — or
+    // null/undefined to accept. One address, one place: pages that also
+    // grew an address *field* ended up with two, and a reader asked which
+    // one was real.
+    onAddressEdit = null,
     dotMeans = "",
     script = null,
     run = null,
@@ -213,6 +220,41 @@ export function createDeviceHeader(options) {
   addrEl.className = "dev-addr";
   el.append(addrEl);
   setAddress(address, addressNote);
+  if (onAddressEdit) {
+    addrEl.style.cursor = "text";
+    addrEl.tabIndex = 0;
+    let before = "";
+    addrEl.addEventListener("focus", () => {
+      before = addrEl.textContent;
+      addrEl.contentEditable = "plaintext-only";
+      addrEl.title = "type the on-air address · Enter commits · Escape reverts";
+    });
+    addrEl.addEventListener("click", () => addrEl.focus());
+    addrEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        addrEl.blur();
+      } else if (event.key === "Escape") {
+        addrEl.textContent = before;
+        addrEl.blur();
+      }
+    });
+    addrEl.addEventListener("blur", () => {
+      addrEl.contentEditable = "false";
+      const next = addrEl.textContent.trim().toUpperCase();
+      if (next === before) {
+        addrEl.textContent = before;
+        return;
+      }
+      const refusal = onAddressEdit(next);
+      if (refusal) {
+        addrEl.textContent = before;
+        addrEl.title = refusal;
+      } else {
+        setAddress(next);
+      }
+    });
+  }
 
   // --- behaviour -----------------------------------------------------------
 
