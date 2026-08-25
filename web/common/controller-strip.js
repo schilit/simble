@@ -25,7 +25,10 @@ function injectStyles() {
   .ctl-strip .strip-label { font-weight:600; letter-spacing:0.06em;
     font-size:0.68rem; text-transform:uppercase; }
   .ctl-strip select { font-size:0.78rem; max-width:16rem; }
-  .ctl-strip .strip-why { flex-basis:100%; font-style:italic; opacity:0.8; }`;
+  .ctl-strip .strip-why { flex-basis:100%; font-style:italic; opacity:0.8; }
+  /* An empty why still claimed a whole flex row, padding the strip's bottom
+     with a blank line. */
+  .ctl-strip .strip-why:empty { display:none; }`;
   document.head.append(style);
 }
 
