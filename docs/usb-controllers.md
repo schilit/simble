@@ -43,11 +43,17 @@ mass-storage device. Nordic's own dongle needs `nrfutil`, whose pip package
 has no Apple Silicon wheels (`pc_ble_driver_py`) and whose Homebrew cask fails
 macOS Gatekeeper, so the flashing route is markedly more awkward on a Mac.
 
-One thing to know before spending anything: **BIG and Channel Sounding cannot
-be checked against software.** Bumble implements no BIG, and Rootcanal answers
-`LE_Create_BIG` with `Unknown HCI Command`. Neither implements the Ranging
-Service. If you are working on broadcast audio or ranging, hardware is not a
-nice-to-have — it is the only oracle that exists.
+One thing to know before spending anything: **Channel Sounding cannot be
+checked against software at all, and BIG only against netsim.** For BIG the
+situation is narrower than it looks: upstream rootcanal *implements* it
+(`rust/src/llcp/iso.rs`) but ships the release binary with those commands
+left out of its supported-commands table, so it answers `LE_Create_BIG` with
+`Unknown HCI Command` — while the rootcanal built into netsim has them
+enabled, and our broadcast path is verified against Bumble's `auracast` app
+through netsim in both directions. Bumble itself models no BIG, and nothing
+in software implements the Ranging Service. So: broadcast audio has exactly
+one software oracle (netsim) and ranging has none — for ranging, hardware is
+not a nice-to-have but the only oracle that exists.
 
 ## Plugging in more than one
 

@@ -229,10 +229,12 @@ been: the foreign peer that proves each of these once built.
   `tests/interop/rootcanal_link.py`.
 - **The `auracast_*` pair still cannot run without netsim**, and the reason
   changed: it is no longer "Bumble models no BIG" but **no controller
-  reachable without the Android SDK models BIG at all**. The upstream
-  rootcanal release answers `LE Create BIG` and `LE BIG Create Sync` with
-  `Unknown HCI Command`, while the rootcanal bundled inside netsim implements
-  both — the two builds differ, and only netsim's has BIG. The scripts read
+  reachable without the Android SDK enables BIG**. The upstream rootcanal
+  release *implements* BIG (`rust/src/llcp/iso.rs` handles `LE Create BIG`
+  and `LE BIG Create Sync`) but ships with those entries left out of its
+  supported-commands table, so it answers both with `Unknown HCI Command` —
+  while the rootcanal bundled inside netsim has them enabled. The same code,
+  gated differently in the two builds. The scripts read
   this off the live controller's supported-commands bitmap, so the day
   upstream ships BIG they run with no edit.
 - **A controller that answers is not the same as a controller that works,**
