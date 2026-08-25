@@ -1,18 +1,15 @@
 // Copyright 2026 Bill Schilit — SPDX-License-Identifier: Apache-2.0
 //
-// A per-device controller strip: the slim line above a device card that says
-// which controller THIS device rides. One dropdown, two kinds of entry:
-// the page's simulator (whichever the top bar picked — in-page or netsim),
-// or a named USB dongle:
+// A per-device dongle strip: the slim line above a device card, shown only
+// when the page runs on USB, that says which dongle THIS device rides:
 //
-//   CONTROLLER [ usb: 02.3.1 — CSR8510 ▾ ]
+//   USB DONGLE [ 02.3.1 — CSR8510 ▾ ]
 //
-// The simulator is deliberately ONE entry, not two. In-page vs netsim is a
-// page-level choice: in-page is a single link hosting both devices, and a
-// netsim/in-page split leaves the two with nobody to talk to — nobody would
-// split devices across simulators, and the strip should not offer it. What
-// devices genuinely split across is simulated vs real: a sink on silicon
-// answering a phone while the source streams into netsim.
+// Nothing else belongs in it. Which *simulator* a page uses is the page
+// bar's choice (nobody splits two devices across simulators — they would
+// have nobody to talk to), and a simulated entry here only re-asked a
+// question the bar had answered. The one per-device question USB raises is
+// which silicon.
 
 const STYLE_ID = "simble-ctl-strip-style";
 
@@ -32,42 +29,29 @@ function injectStyles() {
   document.head.append(style);
 }
 
-/// `value` ↔ option encoding: the simulator is "sim"; a usb choice is
-/// "usb:<selector>".
-const encode = (v) => (v.kind === "usb" ? `usb:${v.device ?? ""}` : "sim");
-const decode = (text) =>
-  text.startsWith("usb:")
-    ? { kind: "usb", device: text.slice(4) }
-    : { kind: "sim", device: "" };
+const encode = (v) => v.device ?? "";
+const decode = (text) => ({ kind: "usb", device: text });
 
 /**
  * @param {object} options
  * @param {{kind:string, device:string}} options.value  initial choice
- * @param {string} [options.simLabel] what the one simulator entry is called
- *        (e.g. "simulated — netsim"); follows the page-level bar.
  * @param {Array<{selector:string, product:string}>} [options.dongles]
  * @param {(value:{kind:string,device:string}) => ?string} options.onChange
  *        return a string to refuse (shown on the strip's why line), or
  *        null/undefined to accept.
  * @param {string} [options.why] a standing note under the choice
  */
-export function createControllerStrip({
-  value,
-  simLabel = "simulated",
-  dongles = [],
-  onChange,
-  why = "",
-}) {
+export function createControllerStrip({ value, dongles = [], onChange, why = "" }) {
   injectStyles();
   const el = document.createElement("div");
   el.className = "ctl-strip";
 
   const label = document.createElement("span");
   label.className = "strip-label";
-  label.textContent = "controller";
+  label.textContent = "usb dongle";
 
   const pick = document.createElement("select");
-  pick.setAttribute("aria-label", "which controller this device rides");
+  pick.setAttribute("aria-label", "which dongle this device rides");
 
   const whyEl = document.createElement("span");
   whyEl.className = "strip-why";
@@ -86,12 +70,11 @@ export function createControllerStrip({
       option.textContent = text;
       pick.append(option);
     };
-    add("sim", simLabel);
-    for (const d of known) add(`usb:${d.selector}`, `usb: ${d.selector} — ${d.product}`);
-    // A stored usb choice whose dongle is not (yet) listed still renders,
-    // so a slow /devices answer cannot silently rewrite the choice.
-    if (current.kind === "usb" && !known.some((d) => d.selector === current.device)) {
-      add(`usb:${current.device}`, `usb: ${current.device || "(no dongle)"}`);
+    for (const d of known) add(d.selector, `${d.selector} — ${d.product}`);
+    // A stored choice whose dongle is not (yet) listed still renders, so a
+    // slow /devices answer cannot silently rewrite the choice.
+    if (current.device && !known.some((d) => d.selector === current.device)) {
+      add(current.device, current.device);
     }
     pick.value = encode(current);
   }
@@ -122,10 +105,6 @@ export function createControllerStrip({
     set,
     setDongles: (list) => {
       known = list;
-      renderOptions();
-    },
-    setSimLabel: (text) => {
-      simLabel = text;
       renderOptions();
     },
     value: () => ({ ...current }),

@@ -610,15 +610,12 @@ function buildStrips(defaultKind) {
   srcCtl = { kind: usbDefault ? "usb" : "sim", device: "" };
   snkCtl = { kind: usbDefault ? "usb" : "sim", device: "" };
   if (!usbDefault) return;
-  const simLabel = "simulated — netsim";
   srcStrip = createControllerStrip({
     value: srcCtl,
-    simLabel,
     onChange: (next) => onStripChange("source", next),
   });
   snkStrip = createControllerStrip({
     value: snkCtl,
-    simLabel,
     onChange: (next) => onStripChange("sink", next),
   });
   $("source-head").before(srcStrip.el);
