@@ -186,6 +186,11 @@ let radioWorker = null;
 let usbPlayer = null;
 let usbRate = 0;
 let soundOn = false; // the gate was clicked; a later-created player may enable itself
+// There is no Volume Control Service on the Classic path — the phone runs
+// AVRCP absolute volume at *its* end, and this end's volume is simply the
+// page's gain. The same buttons, slider and keys drive it, through here.
+let usbVolume = 128;
+let usbMuted = false;
 let lc3 = null;
 let player = null;
 
@@ -443,8 +448,7 @@ function renderMeter() {
   // display should care about. A timestamp settles it either way.
   let peak = 0;
   const active = mode === "usb" ? usbPlayer : player;
-  const muted = mode === "usb" ? false : lastMuted; // no VCS on the USB path
-  if (active && !muted && active.state === "running") {
+  if (active && !lastMuted && active.state === "running") {
     const age = performance.now() - (active.stats.peakAt || 0);
     if (age < PEAK_FRESH_MS) peak = active.stats.peak;
   }
@@ -744,7 +748,7 @@ function applyMode() {
   // The Name field stays: one speaker identity, whichever radio hosts it.
   // The address does not — on a dongle the silicon owns the address, and the
   // dongle picker is how one is chosen.
-  for (const el of [$("sink-script"), root.querySelector(".ops"), $("readout"), $("air-note")]) {
+  for (const el of [$("sink-script"), $("air-note")]) {
     if (el) el.hidden = isUsb;
   }
   $("ident-addr").disabled = isUsb;
@@ -758,6 +762,7 @@ function applyMode() {
       "USB dongle — a Classic A2DP sink on real silicon; the phone is the source.";
     $("status").textContent = "waiting for the bridge";
     loadDongleList();
+    setUsbVolume(usbVolume, usbMuted);
     return;
   }
   $("sink-pick").disabled = inPage;
@@ -951,7 +956,19 @@ function ensureUsbPlayer(rate) {
   usbPlayer = createSduPlayer({ sampleRate: rate });
   usbRate = rate;
   if (soundOn) usbPlayer.enable();
-  usbPlayer.setVolume(Number(slider.value), false);
+  usbPlayer.setVolume(usbVolume, usbMuted);
+}
+
+/// Sets the USB speaker's volume and mute — the page's gain, drawn with the
+/// same cone, arcs and readout the LE sink uses, because to a person it is
+/// the same speaker.
+function setUsbVolume(volume, muted) {
+  usbVolume = Math.max(0, Math.min(255, Math.round(volume)));
+  usbMuted = muted;
+  slider.value = usbVolume;
+  $("vol-num").textContent = usbVolume;
+  usbPlayer?.setVolume(usbVolume, usbMuted);
+  applySpeaker(usbVolume, usbMuted, "—");
 }
 
 /// Interleaved stereo to mono. The shared player schedules one mono channel;
@@ -1158,15 +1175,37 @@ function loop() {
 function onKeyDown(event) {
   if (event.target === slider || event.target === editor) return;
   if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+  const send = mode === "usb" ? usbOp : sendOp;
   if (event.key === "ArrowUp") {
-    sendOp(OP_UP);
+    send(OP_UP);
     event.preventDefault();
   }
   if (event.key === "ArrowDown") {
-    sendOp(OP_DOWN);
+    send(OP_DOWN);
     event.preventDefault();
   }
-  if (event.key === "m") sendOp(OP_UNMUTE_UP);
+  if (event.key === "m") send(OP_UNMUTE_UP);
+}
+
+/// The same opcodes the VCS buttons write, applied to the USB speaker's
+/// gain. VOLUME_STEP matches the LE sink's script so the two speakers feel
+/// the same under the same buttons.
+const USB_VOLUME_STEP = 16;
+function usbOp(op) {
+  switch (op) {
+    case OP_DOWN:
+      return setUsbVolume(usbVolume - USB_VOLUME_STEP, usbMuted);
+    case OP_UP:
+      return setUsbVolume(usbVolume + USB_VOLUME_STEP, usbMuted);
+    case OP_UNMUTE_UP:
+      return setUsbVolume(usbVolume + USB_VOLUME_STEP, false);
+    case OP_UNMUTE:
+      return setUsbVolume(usbVolume, false);
+    case OP_MUTE:
+      return setUsbVolume(usbVolume, true);
+    default:
+      return setUsbVolume(usbVolume, usbMuted);
+  }
 }
 
 // --- markup ----------------------------------------------------------------
@@ -2070,13 +2109,16 @@ function wireControls() {
   // sends — it does not poke the state characteristic.
   slider.addEventListener("input", () => {
     if (mode === "usb") {
-      usbPlayer?.setVolume(Number(slider.value), false);
-      $("vol-num").textContent = slider.value;
+      setUsbVolume(Number(slider.value), usbMuted);
       return;
     }
     setAbsolute(Number(slider.value));
   });
   for (const button of root.querySelectorAll(".ops button")) {
-    button.addEventListener("click", () => sendOp(Number(button.dataset.op)));
+    button.addEventListener("click", () => {
+      const op = Number(button.dataset.op);
+      if (mode === "usb") return usbOp(op);
+      sendOp(op);
+    });
   }
 }

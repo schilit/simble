@@ -29,12 +29,20 @@ let timer = 0;
 let logLen = 0;
 let lastPostAt = 0;
 let lastKey = "";
+// Decoded PCM is accumulated and posted in ~100 ms batches, not per pump.
+// One batch is one AudioBuffer on the page, and one buffer has one seam;
+// posting every 20 ms pump gave the graph fifty seams a second, which is
+// what "scratchy" is (see lc3-player.js's header — this lesson was already
+// written down once).
+let pcmChunks = [];
+let pcmSamples = 0;
 
 const ready = init();
 
 function stopSink() {
   if (timer) clearInterval(timer);
   timer = 0;
+  flushPcm(); // the tail of the stream still deserves to play
   try {
     sink?.free(); // Drop closes the socket, releasing the bridge session
   } catch (_) {
@@ -43,6 +51,21 @@ function stopSink() {
   sink = null;
   logLen = 0;
   lastKey = "";
+}
+
+function flushPcm() {
+  if (!pcmSamples) return;
+  const rate = sink?.sample_rate() || 44100;
+  const channels = sink?.channels() || 2;
+  const batch = new Int16Array(pcmSamples);
+  let at = 0;
+  for (const chunk of pcmChunks) {
+    batch.set(chunk, at);
+    at += chunk.length;
+  }
+  pcmChunks = [];
+  pcmSamples = 0;
+  postMessage({ op: "pcm", pcm: batch, rate, channels }, [batch.buffer]);
 }
 
 function pump() {
@@ -78,11 +101,11 @@ function pump() {
   }
   const pcm = sink.take_pcm();
   if (pcm.length) {
-    postMessage(
-      { op: "pcm", pcm, rate: sink.sample_rate() || 44100, channels: sink.channels() || 2 },
-      [pcm.buffer],
-    );
+    pcmChunks.push(pcm);
+    pcmSamples += pcm.length;
   }
+  // ~100 ms at the negotiated rate; mono streams just batch a little longer.
+  if (pcmSamples >= ((sink.sample_rate() || 44100) / 10) * 2) flushPcm();
 }
 
 self.onmessage = async (e) => {
