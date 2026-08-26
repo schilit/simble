@@ -80,6 +80,15 @@ const SINK_ADDR = "CC:1E:57:00:00:0B";
 /// The sink strip's value when the peripheral is a phone running SimBLE Sink
 /// rather than a dongle of ours.
 const PHONE_SINK = "phone";
+/// A sink strip value naming one phone: `phone:<adb serial>`. Every phone is
+/// its own choice, because "the phone" is ambiguous the moment there are two —
+/// and the ambiguity is not cosmetic: the scan would take whichever
+/// advertised first while the counters came from whichever port was
+/// configured, and those need not be the same device.
+const phoneValue = (serial) => `${PHONE_SINK}:${serial}`;
+const isPhone = (value) => value === PHONE_SINK || value.startsWith(`${PHONE_SINK}:`);
+/// What the bridge told us about each phone, keyed by strip value.
+const phones = new Map();
 /// Where SimBLE Sink serves its counters. `adb forward tcp:8099 tcp:8099`
 /// makes this work over USB or wifi adb without knowing the phone's address;
 /// a phone reachable directly can be named here instead.
@@ -185,8 +194,11 @@ function provenance(controller, dongles) {
     // The peer is the more interesting half when it is not ours: a run
     // against a phone and a run against a dongle are different measurements
     // and must not stack into one bar.
-    if (dongles.sink === PHONE_SINK) {
-      return { id: `phone:${which}`, label: `phone via ${which}`, simulated: false };
+    if (isPhone(dongles.sink)) {
+      // Named, so two phones are two series rather than one blurred average.
+      const phone = phones.get(dongles.sink);
+      const who = phone?.name || phone?.model || "phone";
+      return { id: `${dongles.sink}:${which}`, label: `${who} via ${which}`, simulated: false };
     }
     return { id: `usb:${which}`, label: `usb ${which}`, simulated: false };
   }
@@ -240,7 +252,7 @@ async function runInPage(options, onStage) {
 /// from a rotating resolvable private address that it will not disclose even
 /// to its own app, so the address is discovered by service and never
 /// configured.
-async function runAgainstPhone(options, centralUrl, legacyMasks, onStage, statsBase) {
+async function runAgainstPhone(options, centralUrl, legacyMasks, onStage, statsBase, name) {
   // Zero the phone's counters before a byte moves. This is the out-of-band
   // twin of a BEGIN on the control point, and the reason the link can carry
   // payload and nothing else.
@@ -259,7 +271,12 @@ async function runAgainstPhone(options, centralUrl, legacyMasks, onStage, statsB
   }
   let central = null;
   try {
-    central = WebBulkCentral.discovering(centralUrl, JSON.stringify(options), legacyMasks);
+    central = WebBulkCentral.discovering(
+      centralUrl,
+      JSON.stringify(options),
+      legacyMasks,
+      name || "",
+    );
   } catch (e) {
     return {
       report: {
@@ -848,17 +865,25 @@ export function mountData(root) {
   });
   const sinkStrip = createControllerStrip({
     value: { kind: "usb", device: "" },
-    extras: [{ value: PHONE_SINK, text: "phone — running SimBLE Sink" }],
+    extras: [],
     onChange: (value) => {
       dongles.sink = value.device;
       // Said at the moment of choosing, because a phone has a precondition a
       // dongle does not: the app has to be running on it.
       sinkStrip.setWhy(
-        value.device === PHONE_SINK
+        isPhone(value.device)
           ? "the phone counts what lands and serves it over HTTP — start SimBLE Sink on it first"
           : "the peripheral: it counts what lands",
       );
-      phoneStatsRow.hidden = value.device !== PHONE_SINK;
+      phoneStatsRow.hidden = !isPhone(value.device);
+      // Each phone has its own forwarded port, so choosing one sets where the
+      // counters come from. Typing over it stays possible for a phone the
+      // bridge cannot see.
+      const chosen = phones.get(value.device);
+      if (chosen) {
+        phoneStats.value = `http://127.0.0.1:${chosen.port}`;
+        localStorage.setItem(PHONE_STATS_KEY, phoneStats.value);
+      }
       return null;
     },
     why: "the peripheral: it counts what lands",
@@ -895,6 +920,31 @@ export function mountData(root) {
       const list = Array.isArray(devices) ? devices : [];
       centralStrip.setDongles(list);
       sinkStrip.setDongles(list);
+
+      // Phones come from the same bridge for the same reason dongles do: a
+      // page cannot run adb and cannot reach a phone directly, but it can
+      // read a list of forwarded ports.
+      phones.clear();
+      let found = [];
+      try {
+        const answer = await (await fetch(`${usbBridgeHttp()}/phones`)).json();
+        found = Array.isArray(answer.phones) ? answer.phones : [];
+      } catch (e) {
+        found = [];
+      }
+      const extras = found.map((phone) => {
+        const value = phoneValue(phone.serial);
+        phones.set(value, phone);
+        return {
+          value,
+          // Named by what it advertises, because that is what the scan
+          // matches on; the model is the human's handle on which desk it is.
+          text: phone.running
+            ? `${phone.name || phone.model} — SimBLE Sink on :${phone.port}`
+            : `${phone.model} — Sink not running`,
+        };
+      });
+      sinkStrip.setExtras(extras);
       if (!dongles.central && list[0]) {
         dongles.central = list[0].selector;
         centralStrip.set({ kind: "usb", device: dongles.central });
@@ -905,8 +955,8 @@ export function mountData(root) {
         dongles.sink = list[Math.min(1, list.length - 1)].selector;
         sinkStrip.set({ kind: "usb", device: dongles.sink });
       }
-      phoneStatsRow.hidden = dongles.sink !== PHONE_SINK;
-      if (dongles.sink === PHONE_SINK) {
+      phoneStatsRow.hidden = !isPhone(dongles.sink);
+      if (isPhone(dongles.sink)) {
         sinkStrip.setWhy(
           "the phone counts what lands and reports it back — start SimBLE Sink on it first",
         );
@@ -985,7 +1035,17 @@ export function mountData(root) {
         log: [],
       };
     }
-    if (dongles.sink === PHONE_SINK) {
+    if (isPhone(dongles.sink)) {
+      const phone = phones.get(dongles.sink);
+      if (phone && !phone.running) {
+        return {
+          report: {
+            phase: "failed",
+            failure: `SimBLE Sink is not running on ${phone.model} (${phone.serial})`,
+          },
+          log: [],
+        };
+      }
       return runAgainstPhone(
         // The link carries payload only: a FINISH/REPORT exchange costs air
         // time on the link under test and ends the measured transfer a round
@@ -995,6 +1055,7 @@ export function mountData(root) {
         true,
         onStage,
         phoneStats.value.trim().replace(/\/+$/, "") || PHONE_STATS_DEFAULT,
+        phone?.name ?? "",
       );
     }
     if (dongles.central === dongles.sink) {

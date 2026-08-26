@@ -482,6 +482,118 @@ fn devices_json() -> String {
     out
 }
 
+/// The phones adb can see, each with a local port forwarded to SimBLE Sink.
+///
+/// The page cannot run adb and cannot reach a phone directly — an access
+/// point that isolates clients refuses new connections while adb's own
+/// established one survives — so the bridge sets up a forward per phone and
+/// hands back the ports. That is the same reason it serves `/devices`: a page
+/// cannot discover a port, but it can read a list.
+///
+/// Probing each forward is what separates "a phone is plugged in" from "a
+/// phone is running the sink", and only the second is selectable.
+fn phones_json() -> String {
+    let adb = adb_path();
+    let listed = std::process::Command::new(&adb).arg("devices").arg("-l").output();
+    let Ok(listed) = listed else {
+        return "{\"phones\":[],\"error\":\"adb not found — put it on PATH or set ANDROID_HOME\"}"
+            .to_string();
+    };
+    let text = String::from_utf8_lossy(&listed.stdout);
+
+    let mut out = String::from("{\"phones\":[");
+    let mut first = true;
+    let mut seen: Vec<String> = Vec::new();
+    let mut index = 0usize;
+    for line in text
+        .lines()
+        .skip(1)
+        .filter(|l| l.contains("\tdevice") || l.contains(" device "))
+    {
+        let Some(serial) = line.split_whitespace().next() else {
+            continue;
+        };
+        // One phone can appear twice — a wifi transport and an mdns one are
+        // two adb entries for one radio. Offering both would let a caller
+        // choose "two phones" that are one, and then measure a scan against
+        // the phone it was not fetching counters from.
+        let identity = std::process::Command::new(&adb)
+            .args(["-s", serial, "shell", "getprop", "ro.serialno"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .unwrap_or_default();
+        if !identity.is_empty() {
+            if seen.contains(&identity) {
+                continue;
+            }
+            seen.push(identity);
+        }
+        // One port per phone, so two phones are never the same endpoint —
+        // which is the bug this whole list exists to prevent.
+        let port = 8099 + index as u16;
+        index += 1;
+        let _ = std::process::Command::new(&adb)
+            .args(["-s", serial, "forward", &format!("tcp:{port}"), "tcp:8099"])
+            .output();
+
+        let probe = probe_sink(port);
+        if !first {
+            out.push(',');
+        }
+        first = false;
+        let model = line
+            .split_whitespace()
+            .find_map(|f| f.strip_prefix("model:"))
+            .unwrap_or("phone");
+        out.push_str(&format!(
+            "{{\"serial\":\"{serial}\",\"model\":\"{model}\",\"port\":{port},              \"name\":\"{}\",\"running\":{}}}",
+            probe.as_deref().unwrap_or(""),
+            probe.is_some()
+        ));
+    }
+    out.push_str("]}");
+    out
+}
+
+/// Where adb is. A bridge started from a launcher or a login shell without
+/// the SDK on PATH still has to find it, so the usual install location is
+/// tried before giving up.
+fn adb_path() -> String {
+    if std::process::Command::new("adb").arg("version").output().is_ok() {
+        return "adb".to_string();
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    let candidates = [
+        std::env::var("ANDROID_HOME").ok().map(|h| format!("{h}/platform-tools/adb")),
+        Some(format!("{home}/Library/Android/sdk/platform-tools/adb")),
+        Some(format!("{home}/Android/Sdk/platform-tools/adb")),
+    ];
+    for candidate in candidates.into_iter().flatten() {
+        if std::path::Path::new(&candidate).exists() {
+            return candidate;
+        }
+    }
+    "adb".to_string()
+}
+
+/// Asks the sink on `port` what it advertises as. `None` if nothing answers.
+fn probe_sink(port: u16) -> Option<String> {
+    use std::io::{Read as _, Write as _};
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).ok()?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_millis(700)))
+        .ok()?;
+    write!(stream, "GET /stats HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").ok()?;
+    let mut body = String::new();
+    stream.read_to_string(&mut body).ok()?;
+    // One field out of a flat object, without taking a JSON dependency into
+    // a binary that has none.
+    let at = body.find("\"name\":\"")? + 8;
+    let rest = &body[at..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
 /// Serves one WebSocket client end-to-end: handshake, open the dongle, then
 /// shuttle HCI both ways through one shared channel until either side closes.
 fn serve(mut stream: TcpStream, fallback: &UsbSelector) -> Result<(), String> {
@@ -495,19 +607,18 @@ fn serve(mut stream: TcpStream, fallback: &UsbSelector) -> Result<(), String> {
         // why the bridge serves every dongle from one port rather than one
         // port each -- a page cannot discover a port, but it can read a list.
         Inbound::Request { method, target } => {
+            let known = target.starts_with("/devices") || target.starts_with("/phones");
             let body = if target.starts_with("/devices") {
                 devices_json()
+            } else if target.starts_with("/phones") {
+                phones_json()
             } else {
                 format!(
                     "{{\"error\":\"unknown path\",\"method\":{method:?},\"target\":{target:?},\
-                      \"try\":\"/devices\"}}"
+                      \"try\":\"/devices or /phones\"}}"
                 )
             };
-            let status = if target.starts_with("/devices") {
-                "200 OK"
-            } else {
-                "404 Not Found"
-            };
+            let status = if known { "200 OK" } else { "404 Not Found" };
             let response = format!(
                 "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
                  Access-Control-Allow-Origin: *\r\n\

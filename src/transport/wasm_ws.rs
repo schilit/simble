@@ -5922,6 +5922,46 @@ mod web {
         scanning: bool,
         give_up_at_ms: Option<f64>,
         began_ms: Option<f64>,
+        /// Which peer to accept, by advertised name. Empty means the first
+        /// one carrying the service.
+        ///
+        /// With two phones running the sink, the service alone is ambiguous:
+        /// the scan would take whichever advertised first while the counters
+        /// were fetched from whichever endpoint was configured, and those need
+        /// not be the same phone. The name is the only handle available —
+        /// Android advertises from a rotating private address it will not
+        /// disclose even to its own app.
+        name: String,
+        /// Addresses heard advertising the service, and the names their scan
+        /// responses carried.
+        ///
+        /// A legacy advertisement is 31 octets and a 128-bit service UUID
+        /// takes 16 of them, so the sink puts its name in the *scan response*
+        /// — a second report, with no service UUID in it. Neither report
+        /// alone identifies a named peer, and waiting for one carrying both
+        /// waits forever. They are correlated by address, which is stable for
+        /// as long as a scan lasts even when it is a rotating private one.
+        heard: Vec<(String, bool, Option<String>)>,
+    }
+
+    impl Discovery {
+        /// Folds one report in, and says whether that address now satisfies
+        /// both halves.
+        fn note(&mut self, address: &str, has_service: bool, name: Option<&str>) -> bool {
+            let entry = match self.heard.iter_mut().find(|(a, _, _)| a == address) {
+                Some(entry) => entry,
+                None => {
+                    self.heard.push((address.to_string(), false, None));
+                    self.heard.last_mut().expect("just pushed")
+                }
+            };
+            entry.1 |= has_service;
+            if let Some(name) = name {
+                entry.2 = Some(name.to_string());
+            }
+            let named = self.name.is_empty() || entry.2.as_deref() == Some(self.name.as_str());
+            entry.1 && named
+        }
     }
 
     #[wasm_bindgen]
@@ -5966,6 +6006,7 @@ mod web {
             url: &str,
             options_json: &str,
             legacy_masks: bool,
+            name: &str,
         ) -> Result<WebBulkCentral, JsValue> {
             install_panic_hook();
             let url = ws_url_with_wire_address(url);
@@ -5991,6 +6032,8 @@ mod web {
                     scanning: false,
                     give_up_at_ms: None,
                     began_ms: None,
+                    name: name.to_string(),
+                    heard: Vec::new(),
                 }),
                 scan_taken_ms: None,
                 failed: None,
@@ -6097,19 +6140,23 @@ mod web {
                     crate::device::throughput::BulkOptions::from_json(&d.options_json)
                         .timeout_ms;
                 d.give_up_at_ms = Some(now + patience);
-                self.log.push("scanning for a bulk sink".to_string());
+                self.log.push(if d.name.is_empty() {
+                    "scanning for a bulk sink".to_string()
+                } else {
+                    format!("scanning for {}", d.name)
+                });
             }
 
             let wanted = crate::device::throughput::bulk_uuid::SERVICE.to_string();
             let mut found: Option<String> = None;
             while let Some(packet) = self.channel.poll_controller_packet() {
                 for report in parse_scan_reports(&packet) {
-                    if report
+                    let has_service = report
                         .service_uuids
                         .iter()
-                        .any(|u| u.eq_ignore_ascii_case(&wanted))
-                    {
-                        found = Some(report.address);
+                        .any(|u| u.eq_ignore_ascii_case(&wanted));
+                    if d.note(&report.address, has_service, report.name.as_deref()) {
+                        found = Some(report.address.clone());
                     }
                 }
             }
@@ -6132,6 +6179,9 @@ mod web {
                 let took = d.began_ms.map(|began| now - began);
                 self.scan_taken_ms = took;
                 self.log.push(match took {
+                    Some(ms) if !d.name.is_empty() => {
+                        format!("found {} at {address} in {ms:.0} ms", d.name)
+                    }
                     Some(ms) => format!("found a sink at {address} in {ms:.0} ms"),
                     None => format!("found a sink at {address}"),
                 });
@@ -6139,12 +6189,21 @@ mod web {
             }
 
             if d.give_up_at_ms.is_some_and(|at| now > at) {
-                self.failed = Some(
+                self.failed = Some(if d.name.is_empty() {
                     "nothing advertising the bulk service — is SimBLE Sink running \
                      and in the foreground?"
-                        .to_string(),
-                );
-                return Ok(None);
+                        .to_string()
+                } else {
+                    format!(
+                        "no advertisement from {} carrying the bulk service — is SimBLE Sink \
+                         running and in the foreground on that phone?",
+                        d.name
+                    )
+                });
+                // Returning None here would fall through to starting the run,
+                // which then aimed at the placeholder address and reported a
+                // transfer to 00:00:00:00:00:00.
+                return Ok(Some(self.report_json()));
             }
 
             self.discover = Some(d);

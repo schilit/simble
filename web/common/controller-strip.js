@@ -36,7 +36,10 @@ const encode = (v) => v.device ?? "";
 // A phone is not a dongle we own, but it *is* an answer to this strip's one
 // question — which silicon this device rides. So it belongs in the same
 // select rather than in a control beside it.
-const decode = (text) => ({ kind: text === PHONE ? "phone" : "usb", device: text });
+const decode = (text) => ({
+  kind: text === PHONE || text.startsWith(`${PHONE}:`) ? "phone" : "usb",
+  device: text,
+});
 const PHONE = "phone";
 
 /**
@@ -75,6 +78,7 @@ export function createControllerStrip({
 
   const current = { ...value };
   let known = dongles;
+  let known_extras = extras;
 
   function renderOptions() {
     pick.innerHTML = "";
@@ -85,13 +89,13 @@ export function createControllerStrip({
       pick.append(option);
     };
     for (const d of known) add(d.selector, `${d.selector} — ${d.product}`);
-    for (const e of extras) add(e.value, e.text);
+    for (const e of known_extras) add(e.value, e.text);
     // A stored choice whose dongle is not (yet) listed still renders, so a
     // slow /devices answer cannot silently rewrite the choice.
     if (
       current.device
       && !known.some((d) => d.selector === current.device)
-      && !extras.some((e) => e.value === current.device)
+      && !known_extras.some((e) => e.value === current.device)
     ) {
       add(current.device, current.device);
     }
@@ -134,6 +138,12 @@ export function createControllerStrip({
     set,
     setDongles: (list) => {
       known = list;
+      renderOptions();
+    },
+    /// The non-dongle choices, which arrive asynchronously: the bridge has to
+    /// ask adb what phones exist before this strip can offer them.
+    setExtras: (list) => {
+      known_extras = list;
       renderOptions();
     },
     value: () => ({ ...current }),

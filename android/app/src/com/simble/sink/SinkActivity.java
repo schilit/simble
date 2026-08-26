@@ -88,6 +88,12 @@ public class SinkActivity extends Activity implements StatsServer.Stats {
     private Thread statsThread;
     private int mtu;
     private String peer = "";
+    /// The name this device advertises — `BluetoothAdapter.getName()`, which
+    /// is what lands in the scan response. It is the only handle a scanner has
+    /// on *which* phone answered: Android advertises from a rotating private
+    /// address and will not tell even its own app what that address is, so a
+    /// caller with two phones cannot tell them apart by address.
+    private String advertisedName = "";
 
     @Override
     protected void onCreate(Bundle saved) {
@@ -140,6 +146,7 @@ public class SinkActivity extends Activity implements StatsServer.Stats {
             return;
         }
 
+        advertisedName = adapter.getName() == null ? "" : adapter.getName();
         server = manager.openGattServer(this, gattCallback);
         if (server == null) {
             say("could not open a GATT server");
@@ -366,6 +373,8 @@ public class SinkActivity extends Activity implements StatsServer.Stats {
         out.append("\"last_byte_ms\":").append(lastByteMs).append(',');
         out.append("\"mtu\":").append(mtu).append(',');
         out.append("\"peer\":\"").append(peer).append("\",");
+        out.append("\"name\":\"").append(advertisedName.replace("\"", "")).append("\",");
+        out.append("\"model\":\"").append(android.os.Build.MODEL.replace("\"", "")).append("\",");
         out.append("\"advertising\":").append(advertising);
         out.append('}');
         return out.toString();
