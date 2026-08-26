@@ -1123,6 +1123,49 @@ const METHODS = [
     src: "scripting/client.rs",
     build: (_on, a) => `android::BluetoothGatt(${JSON.stringify(a.name)})` },
 
+  { group: "client", kind: "ctor", mode: "doc", sig: "android::BluetoothLeScanner()",
+    ret: "BluetoothLeScanner",
+    desc: "A scanner, so a script can find a peer by what it advertises instead of by an address.",
+    prose: "The primitive that lets a script meet a peer it was never told about. A phone advertises " +
+      "from a resolvable private address that rotates and that Android will not disclose even to its " +
+      "own app &mdash; there is no address to write into a script, only a service to look for. Keep it " +
+      "in a top-level variable beside the <code>BluetoothGatt</code>; the host queues the scan bring-up " +
+      "once <code>start_scan</code> has been called, and reports arrive at " +
+      "<code>on_scan_result</code>.",
+    params: [],
+    src: "scripting/client.rs" },
+
+  { group: "client", kind: "ctor", mode: "doc", sig: "android::ScanFilter(uuid)", ret: "ScanFilter",
+    desc: "Report only advertisements carrying this service UUID.",
+    prose: "Android's <code>ScanFilter.Builder().setServiceUuid(&hellip;).build()</code>, collapsed to a " +
+      "constructor because a script would call the builder once and build immediately. " +
+      "<code>start_scan()</code> with no filter reports everything, as on Android.",
+    params: [{ key: "uuid", label: "uuid", type: "Uuid",
+      doc: "The service an advertisement must carry, e.g. <code>uuid::of(\"f0bb0001-1234-5678-90ab-cdef01234567\")</code>." }],
+    src: "scripting/client.rs" },
+
+  { group: "client", kind: "method", mode: "doc", sig: "scanner.start_scan(filter)", ret: "()",
+    desc: "Start scanning. The filter is optional, as on Android.",
+    prose: "Active scanning, so a peer's scan-response name is collected too &mdash; a passive scan never " +
+      "solicits it. The bring-up is queued once, on the next pass, and only for a script that actually " +
+      "asked to scan.",
+    receiver: "scanner", receiverName: "scanner",
+    params: [{ key: "filter", label: "filter", type: "ScanFilter",
+      doc: "What to report. Omit the argument to report every advertisement." }],
+    src: "scripting/client.rs" },
+
+  { group: "client", kind: "method", mode: "doc", sig: "scanner.stop_scan()", ret: "()",
+    desc: "Stop reporting advertisements.",
+    prose: "Call it from <code>on_scan_result</code> once the peer is found, or the handler keeps firing " +
+      "for every repeat advertisement.",
+    receiver: "scanner", receiverName: "scanner", params: [],
+    src: "scripting/client.rs" },
+
+  { group: "client", kind: "prop", mode: "doc", sig: "scanner.scanning", ret: "bool",
+    desc: "Whether the scan is still running.",
+    receiver: "scanner", receiverName: "scanner", params: [],
+    src: "scripting/client.rs" },
+
   { group: "client", kind: "method", mode: "ref", sig: "client.connect(address)", ret: "()",
     desc: "Bring the controller up and connect to a peer by address.",
     prose: "Queues the whole bring-up — reset, scan, connect — as HCI packets for the host to send. " +
@@ -1709,6 +1752,22 @@ const METHODS = [
         doc: "The event map — see Event maps for its fields and the kinds a peripheral raises." },
     ],
     src: "transport/wasm_ws.rs · scripting/bindings.rs" },
+
+  { group: "callbacks", kind: "callback", mode: "doc", sig: "fn on_scan_result(client, result)",
+    ret: "ignored",
+    desc: "Central. An advertisement matched the scan filter.",
+    prose: "Fires for every matching advertisement, including repeats of the same device, so guard the " +
+      "first one &mdash; connect twice and the second attempt fights the first. The usual body is " +
+      "<code>client.connect(result.address)</code>, which is how a script aims itself at a peer whose " +
+      "address it could not have known.",
+    params: [
+      { key: "client", label: "client", type: "BluetoothGatt", doc: "The client, ready to be aimed." },
+      { key: "result", label: "result", type: "map",
+        doc: "<code>address</code>, <code>address_type</code>, <code>rssi</code>, " +
+          "<code>connectable</code>, <code>name</code> (<code>()</code> when the advertisement carried " +
+          "none) and <code>service_uuids</code>." },
+    ],
+    src: "scripting/client.rs" },
 
   { group: "callbacks", kind: "callback", mode: "doc",
     sig: "fn on_connection_state_change(client, connected)", ret: "ignored",

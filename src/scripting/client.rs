@@ -45,6 +45,11 @@ use rhai::{AST, Array, Blob, CallFnOptions, Dynamic, Engine, EvalAltResult, Map,
 
 use crate::device::central::{CentralEvent, LeCentral};
 use crate::scripting::bindings::{dynamic_to_bytes, runtime_error};
+
+/// LE Set Scan Parameters (Vol 4, Part E, Section 7.8.10).
+const LE_SET_SCAN_PARAMETERS: [u8; 2] = [0x0B, 0x20];
+/// LE Set Scan Enable (Section 7.8.11).
+const LE_SET_SCAN_ENABLE: [u8; 2] = [0x0C, 0x20];
 use crate::types::{Address, Uuid};
 
 /// Script-side handle to a GATT client. Rhai registered types must be
@@ -144,6 +149,64 @@ impl ScriptGattClient {
     }
 }
 
+/// A scan filter, in Android's shape: `ScanFilter.Builder().setServiceUuid()`
+/// flattened to a constructor, because a script has no use for a builder it
+/// would call once.
+#[derive(Debug, Clone)]
+pub struct ScriptScanFilter {
+    /// The service an advertisement must carry to be reported.
+    pub service_uuid: Option<Uuid>,
+}
+
+/// Android's `BluetoothLeScanner`: find peers by what they advertise, rather
+/// than by an address the script was told in advance.
+///
+/// This is the primitive that makes a script able to meet a peer it does not
+/// already know. A phone advertises from a resolvable private address that
+/// rotates and that Android will not disclose even to its own app, so there
+/// is no address to write into a script — only a service to look for.
+#[derive(Debug, Clone, Default)]
+pub struct ScriptScanner {
+    inner: Rc<RefCell<ScannerInner>>,
+}
+
+#[derive(Debug, Default)]
+struct ScannerInner {
+    scanning: bool,
+    filter: Option<ScriptScanFilter>,
+    /// Set once bring-up has been queued, so it is queued exactly once.
+    started: bool,
+}
+
+impl ScriptScanner {
+    /// Whether the script asked for a scan that has not been queued yet.
+    pub fn needs_start(&self) -> bool {
+        let inner = self.inner.borrow();
+        inner.scanning && !inner.started
+    }
+
+    /// Marks the bring-up as queued.
+    pub fn mark_started(&self) {
+        self.inner.borrow_mut().started = true;
+    }
+
+    /// Whether the scan is still running.
+    pub fn scanning(&self) -> bool {
+        self.inner.borrow().scanning
+    }
+
+    /// Whether `uuids` satisfies the filter the script set.
+    pub fn matches(&self, uuids: &[String]) -> bool {
+        match self.inner.borrow().filter.as_ref().and_then(|f| f.service_uuid) {
+            None => true,
+            Some(wanted) => {
+                let wanted = wanted.to_string();
+                uuids.iter().any(|u| u.eq_ignore_ascii_case(&wanted))
+            }
+        }
+    }
+}
+
 /// Registers the client type, its methods and the `android::BluetoothGatt`
 /// constructor. Called from [`crate::scripting::new_engine`], so every
 /// surface — the playground, `run_test`, MCP, the pages — sees the same
@@ -184,6 +247,26 @@ pub fn register(engine: &mut Engine, android: &mut Module) {
             },
         )
         .register_fn("disconnect", ScriptGattClient::disconnect)
+        .register_type_with_name::<ScriptScanFilter>("ScanFilter")
+        .register_type_with_name::<ScriptScanner>("BluetoothLeScanner")
+        .register_get("scanning", |s: &mut ScriptScanner| s.scanning())
+        .register_fn(
+            "start_scan",
+            |scanner: &mut ScriptScanner, filter: ScriptScanFilter| {
+                let mut inner = scanner.inner.borrow_mut();
+                inner.filter = Some(filter);
+                inner.scanning = true;
+            },
+        )
+        // Android allows a scan with no filters at all; so does this.
+        .register_fn("start_scan", |scanner: &mut ScriptScanner| {
+            let mut inner = scanner.inner.borrow_mut();
+            inner.filter = None;
+            inner.scanning = true;
+        })
+        .register_fn("stop_scan", |scanner: &mut ScriptScanner| {
+            scanner.inner.borrow_mut().scanning = false;
+        })
         .register_fn("read", |client: &mut ScriptGattClient, uuid: Uuid| {
             client.with_central(|c| c.queue_read(uuid));
         })
@@ -279,6 +362,20 @@ pub fn register(engine: &mut Engine, android: &mut Module) {
             Ok(ScriptGattClient::create(name))
         },
     );
+    android.set_native_fn(
+        "BluetoothLeScanner",
+        || -> Result<ScriptScanner, Box<EvalAltResult>> { Ok(ScriptScanner::default()) },
+    );
+    // Android's builder collapsed to a constructor: a script would call
+    // `setServiceUuid` once and `build` immediately.
+    android.set_native_fn(
+        "ScanFilter",
+        |uuid: Uuid| -> Result<ScriptScanFilter, Box<EvalAltResult>> {
+            Ok(ScriptScanFilter {
+                service_uuid: Some(uuid),
+            })
+        },
+    );
 }
 
 /// The script functions a central script may define. Looked up once, at
@@ -293,6 +390,7 @@ struct Handlers {
     characteristic_changed: bool,
     subscribed: bool,
     mtu_changed: bool,
+    scan_result: bool,
     error: bool,
     event: bool,
 }
@@ -312,6 +410,7 @@ impl Handlers {
             characteristic_changed: has("on_characteristic_changed", 3),
             subscribed: has("on_subscribed", 2),
             mtu_changed: has("on_mtu_changed", 2),
+            scan_result: has("on_scan_result", 2),
             error: has("on_error", 2),
             event: has("on_event", 2),
         }
@@ -340,6 +439,10 @@ pub struct ScriptedCentral {
     /// HOGP-shaped callbacks it owes the script are derived from the same
     /// [`CentralEvent`] stream by the proxy itself.
     hid: Option<crate::scripting::hid::ScriptHidHost>,
+    /// The scanner the script built, if it built one. A script that scans is
+    /// looking for a peer it cannot name, so this replaces the address a host
+    /// would otherwise have to supply.
+    scanner: Option<ScriptScanner>,
     /// Per-client state bound as `this` for every handler — script functions
     /// are pure and cannot see the calling scope, so this map is the only
     /// thing a client can remember between calls.
@@ -389,6 +492,10 @@ impl ScriptedCentral {
                 .to_string()
         })?;
 
+        let scanner = scope
+            .iter()
+            .find_map(|(_, _, value)| value.try_cast::<ScriptScanner>());
+
         let handlers = Handlers::detect(&ast);
         Ok(Self {
             engine,
@@ -397,6 +504,7 @@ impl ScriptedCentral {
             client,
             assistant,
             hid,
+            scanner,
             state: Dynamic::from_map(Map::new()),
             handlers,
             last_error: None,
@@ -478,7 +586,8 @@ impl ScriptedCentral {
 
     /// Drains the H4 packets the client has queued for the controller.
     pub fn take_outbox(&mut self) -> Vec<Vec<u8>> {
-        let mut out = self.client.take_outbox();
+        let mut out = self.scan_bring_up();
+        out.extend(self.client.take_outbox());
         out.extend(self.client.with_central(LeCentral::pump));
         out
     }
@@ -488,9 +597,74 @@ impl ScriptedCentral {
     /// subscribes from `on_services_discovered` has its subscription on the
     /// wire in the same pass, rather than a tick later.
     pub fn on_packet(&mut self, packet: &[u8]) -> Vec<Vec<u8>> {
+        self.dispatch_scan_reports(packet);
         let mut out = self.client.with_central(|c| c.on_packet(packet));
         self.dispatch_events();
         out.extend(self.take_outbox());
+        out
+    }
+
+    /// Turns advertising reports into `on_scan_result(client, result)`.
+    ///
+    /// Read before [`LeCentral`] sees the packet, and never instead of it: a
+    /// central waiting to hear its target needs the same reports.
+    fn dispatch_scan_reports(&mut self, packet: &[u8]) {
+        let Some(scanner) = self.scanner.clone() else {
+            return;
+        };
+        if !scanner.scanning() || !self.handlers.scan_result {
+            return;
+        }
+        for report in crate::transport::wasm_ws::parse_scan_reports(packet) {
+            if !scanner.matches(&report.service_uuids) {
+                continue;
+            }
+            let mut map = Map::new();
+            map.insert("address".into(), Dynamic::from(report.address.clone()));
+            map.insert(
+                "address_type".into(),
+                Dynamic::from(report.address_type.to_string()),
+            );
+            map.insert("rssi".into(), Dynamic::from(i64::from(report.rssi)));
+            map.insert("connectable".into(), Dynamic::from(report.connectable));
+            map.insert(
+                "name".into(),
+                report.name.clone().map_or(Dynamic::UNIT, Dynamic::from),
+            );
+            map.insert(
+                "service_uuids".into(),
+                Dynamic::from(
+                    report
+                        .service_uuids
+                        .iter()
+                        .map(|u| Dynamic::from(u.clone()))
+                        .collect::<Array>(),
+                ),
+            );
+            self.call("on_scan_result", (Dynamic::from_map(map),));
+        }
+    }
+
+    /// The HCI a scanning script needs before any report can arrive.
+    ///
+    /// Queued once, and only for a script that actually asked to scan, so a
+    /// client script that names its peer is unaffected.
+    fn scan_bring_up(&mut self) -> Vec<Vec<u8>> {
+        let Some(scanner) = self.scanner.clone() else {
+            return Vec::new();
+        };
+        if !scanner.needs_start() {
+            return Vec::new();
+        }
+        scanner.mark_started();
+        let mut out = crate::device::host::init_commands();
+        // Active scanning, so a peer's scan-response name is collected too;
+        // a passive scan never solicits it.
+        out.push(crate::device::host::command(
+            LE_SET_SCAN_PARAMETERS,
+            &[0x01, 0x10, 0x00, 0x10, 0x00, 0x00, 0x00],
+        ));
+        out.push(crate::device::host::command(LE_SET_SCAN_ENABLE, &[0x01, 0x00]));
         out
     }
 

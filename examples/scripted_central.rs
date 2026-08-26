@@ -44,12 +44,21 @@ fn main() -> std::process::ExitCode {
             }
         },
     };
-    let target: Address = match args.get(1).map(|a| a.parse()) {
-        Some(Ok(address)) => address,
-        _ => {
-            eprintln!("second argument must be the peer address, e.g. F0:F1:F2:F3:F4:D2");
-            return std::process::ExitCode::from(2);
-        }
+    // `-` means the script finds its own peer. A scanning script is aimed by
+    // what it sees advertised, and an address supplied here would override
+    // the very thing it went looking for.
+    let target: Option<Address> = match args.get(1).map(String::as_str) {
+        None | Some("-") => None,
+        Some(text) => match text.parse() {
+            Ok(address) => Some(address),
+            Err(_) => {
+                eprintln!(
+                    "second argument must be the peer address (e.g. F0:F1:F2:F3:F4:D2), \
+                     or `-` for a script that scans for its own"
+                );
+                return std::process::ExitCode::from(2);
+            }
+        },
     };
     let seconds: f64 = args.get(2).and_then(|a| a.parse().ok()).unwrap_or(15.0);
     // The central's own identity on netsim. netsim reads the URL's address
@@ -66,7 +75,9 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
-    central.set_target(target);
+    if let Some(target) = target {
+        central.set_target(target);
+    }
 
     // netsim unless `$SIMBLE_HCI` says otherwise, so every existing
     // invocation is unchanged; `tcp:HOST:PORT` reaches a Bumble-hosted

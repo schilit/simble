@@ -420,3 +420,59 @@ fn every_catalog_central_connects_to_the_peripheral_it_was_written_for() {
         );
     }
 }
+
+/// A script can find its own peer, without being told an address.
+///
+/// This is the case an address cannot cover. A phone advertises from a
+/// resolvable private address that rotates and that Android will not disclose
+/// even to its own app, so a script that meets one has nothing to write down —
+/// only a service to look for. Proven against a Pixel 9 Pro before it was
+/// written here; this is the part that can run without one.
+///
+/// Both endpoints are simble's, so what this proves is the scripting surface:
+/// that `start_scan` reaches the controller as scan bring-up, that
+/// advertising reports become `on_scan_result` with a map the script can read,
+/// and that connecting from inside that handler aims the client.
+#[test]
+fn a_scripted_central_finds_its_own_peer_by_scanning() {
+    let central = r#"
+let client = android::BluetoothGatt("Finder");
+let scanner = android::BluetoothLeScanner();
+scanner.start_scan();
+
+fn on_scan_result(client, result) {
+    // Repeats of the same advertisement keep arriving; connecting twice would
+    // have the second attempt fight the first.
+    if this.aimed == () {
+        this.aimed = true;
+        assert(result.address != "", "a report carries an address");
+        client.emit("saw", result.address);
+        client.connect(result.address);
+    }
+}
+fn on_services_discovered(client) {
+    client.emit("services", client.services().len());
+}
+"#;
+    let (mut scene, _, c) = run(HEART_RATE_PERIPHERAL, central, 80);
+    assert_eq!(
+        scene.scripted_central(c).and_then(|c| c.failure()),
+        None,
+        "no assertion failed"
+    );
+    let messages = emitted(&mut scene, c);
+    let kinds: Vec<&str> = messages.iter().map(|(kind, _)| kind.as_str()).collect();
+    assert_eq!(
+        kinds.first(),
+        Some(&"saw"),
+        "the scan reported before anything else happened, got {kinds:?}"
+    );
+    assert_eq!(
+        messages[0].1, "AA:BB:CC:00:00:01",
+        "the address came from the advertisement, not from the script"
+    );
+    assert!(
+        kinds.contains(&"services"),
+        "connecting from on_scan_result reached discovery, got {kinds:?}"
+    );
+}
