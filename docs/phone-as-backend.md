@@ -157,7 +157,41 @@ MCP already speaks JSON-RPC over stdio and WebSocket (`simble mcp
 --ws-server`), so the device-side server is that handler behind a third
 transport rather than a new interface.
 
-## 7. What it opens: a ladder of fidelity
+## 7. The first milestone: `toast`
+
+Before any radio, the first verb is `toast` — show a message on the phone's
+screen.
+
+It is the right opening move precisely because it has no Bluetooth in it. A
+toast exercises the whole chain end to end — `adb forward` → the device-side
+server → JSON-RPC dispatch → JNI → the Kotlin shim → an Android UI call — and
+nothing else. If a toast fired from this machine appears on a phone across the
+room, everything structural is finished and what remains is more verbs. If it
+does not, the failure is unambiguously in the transport or the app, not in a
+radio, which is a distinction that cost days elsewhere in this project.
+
+It also answers a question a shelf of identical phones raises immediately:
+*which one is running my script?* A device that can say so is a device you can
+keep track of.
+
+Two implementation notes: `Toast` needs a `Context` and must be shown on the
+main looper, so it belongs in the Kotlin shim rather than raw JNI; and
+Android 11+ restricts *custom* toast views from the background, while plain
+text toasts still show — which is all this needs.
+
+**And there is a version that works today, with no app at all**, which is
+worth keeping as both a setup tool and a fallback. It runs as the `shell`
+user, so it works even when the app is wedged:
+
+```sh
+adb -s <serial> shell cmd notification post -S bigtext -t 'SimBLE' tag '<message>'
+```
+
+Verified against the Pixel 9 Pro: the notification appears. Use it to label
+phones as they are added to the fleet, and as the smoke test that a newly
+paired device is reachable before anything else is attempted.
+
+## 8. What it opens: a ladder of fidelity
 
 The phone completes something the other backends only gesture at. One
 artifact — the script — climbs every rung, and each rung costs more and
@@ -188,7 +222,7 @@ the wrong address, and an ISO stream with no flow control — were exactly this
 shape: correct in simulation, wrong on silicon. They took days to find by
 hand. They would each have been one rung of this ladder.
 
-## 8. What is not settled
+## 9. What is not settled
 
 - **Whether the whole scripting surface can be implemented over the Android
   API.** GATT maps closely (the classes and every `PROPERTY_*` / `PERMISSION_*`
@@ -199,4 +233,12 @@ hand. They would each have been one rung of this ladder.
   much of the catalog is portable, and has not been done.
 - **One radio, one device.** A phone is one controller, so a phone backend has
   the dongle's constraint: peripheral or central, not both. Two-ended tests
-  need two backends.
+  need two backends — which a fleet of spare phones supplies naturally, and
+  more usefully than dongles do: two phones are two *independent Android
+  stacks*, where two dongles are two radios under one host stack of ours.
+- **What the fleet actually spans.** Old phones are more interesting than new
+  ones here, because a device that works across Bluetooth 4.0, 4.2, 5.0 and
+  5.3 is a compatibility claim rather than a data point. The floor is API 26
+  or so for a headless foreground service; the runtime permission model
+  changed at 12, and LE Audio needs 13+. Nobody has enumerated the versions in
+  hand, so the matrix is unwritten.
