@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Copyright 2026 Bill Schilit — SPDX-License-Identifier: Apache-2.0 -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.simble.sink">
+
+    <!-- Advertise and serve only. We never scan, which is what keeps
+         ACCESS_FINE_LOCATION off this manifest: a scanning app must ask for
+         location, a peripheral need not. -->
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <uses-feature
+        android:name="android.hardware.bluetooth_le"
+        android:required="true" />
+
+    <application
+        android:label="SimBLE Sink"
+        android:allowBackup="false">
+        <activity
+            android:name=".SinkActivity"
+            android:exported="true"
+            android:label="SimBLE Sink">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

@@ -35,3 +35,7 @@
 
 # The Android crate is outside the workspace and has its own target dir.
 android/rust/target/
+
+# SimBLE Sink build output and its throwaway signing key.
+android/app/build/
+android/app/debug.keystore
