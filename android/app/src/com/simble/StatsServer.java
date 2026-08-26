@@ -1,7 +1,7 @@
 // Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
-package com.simble.sink;
+package com.simble;
 
 import android.util.Log;
 
@@ -36,7 +36,7 @@ import java.util.Enumeration;
  */
 final class StatsServer implements Runnable {
 
-    private static final String TAG = "SimbleSink";
+    private static final String TAG = "SimbleAndroid";
     static final int PORT = 8099;
 
     /** What the activity knows; read on the server thread. */

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Copyright 2026 Bill Schilit — SPDX-License-Identifier: Apache-2.0 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.simble.sink">
+    package="com.simble">
 
     <!-- Advertise and serve only. We never scan, which is what keeps
          ACCESS_FINE_LOCATION off this manifest: a scanning app must ask for
@@ -20,12 +20,12 @@
         android:required="true" />
 
     <application
-        android:label="SimBLE Sink"
+        android:label="SimBLE Android"
         android:allowBackup="false">
         <activity
-            android:name=".SinkActivity"
+            android:name=".SimbleActivity"
             android:exported="true"
-            android:label="SimBLE Sink">
+            android:label="SimBLE Android">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

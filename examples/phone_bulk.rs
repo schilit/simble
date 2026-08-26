@@ -3,7 +3,7 @@
 
 //! The bulk-transfer benchmark against a real phone.
 //!
-//! A dongle is the central and does the writing; the phone runs SimBLE Sink
+//! A dongle is the central and does the writing; the phone runs SimBLE Android
 //! (`android/app/`) and counts what lands. That direction is the interesting
 //! one: it puts Android's real host stack and a real phone controller on the
 //! receiving end, which is where the bugs that only real silicon shows have
@@ -18,7 +18,7 @@
 //! point is a broken link could not deliver its result over it at all.
 //!
 //! So the run sets `use_control_point: false` and the link carries payload
-//! and nothing else. SimBLE Sink serves its counters on port 8099, and this
+//! and nothing else. SimBLE Android serves its counters on port 8099, and this
 //! reads them before and after. The phone's `duration_ms` is measured
 //! entirely on the phone's own clock; a *duration* needs no agreement about
 //! epochs, which is what makes it quotable here.
@@ -60,7 +60,7 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(65536);
 
-    // Where SimBLE Sink is serving. `adb forward tcp:8099 tcp:8099` makes the
+    // Where SimBLE Android is serving. `adb forward tcp:8099 tcp:8099` makes the
     // default work over USB or wifi adb without knowing the phone's address.
     let stats_host = std::env::var("SIMBLE_SINK_HTTP")
         .unwrap_or_else(|_| "127.0.0.1:8099".to_string());
@@ -80,8 +80,8 @@ fn main() {
     else {
         eprintln!(
             "no peer advertising the bulk service.\n\
-             Is SimBLE Sink running and in the foreground?\n\
-             adb shell am start -n com.simble.sink/.SinkActivity"
+             Is SimBLE Android running and in the foreground?\n\
+             adb shell am start -n com.simble/.SimbleActivity"
         );
         std::process::exit(1);
     };
@@ -101,7 +101,7 @@ fn main() {
         Ok(body) => println!("sink reset: {body}"),
         Err(e) => {
             eprintln!(
-                "could not reach SimBLE Sink at {stats_host}: {e}\n\
+                "could not reach SimBLE Android at {stats_host}: {e}\n\
                  try: adb forward tcp:8099 tcp:8099"
             );
             std::process::exit(1);

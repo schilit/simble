@@ -164,7 +164,7 @@ pub struct BulkOptions {
     ///
     /// A caller that turns this off is expected to collect the peer's
     /// counters by some other path and hand them to [`BulkCentral::note_server`]
-    /// — over HTTP, for a phone running SimBLE Sink.
+    /// — over HTTP, for a phone running SimBLE Android.
     pub use_control_point: bool,
 }
 

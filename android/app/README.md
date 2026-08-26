@@ -1,4 +1,4 @@
-# SimBLE Sink
+# SimBLE Android
 
 The peripheral half of the bulk-transfer benchmark, on a real phone. A dongle
 central writes; this counts what lands and reports the count back over the
@@ -16,7 +16,7 @@ network** — the app is one Java file, and Gradle would add a wrapper
 download, a daemon and a dependency graph to a build that is four commands.
 
 ```sh
-./build.sh            # -> build/simble-sink.apk
+./build.sh            # -> build/simble-android.apk
 ./build.sh install    # also installs, grants permissions, launches
 ```
 

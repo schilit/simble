@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Copyright 2026 Bill Schilit — SPDX-License-Identifier: Apache-2.0
 #
-# Builds SimBLE Sink into an installable APK using only the Android SDK build
+# Builds SimBLE Android into an installable APK using only the Android SDK build
 # tools and a JDK -- no Gradle, no Kotlin compiler, no network.
 #
 # That is a deliberate choice for this app and not a general position. The
@@ -23,7 +23,7 @@ MIN_SDK=31   # BLUETOOTH_ADVERTISE and BLUETOOTH_CONNECT are API 31+
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 out="$here/build"
-pkg=com.simble.sink
+pkg=com.simble
 
 for tool in aapt2 d8 zipalign apksigner; do
     [ -x "$BUILD_TOOLS/$tool" ] || { echo "missing $tool in $BUILD_TOOLS" >&2; exit 1; }
@@ -72,17 +72,41 @@ echo "==> assembling"
 "$BUILD_TOOLS/zipalign" -f 4 "$out/base.apk" "$out/aligned.apk"
 "$BUILD_TOOLS/apksigner" sign \
     --ks "$keystore" --ks-pass pass:android --key-pass pass:android \
-    --out "$out/simble-sink.apk" "$out/aligned.apk"
+    --out "$out/simble-android.apk" "$out/aligned.apk"
 
-echo "built $out/simble-sink.apk"
+echo "built $out/simble-android.apk"
 
 if [ "${1:-}" = "install" ]; then
+    # A shell without the SDK on PATH still has to find adb, and one phone can
+    # show up twice — a wifi transport and an mdns one are two adb devices and
+    # one radio, which is enough for adb to refuse to guess.
+    ADB="$(command -v adb || true)"
+    for candidate in "${ANDROID_HOME:-}/platform-tools/adb" \
+                     "$HOME/Library/Android/sdk/platform-tools/adb" \
+                     "$HOME/Android/Sdk/platform-tools/adb"; do
+        [ -n "$ADB" ] && break
+        [ -x "$candidate" ] && ADB="$candidate"
+    done
+    if [ -z "$ADB" ]; then
+        echo "adb not found — put it on PATH or set ANDROID_HOME" >&2
+        exit 1
+    fi
+    if [ -z "${ANDROID_SERIAL:-}" ] \
+       && [ "$("$ADB" devices | grep -c "device$")" -gt 1 ]; then
+        echo "more than one device; set ANDROID_SERIAL to one of:" >&2
+        "$ADB" devices | grep "device$" >&2
+        exit 1
+    fi
     echo "==> installing"
-    adb install -r "$out/simble-sink.apk"
+    # A renamed package is a *different* app to Android. Leaving the old one
+    # installed means two icons and two advertisers on the same service UUID,
+    # which a scan filtering by name cannot tell apart.
+    "$ADB" uninstall com.simble.sink >/dev/null 2>&1 || true
+    "$ADB" install -r "$out/simble-android.apk"
     # Runtime permissions, granted without touching the screen. Without these
     # the app launches and immediately reports that it cannot advertise.
-    adb shell pm grant $pkg android.permission.BLUETOOTH_ADVERTISE
-    adb shell pm grant $pkg android.permission.BLUETOOTH_CONNECT
+    "$ADB" shell pm grant $pkg android.permission.BLUETOOTH_ADVERTISE
+    "$ADB" shell pm grant $pkg android.permission.BLUETOOTH_CONNECT
     echo "==> launching"
-    adb shell am start -n "$pkg/.SinkActivity"
+    "$ADB" shell am start -n "$pkg/.SimbleActivity"
 fi

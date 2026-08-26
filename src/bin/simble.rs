@@ -482,7 +482,7 @@ fn devices_json() -> String {
     out
 }
 
-/// The phones adb can see, each with a local port forwarded to SimBLE Sink.
+/// The phones adb can see, each with a local port forwarded to SimBLE Android.
 ///
 /// The page cannot run adb and cannot reach a phone directly — an access
 /// point that isolates clients refuses new connections while adb's own
@@ -546,7 +546,7 @@ fn phones_json() -> String {
             .find_map(|f| f.strip_prefix("model:"))
             .unwrap_or("phone");
         out.push_str(&format!(
-            "{{\"serial\":\"{serial}\",\"model\":\"{model}\",\"port\":{port},              \"name\":\"{}\",\"running\":{}}}",
+            "{{\"serial\":\"{serial}\",\"model\":\"{model}\",\"port\":{port},\"name\":\"{}\",\"running\":{}}}",
             probe.as_deref().unwrap_or(""),
             probe.is_some()
         ));

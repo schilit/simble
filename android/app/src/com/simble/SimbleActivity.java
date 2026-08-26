@@ -1,7 +1,7 @@
 // Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
-package com.simble.sink;
+package com.simble;
 
 import android.Manifest;
 import android.app.Activity;
@@ -47,9 +47,9 @@ import java.util.UUID;
  * transfer, which is the whole point of a first phone measurement. A visible
  * counter is also the fastest way to see a run stall.
  */
-public class SinkActivity extends Activity implements StatsServer.Stats {
+public class SimbleActivity extends Activity implements StatsServer.Stats {
 
-    private static final String TAG = "SimbleSink";
+    private static final String TAG = "SimbleAndroid";
 
     /** Bulk Transfer Service — matches {@code bulk_uuid::SERVICE} in Rust. */
     private static final UUID SERVICE =
@@ -110,8 +110,8 @@ public class SinkActivity extends Activity implements StatsServer.Stats {
         runOnUiThread(() -> endpoint.setText("http://" + StatsServer.address() + "/stats"));
 
         // Granted out of band in practice:
-        //   adb shell pm grant com.simble.sink android.permission.BLUETOOTH_ADVERTISE
-        //   adb shell pm grant com.simble.sink android.permission.BLUETOOTH_CONNECT
+        //   adb shell pm grant com.simble android.permission.BLUETOOTH_ADVERTISE
+        //   adb shell pm grant com.simble android.permission.BLUETOOTH_CONNECT
         // Asking here too keeps the app usable when launched by hand.
         String[] needed = {
             Manifest.permission.BLUETOOTH_ADVERTISE,
@@ -233,7 +233,7 @@ public class SinkActivity extends Activity implements StatsServer.Stats {
 
         @Override
         public void onMtuChanged(BluetoothDevice device, int mtu) {
-            SinkActivity.this.mtu = mtu;
+            SimbleActivity.this.mtu = mtu;
             Log.i(TAG, "MTU " + mtu);
             say("connected, MTU " + mtu);
         }
@@ -406,7 +406,7 @@ public class SinkActivity extends Activity implements StatsServer.Stats {
         root.setPadding(48, 48, 48, 48);
 
         TextView title = new TextView(this);
-        title.setText("SimBLE Sink");
+        title.setText("SimBLE Android");
         title.setTextSize(28);
         title.setGravity(Gravity.CENTER);
 

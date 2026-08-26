@@ -6190,12 +6190,12 @@ mod web {
 
             if d.give_up_at_ms.is_some_and(|at| now > at) {
                 self.failed = Some(if d.name.is_empty() {
-                    "nothing advertising the bulk service — is SimBLE Sink running \
+                    "nothing advertising the bulk service — is SimBLE Android running \
                      and in the foreground?"
                         .to_string()
                 } else {
                     format!(
-                        "no advertisement from {} carrying the bulk service — is SimBLE Sink \
+                        "no advertisement from {} carrying the bulk service — is SimBLE Android \
                          running and in the foreground on that phone?",
                         d.name
                     )

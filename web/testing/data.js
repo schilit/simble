@@ -77,7 +77,7 @@ const MAX_RUNS = 200;
 // about the measurement depends on them, and an address field is a knob for
 // its own sake.
 const SINK_ADDR = "CC:1E:57:00:00:0B";
-/// The sink strip's value when the peripheral is a phone running SimBLE Sink
+/// The sink strip's value when the peripheral is a phone running SimBLE Android
 /// rather than a dongle of ours.
 const PHONE_SINK = "phone";
 /// A sink strip value naming one phone: `phone:<adb serial>`. Every phone is
@@ -89,7 +89,7 @@ const phoneValue = (serial) => `${PHONE_SINK}:${serial}`;
 const isPhone = (value) => value === PHONE_SINK || value.startsWith(`${PHONE_SINK}:`);
 /// What the bridge told us about each phone, keyed by strip value.
 const phones = new Map();
-/// Where SimBLE Sink serves its counters. `adb forward tcp:8099 tcp:8099`
+/// Where SimBLE Android serves its counters. `adb forward tcp:8099 tcp:8099`
 /// makes this work over USB or wifi adb without knowing the phone's address;
 /// a phone reachable directly can be named here instead.
 const PHONE_STATS_DEFAULT = "http://127.0.0.1:8099";
@@ -263,7 +263,7 @@ async function runAgainstPhone(options, centralUrl, legacyMasks, onStage, statsB
     return {
       report: {
         phase: "failed",
-        failure: `SimBLE Sink is not answering at ${statsBase} — `
+        failure: `SimBLE Android is not answering at ${statsBase} — `
           + `try: adb forward tcp:8099 tcp:8099`,
       },
       log: [],
@@ -872,7 +872,7 @@ export function mountData(root) {
       // dongle does not: the app has to be running on it.
       sinkStrip.setWhy(
         isPhone(value.device)
-          ? "the phone counts what lands and serves it over HTTP — start SimBLE Sink on it first"
+          ? "the phone counts what lands and serves it over HTTP — start SimBLE Android on it first"
           : "the peripheral: it counts what lands",
       );
       phoneStatsRow.hidden = !isPhone(value.device);
@@ -940,8 +940,8 @@ export function mountData(root) {
           // Named by what it advertises, because that is what the scan
           // matches on; the model is the human's handle on which desk it is.
           text: phone.running
-            ? `${phone.name || phone.model} — SimBLE Sink on :${phone.port}`
-            : `${phone.model} — Sink not running`,
+            ? `${phone.name || phone.model} — SimBLE on :${phone.port}`
+            : `${phone.model} — SimBLE not running`,
         };
       });
       sinkStrip.setExtras(extras);
@@ -958,7 +958,7 @@ export function mountData(root) {
       phoneStatsRow.hidden = !isPhone(dongles.sink);
       if (isPhone(dongles.sink)) {
         sinkStrip.setWhy(
-          "the phone counts what lands and reports it back — start SimBLE Sink on it first",
+          "the phone counts what lands and reports it back — start SimBLE Android on it first",
         );
       } else if (list.length < 2) {
         sinkStrip.setWhy("the bridge sees fewer than two dongles — a real-RF run needs one for each end");
@@ -1041,7 +1041,7 @@ export function mountData(root) {
         return {
           report: {
             phase: "failed",
-            failure: `SimBLE Sink is not running on ${phone.model} (${phone.serial})`,
+            failure: `SimBLE Android is not running on ${phone.model} (${phone.serial})`,
           },
           log: [],
         };
