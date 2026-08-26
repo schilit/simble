@@ -424,3 +424,86 @@ systematic fix is the state×event matrix in gap 2 above, with the
 exhaustiveness rule: **for every command a host sends, one row per answer the
 controller may give.** The SIG publishes the contract to derive it from — see
 `docs/sig-as-oracle.md`.
+
+---
+
+## The same shape again, on hardware — and what to do about it
+
+*Added 2026-08-25, after a day of real-radio work.*
+
+The four bugs above were found in simulation. A day against dongles and a
+phone produced five more, and **every one was the same shape**: something
+broke and the code's answer was to hang rather than to say so.
+
+- `stty -f <path>` opening a CDC device — blocked in an uninterruptible
+  kernel open, holding the device until it was replugged. Three of them
+  accumulated before anyone noticed.
+- A blocking write to a controller that had stopped draining — parked
+  forever, at 0% CPU, with a healthy-looking BIG still advertising.
+- ISO SDUs with no credit accounting — 200/s into eight buffers, wedging the
+  transport inside a second.
+- A peripheral advertising from an address it did not own — a scan that
+  stalled for fifteen seconds against a dongle that was working perfectly.
+- A write sized to the ATT MTU rather than the controller's buffer pool — a
+  stalled bulk endpoint, which reads as a dead transport rather than as
+  overflow.
+
+None of these is exotic. Each is a state with no exit, and each cost hours
+because the symptom was silence.
+
+### A third test category: Faults
+
+Two exist today — **Asserts** (is it correct) and **Data** (how fast, and
+where does the time go). The third asks **what happens when it breaks**, and
+it is the one that would have caught all five.
+
+**Dongles make it possible in a way phones never will.** With a dongle we own
+the controller; Android owns its own stack and will not let a test sever a
+link on cue. That is a real argument for keeping dongles in the fleet even
+once phones are the more convenient peer.
+
+The Data benchmark already names its phases, so the parameterisation is
+obvious: break during **discover / connect / negotiate / transfer**, and
+assert that the failure is *reported*, *named for the phase it happened in*,
+and *cleaned up*. Injection points, ordered by what they would teach:
+
+| Injection | Models |
+|---|---|
+| HCI Disconnect at byte N | the ordinary mid-transfer loss |
+| Controller reset mid-stream | a peer that vanishes without disconnecting |
+| Stop pumping | a stalled host — the shape that hangs instead of erroring |
+| Drop the bridge session | the transport dying under a live link |
+| Unplug the dongle | the harshest, and the only one needing a hand |
+
+**The bridge is the natural injection point.** `simble --usb --ws` already
+sees every packet in both directions, so "close the socket after N ACL
+packets" or "stop forwarding at phase X" is a small feature there, needs no
+extra hardware, and is scriptable.
+
+There is a second thing such a suite would catch, observed repeatedly and
+never yet tested for: **a failed run leaving the dongle in a state that
+poisons the next one.** Several runs during this work only succeeded after an
+explicit controller reset, which is a cleanup bug wearing the costume of
+flaky hardware.
+
+**Sequencing.** Faults should wait until the Data path actually lands bytes
+end to end on real RF. A fault suite needs a working baseline to break;
+without one, every failure looks like the injection working.
+
+### A note on the visualisation
+
+The Data category renders each run as a stacked bar on a shared time axis.
+The better model is **Perfetto's**: tracks and slices, a zoomable axis, and
+detail per slice. Two things follow from adopting it:
+
+- A 6 ms in-page run and a 3 s dongle run become readable in one view, which
+  a fixed axis cannot manage.
+- Phases can **nest**. `negotiate` is really MTU exchange, then service
+  discovery, then subscribe — and when a run stalls, which of those three it
+  stalled in is exactly the question being asked.
+
+Worth more than imitation: Perfetto ingests a documented JSON trace format,
+so **emitting it** would let a benchmark run open in the real Perfetto UI,
+with its zooming, selection and measurement for free. That is a larger idea
+than restyling bars and probably the better one.
+
