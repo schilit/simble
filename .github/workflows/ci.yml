@@ -376,6 +376,36 @@ jobs:
           done
           exit $rc
 
+  android-crate:
+    name: Android crate (checks it still builds against simble)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # The crate is built for a phone; checking it for the host target
+          # too would need the NDK for no extra signal.
+          targets: aarch64-linux-android
+
+      # android/rust is deliberately outside the workspace (see
+      # android/README.md), so the main gates never build it — which means
+      # nothing would notice a breaking change in simble until someone opened
+      # that directory. This job is what notices.
+      - name: Check for aarch64-linux-android
+        working-directory: android/rust
+        run: cargo check --target aarch64-linux-android --all-targets
+
+      - name: Test on the host
+        working-directory: android/rust
+        # The scripting layer it links is target-independent, so its tests
+        # run here rather than needing a device.
+        run: cargo test
+
   duplication-report:
     name: Duplication Report (non-blocking)
     runs-on: ubuntu-latest

@@ -1,0 +1,21 @@
+[package]
+name = "simble-android"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "SimBLE's Rhai runner on a real Android device"
+license = "Apache-2.0"
+
+# Deliberately not a workspace member: see android/README.md. `simble` comes
+# in by path so a breaking change here is caught by CI rather than by whoever
+# next opens this directory.
+[dependencies]
+simble = { path = "../.." }
+
+# The JNI boundary. Every Android Bluetooth call crosses it, because there is
+# no NDK Bluetooth API — the framework classes are Java-only.
+jni = "0.21"
+
+[lib]
+# cdylib for the JVM to `System.loadLibrary`; rlib so tests can link it.
+crate-type = ["cdylib", "rlib"]

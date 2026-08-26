@@ -32,3 +32,6 @@
 # `tests/cs_real_capture_test.rs` include_str!s. Without it that test does not
 # compile, so it has to be tracked.
 !/third_party/waves
+
+# The Android crate is outside the workspace and has its own target dir.
+android/rust/target/
