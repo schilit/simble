@@ -26,11 +26,13 @@ export const CONTROLLERS = [
   // distinguishes the two controllers is in `why` below, said once.
   { id: "in-page", label: "In browser" },
   { id: "websocket", label: "netsim" },
-  // A `simble --usb` bridge holding a physical dongle. Only domains whose
-  // devices can ride real silicon declare it; the rest inherit the default
-  // reason below rather than each inventing their own wording for "not
-  // wired up here".
-  { id: "usb", label: "USB dongle" },
+  // Real radio, whatever holds it: a `simble --usb` bridge with a physical
+  // dongle, and — where the page supports it — a phone running SimBLE Android
+  // reached through that same bridge. The id stays `usb` because that is the
+  // bridge it goes through; the label is the *category*, since "USB dongle"
+  // named one member of it as though it were the whole. The bars already say
+  // "RF", so the selector says the spelled form of the same word.
+  { id: "usb", label: "Real radio" },
 ];
 
 /// What a domain that says nothing about a controller means: it has not been
@@ -59,17 +61,30 @@ export function usbBridgeHttp() {
   return usbBridgeUrl().trim().replace(/^ws/, "http").replace(/\/+$/, "");
 }
 
-/// Decorates the USB option's label with how many dongles the bridge sees,
-/// e.g. "USB dongle (3)" — and when no bridge answers, says how to start
-/// one, here where the choice is offered rather than on some page's card.
-/// Instructions for a thing that is already running are noise; the sentence
-/// appears only when it is needed.
+/// Decorates the Real radio option's label with how many real endpoints the
+/// bridge sees — dongles plus any phones running SimBLE Android — e.g.
+/// "Real radio (3)". When no bridge answers, says how to start one, here where
+/// the choice is offered rather than on some page's card. Instructions for a
+/// thing already running are noise, so the sentence appears only when needed.
+///
+/// Counting phones matters: a page whose sink is a phone has zero dongles and
+/// one endpoint, and "(0)" beside a working choice would read as unavailable.
 async function decorateUsbCount(nameEl, whyEl) {
   try {
-    const { devices } = await (await fetch(`${usbBridgeHttp()}/devices`)).json();
-    if (Array.isArray(devices)) nameEl.textContent = `USB dongle (${devices.length})`;
+    const http = usbBridgeHttp();
+    const { devices } = await (await fetch(`${http}/devices`)).json();
+    let count = Array.isArray(devices) ? devices.length : 0;
+    // Phones are the newer half of "real radio" and answer a separate route.
+    // A bridge too old to serve it just leaves the count at the dongles.
+    try {
+      const { phones } = await (await fetch(`${http}/phones`)).json();
+      if (Array.isArray(phones)) count += phones.filter((p) => p.running).length;
+    } catch (_) {
+      /* no /phones on this bridge; dongles alone */
+    }
+    nameEl.textContent = `Real radio (${count})`;
   } catch (_) {
-    const hint = " USB dongle needs its bridge: run simble --usb --ws 32323.";
+    const hint = " Real radio needs its bridge: run simble --usb --ws 32323.";
     if (!whyEl.textContent.includes("needs its bridge")) whyEl.textContent += hint;
   }
 }
@@ -149,7 +164,9 @@ export function createControllerBar({ supports, onChange }) {
       // would be worse -- nothing here is an IP network. netsim's own word for
       // it, and the one the rest of this site already uses, is a scene.
       : "In browser needs nothing installed; netsim needs netsimd running, "
-        + "and puts the devices in the same scene as the Android emulator.";
+        + "and puts the devices in the same scene as the Android emulator; "
+        + "Real radio is a dongle — or a phone running SimBLE Android — "
+        + "through the simble --usb bridge.";
     for (const c of CONTROLLERS) {
       const reason = map[c.id];
       const usable = reason === true;

@@ -995,7 +995,7 @@ export function mountData(root) {
     $("bench-honesty").textContent = runs.length
       ? `${runs.length} run(s) stored: ${simulated} on a simulated link (in browser or netsim — ` +
         "these time simble's own stack and a simulated medium, not radio), " +
-        `${runs.length - simulated} on real RF through a USB dongle.`
+        `${runs.length - simulated} on real RF — a dongle, or a phone through one.`
       : "";
   }
 
