@@ -39,7 +39,8 @@ the code moves, and it is expensive to reconstruct. Read them as history.
 | `lc3-evaluation.md` | LC3 options for the wasm demo devices. |
 | `rfcomm-comparison.md` | simble vs Bumble vs Zephyr. Carries its own status header: the five gaps it identifies are fixed. |
 | `decisions-2026-08-23.md` | Two choices that would otherwise live only in commit messages: why L2CAP dispatch stays keyed on PSM (and why `(psm, cid)` was rejected), and why `tests/`' `run_until` ticks before it checks. |
-| `android-rpc-peer.md` | An Android app that runs SimBLE scripts, so a phone becomes a hands-free test peer. Records what the Android API can and cannot reach — GATT yes, everything below it no — and why the script vocabulary already matches. |
+| `phone-as-backend.md` | The phone as a first-class backend: the script runs *on the device*, not a remote-control client, so it measures without a network in the loop and can be diffed against the simulator. Transport measured against a Pixel 9 Pro. Supersedes `android-rpc-peer.md`. |
+| `android-rpc-peer.md` | **Superseded by `phone-as-backend.md`.** Kept for its boundary analysis: what the Android API can and cannot reach — GATT yes, everything below it no — and why the script vocabulary already matches. Its v1/v2 staging and its recommendation are obsolete. |
 | `bumble-bridging-evaluation.md` | Whether Bumble can bridge the in-page, netsim and dongle controllers into one ether. It cannot — its cross-process link was deleted upstream and its "L2CAP bridge" is a Bluetooth↔TCP gateway. Records what each layer really offers, why a physical radio cannot be joined by software, and a measured experiment showing rootcanal's phy socket is the facility that does exist. |
 
 ## Stale — annotated, kept for the parts that hold

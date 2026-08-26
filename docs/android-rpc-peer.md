@@ -1,5 +1,13 @@
 # A scriptable phone: SimBLE scripts on real Android
 
+> **Superseded by [`phone-as-backend.md`](phone-as-backend.md).** The
+> recommendation below — per-call RPC first, an interpreter later — was
+> reversed: the script runs on the device. Two arguments made here are simply
+> wrong and are corrected there: that two Rhai engines would drift (it is one
+> engine cross-compiled), and that the calls are not latency-sensitive (device
+> *callbacks* are). Section 2's boundary analysis stands and is why this file
+> is kept.
+>
 > **Design record, 2026-08-25.** Point-in-time by design. Nothing here is
 > implemented. It records a proposal, the evidence for it, and — more usefully
 > — the boundary of what an Android app can and cannot do, so nobody starts
