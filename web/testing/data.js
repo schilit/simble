@@ -73,6 +73,9 @@ const MAX_RUNS = 200;
 // about the measurement depends on them, and an address field is a knob for
 // its own sake.
 const SINK_ADDR = "CC:1E:57:00:00:0B";
+/// The sink strip's value when the peripheral is a phone running SimBLE Sink
+/// rather than a dongle of ours.
+const PHONE_SINK = "phone";
 const CENTRAL_ADDR = "CC:1E:57:00:00:0C";
 const netsimUrl = (node, address) =>
   `ws://localhost:7681/v1/websocket/bt?name=${encodeURIComponent(node)}&address=${address}`;
@@ -170,6 +173,12 @@ function saveRuns(runs) {
 function provenance(controller, dongles) {
   if (controller === "usb") {
     const which = dongles.central || "dongle";
+    // The peer is the more interesting half when it is not ours: a run
+    // against a phone and a run against a dongle are different measurements
+    // and must not stack into one bar.
+    if (dongles.sink === PHONE_SINK) {
+      return { id: `phone:${which}`, label: `phone via ${which}`, simulated: false };
+    }
     return { id: `usb:${which}`, label: `usb ${which}`, simulated: false };
   }
   if (controller === "websocket") {
@@ -209,6 +218,60 @@ async function runInPage(options, onStage) {
     await watch.yield();
   }
   return { report, ...watch.verdict(), log: Array.from(bench.log()) };
+}
+
+/// Runs the benchmark against a phone: one dongle as the central, and a
+/// peripheral we do not own and cannot address in advance.
+///
+/// Two things differ from every other run here, and both come from the peer
+/// being somebody else's device. There is no `WebBulkSink` to tick, so the
+/// end of the transfer is whatever the phone reports over the control point
+/// rather than a count on our own clock — `peer-reported`, never
+/// `server-stamped`. And the run has to *find* its peer: Android advertises
+/// from a rotating resolvable private address that it will not disclose even
+/// to its own app, so the address is discovered by service and never
+/// configured.
+async function runAgainstPhone(options, centralUrl, legacyMasks, onStage) {
+  let central = null;
+  try {
+    central = WebBulkCentral.discovering(centralUrl, JSON.stringify(options), legacyMasks);
+  } catch (e) {
+    return {
+      report: {
+        phase: "failed",
+        failure: `could not reach the controller: ${e?.message ?? e}`,
+      },
+      log: [],
+    };
+  }
+  // The scan gets the run's own patience on top of the run's own timeout,
+  // because finding the peer and transferring to it are separate waits.
+  const giveUpAt = performance.now() + options.timeout_ms * 2 + 8000;
+  let report = null;
+  const watch = yieldWatch();
+  try {
+    for (;;) {
+      report = JSON.parse(central.tick());
+      if (central.is_finished()) break;
+      if (performance.now() > giveUpAt) {
+        report.failure = report.failure
+          || (central.ready_state() === 1
+            ? "the page gave up waiting for the run"
+            : "the controller's socket never opened");
+        report.phase = "failed";
+        break;
+      }
+      onStage(
+        report.phase === "discovering"
+          ? "scanning for the phone"
+          : `${report.phase} — ${report.bytes_sent ?? 0} sent`,
+      );
+      await watch.yield();
+    }
+    return { report, ...watch.verdict(), log: Array.from(central.log()) };
+  } finally {
+    central?.free?.();
+  }
 }
 
 /// Runs the benchmark across two sockets: a sink on one controller, a
@@ -726,8 +789,16 @@ export function mountData(root) {
   });
   const sinkStrip = createControllerStrip({
     value: { kind: "usb", device: "" },
+    extras: [{ value: PHONE_SINK, text: "phone — running SimBLE Sink" }],
     onChange: (value) => {
       dongles.sink = value.device;
+      // Said at the moment of choosing, because a phone has a precondition a
+      // dongle does not: the app has to be running on it.
+      sinkStrip.setWhy(
+        value.device === PHONE_SINK
+          ? "the phone counts what lands and reports it back — start SimBLE Sink on it first"
+          : "the peripheral: it counts what lands",
+      );
       return null;
     },
     why: "the peripheral: it counts what lands",
@@ -749,11 +820,15 @@ export function mountData(root) {
       }
       // Two ends, two radios: default the sink to a *different* dongle, since
       // one controller cannot be both halves of a link.
-      if (!dongles.sink && list.length) {
+      if (dongles.sink !== PHONE_SINK && !dongles.sink && list.length) {
         dongles.sink = list[Math.min(1, list.length - 1)].selector;
         sinkStrip.set({ kind: "usb", device: dongles.sink });
       }
-      if (list.length < 2) {
+      if (dongles.sink === PHONE_SINK) {
+        sinkStrip.setWhy(
+          "the phone counts what lands and reports it back — start SimBLE Sink on it first",
+        );
+      } else if (list.length < 2) {
         sinkStrip.setWhy("the bridge sees fewer than two dongles — a real-RF run needs one for each end");
       }
     } catch (e) {
@@ -827,6 +902,14 @@ export function mountData(root) {
         report: { phase: "failed", failure: "pick a dongle for each end above" },
         log: [],
       };
+    }
+    if (dongles.sink === PHONE_SINK) {
+      return runAgainstPhone(
+        options,
+        `${base}/?device=${encodeURIComponent(dongles.central)}`,
+        true,
+        onStage,
+      );
     }
     if (dongles.central === dongles.sink) {
       return {

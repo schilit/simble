@@ -33,25 +33,36 @@ function injectStyles() {
 }
 
 const encode = (v) => v.device ?? "";
-const decode = (text) => ({ kind: "usb", device: text });
+// A phone is not a dongle we own, but it *is* an answer to this strip's one
+// question — which silicon this device rides. So it belongs in the same
+// select rather than in a control beside it.
+const decode = (text) => ({ kind: text === PHONE ? "phone" : "usb", device: text });
+const PHONE = "phone";
 
 /**
  * @param {object} options
  * @param {{kind:string, device:string}} options.value  initial choice
  * @param {Array<{selector:string, product:string}>} [options.dongles]
+ * @param {Array<{value:string, text:string}>} [options.extras] non-dongle
+ *        choices (a phone running the sink app) listed after the dongles
  * @param {(value:{kind:string,device:string}) => ?string} options.onChange
  *        return a string to refuse (shown on the strip's why line), or
  *        null/undefined to accept.
  * @param {string} [options.why] a standing note under the choice
  */
-export function createControllerStrip({ value, dongles = [], onChange, why = "" }) {
+export function createControllerStrip({
+  value,
+  dongles = [],
+  extras = [],
+  onChange,
+  why = "",
+}) {
   injectStyles();
   const el = document.createElement("div");
   el.className = "ctl-strip";
 
   const label = document.createElement("span");
   label.className = "strip-label";
-  label.textContent = "usb dongle";
 
   const pick = document.createElement("select");
   pick.setAttribute("aria-label", "which dongle this device rides");
@@ -74,24 +85,39 @@ export function createControllerStrip({ value, dongles = [], onChange, why = "" 
       pick.append(option);
     };
     for (const d of known) add(d.selector, `${d.selector} — ${d.product}`);
+    for (const e of extras) add(e.value, e.text);
     // A stored choice whose dongle is not (yet) listed still renders, so a
     // slow /devices answer cannot silently rewrite the choice.
-    if (current.device && !known.some((d) => d.selector === current.device)) {
+    if (
+      current.device
+      && !known.some((d) => d.selector === current.device)
+      && !extras.some((e) => e.value === current.device)
+    ) {
       add(current.device, current.device);
     }
     pick.value = encode(current);
+    renderLabel();
+  }
+
+  function renderLabel() {
+    label.textContent = current.kind === "phone" ? "phone" : "usb dongle";
   }
 
   pick.addEventListener("change", () => {
     const next = decode(pick.value);
+    // Clear to the standing note *before* the handler runs, so a handler that
+    // sets its own note is not immediately overwritten by this one.
+    whyEl.textContent = why;
     const refusal = onChange?.(next);
     if (refusal) {
       whyEl.textContent = refusal;
       pick.value = encode(current); // snap back
       return;
     }
-    whyEl.textContent = why;
     Object.assign(current, next);
+    // The label names what was picked, so it has to follow a live change and
+    // not only the initial render.
+    renderLabel();
   });
 
   /** Sets the choice without firing onChange — for a partner strip's echo. */

@@ -5868,6 +5868,22 @@ mod web {
         }
     }
 
+    /// LE Set Scan Enable — off.
+    const SCAN_OFF: [u8; 5] = [0x0C, 0x20, 0x02, 0x00, 0x00];
+    /// What the page renders while the scan is still going.
+    const DISCOVERING_JSON: &str =
+        "{\"phase\":\"discovering\",\"complete\":false,\"failure\":null,\"bytes_sent\":0}";
+
+    /// A discovery that never found anything is still a measurement, and has
+    /// to serialise like one so the page's table and CSV keep their shape.
+    fn failed_report_json(why: &str) -> String {
+        let quoted = serde_json::to_string(why).unwrap_or_else(|_| "\"failed\"".to_string());
+        format!(
+            "{{\"phase\":\"failed\",\"complete\":false,\"failure\":{quoted},\
+             \"bytes_sent\":0,\"confirmation\":\"unconfirmed\"}}"
+        )
+    }
+
     /// The benchmark **central** on a controller of its own.
     ///
     /// Point it at a [`WebBulkSink`] on another socket (netsim) or another
@@ -5881,6 +5897,24 @@ mod web {
         runner: crate::device::throughput::BulkCentral,
         started: bool,
         log: Vec<String>,
+        /// Set when the peer has to be found before it can be aimed at.
+        discover: Option<Discovery>,
+        /// Why discovery gave up, if it did.
+        failed: Option<String>,
+    }
+
+    /// The scan that precedes a run against a peer whose address is not
+    /// knowable in advance.
+    ///
+    /// A phone advertises from a resolvable private address that rotates, and
+    /// Android does not tell even its own app what that address currently is.
+    /// So there is nothing to write down: the peer is found by the service it
+    /// advertises, and the run is aimed at whatever answers.
+    struct Discovery {
+        options_json: String,
+        legacy_masks: bool,
+        scanning: bool,
+        give_up_at_ms: Option<f64>,
     }
 
     #[wasm_bindgen]
@@ -5910,6 +5944,46 @@ mod web {
                 runner,
                 started: false,
                 log: Vec::new(),
+                discover: None,
+                failed: None,
+            })
+        }
+
+        /// Joins the controller at `url` and aims at whatever advertises the
+        /// bulk service, rather than at an address given in advance.
+        ///
+        /// This is what a phone needs. See [`Discovery`].
+        #[wasm_bindgen(js_name = discovering)]
+        pub fn discovering(
+            url: &str,
+            options_json: &str,
+            legacy_masks: bool,
+        ) -> Result<WebBulkCentral, JsValue> {
+            install_panic_hook();
+            let url = ws_url_with_wire_address(url);
+            let options = crate::device::throughput::BulkOptions::from_json(options_json);
+            // A placeholder target: the runner is rebuilt, unstarted, the
+            // moment the scan produces a real one.
+            let mut runner = crate::device::throughput::BulkCentral::new(
+                Address::from_be_bytes([0; 6]),
+                options,
+            );
+            if legacy_masks {
+                runner.set_le_event_mask(crate::device::host::LE_EVENT_MASK_CORE_4_0);
+            }
+            Ok(Self {
+                transport: WasmWsTransport::connect(&url)?,
+                channel: HciChannel::new(),
+                runner,
+                started: false,
+                log: Vec::new(),
+                discover: Some(Discovery {
+                    options_json: options_json.to_string(),
+                    legacy_masks,
+                    scanning: false,
+                    give_up_at_ms: None,
+                }),
+                failed: None,
             })
         }
 
@@ -5922,6 +5996,10 @@ mod web {
         pub fn tick(&mut self) -> Result<String, JsValue> {
             self.transport.pump(&self.channel)?;
             let now = now_ms();
+            if let Some(interim) = self.poll_discovery(now)? {
+                self.transport.pump(&self.channel)?;
+                return Ok(interim);
+            }
             if !self.started && self.transport.is_open() {
                 for packet in self.runner.start(now) {
                     self.channel.inject_host_packet(packet).map_err(js_error)?;
@@ -5960,12 +6038,91 @@ mod web {
 
         /// Whether the run reached its end, successfully or not.
         pub fn is_finished(&self) -> bool {
-            self.runner.is_finished()
+            self.failed.is_some() || self.runner.is_finished()
         }
 
         /// What the run measured.
         pub fn report_json(&self) -> String {
-            self.runner.report_json()
+            match &self.failed {
+                Some(why) => failed_report_json(why),
+                None => self.runner.report_json(),
+            }
+        }
+
+        /// Scans for the bulk service, and re-aims the run at what answers.
+        ///
+        /// Returns `Some(json)` while the scan is still going, which the page
+        /// shows as progress; `None` once there is a target (or once there
+        /// never will be), so `tick` proceeds to the run itself.
+        ///
+        /// The discovery state is taken out for the duration rather than
+        /// borrowed, so this can use `self.channel` freely.
+        fn poll_discovery(&mut self, now: f64) -> Result<Option<String>, JsValue> {
+            let Some(mut d) = self.discover.take() else {
+                return Ok(None);
+            };
+            // Nothing to scan with until the controller socket is up.
+            if !self.transport.is_open() {
+                self.discover = Some(d);
+                return Ok(Some(DISCOVERING_JSON.to_string()));
+            }
+            if !d.scanning {
+                queue_scanner_start(&self.channel).map_err(js_error)?;
+                d.scanning = true;
+                // The run's own configured patience, not a second
+                // invented number: a caller who widens the timeout
+                // because the air is busy means it for the scan too.
+                let patience =
+                    crate::device::throughput::BulkOptions::from_json(&d.options_json)
+                        .timeout_ms;
+                d.give_up_at_ms = Some(now + patience);
+                self.log.push("scanning for a bulk sink".to_string());
+            }
+
+            let wanted = crate::device::throughput::bulk_uuid::SERVICE.to_string();
+            let mut found: Option<String> = None;
+            while let Some(packet) = self.channel.poll_controller_packet() {
+                for report in parse_scan_reports(&packet) {
+                    if report
+                        .service_uuids
+                        .iter()
+                        .any(|u| u.eq_ignore_ascii_case(&wanted))
+                    {
+                        found = Some(report.address);
+                    }
+                }
+            }
+
+            if let Some(address) = found {
+                let Ok(target) = address.parse::<Address>() else {
+                    self.discover = Some(d);
+                    return Ok(Some(DISCOVERING_JSON.to_string()));
+                };
+                // Stop scanning before connecting: a controller still in scan
+                // mode has not freed what the connection needs.
+                self.channel.send_command(&SCAN_OFF).map_err(js_error)?;
+                let options =
+                    crate::device::throughput::BulkOptions::from_json(&d.options_json);
+                let mut runner = crate::device::throughput::BulkCentral::new(target, options);
+                if d.legacy_masks {
+                    runner.set_le_event_mask(crate::device::host::LE_EVENT_MASK_CORE_4_0);
+                }
+                self.runner = runner;
+                self.log.push(format!("found a sink at {address}"));
+                return Ok(None);
+            }
+
+            if d.give_up_at_ms.is_some_and(|at| now > at) {
+                self.failed = Some(
+                    "nothing advertising the bulk service — is SimBLE Sink running \
+                     and in the foreground?"
+                        .to_string(),
+                );
+                return Ok(None);
+            }
+
+            self.discover = Some(d);
+            Ok(Some(DISCOVERING_JSON.to_string()))
         }
 
         /// The progress lines, oldest first.
