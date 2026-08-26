@@ -183,6 +183,10 @@ impl BulkOptions {
 
 /// LE Read Buffer Size (Vol 4, Part E, Section 7.8.2).
 const LE_READ_BUFFER_SIZE: [u8; 2] = [0x02, 0x20];
+/// HCI Read Buffer Size — the *shared* pool. A controller with no separate LE
+/// buffers answers LE Read Buffer Size with zeros and expects the host to ask
+/// this instead (Vol 4, Part E, Section 7.8.2).
+const READ_BUFFER_SIZE: [u8; 2] = [0x05, 0x10];
 /// LE Set PHY (Vol 4, Part E, Section 7.8.49).
 const LE_SET_PHY: [u8; 2] = [0x32, 0x20];
 /// LE PHY Update Complete subevent (Vol 4, Part E, Section 7.7.65.12).
@@ -532,6 +536,9 @@ pub struct BulkCentral {
     rx_phy: Option<u8>,
     phy_requested: bool,
     buffer_size_asked: bool,
+    /// The controller answered LE Read Buffer Size with zeros, so the shared
+    /// pool must be asked for with the Classic command.
+    pending_shared_pool: bool,
     /// The controller's ACL buffer count, when it reports one.
     acl_total: Option<u16>,
     /// ACL packets handed over and not yet completed, when credits are known.
@@ -573,6 +580,7 @@ impl BulkCentral {
             rx_phy: None,
             phy_requested: false,
             buffer_size_asked: false,
+            pending_shared_pool: false,
             acl_total: None,
             acl_outstanding: 0,
             started_ms: None,
@@ -638,6 +646,12 @@ impl BulkCentral {
         }
         self.advance_phase(now_ms);
         let mut out = Vec::new();
+        // The Classic follow-up, issued once, as soon as the LE answer says
+        // this controller has no LE pool of its own.
+        if self.pending_shared_pool {
+            self.pending_shared_pool = false;
+            out.push(command(READ_BUFFER_SIZE, &[]));
+        }
         if self.phase == BulkPhase::Negotiating || self.phase == BulkPhase::Transferring {
             self.drive(now_ms, &mut out);
         }
@@ -761,9 +775,7 @@ impl BulkCentral {
             return;
         }
         self.mtu = self.central.mtu();
-        self.chunk_bytes = usize::from(self.mtu)
-            .saturating_sub(ATT_WRITE_OVERHEAD)
-            .max(1);
+        self.chunk_bytes = self.writable_chunk();
         if self.central.value_handle(bulk_uuid::CONTROL).is_some() {
             self.has_control = true;
             self.central.queue_subscribe(bulk_uuid::CONTROL, true);
@@ -869,6 +881,38 @@ impl BulkCentral {
         }
     }
 
+    /// The largest ATT payload this controller can actually carry in one
+    /// write.
+    ///
+    /// The ATT MTU is a negotiation between hosts and says nothing about the
+    /// controller underneath. A 4.0 dongle has no Data Length Extension, so
+    /// its LE ACL buffers are 27 bytes and it owns a handful of them — while
+    /// an MTU of 512 asks for a write that fragments into twenty. A
+    /// controller cannot hold more fragments than it has buffers, and one
+    /// PDU cannot be split across a refill, so a write larger than the pool
+    /// can never be sent whole: a CSR8510 answers by stalling the bulk
+    /// endpoint, which reads as a dead transport rather than as overflow.
+    ///
+    /// So the write is sized to the pool, not to the MTU. Where the
+    /// controller does not report its buffers, the MTU stands — which is
+    /// what every simulated controller does, and they carry any PDU whole.
+    fn writable_chunk(&self) -> usize {
+        let by_mtu = usize::from(self.mtu)
+            .saturating_sub(ATT_WRITE_OVERHEAD)
+            .max(1);
+        let Some(buffers) = self.acl_total.filter(|n| *n > 0) else {
+            return by_mtu;
+        };
+        // Leave one buffer spare: a completion can be in flight while the
+        // next PDU is queued, and a pool used to its exact last slot has no
+        // room for the rounding.
+        let usable = usize::from(buffers).saturating_sub(1).max(1) * LE_ACL_DATA_LEN;
+        let by_pool = usable
+            .saturating_sub(L2CAP_HEADER + ATT_WRITE_OVERHEAD)
+            .max(1);
+        by_mtu.min(by_pool)
+    }
+
     /// How many H4 ACL packets one chunk becomes.
     fn fragments_per_chunk(&self) -> usize {
         let l2cap = L2CAP_HEADER + ATT_WRITE_OVERHEAD + self.chunk_bytes;
@@ -899,6 +943,25 @@ impl BulkCentral {
         let params = &packet[3.min(packet.len())..];
         match code {
             crate::packets::hci_events::event_code::COMMAND_COMPLETE => {
+                // Both buffer queries land here. Matched in one arm because
+                // a second `COMMAND_COMPLETE` arm below would be unreachable —
+                // the first matching arm wins, and this one returns early for
+                // everything it does not recognise.
+                if params.get(1..3) == Some(&READ_BUFFER_SIZE[..]) {
+                    // status, ACL length (2), SCO length (1), ACL count (2).
+                    if params.get(3) == Some(&0x00)
+                        && let Some(bytes) = params.get(7..9)
+                    {
+                        let total = u16::from_le_bytes([bytes[0], bytes[1]]);
+                        if total > 0 {
+                            self.acl_total = Some(total);
+                            self.log.push(format!(
+                                "no separate LE pool; the controller shares {total} ACL buffers"
+                            ));
+                        }
+                    }
+                    return;
+                }
                 if params.get(1..3) != Some(&LE_READ_BUFFER_SIZE[..]) {
                     return;
                 }
@@ -913,6 +976,15 @@ impl BulkCentral {
                     self.acl_total = Some(u16::from(total));
                     self.log
                         .push(format!("the controller reports {total} LE ACL buffers"));
+                } else if params.get(3) == Some(&0x00) {
+                    // Zero LE buffers is not "no buffers" — it means this
+                    // controller keeps one shared pool and the host must ask
+                    // for it with the Classic command instead (Vol 4, Part E,
+                    // 7.8.2). A CSR8510 answers exactly this way, and a host
+                    // that takes the zero at face value learns nothing, sizes
+                    // its writes to the ATT MTU, and stalls the dongle's bulk
+                    // endpoint on the first PDU.
+                    self.pending_shared_pool = true;
                 }
                 self.buffer_size_asked = true;
             }
