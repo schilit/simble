@@ -8,7 +8,8 @@
 <link rel="stylesheet" href="../common/simble.css">
 <link rel="stylesheet" href="../common/nav.css">
 <style>
-  main { max-width: var(--read-w); margin: 0 auto; padding: 1rem 1.25rem 2.5rem; }
+  main { max-width: var(--page-w); margin: 0 auto; padding: 1rem 1.25rem 2.5rem; }
+  #cat-asserts { max-width: var(--read-w); }
   .intro { color: var(--dim); font-size: var(--fs-lead); line-height: 1.6; margin: 0.4rem 0 1.1rem; max-width: 52rem; }
   .intro strong { color: var(--text); }
   .intro code { color: var(--good); background: var(--panel); padding: 0.05rem 0.3rem; border-radius: 4px; font-size: 0.85em; }
@@ -53,6 +54,49 @@
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .world pre code { color: var(--good); }
   .world .runs-ci { color: var(--good); font-weight: 600; }
+  /* --- the two categories ------------------------------------------------ */
+  .cats { display: flex; gap: 0.35rem; border-bottom: 1px solid var(--border); margin: 0.2rem 0 1rem; }
+  .cat-tab { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0;
+    padding: 0.45rem 0.9rem; color: var(--dim); font-size: var(--fs-lead); font-weight: 600; }
+  .cat-tab:hover { color: var(--text); }
+  .cat-tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .cat-what { color: var(--dim); font-size: var(--fs-label); margin: -0.6rem 0 1rem; }
+
+  /* --- the Data category -------------------------------------------------- */
+  .settings { display: flex; flex-wrap: wrap; gap: 0.9rem 1.2rem; align-items: flex-end;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--panel);
+    padding: 0.7rem 0.85rem; margin: 0.7rem 0; }
+  .settings label { display: flex; flex-direction: column; gap: 0.2rem;
+    font-size: var(--fs-meta); text-transform: uppercase; letter-spacing: 0.05em; color: var(--dim); }
+  .settings select { text-transform: none; letter-spacing: 0; }
+  .settings-note { flex-basis: 100%; margin: 0; color: var(--dim); font-size: var(--fs-meta); line-height: 1.5; }
+  .toolbar .spacer { flex: 1; }
+  .stage { color: var(--dim); font-size: var(--fs-label); font-family: ui-monospace, Menlo, monospace; }
+  .legend { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; align-items: center;
+    font-size: var(--fs-meta); color: var(--dim); margin: 0.6rem 0 0.3rem; }
+  .legend-item { display: inline-flex; align-items: center; gap: 0.35rem; }
+  .legend-item i { width: 0.75rem; height: 0.75rem; border-radius: 2px; display: inline-block; }
+  .legend-marks { flex-basis: 100%; }
+  .legend-marks b { font-weight: 600; }
+  .legend-marks b.sim { color: var(--dim); }
+  .legend-marks b.rf { color: var(--warn); }
+  .chart { border: 1px solid var(--border); border-radius: 8px; background: var(--panel);
+    padding: 0.5rem 0.6rem; overflow-x: auto; }
+  .chart .empty { margin: 1.2rem 0.4rem; color: var(--dim); font-size: var(--fs-body); }
+  .honesty { color: var(--dim); font-size: var(--fs-meta); margin: 0.5rem 0 0.9rem; line-height: 1.5; }
+  .table-wrap { overflow-x: auto; }
+  table.runs { border-collapse: collapse; width: 100%; font-size: var(--fs-meta); }
+  table.runs th, table.runs td { text-align: left; padding: 0.25rem 0.5rem;
+    border-bottom: 1px solid var(--border); white-space: nowrap; }
+  table.runs th { color: var(--dim); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+  table.runs tr.failed td { color: var(--bad); }
+  table.runs tr.lossy td { background: rgba(207, 34, 46, 0.06); }
+  table.runs tr.throttled td { color: var(--warn); }
+  details.raw { margin-top: 0.9rem; }
+  details.raw summary { cursor: pointer; color: var(--dim); font-size: var(--fs-label); }
+  details.raw pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.5rem 0.6rem; overflow-x: auto; font-size: var(--fs-meta); max-height: 22rem; }
+  .ctl-strip[hidden] { display: none; }
   footer { color: var(--dim); font-size: var(--fs-meta); padding: 1.4rem 1.25rem 0; max-width: var(--read-w); margin: 0 auto; }
 </style>
 </head>
@@ -80,6 +124,12 @@
 </header>
 
 <main>
+  <div class="cats" role="tablist" aria-label="kind of test">
+    <button class="cat-tab" data-cat="asserts" role="tab" aria-selected="true">Asserts</button>
+    <button class="cat-tab" data-cat="data" role="tab" aria-selected="false">Data</button>
+  </div>
+
+<section id="cat-asserts" role="tabpanel">
   <p class="intro">A SimBLE device is a Rhai script; add <code>assert(...)</code> and the same script is a
     <strong>test</strong>. It runs <strong>deterministically</strong> — no radio, no timing — so a failure is
     reproducible and the AI generate-check-fix loop converges. Edit below and press <strong>Run test</strong>.</p>
@@ -127,6 +177,16 @@
     the exact same script an LLM writes, that you check here, and that CI runs natively are one file — no
     hand-translation between "the test" and "the fixture". Behavioural tests (connect, subscribe, assert a
     notification over time) build on the same primitive with <code>wait_for</code> and the scene APIs.</p>
+</section>
+
+<section id="cat-data" role="tabpanel" hidden>
+  <p class="intro">An assert is true or false. A <strong>measurement</strong> is a number, and a number is
+    only meaningful with the controller that produced it attached. This category writes
+    <strong>256 KB</strong> to a peripheral over GATT and times it in four segments — discover, connect,
+    negotiate, transfer — because on BLE the setup latency is often the larger half of "how long until it
+    lands". Runs accumulate so controllers can be compared; failures are kept, because a run that never
+    connected is a measurement too.</p>
+</section>
 </main>
 
 <script type="module" src="./testing.js"></script>

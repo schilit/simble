@@ -18,6 +18,11 @@ pub(crate) mod netsim;
 pub(crate) mod rootcanal;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod serial;
+// nusb has no wasm32 backend, so this module is as native-only as its
+// neighbours above. It lost the gate at some point and the browser build has
+// been failing on seventeen `unresolved module nusb` errors ever since; the
+// re-exports below and every caller (`mcp`, `live`, the CLI) were already
+// gated, so only the declaration was missing.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod usb;
 pub mod wasm_ws;

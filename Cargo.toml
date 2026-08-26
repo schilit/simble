@@ -87,7 +87,14 @@ web-sys = { version = "0.3", features = [
     "CloseEvent",
     "Event",
     "MessageEvent",
+    # The bulk-transfer benchmark times phases that last a fraction of a
+    # millisecond on the in-page link, and `Date::now` is quantised to 1 ms —
+    # which would report every setup phase as 0. `Performance::now` is
+    # sub-millisecond and monotonic, so it is the clock a measurement page
+    # feeds its runner. Features of a dependency already present, not a new one.
+    "Performance",
     "WebSocket",
+    "Window",
     "console",
 ] }
 # rhai -> ahash -> getrandom, which on wasm32-unknown-unknown needs the

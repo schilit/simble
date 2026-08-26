@@ -5673,6 +5673,310 @@ mod web {
         crate::devices::catalog::script(name).map(str::to_string)
     }
 
+    // -- the bulk-transfer benchmark ---------------------------------------
+    //
+    // Three wrappers for one measurement, because the two ends may sit on
+    // different controllers. In-page both halves share a simulated medium in
+    // this object; on netsim each half owns a socket; on the `simble --usb`
+    // bridge each half owns a dongle. The Rust in
+    // [`crate::device::throughput`] is identical in all three — only where
+    // the packets go differs, which is the whole point of being able to
+    // compare the numbers.
+
+    /// The clock the benchmark is fed.
+    ///
+    /// `performance.now()` where there is a window (sub-millisecond,
+    /// monotonic, unaffected by the wall clock being set), and `Date.now()`
+    /// in a worker where there is not. Never `std::time::Instant`, which
+    /// panics on `wasm32-unknown-unknown`.
+    fn now_ms() -> f64 {
+        web_sys::window()
+            .and_then(|window| window.performance())
+            .map(|performance| performance.now())
+            .unwrap_or_else(js_sys::Date::now)
+    }
+
+    /// The bulk-transfer benchmark with both ends in this tab, over the
+    /// in-process simulated medium.
+    ///
+    /// The numbers this produces measure **simble's own stack and a
+    /// simulated link** — ATT, L2CAP fragmenting into 27-octet packets, the
+    /// in-process controller — and no radio at all. A page showing them
+    /// beside a dongle's must say so.
+    ///
+    /// [`Self::pump`] runs the scene for a slice of wall clock rather than a
+    /// fixed number of steps, so a page stays responsive without the
+    /// measurement becoming a measurement of the page's frame rate.
+    #[wasm_bindgen]
+    pub struct WebBulkBench {
+        scene: crate::device::throughput::ThroughputScene,
+        log: Vec<String>,
+    }
+
+    /// The in-page sink's address.
+    const BULK_SINK_ADDRESS: Address = Address::new([0x0B, 0x00, 0x00, 0x57, 0x1E, 0xCC]);
+    /// The in-page central's address.
+    const BULK_CENTRAL_ADDRESS: Address = Address::new([0x0C, 0x00, 0x00, 0x57, 0x1E, 0xCC]);
+
+    #[wasm_bindgen]
+    impl WebBulkBench {
+        /// One run, configured by the JSON a settings panel produces (see
+        /// `BulkOptions`). Unknown keys and malformed JSON fall back to the
+        /// defaults rather than refusing to run.
+        #[wasm_bindgen(constructor)]
+        pub fn new(options_json: &str) -> WebBulkBench {
+            install_panic_hook();
+            let options = crate::device::throughput::BulkOptions::from_json(options_json);
+            Self {
+                scene: crate::device::throughput::ThroughputScene::new(
+                    BULK_SINK_ADDRESS,
+                    BULK_CENTRAL_ADDRESS,
+                    options,
+                ),
+                log: Vec::new(),
+            }
+        }
+
+        /// Advances the run for up to `budget_ms` of wall clock, then hands
+        /// back the report so far. Call it again until
+        /// [`Self::is_finished`].
+        pub fn pump(&mut self, budget_ms: f64) -> String {
+            let deadline = now_ms() + budget_ms.max(1.0);
+            while !self.scene.central().is_finished() {
+                let now = now_ms();
+                if now > deadline {
+                    break;
+                }
+                self.scene.tick(now);
+            }
+            self.log.extend(self.scene.central_mut().take_log());
+            self.scene.report_json()
+        }
+
+        /// Whether the run reached its end, successfully or not.
+        pub fn is_finished(&self) -> bool {
+            self.scene.central().is_finished()
+        }
+
+        /// What the run measured.
+        pub fn report_json(&self) -> String {
+            self.scene.report_json()
+        }
+
+        /// The progress lines, oldest first.
+        pub fn log(&self) -> js_sys::Array {
+            self.log
+                .iter()
+                .map(|line| JsValue::from_str(line))
+                .collect()
+        }
+    }
+
+    /// The benchmark **peripheral** on a controller of its own: a netsim
+    /// socket, or the `simble --usb` bridge holding a dongle.
+    ///
+    /// It counts the bytes that arrive and stamps when the last one did,
+    /// which is the half of the measurement the central cannot make. The
+    /// page relays those numbers to [`WebBulkCentral::note_server`] so the
+    /// transfer segment ends at arrival rather than at the central's last
+    /// queued write.
+    #[wasm_bindgen]
+    pub struct WebBulkSink {
+        transport: WasmWsTransport,
+        channel: HciChannel,
+        sink: crate::device::throughput::BulkSink,
+        started: bool,
+    }
+
+    #[wasm_bindgen]
+    impl WebBulkSink {
+        /// Joins the controller at `url` as a benchmark sink advertising at
+        /// `address`. `legacy_masks` narrows the LE event mask to what a
+        /// Bluetooth 4.0 dongle accepts — a real part refuses the wider one
+        /// outright and then reports no connection at all.
+        #[wasm_bindgen(constructor)]
+        pub fn new(url: &str, address: &str, legacy_masks: bool) -> Result<WebBulkSink, JsValue> {
+            install_panic_hook();
+            let address: Address = address
+                .parse()
+                .map_err(|_| JsValue::from_str("address is not a Bluetooth address"))?;
+            let url = ws_url_with_wire_address(url);
+            let mut sink = crate::device::throughput::BulkSink::new("simble-bulk-sink", address);
+            if legacy_masks {
+                sink.set_le_event_mask(crate::device::host::LE_EVENT_MASK_CORE_4_0);
+            }
+            Ok(Self {
+                transport: WasmWsTransport::connect(&url)?,
+                channel: HciChannel::new(),
+                sink,
+                started: false,
+            })
+        }
+
+        /// The underlying WebSocket ready state (per the WebSocket API).
+        pub fn ready_state(&self) -> u16 {
+            self.transport.ready_state()
+        }
+
+        /// One pump. Returns the counters as JSON — what arrived, and when.
+        pub fn tick(&mut self) -> Result<String, JsValue> {
+            self.transport.pump(&self.channel)?;
+            if !self.started && self.transport.is_open() {
+                for packet in self.sink.start_commands() {
+                    self.channel.inject_host_packet(packet).map_err(js_error)?;
+                }
+                self.started = true;
+            }
+            let now = now_ms();
+            for packet in self.sink.poll() {
+                let _ = self.channel.inject_host_packet(packet);
+            }
+            while let Some(packet) = self.channel.poll_controller_packet() {
+                for out in self.sink.on_packet(&packet, now) {
+                    let _ = self.channel.inject_host_packet(out);
+                }
+            }
+            self.transport.pump(&self.channel)?;
+            Ok(self.counters_json())
+        }
+
+        /// What the sink has seen, as JSON.
+        pub fn counters_json(&self) -> String {
+            let counters = self.sink.counters();
+            serde_json::to_string(&counters).unwrap_or_else(|_| "{}".to_string())
+        }
+
+        /// Bytes received since the last `BEGIN`.
+        pub fn bytes(&self) -> f64 {
+            self.sink.counters().bytes as f64
+        }
+
+        /// Writes those bytes arrived in.
+        pub fn chunks(&self) -> u32 {
+            self.sink.counters().chunks
+        }
+
+        /// When the most recent byte landed, on the page's clock, or `None`
+        /// if nothing has.
+        pub fn last_byte_ms(&self) -> Option<f64> {
+            self.sink.counters().last_byte_ms
+        }
+
+        /// Whether a central is connected.
+        pub fn is_connected(&self) -> bool {
+            self.sink.is_connected()
+        }
+    }
+
+    /// The benchmark **central** on a controller of its own.
+    ///
+    /// Point it at a [`WebBulkSink`] on another socket (netsim) or another
+    /// dongle (the bridge). Against a peer that is not a benchmark sink the
+    /// run still measures discovery, connection and negotiation and then
+    /// fails with a reason, which is a data point rather than a hang.
+    #[wasm_bindgen]
+    pub struct WebBulkCentral {
+        transport: WasmWsTransport,
+        channel: HciChannel,
+        runner: crate::device::throughput::BulkCentral,
+        started: bool,
+        log: Vec<String>,
+    }
+
+    #[wasm_bindgen]
+    impl WebBulkCentral {
+        /// Joins the controller at `url` and aims at `target`, configured by
+        /// the same settings JSON [`WebBulkBench`] takes.
+        #[wasm_bindgen(constructor)]
+        pub fn new(
+            url: &str,
+            target: &str,
+            options_json: &str,
+            legacy_masks: bool,
+        ) -> Result<WebBulkCentral, JsValue> {
+            install_panic_hook();
+            let target: Address = target
+                .parse()
+                .map_err(|_| JsValue::from_str("target is not a Bluetooth address"))?;
+            let url = ws_url_with_wire_address(url);
+            let options = crate::device::throughput::BulkOptions::from_json(options_json);
+            let mut runner = crate::device::throughput::BulkCentral::new(target, options);
+            if legacy_masks {
+                runner.set_le_event_mask(crate::device::host::LE_EVENT_MASK_CORE_4_0);
+            }
+            Ok(Self {
+                transport: WasmWsTransport::connect(&url)?,
+                channel: HciChannel::new(),
+                runner,
+                started: false,
+                log: Vec::new(),
+            })
+        }
+
+        /// The underlying WebSocket ready state (per the WebSocket API).
+        pub fn ready_state(&self) -> u16 {
+            self.transport.ready_state()
+        }
+
+        /// One pump plus one step. Returns the report as JSON.
+        pub fn tick(&mut self) -> Result<String, JsValue> {
+            self.transport.pump(&self.channel)?;
+            let now = now_ms();
+            if !self.started && self.transport.is_open() {
+                for packet in self.runner.start(now) {
+                    self.channel.inject_host_packet(packet).map_err(js_error)?;
+                }
+                self.started = true;
+            }
+            if self.started {
+                while let Some(packet) = self.channel.poll_controller_packet() {
+                    for out in self.runner.on_packet(&packet, now) {
+                        let _ = self.channel.inject_host_packet(out);
+                    }
+                }
+                for packet in self.runner.step(now) {
+                    let _ = self.channel.inject_host_packet(packet);
+                }
+            }
+            self.log.extend(self.runner.take_log());
+            self.transport.pump(&self.channel)?;
+            Ok(self.runner.report_json())
+        }
+
+        /// Tells the run what the peripheral saw. `last_byte_ms` must be on
+        /// the same clock this object uses — which it is when both halves
+        /// live in one page, and is why netsim runs are `server-stamped`
+        /// rather than merely `peer-reported`.
+        pub fn note_server(&mut self, bytes: f64, chunks: u32, last_byte_ms: Option<f64>) {
+            self.runner
+                .note_server(crate::device::throughput::SinkCounters {
+                    bytes: bytes.max(0.0) as u64,
+                    chunks,
+                    expected: 0,
+                    first_byte_ms: None,
+                    last_byte_ms,
+                });
+        }
+
+        /// Whether the run reached its end, successfully or not.
+        pub fn is_finished(&self) -> bool {
+            self.runner.is_finished()
+        }
+
+        /// What the run measured.
+        pub fn report_json(&self) -> String {
+            self.runner.report_json()
+        }
+
+        /// The progress lines, oldest first.
+        pub fn log(&self) -> js_sys::Array {
+            self.log
+                .iter()
+                .map(|line| JsValue::from_str(line))
+                .collect()
+        }
+    }
+
     /// Runs a Rhai test script (device-building + `assert(...)`) and returns
     /// `{"ok":true}` if every assertion passed, or `{"ok":false,"error":"…"}`
     /// with the failure message.
@@ -5690,8 +5994,8 @@ mod web {
 
 #[cfg(target_arch = "wasm32")]
 pub use web::{
-    WebAdvertiser, WebCarKit, WebPeripheral, WebScanner, WebSession, default_heart_rate_script,
-    run_test,
+    WebAdvertiser, WebBulkBench, WebBulkCentral, WebBulkSink, WebCarKit, WebPeripheral, WebScanner,
+    WebSession, default_heart_rate_script, run_test,
 };
 
 #[cfg(test)]

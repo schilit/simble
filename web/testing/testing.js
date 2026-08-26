@@ -1,9 +1,23 @@
-// SimBLE Testing page: run an assert-based Rhai script and show PASS/FAIL.
-// The script IS the device and the test; run_test() evaluates it deterministically
-// in a fresh engine (no netsim, no connection) and reports the result.
+// SimBLE Testing page: two categories of test, one page.
+//
+// **Asserts** — the original runner. A SimBLE device is a Rhai script; add
+// `assert(...)` and the same script is a test. `run_test()` evaluates it
+// deterministically in a fresh engine — no netsim, no connection, no clock —
+// and reports PASS or FAIL.
+//
+// **Data** — a 256 KB bulk transfer, measured on whichever controller you
+// pick, with the setup phases timed separately from the payload. Lives in
+// ./data.js; it is a much larger thing than the assert runner and shares
+// nothing with it but the tab strip.
+//
+// The two are categories rather than two pages because the question they
+// answer is one question — "is this device right, and how does it behave?" —
+// and because a person comparing controllers wants the assert runner one
+// click away, not one navigation away.
 
 import init, { run_test } from "../pkg/simble.js";
 import { attachHighlightedEditor } from "../common/highlight.js";
+import { mountData } from "./data.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -51,6 +65,34 @@ function runTest() {
   showResult(res.ok, res.error, performance.now() - t0);
 }
 
+// --- the category strip -----------------------------------------------------
+//
+// Both panels exist in the DOM from the start and one is hidden. The Data
+// category holds a running measurement and a chart laid out against its
+// container's pixel width; rebuilding it on every tab switch would throw
+// away the first and mis-size the second.
+
+let dataMounted = false;
+
+function selectCategory(name) {
+  for (const tab of document.querySelectorAll(".cat-tab")) {
+    const active = tab.dataset.cat === name;
+    tab.classList.toggle("active", active);
+    tab.setAttribute("aria-selected", String(active));
+  }
+  $("cat-asserts").hidden = name !== "asserts";
+  $("cat-data").hidden = name !== "data";
+  if (name === "data" && !dataMounted) {
+    dataMounted = true;
+    mountData($("cat-data"));
+  }
+  try {
+    localStorage.setItem("simble-testing-category", name);
+  } catch (e) {
+    /* the choice applies to this page, it just is not remembered */
+  }
+}
+
 await Promise.all([init(), loadExamples()]);
 editor = $("script");
 editor.value = EXAMPLES.structure;
@@ -65,3 +107,15 @@ $("examples").addEventListener("change", (e) => {
     $("result").className = "result";
   }
 });
+
+for (const tab of document.querySelectorAll(".cat-tab")) {
+  tab.addEventListener("click", () => selectCategory(tab.dataset.cat));
+}
+
+let remembered = "asserts";
+try {
+  remembered = localStorage.getItem("simble-testing-category") || "asserts";
+} catch (e) {
+  /* private window */
+}
+selectCategory(remembered === "data" ? "data" : "asserts");

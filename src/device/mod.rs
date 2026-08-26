@@ -25,6 +25,7 @@ pub(crate) mod observer;
 pub mod profile_scene;
 pub mod ranging_scene;
 pub mod speaker_scene;
+pub mod throughput;
 pub(crate) mod virtual_device;
 
 pub use a2dp::{A2dpSink, A2dpSource, SourcePhase};
@@ -51,4 +52,7 @@ pub use observer::{AttServerObserver, SubscriptionReason};
 pub use profile_scene::{DeviceSpec, LinkPhase as ClassicLinkPhase, ProfileScene};
 pub use ranging_scene::RangingScene;
 pub use speaker_scene::SpeakerScene;
+pub use throughput::{
+    BulkCentral, BulkOptions, BulkPhase, BulkReport, BulkSink, SinkCounters, ThroughputScene,
+};
 pub use virtual_device::VirtualDevice;
