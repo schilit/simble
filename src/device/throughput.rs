@@ -632,9 +632,10 @@ impl BulkCentral {
     pub fn on_packet(&mut self, packet: &[u8], now_ms: f64) -> Vec<Vec<u8>> {
         self.observe_controller(packet);
         let mut out = self.central.on_packet(packet);
-        self.drain_events(now_ms);
-        out.extend(self.step(now_ms));
         self.charge(&out);
+        self.drain_events(now_ms);
+        // `step` charges its own output, so this must not charge again.
+        out.extend(self.step(now_ms));
         out
     }
 

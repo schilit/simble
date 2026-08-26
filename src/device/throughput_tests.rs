@@ -364,3 +364,89 @@ fn a_second_run_against_the_same_sink_starts_from_zero() {
     assert_eq!(counters.chunks, 0);
     assert_eq!(counters.expected, 512);
 }
+
+/// Every ACL packet the runner hands out is charged against the controller's
+/// buffers exactly once.
+///
+/// This is the invariant that a simulated run cannot check on its own. The
+/// scene's link has no buffer pool and never sends `Number Of Completed
+/// Packets`, so a packet charged twice costs nothing here — it cost the whole
+/// transfer on real silicon. `step` charges its own output and `on_packet`
+/// charges its own; when `on_packet` also charged what `step` returned, every
+/// streamed fragment was billed twice, `acl_outstanding` climbed past the
+/// pool and the budget sat at zero forever. The run reported "stalled in
+/// transfer — 0 of 16384 bytes" while the link was perfectly healthy.
+///
+/// Counting the packets as they leave is the only way to see it: the runner's
+/// own tally is the thing under test, so it cannot be the reference.
+#[test]
+fn each_acl_packet_is_charged_exactly_once() {
+    let mut scene = scene(4096);
+    let mut handed_out = 0usize;
+    let mut step = 0usize;
+    // Charging is a no-op until the controller reports its pool, and the
+    // simulated link never does. A pool far larger than the run needs turns
+    // the accounting on without ever letting the budget bind, so the run
+    // still finishes and the tally is purely a count of what went out.
+    scene.runner.acl_total = Some(u16::MAX);
+
+    // `tick`, unrolled, so the ACL packets can be counted on their way past.
+    while step < 4000 && !scene.runner.is_finished() {
+        let now = clock(step);
+        if !scene.started {
+            for packet in scene.sink.start_commands() {
+                let _ = scene.sink_channel.inject_host_packet(packet);
+            }
+            for packet in scene.runner.start(now) {
+                handed_out += acl_count(&packet);
+                let _ = scene.central_channel.inject_host_packet(packet);
+            }
+            scene.started = true;
+        }
+        for packet in scene.sink.poll() {
+            let _ = scene.sink_channel.inject_host_packet(packet);
+        }
+        for packet in scene.runner.step(now) {
+            handed_out += acl_count(&packet);
+            let _ = scene.central_channel.inject_host_packet(packet);
+        }
+
+        scene.link.tick();
+
+        while let Some(packet) = scene.sink_channel.poll_controller_packet() {
+            for out in scene.sink.on_packet(&packet, now) {
+                let _ = scene.sink_channel.inject_host_packet(out);
+            }
+        }
+        while let Some(packet) = scene.central_channel.poll_controller_packet() {
+            for out in scene.runner.on_packet(&packet, now) {
+                handed_out += acl_count(&out);
+                let _ = scene.central_channel.inject_host_packet(out);
+            }
+        }
+        scene.runner.note_server(scene.sink.counters());
+        step += 1;
+    }
+
+    assert!(
+        scene.runner.is_finished(),
+        "the run should finish so there is something to have charged"
+    );
+    assert!(handed_out > 0, "the run should have sent ACL packets");
+    assert_eq!(
+        scene.runner.acl_total,
+        Some(u16::MAX),
+        "the simulated controller should not have reported a pool of its own"
+    );
+    // Nothing credits them back in simulation, so the tally is the count.
+    assert_eq!(
+        scene.runner.acl_outstanding as usize, handed_out,
+        "charged {} for {handed_out} ACL packets actually handed to the controller",
+        scene.runner.acl_outstanding
+    );
+}
+
+/// One if this is an ACL packet, zero otherwise.
+fn acl_count(packet: &[u8]) -> usize {
+    usize::from(packet.first() == Some(&crate::transport::h4_type::HCI_ACL_DATA))
+}
