@@ -9,6 +9,12 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
+    <!-- The stats server. The counters must leave this device by a path that
+         is not the link being measured: anything sent over Bluetooth costs
+         air time, ends the measured transfer a round trip late, and cannot
+         arrive at all when the run is a deliberately broken link. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <uses-feature
         android:name="android.hardware.bluetooth_le"
         android:required="true" />

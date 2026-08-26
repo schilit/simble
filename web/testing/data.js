@@ -76,6 +76,11 @@ const SINK_ADDR = "CC:1E:57:00:00:0B";
 /// The sink strip's value when the peripheral is a phone running SimBLE Sink
 /// rather than a dongle of ours.
 const PHONE_SINK = "phone";
+/// Where SimBLE Sink serves its counters. `adb forward tcp:8099 tcp:8099`
+/// makes this work over USB or wifi adb without knowing the phone's address;
+/// a phone reachable directly can be named here instead.
+const PHONE_STATS_DEFAULT = "http://127.0.0.1:8099";
+const PHONE_STATS_KEY = "simble.data.phoneStats";
 const CENTRAL_ADDR = "CC:1E:57:00:00:0C";
 const netsimUrl = (node, address) =>
   `ws://localhost:7681/v1/websocket/bt?name=${encodeURIComponent(node)}&address=${address}`;
@@ -231,7 +236,23 @@ async function runInPage(options, onStage) {
 /// from a rotating resolvable private address that it will not disclose even
 /// to its own app, so the address is discovered by service and never
 /// configured.
-async function runAgainstPhone(options, centralUrl, legacyMasks, onStage) {
+async function runAgainstPhone(options, centralUrl, legacyMasks, onStage, statsBase) {
+  // Zero the phone's counters before a byte moves. This is the out-of-band
+  // twin of a BEGIN on the control point, and the reason the link can carry
+  // payload and nothing else.
+  onStage("resetting the phone's counters");
+  try {
+    await fetch(`${statsBase}/reset?total=${options.total_bytes}`, { cache: "no-store" });
+  } catch (e) {
+    return {
+      report: {
+        phase: "failed",
+        failure: `SimBLE Sink is not answering at ${statsBase} — `
+          + `try: adb forward tcp:8099 tcp:8099`,
+      },
+      log: [],
+    };
+  }
   let central = null;
   try {
     central = WebBulkCentral.discovering(centralUrl, JSON.stringify(options), legacyMasks);
@@ -268,7 +289,26 @@ async function runAgainstPhone(options, centralUrl, legacyMasks, onStage) {
       );
       await watch.yield();
     }
-    return { report, ...watch.verdict(), log: Array.from(central.log()) };
+    const log = Array.from(central.log());
+    // The measurement proper, on a path the run never touched.
+    try {
+      const sink = await (await fetch(`${statsBase}/stats`, { cache: "no-store" })).json();
+      report.bytes_received = sink.bytes;
+      report.chunks_received = sink.chunks;
+      // Not `peer-reported`: nothing came back over the link. The count is the
+      // phone's own, fetched over wifi, and the duration is measured end to
+      // end on the phone's clock — a duration needs no agreement about epochs.
+      report.confirmation = "http-reported";
+      report.sink_duration_ms = sink.duration_ms;
+      log.push(`the phone received ${sink.bytes} of ${options.total_bytes} bytes `
+        + `in ${sink.chunks} chunks over ${sink.duration_ms} ms`);
+      if (sink.bytes !== options.total_bytes) {
+        log.push(`${options.total_bytes - sink.bytes} bytes lost`);
+      }
+    } catch (e) {
+      log.push(`could not read the phone's counters: ${e?.message ?? e}`);
+    }
+    return { report, ...watch.verdict(), log };
   } finally {
     central?.free?.();
   }
@@ -796,14 +836,36 @@ export function mountData(root) {
       // dongle does not: the app has to be running on it.
       sinkStrip.setWhy(
         value.device === PHONE_SINK
-          ? "the phone counts what lands and reports it back — start SimBLE Sink on it first"
+          ? "the phone counts what lands and serves it over HTTP — start SimBLE Sink on it first"
           : "the peripheral: it counts what lands",
       );
+      phoneStatsRow.hidden = value.device !== PHONE_SINK;
       return null;
     },
     why: "the peripheral: it counts what lands",
   });
-  $("data-strips").append(centralStrip.el, sinkStrip.el);
+  // Only meaningful when the peripheral is a phone, so it lives with that
+  // choice rather than in the controller bar.
+  const phoneStatsRow = document.createElement("div");
+  phoneStatsRow.className = "ctl-strip";
+  phoneStatsRow.hidden = true;
+  const phoneStatsLabel = document.createElement("span");
+  phoneStatsLabel.className = "strip-label";
+  phoneStatsLabel.textContent = "sink stats";
+  const phoneStats = document.createElement("input");
+  phoneStats.type = "text";
+  phoneStats.size = 28;
+  phoneStats.value = localStorage.getItem(PHONE_STATS_KEY) || PHONE_STATS_DEFAULT;
+  phoneStats.addEventListener("change", () => {
+    localStorage.setItem(PHONE_STATS_KEY, phoneStats.value.trim());
+  });
+  const phoneStatsWhy = document.createElement("span");
+  phoneStatsWhy.className = "strip-why";
+  phoneStatsWhy.textContent =
+    "counters come back over HTTP, not over the link — adb forward tcp:8099 tcp:8099";
+  phoneStatsRow.append(phoneStatsLabel, phoneStats, phoneStatsWhy);
+
+  $("data-strips").append(centralStrip.el, sinkStrip.el, phoneStatsRow);
 
   async function refreshStrips() {
     const usb = bar.selected === "usb";
@@ -824,6 +886,7 @@ export function mountData(root) {
         dongles.sink = list[Math.min(1, list.length - 1)].selector;
         sinkStrip.set({ kind: "usb", device: dongles.sink });
       }
+      phoneStatsRow.hidden = dongles.sink !== PHONE_SINK;
       if (dongles.sink === PHONE_SINK) {
         sinkStrip.setWhy(
           "the phone counts what lands and reports it back — start SimBLE Sink on it first",
@@ -905,10 +968,14 @@ export function mountData(root) {
     }
     if (dongles.sink === PHONE_SINK) {
       return runAgainstPhone(
-        options,
+        // The link carries payload only: a FINISH/REPORT exchange costs air
+        // time on the link under test and ends the measured transfer a round
+        // trip late, and a broken-link run could never deliver it at all.
+        { ...options, use_control_point: false },
         `${base}/?device=${encodeURIComponent(dongles.central)}`,
         true,
         onStage,
+        phoneStats.value.trim().replace(/\/+$/, "") || PHONE_STATS_DEFAULT,
       );
     }
     if (dongles.central === dongles.sink) {

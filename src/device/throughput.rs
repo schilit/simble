@@ -151,6 +151,21 @@ pub struct BulkOptions {
     pub window_chunks: usize,
     /// How long a segment may stall before the run is called failed.
     pub timeout_ms: f64,
+    /// Whether to use the peer's control point to set up and read back the
+    /// run.
+    ///
+    /// `false` keeps the link carrying **payload and nothing else**, which is
+    /// the only honest way to measure a link whose behaviour is the subject.
+    /// A `BEGIN`/`FINISH` exchange costs air time on the link under test, and
+    /// the report's arrival is what ends the measured transfer — so every
+    /// figure includes a round trip of the very thing being measured. Worse,
+    /// a run that exists to break the link cannot deliver its own result over
+    /// it.
+    ///
+    /// A caller that turns this off is expected to collect the peer's
+    /// counters by some other path and hand them to [`BulkCentral::note_server`]
+    /// — over HTTP, for a phone running SimBLE Sink.
+    pub use_control_point: bool,
 }
 
 impl Default for BulkOptions {
@@ -160,6 +175,7 @@ impl Default for BulkOptions {
             with_response: false,
             window_chunks: DEFAULT_WINDOW_CHUNKS,
             timeout_ms: DEFAULT_TIMEOUT_MS,
+            use_control_point: true,
         }
     }
 }
@@ -782,19 +798,23 @@ impl BulkCentral {
         }
         self.mtu = self.central.mtu();
         self.chunk_bytes = self.writable_chunk();
-        if self.central.value_handle(bulk_uuid::CONTROL).is_some() {
+        if self.options.use_control_point
+            && self.central.value_handle(bulk_uuid::CONTROL).is_some() {
             self.has_control = true;
             self.central.queue_subscribe(bulk_uuid::CONTROL, true);
             self.step = Step::Beginning;
             self.progress(now_ms, "subscribing to the peer's control point");
             return;
         }
-        // No control point: the peer is somebody else's. The bytes still go,
-        // and the report will say the arrival was never confirmed.
-        self.log.push(
-            "the peer has no control point — this run measures bytes SENT, not delivered"
-                .to_string(),
-        );
+        // Either the peer is somebody else's, or the caller deliberately kept
+        // the link clean. The bytes still go; what differs is who is expected
+        // to produce the arrival count.
+        self.log.push(if self.options.use_control_point {
+            "the peer has no control point — this run measures bytes SENT, not delivered".to_string()
+        } else {
+            "control point off — the link carries payload only; the count must come from elsewhere"
+                .to_string()
+        });
         self.enter_transfer(now_ms);
     }
 

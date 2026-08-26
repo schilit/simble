@@ -47,7 +47,7 @@ import java.util.UUID;
  * transfer, which is the whole point of a first phone measurement. A visible
  * counter is also the fastest way to see a run stall.
  */
-public class SinkActivity extends Activity {
+public class SinkActivity extends Activity implements StatsServer.Stats {
 
     private static final String TAG = "SimbleSink";
 
@@ -78,15 +78,30 @@ public class SinkActivity extends Activity {
     private long expected;
     private long firstByteMs;
     private long lastByteMs;
+    private boolean advertising;
 
     private TextView status;
     private TextView counters;
+    private TextView endpoint;
+
+    private StatsServer statsServer;
+    private Thread statsThread;
+    private int mtu;
+    private String peer = "";
 
     @Override
     protected void onCreate(Bundle saved) {
         super.onCreate(saved);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         buildUi();
+
+        // Started before the permission check: the counters are worth serving
+        // even from a run that never got a radio.
+        statsServer = new StatsServer(this);
+        statsThread = new Thread(statsServer, "simble-stats");
+        statsThread.setDaemon(true);
+        statsThread.start();
+        runOnUiThread(() -> endpoint.setText("http://" + StatsServer.address() + "/stats"));
 
         // Granted out of band in practice:
         //   adb shell pm grant com.simble.sink android.permission.BLUETOOTH_ADVERTISE
@@ -185,6 +200,7 @@ public class SinkActivity extends Activity {
             // Android advertises from a rotating resolvable private address and
             // does not tell the app what it is, so the central has to find us by
             // service UUID rather than by a address written down in advance.
+            advertising = true;
             say("advertising f0bb0001 — waiting for a central");
             Log.i(TAG, "advertising started");
         }
@@ -200,6 +216,7 @@ public class SinkActivity extends Activity {
         @Override
         public void onConnectionStateChange(BluetoothDevice device, int status, int state) {
             if (state == BluetoothGatt.STATE_CONNECTED) {
+                peer = device.getAddress();
                 say("connected to " + device.getAddress());
             } else {
                 say("disconnected — advertising again");
@@ -209,6 +226,7 @@ public class SinkActivity extends Activity {
 
         @Override
         public void onMtuChanged(BluetoothDevice device, int mtu) {
+            SinkActivity.this.mtu = mtu;
             Log.i(TAG, "MTU " + mtu);
             say("connected, MTU " + mtu);
         }
@@ -225,13 +243,7 @@ public class SinkActivity extends Activity {
 
             if (DATA.equals(characteristic.getUuid())) {
                 if (value != null && value.length > 0) {
-                    long now = System.currentTimeMillis();
-                    if (bytes == 0) {
-                        firstByteMs = now;
-                    }
-                    lastByteMs = now;
-                    bytes += value.length;
-                    chunks++;
+                    count(value.length);
                     showCounters();
                 }
             } else if (CONTROL.equals(characteristic.getUuid())) {
@@ -297,6 +309,18 @@ public class SinkActivity extends Activity {
         }
     }
 
+    /// One arrival. Synchronized because writes land on a binder thread and
+    /// the stats server reads from its own.
+    private synchronized void count(int length) {
+        long now = System.currentTimeMillis();
+        if (bytes == 0) {
+            firstByteMs = now;
+        }
+        lastByteMs = now;
+        bytes += length;
+        chunks++;
+    }
+
     private void notifyControl(BluetoothDevice device, byte[] payload) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             server.notifyCharacteristicChanged(device, control, false, payload);
@@ -318,6 +342,50 @@ public class SinkActivity extends Activity {
         b[at + 1] = (byte) ((v >> 8) & 0xFF);
         b[at + 2] = (byte) ((v >> 16) & 0xFF);
         b[at + 3] = (byte) ((v >> 24) & 0xFF);
+    }
+
+    // -- what the stats server serves ---------------------------------------
+
+    /// The counters, as JSON.
+    ///
+    /// `duration_ms` is the span between the first and last byte *on this
+    /// device's clock*. A duration needs no agreement about epochs, which is
+    /// what makes it quotable by a caller whose clock is unrelated — and it
+    /// covers only the data path, with none of the round trip that ending a
+    /// run over the link itself would have included.
+    @Override
+    public synchronized String json() {
+        long duration = (bytes > 0 && lastByteMs >= firstByteMs) ? lastByteMs - firstByteMs : 0;
+        StringBuilder out = new StringBuilder();
+        out.append('{');
+        out.append("\"bytes\":").append(bytes).append(',');
+        out.append("\"chunks\":").append(chunks).append(',');
+        out.append("\"expected\":").append(expected).append(',');
+        out.append("\"duration_ms\":").append(duration).append(',');
+        out.append("\"first_byte_ms\":").append(firstByteMs).append(',');
+        out.append("\"last_byte_ms\":").append(lastByteMs).append(',');
+        out.append("\"mtu\":").append(mtu).append(',');
+        out.append("\"peer\":\"").append(peer).append("\",");
+        out.append("\"advertising\":").append(advertising);
+        out.append('}');
+        return out.toString();
+    }
+
+    /// Zeroes the counters for the next run.
+    ///
+    /// The out-of-band twin of a `BEGIN` on the control point, so a run can be
+    /// set up and read back without the link carrying anything but payload.
+    @Override
+    public synchronized void reset(long expected) {
+        bytes = 0;
+        chunks = 0;
+        firstByteMs = 0;
+        lastByteMs = 0;
+        this.expected = expected;
+        showCounters();
+        say(expected > 0
+                ? "reset over HTTP — expecting " + expected + " bytes"
+                : "counters reset over HTTP");
     }
 
     // -- the visible part ---------------------------------------------------
@@ -342,9 +410,15 @@ public class SinkActivity extends Activity {
         counters.setTextSize(20);
         counters.setGravity(Gravity.CENTER);
 
+        endpoint = new TextView(this);
+        endpoint.setTextSize(13);
+        endpoint.setGravity(Gravity.CENTER);
+        endpoint.setPadding(0, 32, 0, 0);
+
         root.addView(title);
         root.addView(status);
         root.addView(counters);
+        root.addView(endpoint);
         setContentView(root);
         showCounters();
     }
@@ -366,6 +440,9 @@ public class SinkActivity extends Activity {
         }
         if (server != null) {
             server.close();
+        }
+        if (statsServer != null) {
+            statsServer.stop();
         }
     }
 }

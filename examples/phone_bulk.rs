@@ -9,6 +9,24 @@
 //! receiving end, which is where the bugs that only real silicon shows have
 //! always been.
 //!
+//! # Why the counters come back over HTTP
+//!
+//! They must not come back over the link. A `FINISH`/`REPORT` exchange on the
+//! peer's control point costs air time on the link being measured, and the
+//! report's *arrival* is what ends the measured transfer — so every figure
+//! would include a round trip of the thing under test. A run whose whole
+//! point is a broken link could not deliver its result over it at all.
+//!
+//! So the run sets `use_control_point: false` and the link carries payload
+//! and nothing else. SimBLE Sink serves its counters on port 8099, and this
+//! reads them before and after. The phone's `duration_ms` is measured
+//! entirely on the phone's own clock; a *duration* needs no agreement about
+//! epochs, which is what makes it quotable here.
+//!
+//! Reach it however the phone is reachable — a plain address, or a forward:
+//!
+//!     adb forward tcp:8099 tcp:8099
+//!
 //! # Why this scans first
 //!
 //! Android advertises from a resolvable private address that rotates, and it
@@ -28,6 +46,9 @@ use simble::transport::usb::{UsbSelector, UsbTransport};
 use simble::transport::wasm_ws::{parse_scan_reports, queue_scanner_start};
 use simble::types::Address;
 
+use std::io::{Read, Write};
+use std::net::TcpStream;
+
 /// LE Set Scan Enable — off, no duplicate filtering.
 const SCAN_OFF: [u8; 5] = [0x0C, 0x20, 0x02, 0x00, 0x00];
 
@@ -39,6 +60,11 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(65536);
 
+    // Where SimBLE Sink is serving. `adb forward tcp:8099 tcp:8099` makes the
+    // default work over USB or wifi adb without knowing the phone's address.
+    let stats_host = std::env::var("SIMBLE_SINK_HTTP")
+        .unwrap_or_else(|_| "127.0.0.1:8099".to_string());
+
     let sel = UsbSelector::parse(selector).expect("selector");
     let mut usb = UsbTransport::open_selected(&sel).expect("open dongle");
     let channel = HciChannel::new();
@@ -49,6 +75,7 @@ fn main() {
     println!("scanning on {selector} for {wanted}");
     queue_scanner_start(&channel).expect("scanner bring-up");
 
+    let scan_began = Instant::now();
     let Some((address, rssi, name)) = find_sink(&mut usb, &channel, &wanted, Duration::from_secs(20))
     else {
         eprintln!(
@@ -60,18 +87,34 @@ fn main() {
     };
 
     println!(
-        "found {address} at {rssi} dBm{}",
-        name.map(|n| format!(" — \"{n}\"")).unwrap_or_default()
+        "found {address} at {rssi} dBm{} in {:.1} ms",
+        name.map(|n| format!(" — \"{n}\"")).unwrap_or_default(),
+        scan_began.elapsed().as_secs_f64() * 1000.0
     );
 
     channel.send_command(&SCAN_OFF).expect("scan off");
     settle(&mut usb, &channel, Duration::from_millis(300));
+
+    // Zero the peer's counters out of band, so the link carries no setup
+    // either. This is the HTTP twin of a `BEGIN` on the control point.
+    match http_get(&stats_host, &format!("/reset?total={total_bytes}")) {
+        Ok(body) => println!("sink reset: {body}"),
+        Err(e) => {
+            eprintln!(
+                "could not reach SimBLE Sink at {stats_host}: {e}\n\
+                 try: adb forward tcp:8099 tcp:8099"
+            );
+            std::process::exit(1);
+        }
+    }
 
     let target: Address = address.parse().expect("address");
     let mut run = BulkCentral::new(
         target,
         BulkOptions {
             total_bytes,
+            // The link carries payload only; the count comes over HTTP.
+            use_control_point: false,
             ..BulkOptions::default()
         },
     );
@@ -104,6 +147,14 @@ fn main() {
         println!("  {line}");
     }
     println!("{}", run.report_json());
+
+    // The measurement proper: what the phone says it received, on a path the
+    // run did not touch.
+    match http_get(&stats_host, "/stats") {
+        Ok(body) => println!("sink says: {body}"),
+        Err(e) => eprintln!("could not read the sink's counters: {e}"),
+    }
+
     if !run.is_finished() {
         eprintln!("gave up after 180 s");
         std::process::exit(1);
@@ -134,6 +185,24 @@ fn find_sink(
         std::thread::sleep(Duration::from_millis(2));
     }
     None
+}
+
+/// One HTTP GET, hand-rolled because this crate carries no HTTP client and
+/// this speaks to exactly one server that answers in one packet.
+fn http_get(host: &str, path: &str) -> std::io::Result<String> {
+    let mut stream = TcpStream::connect(host)?;
+    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+    )?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response)?;
+    // The body is whatever follows the blank line.
+    Ok(response
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body.trim().to_string())
+        .unwrap_or(response))
 }
 
 /// Drains the controller for a while, so a mode change lands before the next.
