@@ -58,6 +58,10 @@ export const SUPPORTS = { "in-page": true, "websocket": true, "usb": true };
 // negotiated. The colours are the site's own palette so the chart does not
 // introduce a fifth accent nobody else uses.
 const PHASES = [
+  // Finding a peer nobody named. Only a scanning run has one, and it happens
+  // before the run starts, so it is its own segment rather than part of
+  // `discover`, which is bring-up against a peer already known.
+  { key: "scan_ms", label: "scan", fill: "#bf3989" },
   { key: "discover_ms", label: "discover", fill: "#8250df" },
   { key: "connect_ms", label: "connect", fill: "#0969da" },
   { key: "negotiate_ms", label: "negotiate", fill: "#9a6700" },
@@ -290,6 +294,9 @@ async function runAgainstPhone(options, centralUrl, legacyMasks, onStage, statsB
       await watch.yield();
     }
     const log = Array.from(central.log());
+    // -1 means this run was aimed at an address and never scanned.
+    const scanned = central.scan_ms();
+    if (scanned >= 0) report.scan_ms = scanned;
     // The measurement proper, on a path the run never touched.
     try {
       const sink = await (await fetch(`${statsBase}/stats`, { cache: "no-store" })).json();
@@ -378,6 +385,13 @@ const svgEl = (name, attrs = {}) => {
   for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
   return node;
 };
+
+/// Every segment before the transfer: scan, discover, connect, negotiate.
+const setupMs = (run) =>
+  PHASES.filter((phase) => phase.key !== "transfer_ms").reduce(
+    (total, phase) => total + (run[phase.key] || 0),
+    0,
+  );
 
 const fmtSeconds = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${ms.toFixed(0)} ms`);
 /// A simulated link moves tens of megabytes a second, and five digits of
@@ -684,7 +698,8 @@ function renderTable(host, runs) {
   table.className = "runs";
   table.innerHTML =
     "<thead><tr><th>when</th><th>controller</th><th>mode</th><th>MTU</th><th>PHY</th>" +
-    "<th>sent</th><th>received</th><th>total</th><th>transfer</th><th>confirmation</th>" +
+    "<th>sent</th><th>received</th><th>setup</th><th>total</th><th>transfer</th>" +
+    "<th>confirmation</th>" +
     "<th>event loop</th></tr></thead>";
   const body = document.createElement("tbody");
   for (const run of [...runs].reverse()) {
@@ -702,6 +717,10 @@ function renderTable(host, runs) {
       run.bytes_received != null && run.bytes_received !== run.bytes_sent
         ? `${short(run.bytes_received)} ⚠`
         : short(run.bytes_received),
+      // Everything before a byte moves. On a small transfer this *is* the
+      // run — 2.5 s of it against a phone, which no per-phase tooltip makes
+      // obvious at a glance.
+      setupMs(run) ? fmtSeconds(setupMs(run)) : "—",
       run.complete ? fmtSeconds(run.total_ms) : (run.failure || "failed"),
       run.transfer_ms ? fmtSeconds(run.transfer_ms) : "—",
       run.confirmation ?? "—",

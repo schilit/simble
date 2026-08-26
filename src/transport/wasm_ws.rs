@@ -5899,6 +5899,12 @@ mod web {
         log: Vec<String>,
         /// Set when the peer has to be found before it can be aimed at.
         discover: Option<Discovery>,
+        /// How long the scan took, once it has finished. Kept beside the
+        /// report rather than inside it: finding a peer happens *before*
+        /// `BulkCentral::start`, so it is not one of the four segments and
+        /// must not be folded into `discover_ms`, which measures bring-up and
+        /// hearing a peer already known.
+        scan_taken_ms: Option<f64>,
         /// Why discovery gave up, if it did.
         failed: Option<String>,
     }
@@ -5915,6 +5921,7 @@ mod web {
         legacy_masks: bool,
         scanning: bool,
         give_up_at_ms: Option<f64>,
+        began_ms: Option<f64>,
     }
 
     #[wasm_bindgen]
@@ -5945,6 +5952,7 @@ mod web {
                 started: false,
                 log: Vec::new(),
                 discover: None,
+                scan_taken_ms: None,
                 failed: None,
             })
         }
@@ -5982,7 +5990,9 @@ mod web {
                     legacy_masks,
                     scanning: false,
                     give_up_at_ms: None,
+                    began_ms: None,
                 }),
+                scan_taken_ms: None,
                 failed: None,
             })
         }
@@ -6049,6 +6059,16 @@ mod web {
             }
         }
 
+        /// How long finding the peer took, in milliseconds, or `-1` if this
+        /// run was aimed at an address and never scanned.
+        ///
+        /// Reported separately because it happens *before* the run starts:
+        /// folding it into `discover_ms` would mix finding a stranger with
+        /// bring-up against a peer already known.
+        pub fn scan_ms(&self) -> f64 {
+            self.scan_taken_ms.unwrap_or(-1.0)
+        }
+
         /// Scans for the bulk service, and re-aims the run at what answers.
         ///
         /// Returns `Some(json)` while the scan is still going, which the page
@@ -6069,6 +6089,7 @@ mod web {
             if !d.scanning {
                 queue_scanner_start(&self.channel).map_err(js_error)?;
                 d.scanning = true;
+                d.began_ms = Some(now);
                 // The run's own configured patience, not a second
                 // invented number: a caller who widens the timeout
                 // because the air is busy means it for the scan too.
@@ -6108,7 +6129,12 @@ mod web {
                     runner.set_le_event_mask(crate::device::host::LE_EVENT_MASK_CORE_4_0);
                 }
                 self.runner = runner;
-                self.log.push(format!("found a sink at {address}"));
+                let took = d.began_ms.map(|began| now - began);
+                self.scan_taken_ms = took;
+                self.log.push(match took {
+                    Some(ms) => format!("found a sink at {address} in {ms:.0} ms"),
+                    None => format!("found a sink at {address}"),
+                });
                 return Ok(None);
             }
 
