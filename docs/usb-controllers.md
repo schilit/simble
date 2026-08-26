@@ -29,7 +29,7 @@ reasonable.
 |---|---|---|---|---|
 | **CSR8510 A10** | **Ezurio (Laird) BT820** — `BT820-ND` ([DigiKey](https://www.digikey.com/en/products/detail/laird-connectivity-inc/BT820/4423863), [Newark](https://www.newark.com/laird-technologies/bt820/usb-dongle-bluetooth-bt800-v4/dp/08X8202), [Ezurio](https://www.ezurio.com/part/bt820)) | 4.0 | Real RF, real timing, a real peer: advertising, scanning, connections, GATT | ✅ two of them link and discover over the air (`tests/usb_hardware_test.rs`) |
 | **Realtek RTL8761B / RTL8852BE** | Most "5.x" dongles sold today, many brand names | 5.1–5.3 | Real RF; extended advertising varies by firmware | ⚠️ untested |
-| **Nordic nRF52840** | **Dongle** — `NRF52840-DONGLE` / PCA10059 ([Arrow](https://www.arrow.com/en/products/nrf52840-dongle/nordic-semiconductor), [DigiKey](https://www.digikey.com/en/products/detail/nordic-semiconductor-asa/NRF52840-DONGLE/9491124), [Mouser](https://www.mouser.com/ProductDetail/Nordic-Semiconductor/nRF52840-Dongle?qs=gTYE2QTfZfTbdrOaMHWEZg%3D%3D))<br>**XIAO** — Seeed `102010448` ([DigiKey](https://www.digikey.com/en/products/detail/seeed-technology-co-ltd/102010448/16652893), [Seeed](https://www.seeedstudio.com/Seeed-XIAO-BLE-nRF52840-p-5201.html))<br>**MDK USB Dongle** — makerdiary ([product](https://makerdiary.com/products/nrf52840-mdk-usb-dongle), [wiki](https://wiki.makerdiary.com/nrf52840-mdk-usb-dongle/)), USB-A stick with a UF2 bootloader | 5.4 | Extended advertising, periodic advertising, **LE Audio broadcast (BIG)**, 2M + Coded PHY, LE Extended Create Connection | ✅ **dongle** tested, flashed with Zephyr `hci_usb`<br>⚠️ **XIAO** untested — same silicon, expected to work |
+| **Nordic nRF52840** | **Dongle** — `NRF52840-DONGLE` / PCA10059 ([Arrow](https://www.arrow.com/en/products/nrf52840-dongle/nordic-semiconductor), [DigiKey](https://www.digikey.com/en/products/detail/nordic-semiconductor-asa/NRF52840-DONGLE/9491124), [Mouser](https://www.mouser.com/ProductDetail/Nordic-Semiconductor/nRF52840-Dongle?qs=gTYE2QTfZfTbdrOaMHWEZg%3D%3D))<br>**XIAO** — Seeed `102010448` ([DigiKey](https://www.digikey.com/en/products/detail/seeed-technology-co-ltd/102010448/16652893), [Seeed](https://www.seeedstudio.com/Seeed-XIAO-BLE-nRF52840-p-5201.html))<br>**MDK USB Dongle** — makerdiary ([product](https://makerdiary.com/products/nrf52840-mdk-usb-dongle), [wiki](https://wiki.makerdiary.com/nrf52840-mdk-usb-dongle/)), USB-A stick with a UF2 bootloader | 5.4 | Extended advertising, periodic advertising, 2M + Coded PHY, LE Extended Create Connection, **BIG at the HCI level only — see the caveat below** | ✅ **dongle** tested, flashed with Zephyr `hci_uart` (H4 over CDC-ACM; `hci_usb` cannot carry ISO)<br>⚠️ **XIAO** is a bare MCU, not a dongle: Seeed ships no HCI firmware and its docs never mention HCI, so it needs the same Zephyr build flashed by UF2 |
 | **Nordic nRF54L15** | **DK** ([Arrow](https://www.arrow.com/en/products/nrf54l15-dk/nordic-semiconductor.html), [Newark](https://www.newark.com/new-products/embedded-computers-education-maker-boards/nordic-nrf54l15-dk))<br>**makerdiary Connect Kit** ([direct](https://makerdiary.com/products/nrf54l15-connectkit))<br>**Nordic Tag** — two antennas | 6.0 | **Channel Sounding** (distance ranging) | ❌ blocked **on SimBLE, not the board** — these expose HCI on a virtual serial port and SimBLE has no UART transport yet |
 
 No nRF board is plug-in-and-go: all need firmware flashed before they are
@@ -43,7 +43,30 @@ mass-storage device. Nordic's own dongle needs `nrfutil`, whose pip package
 has no Apple Silicon wheels (`pc_ble_driver_py`) and whose Homebrew cask fails
 macOS Gatekeeper, so the flashing route is markedly more awkward on a Mac.
 
-One thing to know before spending anything: **Channel Sounding cannot be
+### The nRF52840 and LE Audio: what it does, and what nobody supports
+
+Zephyr's open-source controller implements BIG for the nRF52 series, and it
+works as far as HCI can show: on a flashed dongle we created a BIG, opened
+ISO data paths on two BIS, and streamed 240 000 SDUs per BIS for forty
+minutes without an error, with the whole broadcast — BASE, BIG parameters,
+both tones in their right channels — decoded by Bumble as a foreign
+receiver.
+
+**Nordic does not support LE Audio on the nRF52840.** Their position is that
+LE Audio is an nRF5340 feature: the LE Audio controller stack and the LC3
+codec are built for that part, and their Auracast reference designs
+(`nRF Auraconfig`, the broadcast audio samples) target the **nRF5340 Audio
+DK**. See [Auracast feature on
+nRF52840?](https://devzone.nordicsemi.com/f/nordic-q-a/96478/auracast-feature-on-nrf52840).
+
+So: "the controller accepts the commands and the bytes are right" is
+established, and "a commercial receiver joins the broadcast off the air" is
+**not**. A Pixel 9 with Pixel Buds Pro 2 listed our broadcast and synced to
+it but rendered silence, and we could not tell whether the fault lay in the
+phone, the buds, or an unsupported radio path. If Auracast is the goal
+rather than a bonus, buy the part the vendor supports.
+
+One more thing to know before spending anything: **Channel Sounding cannot be
 checked against software at all, and BIG only against netsim.** For BIG the
 situation is narrower than it looks: upstream rootcanal *implements* it
 (`rust/src/llcp/iso.rs`) but ships the release binary with those commands
@@ -92,12 +115,23 @@ Each client gets its own connection, so several radios can be live at once.
 ## Turning an nRF52840 dongle into a controller
 
 An nRF52840 dongle ships running a bootloader, **not** Bluetooth firmware — it
-is a blank board, and will not appear as a controller until you flash it. The
-firmware to use is Zephyr's `hci_usb` sample.
+is a blank board, and will not appear as a controller until you flash it.
+
+**Which sample depends on whether you need ISO.** `hci_usb` is the obvious
+choice and is fine for LE and Classic. It cannot carry HCI ISO data at all:
+Zephyr's USB Bluetooth class hardwires bulk OUT to ACL and its isochronous
+endpoints are zero-bandwidth SCO placeholders (upstream
+[zephyr#44013](https://github.com/zephyrproject-rtos/zephyr/issues/44013)),
+and Nordic's own guidance is that HCI-over-USB is unstable under sustained
+traffic. For anything isochronous — LE Audio, Auracast — use **`hci_uart`**
+instead: it presents as a CDC-ACM serial port carrying H4, where the packet
+type is in-band and ISO rides the same stream as everything else. simble
+reaches it with `serial:/dev/cu.usbmodemXXXX`.
 
 You need a Zephyr workspace, the ARM toolchain, and `nrfutil`. Then:
 
 ```sh
+# hci_usb for LE and Classic; swap in hci_uart if you need ISO (see above).
 west build -p -b nrf52840dongle/nrf52840 zephyr/samples/bluetooth/hci_usb \
   -- -DEXTRA_CONF_FILE=extra.conf
 nrfutil nrf5sdk-tools pkg generate --hw-version 52 --sd-req 0x00 \
