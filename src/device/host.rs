@@ -88,7 +88,9 @@ mod adv_type {
 /// The default LE ACL data length. A host must fragment L2CAP PDUs to this,
 /// as real stacks do (Android fragments its own 65-byte SMP Public Key);
 /// oversized fragments are dropped or mis-handled by real peers.
-const LE_ACL_DATA_LEN: usize = 27;
+/// The ACL payload every LE controller must accept (Vol 6, Part B,
+/// Section 2.4). A safe floor when the controller has not said otherwise.
+pub const LE_ACL_DATA_LEN: usize = 27;
 
 /// Builds one H4 HCI command packet.
 pub fn command(opcode: [u8; 2], params: &[u8]) -> Vec<u8> {
@@ -112,10 +114,27 @@ pub fn adv_data_param(payload: &[u8]) -> Vec<u8> {
 
 /// Splits one L2CAP PDU into the H4 ACL packets that carry it, flagging the
 /// first fragment and any continuations.
+///
+/// Fragments at [`LE_ACL_DATA_LEN`], the 27 bytes every LE controller must
+/// accept. That is the safe floor, not the right answer: a controller reports
+/// what it will really take in Read Buffer Size, and a CSR8510 says 310. Use
+/// [`acl_packets_with_len`] wherever that number is known — fragmenting a
+/// 236-byte write into nine packets instead of one costs nothing in bytes and
+/// everything in buffer credits.
 pub fn acl_packets(handle: u16, l2cap: &[u8]) -> Vec<Vec<u8>> {
+    acl_packets_with_len(handle, l2cap, LE_ACL_DATA_LEN)
+}
+
+/// [`acl_packets`], fragmenting at what the controller said it accepts.
+///
+/// `max_len` is clamped up to [`LE_ACL_DATA_LEN`]: a controller reporting
+/// less than the mandatory minimum is reporting nonsense, and honouring it
+/// would produce packets no peer could reassemble.
+pub fn acl_packets_with_len(handle: u16, l2cap: &[u8], max_len: usize) -> Vec<Vec<u8>> {
+    let max_len = max_len.max(LE_ACL_DATA_LEN);
     let mut packets = Vec::new();
     let mut first = true;
-    for chunk in l2cap.chunks(LE_ACL_DATA_LEN) {
+    for chunk in l2cap.chunks(max_len) {
         let boundary = if first {
             AclPacketBoundary::FirstNonFlushable
         } else {

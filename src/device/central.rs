@@ -40,7 +40,9 @@ use zerocopy::IntoBytes;
 use crate::client::gatt_client::{
     DiscoveredCharacteristic, DiscoveredDescriptor, DiscoveredService, GattClient,
 };
-use crate::device::host::{acl_packets, command, init_commands, init_commands_with_masks};
+use crate::device::host::{
+    LE_ACL_DATA_LEN, acl_packets_with_len, command, init_commands, init_commands_with_masks,
+};
 use crate::l2cap::{AclReassembler, HciAclHeader, L2capHeader};
 use crate::packets::HciEvent;
 use crate::packets::att::opcode as att_op;
@@ -63,6 +65,38 @@ const REASON_REMOTE_USER_TERMINATED: u8 = 0x13;
 /// The ATT MTU this client asks for. 517 is the largest an ATT_MTU field can
 /// express (Vol 3, Part F, Section 3.2.9).
 const CLIENT_MTU: u16 = 517;
+
+/// Signed Write Command — a command, so it is never answered.
+const SIGNED_WRITE_CMD: u8 = 0xD2;
+
+/// ATT error codes this stack sends.
+mod att_error {
+    /// The server does not support the request (Vol 3, Part F, Table 3.4).
+    pub const REQUEST_NOT_SUPPORTED: u8 = 0x06;
+}
+
+/// Whether `op` is a request *from the peer*, which this stack must answer
+/// rather than interpret as a response to something it asked.
+///
+/// Requests and responses alternate through the opcode space, but not
+/// regularly enough to test with arithmetic — `WRITE_CMD` is 0x52 and
+/// `HANDLE_VALUE_NTF` is 0x1B — so they are named.
+fn is_peer_request(op: u8) -> bool {
+    matches!(
+        op,
+        att_op::EXCHANGE_MTU_REQ
+            | att_op::FIND_INFORMATION_REQ
+            | att_op::FIND_BY_TYPE_VALUE_REQ
+            | att_op::READ_BY_TYPE_REQ
+            | att_op::READ_REQ
+            | att_op::READ_BLOB_REQ
+            | att_op::READ_MULTIPLE_REQ
+            | att_op::READ_BY_GROUP_TYPE_REQ
+            | att_op::WRITE_REQ
+            | att_op::PREPARE_WRITE_REQ
+            | att_op::EXECUTE_WRITE_REQ
+    )
+}
 
 /// Where the central is in its connect → discover progression.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -227,6 +261,10 @@ enum Op {
 /// packets, send whatever it hands back.
 pub struct LeCentral {
     /// The advertiser to connect to.
+    /// What the controller said it will take in one ACL packet. Fragmenting
+    /// below this wastes buffer credits: a 236-byte write becomes nine
+    /// packets against a ten-packet pool, so only one write can be in flight.
+    acl_data_len: usize,
     target: Address,
     /// Protocol engine: PDU construction, discovery bookkeeping.
     client: GattClient,
@@ -263,6 +301,7 @@ impl LeCentral {
     /// Creates a central with no target. `connect` points it at one.
     pub fn new() -> Self {
         Self {
+            acl_data_len: LE_ACL_DATA_LEN,
             target: Address::from_be_bytes([0; 6]),
             client: GattClient::new(0, Address::from_be_bytes([0; 6])),
             reassembler: AclReassembler::new(),
@@ -350,6 +389,22 @@ impl LeCentral {
         let mut params = handle.to_le_bytes().to_vec();
         params.push(REASON_REMOTE_USER_TERMINATED);
         vec![command(DISCONNECT, &params)]
+    }
+
+    /// Tells this central what the controller reported in LE Read Buffer Size,
+    /// so writes are fragmented at that size rather than the 27-byte floor.
+    ///
+    /// Only the *LE* answer may size an LE fragment: a BT4.0 controller
+    /// reports a large BR/EDR buffer while its LE path still carries 27.
+    ///
+    /// Values below the mandatory minimum are ignored rather than honoured.
+    pub fn set_acl_data_len(&mut self, len: usize) {
+        self.acl_data_len = len.max(LE_ACL_DATA_LEN);
+    }
+
+    /// What writes are currently fragmented at.
+    pub fn acl_data_len(&self) -> usize {
+        self.acl_data_len
     }
 
     /// The peer this central is pointed at.
@@ -509,7 +564,7 @@ impl LeCentral {
                 };
                 let value_handle = characteristic.value_handle;
                 let pdu = self.client.create_read_request(value_handle);
-                out.extend(acl_packets(handle, &pdu));
+                out.extend(acl_packets_with_len(handle, &pdu, self.acl_data_len));
                 self.in_flight = Some((op, value_handle));
                 Started::InFlight
             }
@@ -526,12 +581,12 @@ impl LeCentral {
                 let value_handle = characteristic.value_handle;
                 if *with_response {
                     let pdu = self.client.create_write_request(value_handle, value);
-                    out.extend(acl_packets(handle, &pdu));
+                    out.extend(acl_packets_with_len(handle, &pdu, self.acl_data_len));
                     self.in_flight = Some((op, value_handle));
                     Started::InFlight
                 } else {
                     let pdu = self.client.create_write_command(value_handle, value);
-                    out.extend(acl_packets(handle, &pdu));
+                    out.extend(acl_packets_with_len(handle, &pdu, self.acl_data_len));
                     // Nothing will ever answer a Write Command, so the
                     // result is reported now rather than never.
                     self.events.push(CentralEvent::CharacteristicWrite {
@@ -572,7 +627,7 @@ impl LeCentral {
                     return Started::Complete;
                 }
                 let pdu = find_information_request(start, end);
-                out.extend(acl_packets(handle, &pdu));
+                out.extend(acl_packets_with_len(handle, &pdu, self.acl_data_len));
                 self.in_flight = Some((op, start));
                 Started::InFlight
             }
@@ -609,7 +664,7 @@ impl LeCentral {
                     0x0001
                 };
                 let pdu = self.client.create_write_request(cccd, &bits.to_le_bytes());
-                out.extend(acl_packets(handle, &pdu));
+                out.extend(acl_packets_with_len(handle, &pdu, self.acl_data_len));
                 self.in_flight = Some((op, value_handle));
                 Started::InFlight
             }
@@ -794,7 +849,7 @@ impl LeCentral {
                     status: 0,
                 });
                 let pdu = self.client.create_exchange_mtu_request(CLIENT_MTU);
-                out.extend(acl_packets(handle, &pdu));
+                out.extend(acl_packets_with_len(handle, &pdu, self.acl_data_len));
             }
             HciEvent::DisconnectionComplete(event) => {
                 self.phase = CentralPhase::Disconnected;
@@ -860,8 +915,45 @@ impl LeCentral {
                 // Without this the server's next indication is never sent.
                 let pdu =
                     L2capHeader::serialize(crate::l2cap::cid::ATT, &[att_op::HANDLE_VALUE_CFM]);
-                out.extend(acl_packets(handle, &pdu));
+                out.extend(acl_packets_with_len(handle, &pdu, self.acl_data_len));
             }
+            return;
+        }
+
+        // A *request* from the peer is not an answer to anything we asked, and
+        // must not advance our client state machine.
+        //
+        // A real peer opens its own client on the same connection: an Android
+        // phone sends Read By Type Request for Service Changed while our
+        // Exchange MTU Request is still outstanding. Feeding that to the FSM
+        // ended the MTU phase on the wrong packet — the MTU stayed at the
+        // default 23, the real Exchange MTU Response arrived one PDU later
+        // with nowhere to go, and 64 KB went to a Pixel 9 Pro as 3277
+        // twenty-byte writes instead of 128 five-hundred-byte ones.
+        //
+        // It has to be *answered*, too. ATT allows one outstanding request per
+        // direction (Vol 3, Part F, Section 3.3.2), so a request we silently
+        // drop wedges the peer's client for the rest of the connection. This
+        // stack is a client and implements no server, and Request Not
+        // Supported is exactly what the spec provides for saying so.
+        if is_peer_request(op) {
+            let pdu = L2capHeader::serialize(
+                crate::l2cap::cid::ATT,
+                &[
+                    att_op::ERROR_RSP,
+                    op,
+                    0x00,
+                    0x00,
+                    att_error::REQUEST_NOT_SUPPORTED,
+                ],
+            );
+            out.extend(acl_packets_with_len(handle, &pdu, self.acl_data_len));
+            return;
+        }
+
+        // A command carries no response and is equally none of the FSM's
+        // business.
+        if op == att_op::WRITE_CMD || op == SIGNED_WRITE_CMD {
             return;
         }
 
@@ -878,7 +970,7 @@ impl LeCentral {
                 });
                 self.phase = CentralPhase::DiscoveringServices;
                 let pdu = self.client.create_discover_services_request(0x0001, 0xFFFF);
-                out.extend(acl_packets(handle, &pdu));
+                out.extend(acl_packets_with_len(handle, &pdu, self.acl_data_len));
             }
             CentralPhase::DiscoveringServices => {
                 if is_error {
@@ -892,7 +984,7 @@ impl LeCentral {
                         let pdu = self
                             .client
                             .create_discover_services_request(last_end + 1, 0xFFFF);
-                        out.extend(acl_packets(handle, &pdu));
+                        out.extend(acl_packets_with_len(handle, &pdu, self.acl_data_len));
                     } else {
                         self.start_characteristic_discovery(out);
                     }
@@ -916,7 +1008,7 @@ impl LeCentral {
                         let pdu = self
                             .client
                             .create_discover_characteristics_request(last + 1, end);
-                        out.extend(acl_packets(handle, &pdu));
+                        out.extend(acl_packets_with_len(handle, &pdu, self.acl_data_len));
                     } else {
                         self.next_characteristic_service(i, out);
                     }
@@ -1089,7 +1181,7 @@ impl LeCentral {
         let pdu = self
             .client
             .create_discover_characteristics_request(service.start_handle, service.end_handle);
-        out.extend(acl_packets(handle, &pdu));
+        out.extend(acl_packets_with_len(handle, &pdu, self.acl_data_len));
     }
 }
 

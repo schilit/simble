@@ -541,6 +541,10 @@ pub struct BulkCentral {
     pending_shared_pool: bool,
     /// The controller's ACL buffer count, when it reports one.
     acl_total: Option<u16>,
+    /// What the controller says it accepts in one ACL packet. `None` until it
+    /// has said. The 27-byte floor is safe but expensive: it turns one
+    /// 236-byte write into nine packets against a ten-packet pool.
+    acl_size: Option<u16>,
     /// ACL packets handed over and not yet completed, when credits are known.
     acl_outstanding: u32,
 
@@ -582,6 +586,7 @@ impl BulkCentral {
             buffer_size_asked: false,
             pending_shared_pool: false,
             acl_total: None,
+            acl_size: None,
             acl_outstanding: 0,
             started_ms: None,
             discover_end_ms: None,
@@ -907,7 +912,7 @@ impl BulkCentral {
         // Leave one buffer spare: a completion can be in flight while the
         // next PDU is queued, and a pool used to its exact last slot has no
         // room for the rounding.
-        let usable = usize::from(buffers).saturating_sub(1).max(1) * LE_ACL_DATA_LEN;
+        let usable = usize::from(buffers).saturating_sub(1).max(1) * self.acl_data_len();
         let by_pool = usable
             .saturating_sub(L2CAP_HEADER + ATT_WRITE_OVERHEAD)
             .max(1);
@@ -917,7 +922,28 @@ impl BulkCentral {
     /// How many H4 ACL packets one chunk becomes.
     fn fragments_per_chunk(&self) -> usize {
         let l2cap = L2CAP_HEADER + ATT_WRITE_OVERHEAD + self.chunk_bytes;
-        l2cap.div_ceil(LE_ACL_DATA_LEN)
+        l2cap.div_ceil(self.acl_data_len())
+    }
+
+    /// Records the controller's ACL packet size and passes it to the central,
+    /// which is what actually fragments.
+    ///
+    /// A zero means "ask the other command" rather than "no room", the same
+    /// way a zero buffer count does, so it is not recorded.
+    fn note_acl_size(&mut self, size: u16) {
+        if size == 0 {
+            return;
+        }
+        self.acl_size = Some(size);
+        self.central.set_acl_data_len(usize::from(size));
+        self.log
+            .push(format!("the controller takes {size} bytes per ACL packet"));
+    }
+
+    /// What one ACL packet carries: the controller's answer, or the floor.
+    fn acl_data_len(&self) -> usize {
+        self.acl_size
+            .map_or(LE_ACL_DATA_LEN, |size| usize::from(size).max(LE_ACL_DATA_LEN))
     }
 
     /// Counts outgoing ACL packets against the controller's buffers.
@@ -954,6 +980,14 @@ impl BulkCentral {
                         && let Some(bytes) = params.get(7..9)
                     {
                         let total = u16::from_le_bytes([bytes[0], bytes[1]]);
+                        // The *count* is shared and usable; the *length* is
+                        // not. This command reports the BR/EDR buffer, and a
+                        // BT4.0 part answers 310 while its LE path still only
+                        // carries 27 — measured on a CSR8510, which silently
+                        // dropped the oversized packets: 63116 of 65536 bytes
+                        // arrived, from a run that reported handing over all
+                        // of them. Only LE Read Buffer Size may size an LE
+                        // fragment.
                         if total > 0 {
                             self.acl_total = Some(total);
                             self.log.push(format!(
@@ -974,6 +1008,9 @@ impl BulkCentral {
                     && let Some(total) = params.get(6).copied()
                     && total > 0
                 {
+                    if let Some(size) = params.get(4..6) {
+                        self.note_acl_size(u16::from_le_bytes([size[0], size[1]]));
+                    }
                     self.acl_total = Some(u16::from(total));
                     self.log
                         .push(format!("the controller reports {total} LE ACL buffers"));
