@@ -490,6 +490,65 @@ flaky hardware.
 end to end on real RF. A fault suite needs a working baseline to break;
 without one, every failure looks like the injection working.
 
+### Where to build Faults first: netsim
+
+netsim already has the primitives, and better ones than the bridge would
+start with:
+
+```sh
+netsim radio ble down <device>    # an instant break
+netsim move <device> x y z        # path loss; walk a device out of range
+netsim link patch …               # link properties
+netsim capture                    # pcap of everything, built in
+```
+
+Two Android emulators on netsim are **two real Android Bluetooth stacks with a
+controllable medium between them** — scriptable, reproducible, no hardware, and
+every fault yields a packet capture of what crossed the air before it broke.
+
+The honest limit: an emulator runs Android's *host* stack over rootcanal's
+controller, not a phone's firmware. That catches host-stack and profile bugs,
+which is most of them, and not controller quirks — the CSR answering LE Read
+Buffer Size with zeros, or the nRF's ISO behaviour, needed real silicon and
+always will.
+
+So the sequencing is: **build Faults on netsim** (reproducible, hands-free,
+pcap included), then port the cases that matter to dongles for the
+controller-level faults only real hardware exhibits.
+
+### The configuration where an emulator and a real phone can meet
+
+They cannot meet at the radio level. A packet on the air is real and netsim's
+ether is a data structure; no software makes a rootcanal PDU appear on a
+phone's antenna. `bumble-bridging-evaluation.md` settles that, and it does not
+change.
+
+One layer up, they can:
+
+```
+real phone <- real RF -> dongle -> simble relay -> netsim socket <-> emulators
+```
+
+One simble process holds both halves — a dongle facing the phone, a netsim
+socket facing the scene — and **re-originates** GATT operations between them.
+The phone sees a real device; the scene sees a real device; simble is the
+relay. That is the device-level proxy from the bridging evaluation, not a PHY
+bridge.
+
+What it costs, and these are not small:
+
+- **Useless for timing.** Every operation crosses two links and a host.
+- **Addresses differ on each side.** Re-origination means anything
+  address-bound does not traverse: pairing, bonds, privacy/RPA, SMP.
+- **Only what the relay understands crosses** — GATT operations, not arbitrary
+  link-layer behaviour.
+
+What it buys is the one thing nothing else here offers: a real phone as a
+participant in a netsim scene. And it composes with faults — netsim breaks its
+half, the bridge breaks the other, so a relayed session can be broken from
+either side, which is a realistic failure mode no single-medium setup
+reproduces.
+
 ### A note on the visualisation
 
 The Data category renders each run as a stacked bar on a shared time axis.
