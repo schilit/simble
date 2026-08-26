@@ -316,16 +316,26 @@ fn test_default_script_full_lifecycle() {
     let commands = drain_host_packets(&channel);
     let opcodes: Vec<u16> = commands.iter().map(|c| opcode_of(c)).collect();
     // 0x2074 (LE Set Host Feature) declares CIS host support, without
-    // which a controller refuses to open an isochronous stream.
+    // which a controller refuses to open an isochronous stream. 0x2005
+    // (LE Set Random Address) precedes the advertising parameters because a
+    // scripted peripheral names the address it advertises from, and only a
+    // random address can be set — a controller's public address is its
+    // silicon's.
     assert_eq!(
         opcodes,
         vec![
-            0x0C03, 0x0C01, 0x2001, 0x2074, 0x2006, 0x2008, 0x2009, 0x200A
+            0x0C03, 0x0C01, 0x2001, 0x2074, 0x2005, 0x2006, 0x2008, 0x2009, 0x200A
         ]
     );
     // Advertising data carries the script device's name and the
     // Environmental Sensing service UUID (0x181A) the script declared.
-    let adv_data = &commands[5];
+    // Found by opcode, not by position: this indexed commands[5] and broke
+    // the day a command was inserted before it, which says nothing about
+    // advertising data.
+    let adv_data = commands
+        .iter()
+        .find(|c| opcode_of(c) == 0x2008)
+        .expect("LE Set Advertising Data was queued");
     assert!(adv_data.windows(15).any(|w| w == b"web-thermometer"));
     assert!(adv_data.windows(2).any(|w| w == [0x1A, 0x18]));
 
@@ -515,7 +525,12 @@ fn test_session_builds_device_incrementally() {
     let channel = HciChannel::new();
     session.queue_start(&channel).unwrap();
     let commands = drain_host_packets(&channel);
-    assert!(commands[5].windows(8).any(|w| w == b"explorer"));
+    // By opcode rather than position, for the same reason as above.
+    let adv_data = commands
+        .iter()
+        .find(|c| opcode_of(c) == 0x2008)
+        .expect("LE Set Advertising Data was queued");
+    assert!(adv_data.windows(8).any(|w| w == b"explorer"));
 }
 
 #[test]

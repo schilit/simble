@@ -30,6 +30,10 @@ pub(crate) mod opcode {
     pub const LE_SET_EVENT_MASK: [u8; 2] = [0x01, 0x20];
     /// LE Set Advertising Parameters.
     pub const LE_SET_ADVERTISING_PARAMETERS: [u8; 2] = [0x06, 0x20];
+    /// LE Set Random Address: the only way a host chooses the address it
+    /// advertises from. A controller's *public* address is its silicon's and
+    /// cannot be set, so a device that names an address must use this one.
+    pub const LE_SET_RANDOM_ADDRESS: [u8; 2] = [0x05, 0x20];
     /// LE Set Advertising Data.
     pub const LE_SET_ADVERTISING_DATA: [u8; 2] = [0x08, 0x20];
     /// LE Set Scan Response Data.
@@ -260,7 +264,24 @@ impl LeHost {
     ) -> Result<Vec<Vec<u8>>, SimbleError> {
         let mut commands = init_commands_with_masks(&EVENT_MASK_ALL, &self.le_event_mask());
 
-        // 100ms interval, public own address, all channels, no filter.
+        // A device whose address type is Random advertises from the address
+        // it names, which a controller only honours after LE Set Random
+        // Address — a *public* address belongs to the silicon and cannot be
+        // set. On a simulated controller either works, because it advertises
+        // whatever it is handed; on a real dongle a Random device that skips
+        // this advertises as the dongle instead, and a peer looking for it by
+        // address never hears it. Measured: a scan stalled for fifteen
+        // seconds against a CSR8510 that was advertising perfectly well under
+        // its own name.
+        let random_address = device.address_type == AddressType::Random;
+        if random_address {
+            commands.push(command(
+                opcode::LE_SET_RANDOM_ADDRESS,
+                device.address.as_slice(),
+            ));
+        }
+
+        // 100ms interval, all channels, no filter.
         let advertising_type = if device.connectable {
             adv_type::ADV_IND
         } else {
@@ -274,7 +295,7 @@ impl LeHost {
                 0xA0,
                 0x00,
                 advertising_type,
-                0x00,
+                u8::from(random_address),
                 0x00,
                 0x00,
                 0x00,

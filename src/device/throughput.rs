@@ -313,7 +313,10 @@ pub struct BulkSink {
 impl BulkSink {
     /// Builds the sink. `name` is what it advertises as.
     pub fn new(name: &str, address: Address) -> Self {
-        let mut device = VirtualDevice::new(name, address, AddressType::Public);
+        // Random, not Public: the benchmark names the address both ends
+        // agree on, and only a random address can be set on a controller
+        // that owns its public one.
+        let mut device = VirtualDevice::new(name, address, AddressType::Random);
         let shared: Arc<Mutex<SinkShared>> = Arc::default();
 
         device.gatt_db.add_service(bulk_uuid::SERVICE, true);

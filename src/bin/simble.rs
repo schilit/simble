@@ -62,7 +62,7 @@ scene options:
 
 Running scripts exits 0 if every assert(...) holds, 1 if any fails.
 Running a scene exits 0 if every device came up and none reported an error.
---usb serves one WebSocket client at a time; point a page's backend at it.";
+--usb serves every dongle at once, one session per client; point a page's backend at it.";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();

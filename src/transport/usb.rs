@@ -1070,7 +1070,17 @@ impl UsbTransport {
 /// in; the "is one plugged in" failure surfaces where it means something.
 pub struct UsbScene {
     /// Which dongle to open, in any of [`UsbSelector`]'s forms.
+    /// The dongle the caller named, and the pool it is the first of.
+    ///
+    /// A dongle is one controller and hosts one device, so a scene with two
+    /// devices needs two dongles. `device` is the one the caller asked for;
+    /// `pool` is every Bluetooth-class dongle on the machine, consulted only
+    /// when a *second* device is added, so a single-dongle machine behaves
+    /// exactly as before.
     device: UsbSelector,
+    pool: Vec<UsbSelector>,
+    /// The dongles already hosting a device, in the order they were taken.
+    taken: Vec<UsbSelector>,
     scene: crate::transport::live_scene::LiveScene<UsbTransport>,
 }
 
@@ -1081,6 +1091,8 @@ impl UsbScene {
     pub fn new(device: UsbSelector) -> Self {
         Self {
             device,
+            pool: Vec::new(),
+            taken: Vec::new(),
             scene: crate::transport::live_scene::LiveScene::new(),
         }
     }
@@ -1091,23 +1103,50 @@ impl UsbScene {
         self.device.describe()
     }
 
-    /// Runs `script` and puts the resulting peripheral on the dongle, opening
-    /// it on this first call. Rejects a second device: one controller, one
-    /// device.
+    /// The dongle for the next device: the caller's choice first, then any
+    /// other Bluetooth-class dongle not already hosting one.
+    ///
+    /// A radio can host exactly one device, so "two devices" and "two
+    /// dongles" are the same requirement. The refusal says which is missing
+    /// rather than asserting the old flat rule that one dongle is the limit.
+    fn next_dongle(&mut self) -> Result<UsbSelector, String> {
+        if self.scene.device_count() == 0 {
+            return Ok(self.device.clone());
+        }
+        if self.pool.is_empty() {
+            self.pool = list_bluetooth_dongles()
+                .map_err(|e| format!("cannot list dongles: {e}"))?
+                .iter()
+                .filter_map(|d| UsbSelector::parse(&d.port_selector()).ok())
+                .collect();
+        }
+        let taken = self.taken.clone();
+        self.pool
+            .iter()
+            .find(|candidate| !taken.iter().any(|t| t.describe() == candidate.describe()))
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "every dongle is already hosting a device ({} plugged in, {} in use) — \
+                     a radio hosts one device, so another needs another dongle; \
+                     run_on(\"self\") for a scene with as many devices as you like",
+                    self.pool.len(),
+                    self.scene.device_count()
+                )
+            })
+    }
+
+    /// Runs `script` and puts the resulting peripheral on a dongle, opening
+    /// it on this call. The first device takes the dongle the caller named;
+    /// each later one takes the next free dongle on the machine, and the
+    /// scene refuses only when the radios run out.
     pub fn add_peripheral(
         &mut self,
         address: crate::types::Address,
         script: &str,
     ) -> Result<usize, String> {
-        if self.scene.device_count() > 0 {
-            return Err(
-                "a USB dongle is one controller and already hosts a device — \
-                        run_on(\"usb\") again to start over, or run_on(\"self\") for a \
-                        scene with several devices"
-                    .to_string(),
-            );
-        }
-        let device = self.device.clone();
+        let device = self.next_dongle()?;
+        self.taken.push(device.clone());
         self.scene.add_peripheral(address, script, |peripheral| {
             // A dongle's vintage is unknown and usually old — the CSR8510
             // clones everyone has are 4.0 parts. The default LE_Event_Mask
