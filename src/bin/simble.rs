@@ -33,9 +33,10 @@
 
 use simble::scene::runner::{RunOptions, RunReport};
 use simble::scene::{Controller, Scene};
+use simble::transport::serial::SerialTransport;
 use simble::transport::usb::{UsbSelector, list_bluetooth_dongles};
 use simble::transport::wasm_ws::{lint_script, run_test_script};
-use simble::transport::{HciChannel, Inbound, UsbTransport, accept_inbound};
+use simble::transport::{HciChannel, HciTransport, Inbound, UsbTransport, accept_inbound};
 use std::io::Read;
 use std::net::{TcpListener, TcpStream};
 use std::process::ExitCode;
@@ -50,6 +51,7 @@ usage:
   simble SCENE.json [SCENE.json ...]   instantiate a scene file and run it
   simble --no-run FILE ...             check only: compile scripts / validate scenes
   simble --usb [SELECTOR] [--ws N]     bridge a USB dongle onto ws://127.0.0.1:N/
+  simble --serial /dev/tty… [--ws N]   bridge a serial (hci_uart) controller instead
                                        SELECTOR: 0a12:0001, #0, 02/4, or 02.3.4
                                        (`simble --usb-list` names every dongle)
   simble mcp                           run the MCP server (stdio) for agents
@@ -95,10 +97,19 @@ fn main() -> ExitCode {
             }
         };
     }
-    if args.iter().any(|a| a == "--usb") {
+    if args.iter().any(|a| a == "--usb" || a == "--serial") {
         return run_bridge(&args);
     }
     run_tests(&args)
+}
+
+/// Which controller the bridge puts on the wire: a USB dongle chosen by
+/// selector, or a serial (H4-over-UART) controller at a tty — a Zephyr
+/// `hci_uart` build, which is how an nRF54L15 (no native USB) becomes a radio.
+#[derive(Clone)]
+enum BridgeSource {
+    Usb(UsbSelector),
+    Serial(String),
 }
 
 /// The MCP server's default WebSocket port, one above the netsim/bridge port
@@ -411,11 +422,22 @@ fn run_bridge(args: &[String]) -> ExitCode {
     // absent), fall back to the first dongle. Two dongles of one model share a
     // vid:pid, so `#0`/`bus.port` are the forms that can actually name one;
     // `usb_list` prints every name each dongle answers to.
-    let selector = args
+    // `--serial /dev/tty…` bridges a serial (hci_uart) controller instead of a
+    // USB dongle — for a radio with no native USB, an nRF54L15 the plainest case.
+    let source = if let Some(path) = args
         .windows(2)
-        .find(|w| w[0] == "--usb")
-        .and_then(|w| UsbSelector::parse(&w[1]).ok())
-        .unwrap_or(UsbSelector::First);
+        .find(|w| w[0] == "--serial")
+        .map(|w| w[1].clone())
+    {
+        BridgeSource::Serial(path)
+    } else {
+        BridgeSource::Usb(
+            args.windows(2)
+                .find(|w| w[0] == "--usb")
+                .and_then(|w| UsbSelector::parse(&w[1]).ok())
+                .unwrap_or(UsbSelector::First),
+        )
+    };
     // `--ws` is accepted as well, because that is what the flag reads like.
     let ws_port = args
         .windows(2)
@@ -440,9 +462,9 @@ fn run_bridge(args: &[String]) -> ExitCode {
     for incoming in listener.incoming() {
         match incoming {
             Ok(stream) => {
-                let fallback = selector.clone();
+                let source = source.clone();
                 std::thread::spawn(move || {
-                    if let Err(e) = serve(stream, &fallback) {
+                    if let Err(e) = serve(stream, &source) {
                         // A client disconnect surfaces as an error too; it is
                         // the clean end of a session, so log it and move on.
                         eprintln!("  session ended: {e}");
@@ -453,6 +475,16 @@ fn run_bridge(args: &[String]) -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+/// The one-entry device list for a serial bridge — the tty it was pointed at,
+/// in the same shape `/devices` gives for a dongle so a page renders it the same.
+fn serial_devices_json(path: &str) -> String {
+    let path = path.replace('"', "'");
+    format!(
+        "{{\"devices\":[{{\"index\":0,\"selector\":\"serial:{path}\",\"bus\":\"serial\",\
+          \"address\":0,\"vid\":\"\",\"pid\":\"\",\"product\":\"Serial HCI ({path})\"}}]}}"
+    )
 }
 
 /// The dongle list a page reads before choosing one, as JSON.
@@ -638,7 +670,7 @@ fn probe_sink(host: &str) -> Option<String> {
 
 /// Serves one WebSocket client end-to-end: handshake, open the dongle, then
 /// shuttle HCI both ways through one shared channel until either side closes.
-fn serve(mut stream: TcpStream, fallback: &UsbSelector) -> Result<(), String> {
+fn serve(mut stream: TcpStream, source: &BridgeSource) -> Result<(), String> {
     let inbound = match accept_inbound(stream.try_clone().map_err(|e| e.to_string())?) {
         Ok(i) => i,
         Err(e) => return Err(e.to_string()),
@@ -650,7 +682,11 @@ fn serve(mut stream: TcpStream, fallback: &UsbSelector) -> Result<(), String> {
         // port each -- a page cannot discover a port, but it can read a list.
         Inbound::Request { method, target } => {
             let (status, body) = if target.starts_with("/devices") {
-                ("200 OK", devices_json())
+                let body = match source {
+                    BridgeSource::Serial(path) => serial_devices_json(path),
+                    BridgeSource::Usb(_) => devices_json(),
+                };
+                ("200 OK", body)
             } else if target.starts_with("/phones") {
                 ("200 OK", phones_json())
             } else if let Some(rest) = target.strip_prefix("/sink/") {
@@ -689,19 +725,31 @@ fn serve(mut stream: TcpStream, fallback: &UsbSelector) -> Result<(), String> {
             return Ok(());
         }
     };
-    // `?device=<selector>` names which dongle this client wants, the way
-    // netsim's `?name=&address=` names which device a connection carries.
-    let wanted = query
-        .split('&')
-        .find_map(|kv| kv.strip_prefix("device="))
-        .map(|v| v.replace("%23", "#"));
-    let selector = match &wanted {
-        Some(spec) => UsbSelector::parse(spec).map_err(|e| e.to_string())?,
-        None => fallback.clone(),
+    // Open the controller this client gets. A USB source lets `?device=` pick
+    // one of several dongles; a serial source is a single tty, so it ignores it.
+    // Both end up behind the same `HciTransport` trait, so the loop below does
+    // not care which it is.
+    let mut dongle: Box<dyn HciTransport> = match source {
+        BridgeSource::Serial(path) => {
+            eprintln!("  client connected ({query:?}); opening serial {path}…");
+            Box::new(SerialTransport::open(path).map_err(|e| e.to_string())?)
+        }
+        BridgeSource::Usb(fallback) => {
+            // `?device=<selector>` names which dongle this client wants, the way
+            // netsim's `?name=&address=` names which device a connection carries.
+            let wanted = query
+                .split('&')
+                .find_map(|kv| kv.strip_prefix("device="))
+                .map(|v| v.replace("%23", "#"));
+            let selector = match &wanted {
+                Some(spec) => UsbSelector::parse(spec).map_err(|e| e.to_string())?,
+                None => fallback.clone(),
+            };
+            eprintln!("  client connected ({query:?}); opening {selector:?}…");
+            Box::new(UsbTransport::open_selected(&selector).map_err(|e| e.to_string())?)
+        }
     };
-    eprintln!("  client connected ({query:?}); opening {selector:?}…");
-    let mut dongle = UsbTransport::open_selected(&selector).map_err(|e| e.to_string())?;
-    eprintln!("  bridging — the dongle is now this client's controller");
+    eprintln!("  bridging — the controller is now this client's");
 
     let channel = HciChannel::new();
     let session: Result<(), String> = loop {
