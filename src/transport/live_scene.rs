@@ -6,7 +6,7 @@
 //! than the in-process `SceneEngine` radio. Peripheral-only by design: the
 //! far side (an Android emulator, a real phone) plays the central.
 
-use super::wasm_ws::ScriptedPeripheral;
+use super::wasm_ws::{ScanReport, ScriptedPeripheral, parse_scan_reports, queue_scanner_start};
 use super::{HciChannel, HciTransport};
 use std::sync::Arc;
 
@@ -20,11 +20,30 @@ struct LiveDevice<T: HciTransport> {
     started: bool,
 }
 
+/// A scanner on a live backend: its own controller, listening on the air and
+/// keeping the latest advertising report per advertiser. A radio plays one
+/// role, so this is a separate controller from any peripheral in the scene —
+/// which is why a backend hands it its own transport (a second dongle, another
+/// netsim connection). Unlike the in-process scene's scanner, what this hears
+/// is whatever is actually on the medium: real devices on real RF.
+struct LiveScanner<T: HciTransport> {
+    channel: Arc<HciChannel>,
+    transport: T,
+    started: bool,
+    /// Advertiser addresses in first-heard order, parallel to `reports`.
+    order: Vec<String>,
+    /// The latest report per advertiser, so a device that advertises many times
+    /// over a scan window collapses to one entry with its freshest content.
+    reports: Vec<ScanReport>,
+}
+
 /// The live-backend counterpart of the in-process `SceneEngine`: each
 /// peripheral owns its transport, and the backend routes advertising and
 /// data between them and whatever else shares its ether.
 pub struct LiveScene<T: HciTransport> {
     devices: Vec<LiveDevice<T>>,
+    /// An optional scanner sharing the backend's medium, on its own controller.
+    scanner: Option<LiveScanner<T>>,
     /// Script-clock seconds handed to `fn tick`; advanced by [`tick`](Self::tick).
     t: f64,
 }
@@ -40,6 +59,7 @@ impl<T: HciTransport> LiveScene<T> {
     pub fn new() -> Self {
         Self {
             devices: Vec::new(),
+            scanner: None,
             t: 0.0,
         }
     }
@@ -98,6 +118,36 @@ impl<T: HciTransport> LiveScene<T> {
                 }
             }
         }
+        self.pump_scanner();
+    }
+
+    /// Ferries the scanner's controller both ways and folds each advertising
+    /// report into `reports`, latest-per-advertiser. Its first pump queues the
+    /// scan bring-up (reset, event masks a 4.0 dongle accepts, active-scan
+    /// parameters, enable) — the same `queue_scanner_start` a page or the bulk
+    /// example uses, so a CSR8510 answers it.
+    fn pump_scanner(&mut self) {
+        let Some(scanner) = self.scanner.as_mut() else {
+            return;
+        };
+        if !scanner.started {
+            let _ = queue_scanner_start(&scanner.channel);
+            scanner.started = true;
+        }
+        if scanner.transport.pump(&scanner.channel).is_err() {
+            return;
+        }
+        while let Some(packet) = scanner.channel.poll_controller_packet() {
+            for report in parse_scan_reports(&packet) {
+                match scanner.order.iter().position(|a| a == &report.address) {
+                    Some(i) => scanner.reports[i] = report,
+                    None => {
+                        scanner.order.push(report.address.clone());
+                        scanner.reports.push(report);
+                    }
+                }
+            }
+        }
     }
 
     /// Advances the script clock by `seconds` (each device's `fn tick` runs
@@ -127,5 +177,30 @@ impl<T: HciTransport> LiveScene<T> {
     /// in-process scene's), or `None` for an unknown index.
     pub fn peripheral_status_json(&self, index: usize) -> Option<String> {
         Some(self.devices.get(index)?.peripheral.status_json())
+    }
+
+    /// Joins a scanner to the scene on `transport` (a controller the backend
+    /// opened for it). Idempotent: a scene keeps one scanner, so this replaces
+    /// any earlier one and starts its window fresh.
+    pub fn add_scanner(&mut self, transport: T) {
+        self.scanner = Some(LiveScanner {
+            channel: Arc::new(HciChannel::new()),
+            transport,
+            started: false,
+            order: Vec::new(),
+            reports: Vec::new(),
+        });
+    }
+
+    /// Whether a scanner is already listening on this scene.
+    pub fn has_scanner(&self) -> bool {
+        self.scanner.is_some()
+    }
+
+    /// The scanner's advertising reports as a JSON array (one per advertiser,
+    /// latest content), or `None` if no scanner has been added.
+    pub fn scanner_reports_json(&self) -> Option<String> {
+        let scanner = self.scanner.as_ref()?;
+        Some(serde_json::to_string(&scanner.reports).unwrap_or_else(|_| "[]".to_string()))
     }
 }

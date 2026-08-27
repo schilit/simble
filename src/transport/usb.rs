@@ -1180,6 +1180,38 @@ impl UsbScene {
         })
     }
 
+    /// Opens a dongle as a scanner and joins it to the scene, so `scan` hears
+    /// what is actually on the air — real devices around the machine, not the
+    /// agent's own peripherals. A radio hosts one role, so the scanner claims
+    /// its own dongle: the named one when the scene is otherwise empty, else the
+    /// next free one. Idempotent — a scene keeps one scanner.
+    pub fn add_scanner(&mut self) -> Result<(), String> {
+        if self.scene.has_scanner() {
+            return Ok(());
+        }
+        let device = self.next_dongle()?;
+        self.taken.push(device.clone());
+        let transport = UsbTransport::open_selected(&device).map_err(|e| {
+            format!(
+                "{e} — is a Bluetooth dongle plugged in and free? \
+                 (the OS Bluetooth stack usually claims the built-in adapter)"
+            )
+        })?;
+        self.scene.add_scanner(transport);
+        Ok(())
+    }
+
+    /// Whether a scanner is already listening on this scene.
+    pub fn has_scanner(&self) -> bool {
+        self.scene.has_scanner()
+    }
+
+    /// The scanner's advertising reports as a JSON array, or `None` if none was
+    /// added — the real-RF answer to `scan`.
+    pub fn scanner_reports_json(&self) -> Option<String> {
+        self.scene.scanner_reports_json()
+    }
+
     /// Moves packets for the device without advancing the script clock (the
     /// shared `LiveScene::pump`).
     pub fn pump(&mut self) {

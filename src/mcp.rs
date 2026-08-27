@@ -115,6 +115,32 @@ impl LiveBackend {
             LiveBackend::Usb(scene) => scene.peripheral_status_json(index),
         }
     }
+
+    /// Adds a scanner on this backend's medium so `scan` hears real advertisers.
+    /// Only the USB backend does real RF today; netsim would need a scan role on
+    /// its ether, which is not wired yet, so it says so rather than pretending.
+    fn add_scanner(&mut self) -> Result<(), String> {
+        match self {
+            LiveBackend::Usb(scene) => scene.add_scanner(),
+            LiveBackend::Netsim(_) => Err(
+                "a real-RF scan needs run_on(\"usb\") — netsim scanning is not wired yet".to_string(),
+            ),
+        }
+    }
+
+    fn has_scanner(&self) -> bool {
+        match self {
+            LiveBackend::Usb(scene) => scene.has_scanner(),
+            LiveBackend::Netsim(_) => false,
+        }
+    }
+
+    fn scanner_reports_json(&self) -> Option<String> {
+        match self {
+            LiveBackend::Usb(scene) => scene.scanner_reports_json(),
+            LiveBackend::Netsim(_) => None,
+        }
+    }
 }
 
 /// An armed watch: the condition a `subscribe` call asked to be told about.
@@ -393,14 +419,15 @@ impl Server {
         let name = params.get("name").and_then(Value::as_str).unwrap_or("");
         let args = params.get("arguments");
 
-        // Every live backend is peripheral-only: something on the far side —
-        // the Android emulator, a phone in the room — plays the central, so
-        // simble's central-side tools have nothing in-scene to run on.
+        // Every live backend is peripheral-only for the *connection* tools:
+        // something on the far side — the Android emulator, a phone in the room
+        // — plays the central, so simble's central-side tools have nothing
+        // in-scene to run on. `scan` is the exception: on a USB dongle it is a
+        // real HCI scan of the air, which `tool_scan` handles directly.
         if let Some(live) = self.live.as_ref()
             && matches!(
                 name,
-                "scan"
-                    | "connect"
+                "connect"
                     | "read"
                     | "write"
                     | "assert"
@@ -1273,6 +1300,26 @@ impl Server {
     /// would see them. This is different from `status` (the scene's god-view
     /// of every device it hosts): `scan` only sees what's actually on the air.
     fn tool_scan(&mut self, id: Option<Value>) -> Value {
+        // On a live backend, `scan` means a real HCI scan: hear whatever is
+        // actually on the medium — real devices on real RF with a USB dongle —
+        // not the agent's own scene. Written when every device lived in the
+        // in-process scene; a dongle-backed session wants the room, not the sim.
+        if let Some(live) = self.live.as_mut() {
+            if !live.has_scanner() {
+                if let Err(e) = live.add_scanner() {
+                    return tool_text(id, &format!("cannot start a real-RF scan: {e}"), true);
+                }
+            }
+            // Advertisements arrive across seconds, so pump the dongle against
+            // the wall clock rather than ticking a script forward.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(2500);
+            while std::time::Instant::now() < deadline {
+                live.pump();
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            let reports = live.scanner_reports_json().unwrap_or_else(|| "[]".to_string());
+            return tool_text(id, &annotate_json(&dedupe_scan_reports(&reports)), false);
+        }
         if self.scene.is_none() {
             self.scene = Some(SceneEngine::new());
         }
@@ -1489,8 +1536,9 @@ fn tools_list() -> Value {
         {
             "name": "scan",
             "description": "The BLE-radio view: run a scanner on the shared medium and return the \
-                advertisements it hears — the peripherals actually on the air, as a real central \
-                would see them. Answers \"scan for devices\" (a subset of status).",
+                advertisements it hears, as a real central would. On a USB dongle (run_on \"usb\") \
+                this is a real HCI scan of the air — every device in radio range, not just the \
+                scene; on \"self\" it is the in-process peripherals. Answers \"scan for devices\".",
             "inputSchema": { "type": "object", "properties": {} },
         },
         {
