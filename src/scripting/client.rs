@@ -641,6 +641,45 @@ impl ScriptedCentral {
                         .collect::<Array>(),
                 ),
             );
+            // The rest of the advertisement, so a script can decode a device by
+            // what it broadcasts and not only by name: the AD flags, the TX
+            // power, the manufacturer-specific data (company id + bytes), and
+            // any service data (service UUID + bytes). All hex, as the wire had.
+            map.insert(
+                "flags".into(),
+                report.flags.map_or(Dynamic::UNIT, |f| Dynamic::from(i64::from(f))),
+            );
+            map.insert(
+                "tx_power".into(),
+                report.tx_power.map_or(Dynamic::UNIT, |p| Dynamic::from(i64::from(p))),
+            );
+            map.insert(
+                "manufacturer_data".into(),
+                match &report.manufacturer_data {
+                    Some(m) => {
+                        let mut inner = Map::new();
+                        inner.insert("company".into(), Dynamic::from(m.tag.clone()));
+                        inner.insert("data".into(), Dynamic::from(m.data.clone()));
+                        Dynamic::from_map(inner)
+                    }
+                    None => Dynamic::UNIT,
+                },
+            );
+            map.insert(
+                "service_data".into(),
+                Dynamic::from(
+                    report
+                        .service_data
+                        .iter()
+                        .map(|sd| {
+                            let mut inner = Map::new();
+                            inner.insert("uuid".into(), Dynamic::from(sd.tag.clone()));
+                            inner.insert("data".into(), Dynamic::from(sd.data.clone()));
+                            Dynamic::from_map(inner)
+                        })
+                        .collect::<Array>(),
+                ),
+            );
             self.call("on_scan_result", (Dynamic::from_map(map),));
         }
     }
