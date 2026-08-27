@@ -18,13 +18,17 @@ import android.bluetooth.le.AdvertiseCallback;
 import android.bluetooth.le.AdvertiseData;
 import android.bluetooth.le.AdvertiseSettings;
 import android.bluetooth.le.BluetoothLeAdvertiser;
+import android.content.Context;
 import android.content.pm.PackageManager;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.ParcelUuid;
+import android.os.PowerManager;
 import android.util.Log;
 import android.view.Gravity;
-import android.view.WindowManager;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -95,10 +99,30 @@ public class SimbleActivity extends Activity implements StatsServer.Stats {
     /// caller with two phones cannot tell them apart by address.
     private String advertisedName = "";
 
+    /** CPU + wifi, held only for the length of a run so idle phones sleep. */
+    private PowerManager.WakeLock wakeLock;
+    private WifiManager.WifiLock wifiLock;
+    private Handler awakeHandler;
+    /**
+     * How long to stay awake after a disconnect. The benchmark reads its
+     * counters over HTTP right after the transfer ends, so the locks have to
+     * outlive the BLE link by a little or the phone would sleep before the read.
+     */
+    private static final long AWAKE_GRACE_MS = 20_000L;
+
     @Override
     protected void onCreate(Bundle saved) {
         super.onCreate(saved);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        // The sink no longer forces the screen on or holds the radios awake
+        // around the clock — that just drained four phones. Instead the locks
+        // are taken *on demand*: BLE advertising is offloaded to the controller
+        // and keeps going while the phone dozes, so a central can still connect;
+        // that connection wakes the app, which grabs the wake + wifi locks for
+        // the run and releases them a beat after the peer leaves. Idle phones
+        // sleep; only an active transfer costs battery. (There is no app-level
+        // "wake on wifi" on Android — the BLE connect is the wake signal.)
+        awakeHandler = new Handler(Looper.getMainLooper());
+        initLocks();
         buildUi();
 
         // Started before the permission check: the counters are worth serving
@@ -223,9 +247,11 @@ public class SimbleActivity extends Activity implements StatsServer.Stats {
         @Override
         public void onConnectionStateChange(BluetoothDevice device, int status, int state) {
             if (state == BluetoothGatt.STATE_CONNECTED) {
+                holdAwake();
                 peer = device.getAddress();
                 say("connected to " + device.getAddress());
             } else {
+                scheduleRelease();
                 say("disconnected — advertising again");
             }
             Log.i(TAG, "connection state " + state + " status " + status);
@@ -441,6 +467,67 @@ public class SimbleActivity extends Activity implements StatsServer.Stats {
         runOnUiThread(() -> counters.setText(bytes + " bytes · " + chunks + " chunks"));
     }
 
+    /** Builds the locks once, unheld. A partial wake lock keeps the CPU (so the
+     *  stats-server thread runs); a high-performance wifi lock keeps the radio
+     *  out of power-save so counters stay reachable — both with the screen dark. */
+    private void initLocks() {
+        try {
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, TAG + ":sink");
+            wakeLock.setReferenceCounted(false);
+            WifiManager wm =
+                    (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, TAG + ":stats");
+            wifiLock.setReferenceCounted(false);
+        } catch (Exception e) {
+            Log.w(TAG, "could not create wake/wifi locks: " + e);
+        }
+    }
+
+    /** Take the locks for a run — called when a central connects. Cancels any
+     *  pending release, so back-to-back runs never let the phone sleep between. */
+    private void holdAwake() {
+        if (awakeHandler != null) {
+            awakeHandler.removeCallbacksAndMessages(null);
+        }
+        try {
+            if (wakeLock != null && !wakeLock.isHeld()) {
+                wakeLock.acquire();
+            }
+            if (wifiLock != null && !wifiLock.isHeld()) {
+                wifiLock.acquire();
+            }
+            Log.i(TAG, "awake for a run");
+        } catch (Exception e) {
+            Log.w(TAG, "could not acquire wake/wifi locks: " + e);
+        }
+    }
+
+    /** Let go after {@link #AWAKE_GRACE_MS}, so the post-run HTTP stats read
+     *  still lands before the phone is free to sleep again. */
+    private void scheduleRelease() {
+        if (awakeHandler == null) {
+            releaseLocks();
+            return;
+        }
+        awakeHandler.removeCallbacksAndMessages(null);
+        awakeHandler.postDelayed(this::releaseLocks, AWAKE_GRACE_MS);
+    }
+
+    private void releaseLocks() {
+        try {
+            if (wifiLock != null && wifiLock.isHeld()) {
+                wifiLock.release();
+            }
+            if (wakeLock != null && wakeLock.isHeld()) {
+                wakeLock.release();
+            }
+            Log.i(TAG, "released locks; sleeping until the next connection");
+        } catch (Exception e) {
+            Log.w(TAG, "could not release wake/wifi locks: " + e);
+        }
+    }
+
     @Override
     protected void onDestroy() {
         super.onDestroy();
@@ -453,5 +540,9 @@ public class SimbleActivity extends Activity implements StatsServer.Stats {
         if (statsServer != null) {
             statsServer.stop();
         }
+        if (awakeHandler != null) {
+            awakeHandler.removeCallbacksAndMessages(null);
+        }
+        releaseLocks();
     }
 }

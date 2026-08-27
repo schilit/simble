@@ -14,6 +14,8 @@
          air time, ends the measured transfer a round trip late, and cannot
          arrive at all when the run is a deliberately broken link. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Hold the CPU and wifi awake so the sink survives the screen turning off. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <uses-feature
         android:name="android.hardware.bluetooth_le"
