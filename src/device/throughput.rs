@@ -207,6 +207,14 @@ const READ_BUFFER_SIZE: [u8; 2] = [0x05, 0x10];
 const LE_SET_PHY: [u8; 2] = [0x32, 0x20];
 /// LE PHY Update Complete subevent (Vol 4, Part E, Section 7.7.65.12).
 const LE_PHY_UPDATE_COMPLETE: u8 = 0x0C;
+/// LE Set Data Length (Vol 4, Part E, Section 7.8.33) — Data Length Extension,
+/// so a write rides one large LL PDU instead of many 27-octet fragments.
+const LE_SET_DATA_LENGTH: [u8; 2] = [0x22, 0x20];
+/// LE Connection Update (Vol 4, Part E, Section 7.8.18) — a tighter connection
+/// interval is more air time per second for a bulk transfer.
+const LE_CONNECTION_UPDATE: [u8; 2] = [0x13, 0x20];
+/// LE Data Length Change subevent (Vol 4, Part E, Section 7.7.65.7).
+const LE_DATA_LENGTH_CHANGE: u8 = 0x07;
 /// Number Of Completed Packets (Vol 4, Part E, Section 7.7.19).
 const NUMBER_OF_COMPLETED_PACKETS: u8 = 0x13;
 /// The LE ACL payload one H4 ACL packet carries, matching
@@ -550,7 +558,11 @@ pub struct BulkCentral {
     mtu: u16,
     tx_phy: Option<u8>,
     rx_phy: Option<u8>,
-    phy_requested: bool,
+    /// Max TX octets the link settled on (LE Data Length Change): 27 without
+    /// Data Length Extension, up to 251 with it. `None` until it changes.
+    max_tx_octets: Option<u16>,
+    /// Whether the on-connect link-speed requests (PHY, DLE, interval) went out.
+    fast_requested: bool,
     buffer_size_asked: bool,
     /// The controller answered LE Read Buffer Size with zeros, so the shared
     /// pool must be asked for with the Classic command.
@@ -598,7 +610,8 @@ impl BulkCentral {
             mtu: 23,
             tx_phy: None,
             rx_phy: None,
-            phy_requested: false,
+            max_tx_octets: None,
+            fast_requested: false,
             buffer_size_asked: false,
             pending_shared_pool: false,
             acl_total: None,
@@ -763,20 +776,39 @@ impl BulkCentral {
         if self.central.phase() != CentralPhase::Ready {
             return;
         }
-        if !self.phy_requested {
-            self.phy_requested = true;
-            // All PHYs allowed both ways, no preference among coded options.
-            // A controller that has never heard of the command answers
-            // Unknown HCI Command and the report simply says the PHY was not
-            // reported, which is the honest outcome.
+        if !self.fast_requested {
+            self.fast_requested = true;
+            // The link-speed requests, sent once the GATT view is ready. Each is
+            // independent: a controller that has never heard of one answers
+            // Unknown HCI Command, and the report simply says that enhancement
+            // was not negotiated — the honest outcome on a 4.0 dongle, which
+            // refuses all three and leaves the link at 1M / 27 octets.
             let handle = self.central.connection_handle();
-            let mut params = Vec::with_capacity(7);
-            params.extend_from_slice(&handle.to_le_bytes());
-            params.push(0x00); // all_phys: both TX and RX are specified below
-            params.push(0x07); // tx_phys: 1M | 2M | Coded
-            params.push(0x07); // rx_phys: 1M | 2M | Coded
-            params.extend_from_slice(&0u16.to_le_bytes()); // phy_options
-            out.push(command(LE_SET_PHY, &params));
+            let h = handle.to_le_bytes();
+
+            // LE Set PHY: all PHYs allowed both ways, so the controller picks
+            // the fastest it and the peer share (LE 2M where possible).
+            let mut phy = Vec::with_capacity(7);
+            phy.extend_from_slice(&h);
+            phy.push(0x00); // all_phys: both TX and RX are specified below
+            phy.push(0x07); // tx_phys: 1M | 2M | Coded
+            phy.push(0x07); // rx_phys: 1M | 2M | Coded
+            phy.extend_from_slice(&0u16.to_le_bytes()); // phy_options
+            out.push(command(LE_SET_PHY, &phy));
+
+            // LE Set Data Length: max TX octets 251 (0x00FB), max TX time
+            // 2120 us (0x0848) — one large LL PDU instead of nine fragments.
+            out.push(command(LE_SET_DATA_LENGTH, &[h[0], h[1], 0xFB, 0x00, 0x48, 0x08]));
+
+            // LE Connection Update: interval 7.5–15 ms (0x0006–0x000C), no
+            // latency, 4 s supervision timeout (0x0190), CE length unconstrained.
+            out.push(command(
+                LE_CONNECTION_UPDATE,
+                &[
+                    h[0], h[1], 0x06, 0x00, 0x0C, 0x00, 0x00, 0x00, 0x90, 0x01, 0x00, 0x00, 0x00,
+                    0x00,
+                ],
+            ));
         }
         match self.step {
             Step::Subscribing => self.begin_subscribing(now_ms),
@@ -1059,11 +1091,9 @@ impl BulkCentral {
                 }
                 self.acl_outstanding = self.acl_outstanding.saturating_sub(completed);
             }
-            crate::packets::hci_events::event_code::LE_META => {
-                if params.first() != Some(&LE_PHY_UPDATE_COMPLETE) {
-                    return;
-                }
-                if params.get(1) == Some(&0x00) {
+            crate::packets::hci_events::event_code::LE_META => match params.first() {
+                // PHY Update Complete: status, handle(2), tx_phy, rx_phy.
+                Some(&LE_PHY_UPDATE_COMPLETE) if params.get(1) == Some(&0x00) => {
                     self.tx_phy = params.get(4).copied();
                     self.rx_phy = params.get(5).copied();
                     if let (Some(tx), Some(rx)) = (self.tx_phy, self.rx_phy) {
@@ -1074,7 +1104,17 @@ impl BulkCentral {
                         ));
                     }
                 }
-            }
+                // Data Length Change: handle(2), MaxTxOctets(2), then times we
+                // don't need. Proof DLE took, and how much bigger the PDU got.
+                Some(&LE_DATA_LENGTH_CHANGE) => {
+                    if let Some(b) = params.get(3..5) {
+                        let octets = u16::from_le_bytes([b[0], b[1]]);
+                        self.max_tx_octets = Some(octets);
+                        self.log.push(format!("data length: {octets} TX octets"));
+                    }
+                }
+                _ => {}
+            },
             _ => {}
         }
     }
@@ -1274,6 +1314,7 @@ impl BulkCentral {
             mtu: self.mtu,
             tx_phy: self.tx_phy.and_then(phy_label),
             rx_phy: self.rx_phy.and_then(phy_label),
+            max_tx_octets: self.max_tx_octets,
             window_chunks: self.options.window_chunks as u32,
             with_response: self.options.with_response,
             acl_credits: self.acl_total,
@@ -1326,6 +1367,9 @@ pub struct BulkReport {
     pub tx_phy: Option<&'static str>,
     /// The receive PHY, where the controller reported one.
     pub rx_phy: Option<&'static str>,
+    /// Max TX octets the link settled on with Data Length Extension, where the
+    /// controller reported a change (27 without DLE, up to 251 with it).
+    pub max_tx_octets: Option<u16>,
     /// The fixed chunk window used when the controller reports no buffers.
     pub window_chunks: u32,
     /// Whether each chunk was an acknowledged Write Request.
