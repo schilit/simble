@@ -89,10 +89,11 @@ const phoneValue = (serial) => `${PHONE_SINK}:${serial}`;
 const isPhone = (value) => value === PHONE_SINK || value.startsWith(`${PHONE_SINK}:`);
 /// What the bridge told us about each phone, keyed by strip value.
 const phones = new Map();
-/// Where SimBLE Android serves its counters. `adb forward tcp:8099 tcp:8099`
-/// makes this work over USB or wifi adb without knowing the phone's address;
-/// a phone reachable directly can be named here instead.
-const PHONE_STATS_DEFAULT = "http://127.0.0.1:8099";
+/// Where the page reads a phone's counters. Choosing a phone points this at the
+/// bridge's `/sink/<ip>` proxy, which reads the phone directly over WiFi — no
+/// adb. This default is only the placeholder before a phone is chosen; a phone
+/// the bridge cannot see can still be named here by hand.
+const PHONE_STATS_DEFAULT = "http://127.0.0.1:32323/sink/<phone-ip>";
 const PHONE_STATS_KEY = "simble.data.phoneStats";
 const CENTRAL_ADDR = "CC:1E:57:00:00:0C";
 const netsimUrl = (node, address) =>
@@ -264,7 +265,7 @@ async function runAgainstPhone(options, centralUrl, legacyMasks, onStage, statsB
       report: {
         phase: "failed",
         failure: `SimBLE Android is not answering at ${statsBase} — `
-          + `try: adb forward tcp:8099 tcp:8099`,
+          + `is the app running, and can the bridge reach the phone over WiFi?`,
       },
       log: [],
     };
@@ -876,12 +877,13 @@ export function mountData(root) {
           : "the peripheral: it counts what lands",
       );
       phoneStatsRow.hidden = !isPhone(value.device);
-      // Each phone has its own forwarded port, so choosing one sets where the
-      // counters come from. Typing over it stays possible for a phone the
-      // bridge cannot see.
+      // The bridge proxies the phone's counter server, so choosing one points
+      // the stats at `/sink/<ip>` on the bridge — the bridge reaches the phone
+      // directly over WiFi, no adb forward. Typing over it stays possible for a
+      // phone the bridge cannot see.
       const chosen = phones.get(value.device);
       if (chosen) {
-        phoneStats.value = `http://127.0.0.1:${chosen.port}`;
+        phoneStats.value = `${usbBridgeHttp()}/sink/${chosen.host}`;
         localStorage.setItem(PHONE_STATS_KEY, phoneStats.value);
       }
       return null;
@@ -906,7 +908,7 @@ export function mountData(root) {
   const phoneStatsWhy = document.createElement("span");
   phoneStatsWhy.className = "strip-why";
   phoneStatsWhy.textContent =
-    "counters come back over HTTP, not over the link — adb forward tcp:8099 tcp:8099";
+    "counters come back over HTTP, not over the link — the bridge reads the phone directly, no adb forward";
   phoneStatsRow.append(phoneStatsLabel, phoneStats, phoneStatsWhy);
 
   $("data-strips").append(centralStrip.el, sinkStrip.el, phoneStatsRow);
@@ -922,8 +924,9 @@ export function mountData(root) {
       sinkStrip.setDongles(list);
 
       // Phones come from the same bridge for the same reason dongles do: a
-      // page cannot run adb and cannot reach a phone directly, but it can
-      // read a list of forwarded ports.
+      // page cannot run adb, and an https page cannot reach a phone's LAN ip
+      // itself, but it can read a list from the bridge and fetch each phone's
+      // counters back through the bridge's `/sink/<ip>` proxy.
       phones.clear();
       let found = [];
       try {
@@ -940,7 +943,7 @@ export function mountData(root) {
           // Named by what it advertises, because that is what the scan
           // matches on; the model is the human's handle on which desk it is.
           text: phone.running
-            ? `${phone.name || phone.model} — SimBLE on :${phone.port}`
+            ? `${phone.name || phone.model} — SimBLE on ${phone.host}:8099`
             : `${phone.model} — SimBLE not running`,
         };
       });

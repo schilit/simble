@@ -494,9 +494,17 @@ fn devices_json() -> String {
 /// phone is running the sink", and only the second is selectable.
 fn phones_json() -> String {
     let adb = adb_path();
-    let listed = std::process::Command::new(&adb).arg("devices").arg("-l").output();
-    let Ok(listed) = listed else {
-        return "{\"phones\":[],\"error\":\"adb not found — put it on PATH or set ANDROID_HOME\"}"
+    // adb is used to *list* phones and nothing else — no `adb shell`, no
+    // `adb forward`. A wireless phone's adb serial already *is* its `ip:port`,
+    // so the bridge reaches the phone's HTTP counter server directly over WiFi
+    // (see `sink_get`); adb routes no data. The one call is bounded so a hung
+    // adb server cannot stall the listing.
+    let listed = output_timeout(
+        std::process::Command::new(&adb).args(["devices", "-l"]),
+        std::time::Duration::from_secs(5),
+    );
+    let Some(listed) = listed else {
+        return "{\"phones\":[],\"error\":\"adb not found or not responding — put it on PATH or set ANDROID_HOME\"}"
             .to_string();
     };
     let text = String::from_utf8_lossy(&listed.stdout);
@@ -504,7 +512,6 @@ fn phones_json() -> String {
     let mut out = String::from("{\"phones\":[");
     let mut first = true;
     let mut seen: Vec<String> = Vec::new();
-    let mut index = 0usize;
     for line in text
         .lines()
         .skip(1)
@@ -513,43 +520,22 @@ fn phones_json() -> String {
         let Some(serial) = line.split_whitespace().next() else {
             continue;
         };
-        // One phone can appear twice — a wifi transport and an mdns one are
-        // two adb entries for one radio. Offering both would let a caller
-        // choose "two phones" that are one, and then measure a scan against
-        // the phone it was not fetching counters from.
-        let identity = output_timeout(
-            std::process::Command::new(&adb).args(["-s", serial, "shell", "getprop", "ro.serialno"]),
-            std::time::Duration::from_secs(3),
-        )
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default();
-        // An empty serial means `getprop` timed out or the phone is otherwise
-        // unreachable (a wedged wireless-adb link is the usual cause). Don't list
-        // a phone we cannot talk to, and don't pay the forward/probe cost on it —
-        // this is what keeps one dead phone from stalling the whole listing.
-        if identity.is_empty() {
+        // Only an `ip:port` wifi transport is reachable HTTP-direct — and the ip
+        // is right there in the serial. This same test drops the duplicate mdns
+        // transport (`adb-…._tcp`) for one phone, which carries no ip, so a radio
+        // is listed once with no `adb shell` round-trip needed to dedup it.
+        let host = match serial.split(':').next() {
+            Some(h) if h.parse::<std::net::Ipv4Addr>().is_ok() => h,
+            _ => continue,
+        };
+        if seen.iter().any(|s| s == host) {
             continue;
         }
-        if seen.contains(&identity) {
-            continue;
-        }
-        seen.push(identity);
-        // One port per phone, so two phones are never the same endpoint —
-        // which is the bug this whole list exists to prevent.
-        let port = 8099 + index as u16;
-        index += 1;
-        let _ = output_timeout(
-            std::process::Command::new(&adb).args([
-                "-s",
-                serial,
-                "forward",
-                &format!("tcp:{port}"),
-                "tcp:8099",
-            ]),
-            std::time::Duration::from_secs(3),
-        );
+        seen.push(host.to_string());
 
-        let probe = probe_sink(port);
+        // The one network touch, straight to the phone over WiFi, bounded so a
+        // phone whose wifi has wedged fails fast rather than stalling the list.
+        let probe = probe_sink(host);
         if !first {
             out.push(',');
         }
@@ -559,7 +545,7 @@ fn phones_json() -> String {
             .find_map(|f| f.strip_prefix("model:"))
             .unwrap_or("phone");
         out.push_str(&format!(
-            "{{\"serial\":\"{serial}\",\"model\":\"{model}\",\"port\":{port},\"name\":\"{}\",\"running\":{}}}",
+            "{{\"serial\":\"{serial}\",\"model\":\"{model}\",\"host\":\"{host}\",\"name\":\"{}\",\"running\":{}}}",
             probe.as_deref().unwrap_or(""),
             probe.is_some()
         ));
@@ -617,16 +603,31 @@ fn output_timeout(
     }
 }
 
-/// Asks the sink on `port` what it advertises as. `None` if nothing answers.
-fn probe_sink(port: u16) -> Option<String> {
+/// One HTTP GET straight to a phone's SimBLE Android counter server at
+/// `<host>:8099`, returning the response body. This is the bridge talking to the
+/// phone over WiFi with no adb in the path — what replaces `adb forward`. `host`
+/// must parse as an address, which fixes the port at 8099 and keeps this from
+/// being a general proxy. Bounded on both connect and read so a phone whose wifi
+/// has wedged fails fast instead of hanging the caller.
+fn sink_get(host: &str, path: &str) -> Option<String> {
     use std::io::{Read as _, Write as _};
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).ok()?;
+    let addr: std::net::SocketAddr = format!("{host}:8099").parse().ok()?;
+    let mut stream =
+        TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(800)).ok()?;
     stream
-        .set_read_timeout(Some(std::time::Duration::from_millis(700)))
+        .set_read_timeout(Some(std::time::Duration::from_millis(1500)))
         .ok()?;
-    write!(stream, "GET /stats HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").ok()?;
-    let mut body = String::new();
-    stream.read_to_string(&mut body).ok()?;
+    write!(stream, "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n").ok()?;
+    let mut raw = String::new();
+    stream.read_to_string(&mut raw).ok()?;
+    // The body is what the caller wants; drop the status line and headers.
+    let at = raw.find("\r\n\r\n").map(|i| i + 4)?;
+    Some(raw[at..].to_string())
+}
+
+/// Asks the sink at `host` what it advertises as. `None` if nothing answers.
+fn probe_sink(host: &str) -> Option<String> {
+    let body = sink_get(host, "/stats")?;
     // One field out of a flat object, without taking a JSON dependency into
     // a binary that has none.
     let at = body.find("\"name\":\"")? + 8;
@@ -648,18 +649,33 @@ fn serve(mut stream: TcpStream, fallback: &UsbSelector) -> Result<(), String> {
         // why the bridge serves every dongle from one port rather than one
         // port each -- a page cannot discover a port, but it can read a list.
         Inbound::Request { method, target } => {
-            let known = target.starts_with("/devices") || target.starts_with("/phones");
-            let body = if target.starts_with("/devices") {
-                devices_json()
+            let (status, body) = if target.starts_with("/devices") {
+                ("200 OK", devices_json())
             } else if target.starts_with("/phones") {
-                phones_json()
+                ("200 OK", phones_json())
+            } else if let Some(rest) = target.strip_prefix("/sink/") {
+                // Proxy a GET straight to a phone's counter server, server-side.
+                // This is what replaces `adb forward`: the browser reaches only
+                // the bridge (loopback, which an https page is allowed to hit),
+                // and the bridge reaches the phone's LAN ip over plain HTTP — no
+                // adb routing anywhere. `/sink/<ip>/stats`, `/sink/<ip>/reset?…`.
+                let (host, path) = match rest.split_once('/') {
+                    Some((h, p)) => (h, format!("/{p}")),
+                    None => (rest, "/stats".to_string()),
+                };
+                match sink_get(host, &path) {
+                    Some(b) => ("200 OK", b),
+                    None => ("502 Bad Gateway", "{\"error\":\"sink unreachable\"}".to_string()),
+                }
             } else {
-                format!(
-                    "{{\"error\":\"unknown path\",\"method\":{method:?},\"target\":{target:?},\
-                      \"try\":\"/devices or /phones\"}}"
+                (
+                    "404 Not Found",
+                    format!(
+                        "{{\"error\":\"unknown path\",\"method\":{method:?},\"target\":{target:?},\
+                          \"try\":\"/devices, /phones, or /sink/<ip>/stats\"}}"
+                    ),
                 )
             };
-            let status = if known { "200 OK" } else { "404 Not Found" };
             let response = format!(
                 "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
                  Access-Control-Allow-Origin: *\r\n\
