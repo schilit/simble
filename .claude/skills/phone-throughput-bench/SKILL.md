@@ -36,37 +36,52 @@ only silicon shows have always been.
    already listed). This is a system setting **you cannot change for the user** —
    direct them to it.
 
-2. **Wireless adb dies under BLE load — prefer USB.** BLE and 2.4 GHz WiFi coexist
-   badly; a concurrent BLE transfer will wedge a phone's wireless-adb link (shell
-   commands hang forever, then `device offline`). Observed on two Pixels in one
-   session. **Put the sink phone on USB** for the stable control + stats-forward
-   channel; leave only the BLE transfer wireless. If the phones are wireless-only,
-   expect instability — run each phone in **one clean pass** and don't be surprised
-   when the second one wedges. Always wrap adb calls in a hard timeout (see below)
-   so a hung call can't stall for 2 minutes.
+2. **A phone that shows "not running" or no HTTP — just relaunch the app. Don't
+   diagnose.** This is the first move, every time. A killed app looks *identical*
+   to a wedged link (no HTTP on :8099, absent from `/phones`), but it is far more
+   common and it is a one-liner to fix:
 
-3. **The dongle.** CSR8510 A10 → selector **`0a12:0001`** (VID 0x0A12 Cambridge
+   ```bash
+   adb -s <serial> shell monkey -p com.simble -c android.intent.category.LAUNCHER 1
+   ```
+
+   Only bother diagnosing if `adb -s <serial> shell getprop ro.serialno` *itself*
+   hangs — that, and only that, means the wireless-adb link is actually wedged.
+   If getprop answers, the phone is fine and the app was simply killed; relaunch
+   and move on. Do not sweep mDNS, reconnect transports, or theorize about
+   coexistence before trying the relaunch.
+
+3. **Wireless adb can die under BLE load — prefer USB.** BLE and 2.4 GHz WiFi
+   coexist badly; a concurrent BLE transfer can wedge a phone's wireless-adb link
+   for real (shell commands hang, then `device offline`). **Put the sink phone on
+   USB** for the stable control channel; leave only the BLE transfer wireless. If
+   the phones are wireless-only, expect the occasional genuine wedge — but reach
+   for trap 2 (relaunch) *first*, since a killed app is the usual cause and a
+   wedged link is the rare one. Always wrap adb calls in a hard timeout (see
+   below) so a hung call can't stall for 2 minutes.
+
+4. **The dongle.** CSR8510 A10 → selector **`0a12:0001`** (VID 0x0A12 Cambridge
    Silicon Radio, PID 0x0001). Verify presence with **`ioreg -p IOUSB`**, not
    `system_profiler SPUSBDataType` (it caches and will show 0 devices right after a
    plug-in). The CSR8510 is the **throughput ceiling**: BT 4.0, 1M PHY, no Data
    Length Extension, and it shares 10 ACL buffers (no separate LE pool). ~4 KB/s to
    any phone is the dongle, not the phone.
 
-4. **adb is not on PATH.** It lives at
+5. **adb is not on PATH.** It lives at
    `~/Library/Android/sdk/platform-tools/adb` (or `$ANDROID_HOME/platform-tools`).
 
-5. **Wireless pairing codes expire in seconds and ports rotate.** Get the pairing
+6. **Wireless pairing codes expire in seconds and ports rotate.** Get the pairing
    port from mDNS `_adb-tls-pairing._tcp` and run `adb pair` in the *same breath*
    as the human reads the 6-digit code. A `protocol fault (couldn't read status
    message)` almost always means the code already expired — ask for a fresh one
    and re-fetch the port. Two devices can share the hostname `Android.local`; map
    the connect port to the right IP by probing which IP actually listens.
 
-6. **One advertiser at a time.** If two phones run SimBLE Android, both advertise
+7. **One advertiser at a time.** If two phones run SimBLE Android, both advertise
    `f0bb0001` and the dongle grabs whichever it sees — corrupting the run.
    `am force-stop com.simble` on every phone except the one under test.
 
-7. **Read stats off-link over HTTP.** `SIMBLE_SINK_HTTP=host:8099`. The sink's
+8. **Read stats off-link over HTTP.** `SIMBLE_SINK_HTTP=host:8099`. The sink's
    `new ServerSocket(PORT)` binds `0.0.0.0`, so **direct WiFi (`<phone-ip>:8099`)
    works and is preferred** — it keeps adb out of the run entirely (adb is only
    for launch/force-stop, before the transfer). `adb forward tcp:8099 tcp:8099`
@@ -76,7 +91,7 @@ only silicon shows have always been.
    socket. Quote the phone's **`duration_ms`** — measured on the phone's own clock,
    and a *duration* needs no agreement about epochs.
 
-8. **The run self-verifies.** `phone_bulk` resets the sink counter to `expected`
+9. **The run self-verifies.** `phone_bulk` resets the sink counter to `expected`
    before the run and reads it after; a clean **0 → N** proves the dongle hit
    *this* phone and not a stray advertiser. If the sink says 0 while the host says
    N sent, the dongle connected to the wrong phone.
