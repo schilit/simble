@@ -517,24 +517,37 @@ fn phones_json() -> String {
         // two adb entries for one radio. Offering both would let a caller
         // choose "two phones" that are one, and then measure a scan against
         // the phone it was not fetching counters from.
-        let identity = std::process::Command::new(&adb)
-            .args(["-s", serial, "shell", "getprop", "ro.serialno"])
-            .output()
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-            .unwrap_or_default();
-        if !identity.is_empty() {
-            if seen.contains(&identity) {
-                continue;
-            }
-            seen.push(identity);
+        let identity = output_timeout(
+            std::process::Command::new(&adb).args(["-s", serial, "shell", "getprop", "ro.serialno"]),
+            std::time::Duration::from_secs(3),
+        )
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+        // An empty serial means `getprop` timed out or the phone is otherwise
+        // unreachable (a wedged wireless-adb link is the usual cause). Don't list
+        // a phone we cannot talk to, and don't pay the forward/probe cost on it —
+        // this is what keeps one dead phone from stalling the whole listing.
+        if identity.is_empty() {
+            continue;
         }
+        if seen.contains(&identity) {
+            continue;
+        }
+        seen.push(identity);
         // One port per phone, so two phones are never the same endpoint —
         // which is the bug this whole list exists to prevent.
         let port = 8099 + index as u16;
         index += 1;
-        let _ = std::process::Command::new(&adb)
-            .args(["-s", serial, "forward", &format!("tcp:{port}"), "tcp:8099"])
-            .output();
+        let _ = output_timeout(
+            std::process::Command::new(&adb).args([
+                "-s",
+                serial,
+                "forward",
+                &format!("tcp:{port}"),
+                "tcp:8099",
+            ]),
+            std::time::Duration::from_secs(3),
+        );
 
         let probe = probe_sink(port);
         if !first {
@@ -574,6 +587,34 @@ fn adb_path() -> String {
         }
     }
     "adb".to_string()
+}
+
+/// Runs a command but gives up after `timeout`, killing the child. A phone on a
+/// wedged wireless-adb link answers `adb shell` *never*, and one such phone must
+/// not hang the whole `/phones` listing behind it. `None` on timeout or failure.
+fn output_timeout(
+    cmd: &mut std::process::Command,
+    timeout: std::time::Duration,
+) -> Option<std::process::Output> {
+    use std::process::Stdio;
+    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().ok()?;
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            // Output is a line or two (adb getprop, forward), so the pipe never
+            // fills — reading it after exit cannot deadlock.
+            Ok(Some(_)) => return child.wait_with_output().ok(),
+            Ok(None) => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 /// Asks the sink on `port` what it advertises as. `None` if nothing answers.
