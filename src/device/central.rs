@@ -56,6 +56,17 @@ const LE_CREATE_CONNECTION: [u8; 2] = [0x0D, 0x20];
 const LE_SET_SCAN_PARAMETERS: [u8; 2] = [0x0B, 0x20];
 /// LE Set Scan Enable (Vol 4, Part E, Section 7.8.11).
 const LE_SET_SCAN_ENABLE: [u8; 2] = [0x0C, 0x20];
+/// LE Set Random Address (Vol 4, Part E, Section 7.8.4).
+const LE_SET_RANDOM_ADDRESS: [u8; 2] = [0x05, 0x20];
+
+/// The static random address the central connects from. A dongle with a public
+/// address in ROM (the CSR8510) could connect as public, but a Zephyr
+/// controller (an nRF running `hci_usb`) has no public address — connecting as
+/// public from `00:00:00:00:00:00` makes the peer drop the link during
+/// negotiation (status 0x3E). A static random address works on both, and the
+/// two most-significant bits `11` are what makes it a *static* random address
+/// (Vol 6, Part B, Section 1.3.2.1). On the wire it is little-endian.
+const CENTRAL_RANDOM_ADDRESS: [u8; 6] = [0xC1, 0x00, 0x00, 0xC0, 0xDE, 0xF0];
 /// Disconnect (Vol 4, Part E, Section 7.1.6).
 const DISCONNECT: [u8; 2] = [0x06, 0x04];
 /// Remote User Terminated Connection — the reason a host gives when the
@@ -346,12 +357,17 @@ impl LeCentral {
         self.client = GattClient::new(0, target);
         self.peer_address_type = address_type;
         self.phase = CentralPhase::Initializing;
-        init_commands_with_masks(
+        let mut out = init_commands_with_masks(
             &crate::device::host::EVENT_MASK_ALL,
             &self
                 .le_event_mask
                 .unwrap_or(crate::device::host::LE_EVENT_MASK_ALL),
-        )
+        );
+        // Give the controller a static random address to connect from, for the
+        // controllers (Zephyr/nRF) that have no public one. Set after Reset and
+        // before any scan or connect, which is exactly here.
+        out.push(command(LE_SET_RANDOM_ADDRESS, &CENTRAL_RANDOM_ADDRESS));
+        out
     }
 
     /// Narrows the `LE_Event_Mask` this central's bring-up asks for — see
@@ -879,7 +895,7 @@ impl LeCentral {
         let mut peer = self.target.to_be_bytes();
         peer.reverse(); // little-endian on the wire
         params.extend_from_slice(&peer);
-        params.push(0x00); // own address type: public
+        params.push(0x01); // own address type: random (the address set above)
         params.extend_from_slice(&0x0018u16.to_le_bytes()); // min interval, 30 ms
         params.extend_from_slice(&0x0028u16.to_le_bytes()); // max interval, 50 ms
         params.extend_from_slice(&0x0000u16.to_le_bytes()); // max latency
