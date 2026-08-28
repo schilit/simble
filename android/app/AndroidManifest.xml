@@ -3,11 +3,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.simble">
 
-    <!-- Advertise and serve only. We never scan, which is what keeps
-         ACCESS_FINE_LOCATION off this manifest: a scanning app must ask for
-         location, a peripheral need not. -->
+    <!-- The sink advertises; the source scans. BLUETOOTH_SCAN carries
+         neverForLocation, which is what keeps ACCESS_FINE_LOCATION off this
+         manifest: we scan to find a SimBLE service, never to place the device. -->
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
 
     <!-- The stats server. The counters must leave this device by a path that
          is not the link being measured: anything sent over Bluetooth costs
