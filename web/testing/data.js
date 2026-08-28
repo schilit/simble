@@ -937,6 +937,34 @@ export function mountData(root) {
         in the table.
       </p>
     </div>
+    <details class="raw" id="pubsub-panel" hidden>
+      <summary>Publish / collect (pub-sub)</summary>
+      <p class="settings-note">A publisher raises its hand — advertises a <em>generation</em>, size and PSM — and holds the current payload; a collector pulls only a generation newer than the one it already has, skipping without connecting otherwise. Latest-only.</p>
+      <div class="settings">
+        <label>Publisher
+          <select id="pubsub-publisher"></select>
+        </label>
+        <label>Generation
+          <input id="pubsub-gen" type="number" min="1" value="1" style="width:5rem">
+        </label>
+        <label>Size
+          <select id="pubsub-size">
+            <option value="16384">16 KB</option>
+            <option value="65536" selected>64 KB</option>
+            <option value="262144">256 KB</option>
+          </select>
+        </label>
+        <button id="pubsub-publish">Publish ▲</button>
+      </div>
+      <div class="settings">
+        <label>Collector
+          <select id="pubsub-collector"></select>
+        </label>
+        <span class="settings-note" id="pubsub-have">has generation 0</span>
+        <button id="pubsub-collect">Collect ▼</button>
+      </div>
+      <p class="honesty" id="pubsub-result"></p>
+    </details>
     <div class="toolbar">
       <button id="bench-run" class="primary">▶ Run</button>
       <span id="bench-pill" class="pill">idle</span>
@@ -1028,6 +1056,7 @@ export function mountData(root) {
       // bridge drives it over adb (a phone → phone run). So the central strip
       // offers the same phones as the sink strip.
       centralStrip.setExtras(extras);
+      refreshPubsub(found);
       if (!dongles.central && list[0]) {
         dongles.central = list[0].selector;
         centralStrip.set({ kind: "usb", device: dongles.central });
@@ -1231,6 +1260,92 @@ export function mountData(root) {
   }
 
   $("bench-run").addEventListener("click", runSeries);
+
+  // --- pub/sub panel -------------------------------------------------------
+  // The collector's own view of what it already holds, keyed by serial, so a
+  // repeat collect dedupes exactly as a real subscriber would.
+  const collectorHas = new Map();
+
+  function refreshPubsub(found) {
+    const panel = $("pubsub-panel");
+    // Any adb-visible phone works — the bridge launches the publish/collect
+    // role, so the app need not already be running.
+    const seen = found || [];
+    panel.hidden = bar.selected !== "usb" || seen.length === 0;
+    if (panel.hidden) return;
+    for (const id of ["pubsub-publisher", "pubsub-collector"]) {
+      const sel = $(id);
+      const prev = sel.value;
+      sel.innerHTML = "";
+      for (const p of seen) {
+        const o = document.createElement("option");
+        o.value = p.serial;
+        o.dataset.name = p.name || p.model;
+        o.textContent = `${p.name || p.model} (${p.host})`;
+        sel.append(o);
+      }
+      if ([...sel.options].some((o) => o.value === prev)) sel.value = prev;
+    }
+    updateHave();
+  }
+
+  const updateHave = () =>
+    ($("pubsub-have").textContent =
+      "has generation " + (collectorHas.get($("pubsub-collector").value) || 0));
+
+  $("pubsub-collector").addEventListener("change", updateHave);
+
+  const bridgeHttp = () => usbBridgeUrl().trim().replace(/^ws/, "http").replace(/\/+$/, "");
+
+  $("pubsub-publish").addEventListener("click", async () => {
+    const phone = $("pubsub-publisher").value;
+    const gen = Number($("pubsub-gen").value);
+    const bytes = Number($("pubsub-size").value);
+    $("pubsub-result").textContent = "publishing…";
+    try {
+      const r = await (await fetch(
+        `${bridgeHttp()}/publish?phone=${encodeURIComponent(phone)}&gen=${gen}&bytes=${bytes}`,
+        { cache: "no-store" },
+      )).json();
+      $("pubsub-result").textContent = r.ok
+        ? `publishing generation ${r.generation} (${(r.size / 1024).toFixed(0)} KB) — ${r.how}`
+        : `publish failed: ${r.error || "?"}`;
+    } catch (e) {
+      $("pubsub-result").textContent = `publish failed: ${e?.message ?? e}`;
+    }
+  });
+
+  $("pubsub-collect").addEventListener("click", async () => {
+    const sel = $("pubsub-collector");
+    const phone = sel.value;
+    const pubName = $("pubsub-publisher").selectedOptions[0]?.dataset.name || "";
+    const since = collectorHas.get(phone) || 0;
+    $("pubsub-result").textContent = "collecting…";
+    try {
+      const r = await (await fetch(
+        `${bridgeHttp()}/collect?phone=${encodeURIComponent(phone)}`
+          + `&publisher=${encodeURIComponent(pubName)}&since=${since}`,
+        { cache: "no-store" },
+      )).json();
+      if (!r.ok) {
+        $("pubsub-result").textContent = `collect failed: ${r.error || "?"}`;
+        return;
+      }
+      if (r.fresh) {
+        collectorHas.set(phone, r.generation);
+        $("pubsub-result").textContent =
+          `collected generation ${r.generation} — ${(r.bytes / 1024).toFixed(0)} KB `
+          + `(${r.throughput_kb_s} KB/s)`;
+      } else {
+        $("pubsub-result").textContent =
+          `nothing new — publisher at generation ${r.generation}, already have ${since}`;
+      }
+      updateHave();
+    } catch (e) {
+      $("pubsub-result").textContent = `collect failed: ${e?.message ?? e}`;
+    }
+  });
+
   $("bench-clear").addEventListener("click", () => {
     runs = [];
     saveRuns(runs);

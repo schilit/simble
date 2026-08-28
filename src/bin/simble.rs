@@ -1000,6 +1000,110 @@ fn pair_result_json(
     .to_string()
 }
 
+/// Starts or advances a publisher on a phone (a pub/sub run). If the app is
+/// already running there, advances it in place over HTTP (no relaunch, PSM
+/// kept); otherwise launches the publish role. Returns the publisher's `{generation,size}`.
+fn publish_start(query: &str) -> String {
+    let params = parse_query(query);
+    let Some(phone) = params.get("phone") else {
+        return serde_json::json!({"ok": false, "error": "need a phone serial"}).to_string();
+    };
+    let generation: u64 = params.get("gen").and_then(|g| g.parse().ok()).unwrap_or(1);
+    let bytes: u64 = params
+        .get("bytes")
+        .and_then(|b| b.parse().ok())
+        .unwrap_or(65536);
+    let adb = adb_path();
+    let (running, _name) = sink_status(&adb, phone);
+    let host = phone.split(':').next().unwrap_or(phone);
+    // A running publisher advances in place over HTTP; a stopped one is launched.
+    if running
+        && let Some(body) = sink_get(host, &format!("/publish?gen={generation}&size={bytes}"))
+        && body.contains("\"generation\"")
+    {
+        return serde_json::json!({"ok": true, "generation": generation, "size": bytes, "how": "bumped"})
+            .to_string();
+    }
+    let _ = output_timeout(
+        std::process::Command::new(&adb).args([
+            "-s", phone, "shell",
+            &format!("am start -n com.simble/.SimbleActivity --es role publish --ei gen {generation} --ei bytes {bytes}"),
+        ]),
+        Duration::from_secs(8),
+    );
+    serde_json::json!({"ok": true, "generation": generation, "size": bytes, "how": "launched"})
+        .to_string()
+}
+
+/// Runs a collector on a phone against the named publisher and returns what it
+/// pulled: `{ok, generation, bytes, fresh, throughput_kb_s}`. `fresh` is false
+/// when the advertised generation was not newer than `since` (deduped).
+fn collect_run(query: &str) -> String {
+    let params = parse_query(query);
+    let (Some(phone), Some(publisher)) = (params.get("phone"), params.get("publisher")) else {
+        return serde_json::json!({"ok": false, "error": "need phone and publisher"}).to_string();
+    };
+    let since: u64 = params
+        .get("since")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let esc = publisher.replace('\'', "");
+    let adb = adb_path();
+    let _ = output_timeout(
+        std::process::Command::new(&adb).args(["-s", phone, "logcat", "-c"]),
+        Duration::from_secs(6),
+    );
+    // Force-stop first: the role is read in onCreate, so `am start` on an
+    // already-running app would deliver the intent via onNewIntent and never
+    // re-dispatch. A fresh process reads the collect role.
+    let _ = output_timeout(
+        std::process::Command::new(&adb).args(["-s", phone, "shell", "am force-stop com.simble"]),
+        Duration::from_secs(6),
+    );
+    let _ = output_timeout(
+        std::process::Command::new(&adb).args([
+            "-s", phone, "shell",
+            &format!("am start -n com.simble/.SimbleActivity --es role collect --ei since {since} --es target '{esc}'"),
+        ]),
+        Duration::from_secs(8),
+    );
+    for _ in 0..30 {
+        std::thread::sleep(Duration::from_secs(1));
+        let Some(out) = output_timeout(
+            std::process::Command::new(&adb).args([
+                "-s",
+                phone,
+                "logcat",
+                "-d",
+                "-s",
+                "SimbleCollector",
+            ]),
+            Duration::from_secs(6),
+        ) else {
+            continue;
+        };
+        let text = String::from_utf8_lossy(&out.stdout);
+        if let Some(line) = text.lines().rev().find(|l| l.contains("span{collect}")) {
+            let generation = span_field(line, "generation").unwrap_or(0);
+            let bytes = span_field(line, "bytes").unwrap_or(0);
+            let ms = span_field(line, "busy_ms").unwrap_or(0);
+            let fresh = span_field(line, "fresh").unwrap_or(0) == 1;
+            let kb_s = if fresh && ms > 0 {
+                (bytes as f64 / 1024.0 / (ms as f64 / 1000.0) * 100.0).round() / 100.0
+            } else {
+                0.0
+            };
+            return serde_json::json!({
+                "ok": true, "generation": generation, "bytes": bytes,
+                "fresh": fresh, "transfer_ms": ms, "throughput_kb_s": kb_s,
+            })
+            .to_string();
+        }
+    }
+    serde_json::json!({"ok": false, "error": "no result — did the collector find the publisher?"})
+        .to_string()
+}
+
 /// One `key=<int>` field out of a span line, if present.
 fn span_field(line: &str, key: &str) -> Option<i64> {
     let at = line.find(&format!("{key}="))? + key.len() + 1;
@@ -1063,6 +1167,14 @@ fn serve(mut stream: TcpStream, source: &BridgeSource) -> Result<(), String> {
                 // rather than folded into a status probe.
                 let q = target.split_once('?').map(|(_, q)| q).unwrap_or("");
                 ("200 OK", pair_run(q))
+            } else if target.starts_with("/publish") {
+                // Start or advance a publisher on a phone (a pub/sub run).
+                let q = target.split_once('?').map(|(_, q)| q).unwrap_or("");
+                ("200 OK", publish_start(q))
+            } else if target.starts_with("/collect") {
+                // Run a collector against a publisher and return what it pulled.
+                let q = target.split_once('?').map(|(_, q)| q).unwrap_or("");
+                ("200 OK", collect_run(q))
             } else {
                 (
                     "404 Not Found",

@@ -724,6 +724,20 @@ public class SimbleActivity extends Activity implements StatsServer.Stats {
     /// also frees a stale link: a page reloaded mid-run leaves its central
     /// connected, and the next run would collide with it — so a reset severs
     /// that connection first, and the fresh run reconnects cleanly.
+    /// Advance a running publisher in place (no relaunch, PSM kept). Serves the
+    /// `/publish?gen=N&size=M` route.
+    @Override
+    public String publish(long gen, long size) {
+        touch();
+        BulkPublisher p = publisher;
+        if (p == null) {
+            return "{\"error\":\"not a publisher — launch with role=publish\"}";
+        }
+        int sz = (int) Math.max(1, size);
+        runOnUiThread(() -> p.setGeneration(gen, sz));
+        return "{\"generation\":" + gen + ",\"size\":" + sz + "}";
+    }
+
     @Override
     public synchronized void reset(long expected) {
         touch(); // a reset is an HTTP request too — refresh the idle timer

@@ -44,6 +44,14 @@ final class StatsServer implements Runnable {
         String json();
 
         void reset(long expected);
+
+        /** Advance a running publisher to generation `gen` with a `size`-byte
+         *  payload, in place — no relaunch, so the L2CAP PSM is kept. Returns a
+         *  small JSON acknowledgement. A no-op with an error body off the
+         *  publish role. */
+        default String publish(long gen, long size) {
+            return "{\"error\":\"not a publisher\"}";
+        }
     }
 
     private final Stats stats;
@@ -97,6 +105,9 @@ final class StatsServer implements Runnable {
             // counts, it just cannot say a run fell short by itself.
             stats.reset(longParam(query, "total"));
             body = stats.json();
+        } else if ("/publish".equals(path)) {
+            // `?gen=N&size=M` advances a running publisher in place.
+            body = stats.publish(longParam(query, "gen"), longParam(query, "size"));
         } else if ("/stats".equals(path) || "/".equals(path)) {
             body = stats.json();
         } else {

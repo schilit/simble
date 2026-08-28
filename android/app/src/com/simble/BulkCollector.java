@@ -134,10 +134,9 @@ final class BulkCollector {
             // Dedupe: nothing to do if the publisher is not past what we hold.
             if (gen <= since) {
                 stopScan();
-                done = true;
-                main.removeCallbacksAndMessages(null);
+                generation = gen;
                 say("up to date — publisher at generation " + gen + ", have " + since);
-                listener.finished(gen, 0, 0, false);
+                report(0); // logs span{collect} fresh=0 and reports
                 return;
             }
             generation = gen;
@@ -260,11 +259,9 @@ final class BulkCollector {
 
     private void onScanTimeout() {
         if (!done && publisher == null) {
-            done = true;
-            main.removeCallbacksAndMessages(null);
             stopScan();
             say("no publisher found");
-            listener.finished(since, 0, 0, false);
+            report(0); // generation stays 0 → fresh=0, no publisher seen
         }
     }
 
