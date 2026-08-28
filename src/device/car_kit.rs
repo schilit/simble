@@ -63,7 +63,8 @@ use crate::classic::hfp::{
 };
 use crate::classic::sdp::SdpUuid;
 use crate::device::SharedRfcommPort;
-use crate::transport::wasm_ws::{ClassicDevice, ClassicPhase, SceneEngine};
+use crate::device::classic_device::{ClassicDevice, ClassicPhase};
+use crate::scene::SceneEngine;
 use crate::types::Address;
 
 /// Server channel the phone advertises its Audio Gateway record on. Nothing

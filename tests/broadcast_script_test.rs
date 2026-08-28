@@ -35,7 +35,8 @@
 
 use simble::controller::sim::Link;
 use simble::device::big_receiver::{BigReceiver, ReceiverConfig, ReceiverState};
-use simble::transport::wasm_ws::{SceneEngine, ScriptedPeripheral};
+use simble::device::scripted_peripheral::ScriptedPeripheral;
+use simble::scene::SceneEngine;
 
 mod common;
 use common::address;
@@ -153,7 +154,7 @@ fn a_settings_map_that_the_base_cannot_carry_is_refused_rather_than_published() 
     // names something else is describing a broadcast that would not go on the
     // air. Silently publishing a different one is exactly the class of bug
     // this project keeps paying for.
-    let error = simble::transport::wasm_ws::run_test_script(
+    let error = simble::scripting::test_script::run_test_script(
         r#"
 let broadcast = android::BluetoothLeBroadcast("Bad");
 broadcast.start_broadcast(#{
@@ -167,7 +168,7 @@ broadcast.start_broadcast(#{
 
     // Same for a codec configuration nobody has checked: a plausible-looking
     // name is worse than an error, because it ships.
-    let error = simble::transport::wasm_ws::run_test_script(
+    let error = simble::scripting::test_script::run_test_script(
         r#"
 let broadcast = android::BluetoothLeBroadcast("Bad");
 broadcast.start_broadcast(#{ broadcast_id: 1, subgroups: [ #{ codec: "lc3_16_2" } ] });
@@ -178,7 +179,7 @@ broadcast.start_broadcast(#{ broadcast_id: 1, subgroups: [ #{ codec: "lc3_16_2" 
 
     // A Broadcast_ID is 24 bits; a wider one would be truncated into a
     // different broadcast than the script named.
-    let error = simble::transport::wasm_ws::run_test_script(
+    let error = simble::scripting::test_script::run_test_script(
         r#"
 let broadcast = android::BluetoothLeBroadcast("Bad");
 broadcast.start_broadcast(#{ broadcast_id: 0x01000000 });
@@ -211,7 +212,7 @@ assert(metadata[0].subgroups[0].bis_sync == 0x03, "two BISes, bits 0 and 1");
 let assistant = android::BluetoothLeBroadcastAssistant("Phone");
 assistant.add_source("AA:BB:CC:00:00:09", metadata[0], false);
 "#;
-    simble::transport::wasm_ws::run_test_script(script).expect("the two halves agree");
+    simble::scripting::test_script::run_test_script(script).expect("the two halves agree");
 }
 
 // ---------------------------------------------------------------------------
@@ -469,7 +470,7 @@ fn searching_before_a_sink_is_known_says_why_rather_than_doing_nothing() {
 let assistant = android::BluetoothLeBroadcastAssistant("Phone");
 assistant.start_searching_for_sources();
 "#;
-    let error =
-        simble::transport::wasm_ws::run_test_script(script).expect_err("there is no sink to tell");
+    let error = simble::scripting::test_script::run_test_script(script)
+        .expect_err("there is no sink to tell");
     assert!(error.contains("not talking to a sink"), "{error}");
 }

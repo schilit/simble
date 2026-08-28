@@ -39,9 +39,10 @@
 
 use crate::devices::catalog::{self, EXAMPLES};
 use crate::gatt::sig_names;
+use crate::scene::SceneEngine;
+use crate::scripting::test_script::{lint_script, run_test_script};
 use crate::transport::netsim::{self, NetsimScene};
 use crate::transport::usb::{UsbScene, UsbSelector, list_bluetooth_dongles};
-use crate::transport::wasm_ws::{SceneEngine, lint_script, run_test_script};
 use crate::types::Address;
 use serde_json::{Value, json};
 use std::io::{BufRead, Write};

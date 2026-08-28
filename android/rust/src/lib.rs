@@ -37,7 +37,7 @@
 /// exists to host, so a breaking change to that layer fails CI here rather
 /// than waiting for someone to open this directory.
 pub fn lint(script: &str) -> Result<(), String> {
-    simble::transport::wasm_ws::lint_script(script)
+    simble::scripting::test_script::lint_script(script)
 }
 
 #[cfg(test)]

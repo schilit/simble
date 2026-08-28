@@ -17,10 +17,11 @@
 //! is the test that version could not pass.
 
 use simble::att::opcode as att_opcode;
+use simble::device::scripted_peripheral::ScriptedPeripheral;
+use simble::gap::build_adv_payload_with_extras;
 use simble::l2cap::{L2capHeader, cid};
 use simble::profiles::csip;
 use simble::profiles::vcp;
-use simble::transport::wasm_ws::{ScriptedPeripheral, build_adv_payload_with_extras};
 use simble::types::{Address, Uuid};
 
 /// Builds the device a script describes and hands back its GATT server.

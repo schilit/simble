@@ -615,7 +615,7 @@ impl ScriptedCentral {
         if !scanner.scanning() || !self.handlers.scan_result {
             return;
         }
-        for report in crate::transport::wasm_ws::parse_scan_reports(packet) {
+        for report in crate::transport::scan_report::parse_scan_reports(packet) {
             if !scanner.matches(&report.service_uuids) {
                 continue;
             }

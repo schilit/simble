@@ -43,6 +43,7 @@ pub mod client;
 pub mod constants;
 pub mod hid;
 pub mod monitor;
+pub mod test_script;
 
 pub use bindings::{CarriedScript, ScriptEvent, ScriptGattServer, SessionEvents};
 pub use broadcast::{ScriptBroadcastAssistant, ScriptBroadcastSource};

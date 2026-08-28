@@ -427,7 +427,7 @@ impl ScriptGattServer {
 }
 
 /// Crate-visible so host-side extension registrars (the web runtime's
-/// `update_value` in `transport::wasm_ws`) raise script errors the same way.
+/// `update_value` in `scripting::test_script`) raise script errors the same way.
 pub(crate) fn runtime_error(message: impl Into<String>) -> Box<EvalAltResult> {
     Box::new(EvalAltResult::ErrorRuntime(
         Dynamic::from(message.into()),

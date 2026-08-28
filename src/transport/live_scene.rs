@@ -6,8 +6,9 @@
 //! than the in-process `SceneEngine` radio. Peripheral-only by design: the
 //! far side (an Android emulator, a real phone) plays the central.
 
-use super::wasm_ws::{ScanReport, ScriptedPeripheral, parse_scan_reports, queue_scanner_start};
+use super::scan_report::{ScanReport, parse_scan_reports, queue_scanner_start};
 use super::{HciChannel, HciTransport};
+use crate::device::scripted_peripheral::ScriptedPeripheral;
 use std::sync::Arc;
 
 /// One scripted peripheral on a live backend: the script/GATT logic, the

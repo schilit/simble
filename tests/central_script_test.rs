@@ -16,7 +16,7 @@
 //! points the same scripted central at a **Bumble**-hosted peripheral over
 //! netsim. Nothing here is a substitute for that.
 
-use simble::transport::wasm_ws::SceneEngine;
+use simble::scene::SceneEngine;
 use simble::types::Address;
 
 /// The peripheral every test connects to, unless it needs a different shape.

@@ -1,7 +1,14 @@
 use super::*;
 use crate::att::opcode;
+use crate::gap::{AdvertisingData, ad_type};
+use crate::gap::{build_adv_payload, build_adv_payload_with_extras};
 use crate::l2cap::AclPacketBoundary;
-use crate::l2cap::{L2capHeader, cid};
+use crate::l2cap::{HciAclHeader, L2capHeader, cid};
+use crate::packets::hci_events::{event_code as hci_event_code, le_subevent};
+use crate::transport::hci_adapter::h4_type;
+use crate::transport::scan_report::{
+    build_demo_adv_payload, parse_scan_reports, queue_advertiser_start, queue_scanner_start,
+};
 use zerocopy::IntoBytes;
 
 fn drain_host_packets(channel: &HciChannel) -> Vec<Vec<u8>> {

@@ -39,8 +39,11 @@
 //! materialized into a per-device [`MemoryBondStore`]. [`runner`] then hosts a
 //! `ResolvedScene` on a controller.
 
+pub mod engine;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod runner;
+
+pub use engine::SceneEngine;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;

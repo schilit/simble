@@ -74,7 +74,7 @@ const SITES: &[(&str, &str)] = &[
     ("src/scripting/catalog.rs", "catalog"),
     ("src/scripting/monitor.rs", "android"),
     ("src/scripting/constants.rs", "uuid"),
-    ("src/transport/wasm_ws.rs", "android"),
+    ("src/scripting/test_script.rs", "android"),
 ];
 
 fn repo_root() -> PathBuf {

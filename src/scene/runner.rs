@@ -21,8 +21,8 @@
 use std::time::{Duration, Instant};
 
 use super::{Controller, Placement, ResolvedScene, Role, SceneError};
+use crate::scene::engine::SceneEngine;
 use crate::transport::netsim::{self, NetsimScene};
-use crate::transport::wasm_ws::SceneEngine;
 
 /// How long and how finely to run. Deliberately *not* part of the scene file:
 /// a scene declares topology, and how long you care to watch it is a property

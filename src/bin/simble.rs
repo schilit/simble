@@ -33,9 +33,9 @@
 
 use simble::scene::runner::{RunOptions, RunReport};
 use simble::scene::{Controller, Scene};
+use simble::scripting::test_script::{lint_script, run_test_script};
 use simble::transport::serial::SerialTransport;
 use simble::transport::usb::{UsbSelector, list_bluetooth_dongles};
-use simble::transport::wasm_ws::{lint_script, run_test_script};
 use simble::transport::{HciChannel, HciTransport, Inbound, UsbTransport, accept_inbound};
 use std::io::Read;
 use std::net::{TcpListener, TcpStream};

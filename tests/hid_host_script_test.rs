@@ -16,7 +16,7 @@
 //! what every other profile binding in this crate does.
 
 use simble::devices::catalog;
-use simble::transport::wasm_ws::SceneEngine;
+use simble::scene::SceneEngine;
 use simble::types::Address;
 
 mod common;

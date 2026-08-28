@@ -1,9 +1,13 @@
 // Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
-//! HCI Transports and in-memory bridges to the Rootcanal Controller.
+//! HCI transports and in-memory bridges to the Rootcanal controller, plus the
+//! transport-neutral [`scan_report`] parsing/bring-up helpers. The `wasm_ws`
+//! module is the browser (wasm32) WebSocket bindings only — the engines it once
+//! held now live in `scan_report`, `device`, `scene`, and `scripting`.
 
 pub(crate) mod hci_adapter;
+pub mod scan_report;
 // The socket/USB transports need `std::net`/`nusb`, neither of which exists
 // on wasm32-unknown-unknown; the browser build talks to netsim through
 // `wasm_ws` instead, whose JS-binding half is gated inside the module so its

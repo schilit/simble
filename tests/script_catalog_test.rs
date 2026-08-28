@@ -16,7 +16,8 @@
 //! learned nothing.
 
 use simble::devices::catalog::{CENTRAL_EXAMPLES, EXAMPLES};
-use simble::transport::wasm_ws::{SceneEngine, run_test_script};
+use simble::scene::SceneEngine;
+use simble::scripting::test_script::run_test_script;
 
 mod common;
 use common::address;

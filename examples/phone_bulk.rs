@@ -42,8 +42,8 @@ use std::time::{Duration, Instant};
 
 use simble::device::throughput::{BulkCentral, BulkOptions, bulk_uuid};
 use simble::transport::HciChannel;
+use simble::transport::scan_report::{parse_scan_reports, queue_scanner_start};
 use simble::transport::usb::{UsbSelector, UsbTransport};
-use simble::transport::wasm_ws::{parse_scan_reports, queue_scanner_start};
 use simble::types::Address;
 
 use std::io::{Read, Write};

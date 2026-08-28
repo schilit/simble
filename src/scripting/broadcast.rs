@@ -1071,7 +1071,7 @@ fn subgroups_of(metadata: &Map) -> Result<Vec<SubgroupInfo>, Box<EvalAltResult>>
 /// [`crate::scripting::new_engine`] — every surface (the playground,
 /// `run_test`, MCP, the pages) sees the same API. That is deliberately unlike
 /// `add_pacs`/`add_ascs`/`add_ras`, which are registered inside
-/// `wasm_ws.rs::register_web_extensions` and are therefore invisible to any
+/// `scripting::test_script::register_web_extensions` and are therefore invisible to any
 /// engine that module does not build.
 pub fn register(engine: &mut Engine, android: &mut Module) {
     register_source(engine, android);

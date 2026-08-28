@@ -1,4 +1,6 @@
 use super::*;
+use crate::device::classic_device::{ClassicPhase, SERIAL_PORT_SERVICE_CLASS};
+use crate::device::classic_host::{self, spp_service_record};
 
 /// The RFCOMM server channel the acceptor advertises and serves.
 const SPP_CHANNEL: u8 = 3;
