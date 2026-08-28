@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The Rhai *test/web* runtime: the extension bindings a scripted device runs
-//! with ([`register_web_extensions`]) and the compile/run entry points
+//! with (`register_web_extensions`) and the compile/run entry points
 //! ([`run_test_script`], [`lint_script`]) an agent uses to check a script.
 //!
 //! `register_web_extensions` and its small conversion helpers were split out of
@@ -484,7 +484,7 @@ pub(crate) fn register_web_extensions(engine: &mut Engine) {
 /// — in a fresh engine, returning `Ok(())` if every assertion passed or the
 /// error message (a failed assert, or a compile/runtime error) otherwise.
 ///
-/// Unlike [`ScriptedPeripheral::run_script`] this does not require the script to
+/// Unlike `ScriptedPeripheral::run_script` this does not require the script to
 /// build a server: a pure-assertion test is valid. The same script is a device,
 /// a test, and a CI fixture — this is the runner for the "test" role.
 pub fn run_test_script(script: &str) -> Result<(), String> {

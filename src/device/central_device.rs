@@ -3,7 +3,7 @@
 
 //! The scene central: the client half of a scripted scene.
 //!
-//! [`CentralDevice`] connects to a peripheral by address over the shared link,
+//! `CentralDevice` connects to a peripheral by address over the shared link,
 //! exchanges MTU, discovers its GATT, and supports interactive read / write /
 //! subscribe — the natively-testable engine the browser bindings wrap. Split
 //! out of the wasm transport so the scene engine and tests can drive it

@@ -136,8 +136,8 @@ impl SceneEngine {
     ///
     /// This is the fifth thing a scene can host, beside the four LE roles
     /// above, and the first that speaks Bluetooth Classic. Build the device
-    /// with [`ClassicDevice::acceptor`] (discoverable, connectable, serving
-    /// SDP and an echoing RFCOMM port) or [`ClassicDevice::initiator`]
+    /// with `ClassicDevice::acceptor` (discoverable, connectable, serving
+    /// SDP and an echoing RFCOMM port) or `ClassicDevice::initiator`
     /// (inquires, pages, queries SDP, opens the advertised serial port).
     ///
     /// Nothing about it is LE: it shares the [`Link`] with the LE devices
@@ -175,7 +175,7 @@ impl SceneEngine {
     }
 
     /// The BR/EDR status JSON of classic device `index` (see
-    /// [`ClassicDevice::status_json`]), or `None` if it isn't one.
+    /// `ClassicDevice::status_json`), or `None` if it isn't one.
     pub fn classic_status_json(&self, index: usize) -> Option<String> {
         Some(self.classic_device(index)?.status_json())
     }
@@ -284,7 +284,7 @@ impl SceneEngine {
     }
 
     /// The GATT status JSON of peripheral `index` (see
-    /// [`ScriptedPeripheral::status_json`]), or `None` if it isn't a peripheral.
+    /// `ScriptedPeripheral::status_json`), or `None` if it isn't a peripheral.
     pub fn peripheral_status_json(&self, index: usize) -> Option<String> {
         match self.devices.get(index)?.role {
             SceneRole::Peripheral(ref p) => Some(p.status_json()),
@@ -372,7 +372,7 @@ impl SceneEngine {
 
     /// Host-writes `value` into characteristic `uuid` of peripheral `index`
     /// and notifies it even when the bytes are unchanged — see
-    /// [`ScriptedPeripheral::notify_characteristic_value`].
+    /// `ScriptedPeripheral::notify_characteristic_value`.
     pub fn peripheral_notify_value(
         &mut self,
         index: usize,

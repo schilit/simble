@@ -3,7 +3,7 @@
 
 //! The scripted GATT peripheral: a Rhai script hosted as a live LE device.
 //!
-//! [`ScriptedPeripheral`] compiles a device script, stands up its GATT server
+//! `ScriptedPeripheral` compiles a device script, stands up its GATT server
 //! over an in-process [`LeHost`], and serves it on an [`HciChannel`] — the
 //! natively-testable engine the browser bindings in
 //! [`crate::transport::wasm_ws`] wrap. It carries the default device script and
@@ -121,7 +121,7 @@ pub struct ScriptedPeripheral {
     last_error: Option<String>,
 }
 
-/// The result of evaluating one REPL line in a [`ScriptedPeripheral`] session
+/// The result of evaluating one REPL line in a `ScriptedPeripheral` session
 /// (the API Explorer emits exactly one Rhai statement per Execute): the
 /// statement's return value rendered for display, and any queue events it
 /// produced, already formatted for the Explorer's log.

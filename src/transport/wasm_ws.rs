@@ -8,15 +8,15 @@
 //! `netsim`, but with the browser doing all RFC 6455 framing).
 //!
 //! This module is *only* the browser half. The target-independent engines it
-//! wraps live in proper homes and compile and unit-test on every target:
-//! - scan-report parsing and demo HCI bring-up in
-//!   [`crate::transport::scan_report`],
-//! - the scripted peripheral in [`crate::device::scripted_peripheral`], the
-//!   scene central in [`crate::device::central_device`], and the classic
-//!   device in [`crate::device::classic_device`],
-//! - the multi-device [`SceneEngine`](crate::scene::engine::SceneEngine),
-//! - and the script compile/run entry points in
-//!   [`crate::scripting::test_script`].
+//! wraps live in proper homes and compile and unit-test on every target
+//! (plain code spans, not intra-doc links: these are internal modules that the
+//! published closed-surface build does not document, so a link would fail it):
+//! - scan-report parsing and demo HCI bring-up in `transport::scan_report`,
+//! - the scripted peripheral in `device::scripted_peripheral`, the scene
+//!   central in `device::central_device`, and the classic device in
+//!   `device::classic_device`,
+//! - the multi-device `scene::engine::SceneEngine`,
+//! - and the script compile/run entry points in `scripting::test_script`.
 //!
 //! The `web` submodule below (gated `#[cfg(target_arch = "wasm32")]`) wraps
 //! `web_sys::WebSocket` and exports the page-facing wasm-bindgen types. Browser

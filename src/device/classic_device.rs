@@ -3,7 +3,7 @@
 
 //! BR/EDR (classic) devices in a scene: the SPP client/server engine.
 //!
-//! [`ClassicDevice`] drives a classic connection — SDP then RFCOMM — as either
+//! `ClassicDevice` drives a classic connection — SDP then RFCOMM — as either
 //! initiator or acceptor, the natively-testable engine behind the browser
 //! bindings. Split out of the wasm transport so the scene engine and the car
 //! kit can drive it directly.

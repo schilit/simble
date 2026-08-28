@@ -148,7 +148,7 @@ const AUDIO_FRAME_BYTES: usize = 60;
 /// How far the head unit has got in reaching the phone's Hands-Free service.
 ///
 /// The first three are the BR/EDR link coming up and belong to
-/// [`ClassicDevice`]; the rest are HFP's own and belong to this type. They
+/// `ClassicDevice`; the rest are HFP's own and belong to this type. They
 /// are one list because from the dashboard's point of view there is one
 /// question — can I make a call yet — and the interesting failures are in
 /// the half nobody usually shows.
