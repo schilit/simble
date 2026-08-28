@@ -9,6 +9,7 @@ import android.bluetooth.BluetoothGatt;
 import android.bluetooth.BluetoothGattCallback;
 import android.bluetooth.BluetoothGattCharacteristic;
 import android.bluetooth.BluetoothGattDescriptor;
+import android.bluetooth.BluetoothSocket;
 import android.bluetooth.BluetoothStatusCodes;
 import android.bluetooth.le.BluetoothLeScanner;
 import android.bluetooth.le.ScanCallback;
@@ -22,6 +23,8 @@ import android.os.Looper;
 import android.os.ParcelUuid;
 import android.util.Log;
 
+import java.io.IOException;
+import java.io.OutputStream;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
@@ -55,6 +58,8 @@ final class BulkSource {
             UUID.fromString("f0bb0003-1234-5678-90ab-cdef01234567");
     private static final UUID CCCD =
             UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
+    private static final UUID PSM =
+            UUID.fromString("f0bb0004-1234-5678-90ab-cdef01234567");
     private static final byte BEGIN = 0x01;
     private static final byte FINISH = 0x02;
     private static final byte REPORT = 0x03;
@@ -78,15 +83,23 @@ final class BulkSource {
     // baseline. (Android exposes no Data Length control, so DLE — the third
     // fast lever on the dongle path — cannot be toggled here.)
     private final boolean fast;
+    // Stream the payload over an L2CAP CoC socket instead of GATT writes. GATT
+    // is metered ~one write per connection event; L2CAP rides its own credit-
+    // based flow control, so it can pack the event. The GATT link is still set
+    // up (discovery, control point, REPORT) — only the payload changes path.
+    private final boolean l2cap;
     private final Listener listener;
     private final Handler main = new Handler(Looper.getMainLooper());
 
     private BluetoothLeScanner scanner;
     private BluetoothGatt gatt;
+    private BluetoothDevice peerDevice;   // for opening the L2CAP channel
+    private BluetoothSocket l2capSocket;  // held open until the sink confirms
     private BluetoothGattCharacteristic dataCh;
     private BluetoothGattCharacteristic controlCh;
 
     private int chunkSize = 20;        // MTU-3, resolved once the MTU is up
+    private int psm;                   // the sink's L2CAP PSM, 0 = none (use GATT)
     private int negotiatedMtu = 23;    // the ATT default until onMtuChanged fires
     private int txPhy;                  // 0 until onPhyUpdate; 1=1M 2=2M 3=coded
     private int rxPhy;
@@ -111,12 +124,13 @@ final class BulkSource {
     private static final long MTU_STALL_MS = 5_000L;
 
     BulkSource(Context ctx, BluetoothAdapter adapter, String targetName,
-               long total, boolean fast, Listener listener) {
+               long total, boolean fast, boolean l2cap, Listener listener) {
         this.ctx = ctx;
         this.adapter = adapter;
         this.targetName = targetName == null ? "" : targetName.trim();
         this.total = total;
         this.fast = fast;
+        this.l2cap = l2cap;
         this.listener = listener;
     }
 
@@ -181,6 +195,7 @@ final class BulkSource {
     };
 
     private void connect(BluetoothDevice device) {
+        peerDevice = device;
         try {
             gatt = device.connectGatt(ctx, false, gattCallback, BluetoothDevice.TRANSPORT_LE);
         } catch (SecurityException e) {
@@ -253,12 +268,31 @@ final class BulkSource {
         @Override
         public void onDescriptorWrite(BluetoothGatt g, BluetoothGattDescriptor d, int status) {
             if (CCCD.equals(d.getUuid())) {
-                say("subscribed — starting the transfer");
-                byte[] begin = new byte[5];
-                begin[0] = BEGIN;
-                putU32(begin, 1, total);
-                writeControl(g, begin);
+                if (l2cap) {
+                    // Read the sink's L2CAP PSM before the transfer; BEGIN goes
+                    // out once we have it (or once we know to fall back to GATT).
+                    say("subscribed — reading L2CAP PSM");
+                    BluetoothGattCharacteristic psmCh = g.getService(SERVICE).getCharacteristic(PSM);
+                    if (psmCh != null && safeReadPsm(g, psmCh)) {
+                        return;
+                    }
+                    Log.w(TAG, "no PSM characteristic — falling back to GATT");
+                }
+                sendBegin(g);
             }
+        }
+
+        @Override
+        public void onCharacteristicRead(BluetoothGatt g,
+                                         BluetoothGattCharacteristic ch, int status) {
+            onPsmRead(ch, status == BluetoothGatt.GATT_SUCCESS ? ch.getValue() : null);
+        }
+
+        // API 33+ delivers the read value as an argument.
+        @Override
+        public void onCharacteristicRead(BluetoothGatt g,
+                                         BluetoothGattCharacteristic ch, byte[] value, int status) {
+            onPsmRead(ch, status == BluetoothGatt.GATT_SUCCESS ? value : null);
         }
 
         @Override
@@ -275,7 +309,11 @@ final class BulkSource {
                     // is unreliable on Android's stack.
                     startMs = System.currentTimeMillis();
                     enter("transfer");
-                    main.post(() -> pump(g));
+                    if (psm > 0) {
+                        streamL2cap();          // payload over the socket
+                    } else {
+                        main.post(() -> pump(g)); // payload over GATT writes
+                    }
                 }
             } else if (DATA.equals(ch.getUuid())) {
                 main.post(() -> pump(g)); // confirmed write done — send the next
@@ -297,6 +335,95 @@ final class BulkSource {
             onReport(ch, ch.getValue());
         }
     };
+
+    /** Sends BEGIN so the sink zeroes its counters and learns the length. */
+    private void sendBegin(BluetoothGatt g) {
+        say("subscribed — starting the transfer");
+        byte[] begin = new byte[5];
+        begin[0] = BEGIN;
+        putU32(begin, 1, total);
+        writeControl(g, begin);
+    }
+
+    /** Reads the PSM characteristic; false if the read could not be issued. */
+    private boolean safeReadPsm(BluetoothGatt g, BluetoothGattCharacteristic ch) {
+        try {
+            return g.readCharacteristic(ch);
+        } catch (SecurityException e) {
+            return false;
+        }
+    }
+
+    /** The PSM read came back: capture it (0 = sink has no L2CAP, stay on GATT),
+     *  then BEGIN. */
+    private void onPsmRead(BluetoothGattCharacteristic ch, byte[] value) {
+        if (PSM.equals(ch.getUuid())) {
+            if (value != null && value.length >= 2) {
+                psm = (value[0] & 0xFF) | ((value[1] & 0xFF) << 8);
+            }
+            if (psm > 0) {
+                say("sink L2CAP PSM " + psm);
+            } else {
+                Log.w(TAG, "sink reported no L2CAP PSM — using GATT");
+            }
+            main.post(() -> {
+                if (gatt != null) {
+                    sendBegin(gatt);
+                }
+            });
+        }
+    }
+
+    /**
+     * Streams the whole payload over an L2CAP CoC socket on a worker thread,
+     * then closes it and sends FINISH so the sink reports its count. The socket
+     * bypasses GATT/ATT: L2CAP's credit-based flow control packs the connection
+     * event, where a GATT write is metered roughly one per event.
+     */
+    private void streamL2cap() {
+        Thread worker = new Thread(() -> {
+            try {
+                l2capSocket = peerDevice.createInsecureL2capChannel(psm);
+                l2capSocket.connect();
+                OutputStream out = l2capSocket.getOutputStream();
+                byte[] chunk = new byte[Math.min(4096, (int) Math.min(total, Integer.MAX_VALUE))];
+                for (int i = 0; i < chunk.length; i++) {
+                    chunk[i] = (byte) (i & 0xFF); // a ramp; the sink counts length
+                }
+                long left = total;
+                while (left > 0 && !done) {
+                    int n = (int) Math.min(chunk.length, left);
+                    out.write(chunk, 0, n);
+                    left -= n;
+                    sent += n;
+                    if ((sent & 0x3FFF) == 0) {
+                        long s = sent;
+                        main.post(() -> listener.status("streaming… " + s + " / " + total + " bytes"));
+                    }
+                }
+                out.flush();
+            } catch (IOException | SecurityException e) {
+                Log.w(TAG, "L2CAP stream failed: " + e);
+                main.post(() -> fail("L2CAP stream failed: " + e.getMessage()));
+                return;
+            }
+            // The bytes are written, but a socket write returns once buffered,
+            // not once transmitted — closing now would discard the tail. Leave
+            // the socket open (report() closes it) and send FINISH; the sink
+            // waits for its byte count to reach `expected` before REPORTing, so
+            // the credit-controlled drain finishes first.
+            main.post(() -> {
+                if (done || gatt == null) {
+                    return;
+                }
+                finishing = true;
+                byte[] fin = {FINISH};
+                writeControl(gatt, fin);
+            });
+        }, "simble-l2cap-tx");
+        worker.setDaemon(true);
+        worker.start();
+    }
 
     /** Applies the fast-link PHY/priority preferences and starts service
      *  discovery — once, whether reached by a normal MTU change or the stall
@@ -387,8 +514,16 @@ final class BulkSource {
         // final (ok=…) span to key on.
         if (phase != null) {
             phase.close("bytes=" + acked + " ok=" + (ok ? 1 : 0)
-                    + " mtu=" + negotiatedMtu + " txphy=" + txPhy + " rxphy=" + rxPhy);
+                    + " mtu=" + negotiatedMtu + " txphy=" + txPhy + " rxphy=" + rxPhy
+                    + " link=" + (psm > 0 ? "l2cap" : "gatt"));
             phase = null;
+        }
+        if (l2capSocket != null) {
+            try {
+                l2capSocket.close(); // now safe: the sink has REPORTed its count
+            } catch (IOException ignored) {
+            }
+            l2capSocket = null;
         }
         try {
             if (gatt != null) {

@@ -753,6 +753,12 @@ fn pair_run(query: &str) -> String {
     let bytes: u64 = params.get("bytes").and_then(|b| b.parse().ok()).unwrap_or(65536);
     // Fast link on by default; `fast=0` runs the 1M baseline.
     let fast: u8 = if params.get("fast").map(|f| f == "0").unwrap_or(false) { 0 } else { 1 };
+    // Payload path: GATT writes by default, or L2CAP CoC with `link=l2cap`.
+    let link = if params.get("link").map(|l| l == "l2cap").unwrap_or(false) {
+        "l2cap"
+    } else {
+        "gatt"
+    };
     let adb = adb_path();
 
     // The source scans for the sink by the name it advertises.
@@ -830,7 +836,7 @@ fn pair_run(query: &str) -> String {
     fire(
         source,
         &format!(
-            "am start -n com.simble/.SimbleActivity --es role source --es target '{esc}' --ei bytes {bytes} --ei fast {fast}"
+            "am start -n com.simble/.SimbleActivity --es role source --es target '{esc}' --ei bytes {bytes} --ei fast {fast} --es link {link}"
         ),
     );
 
@@ -848,7 +854,18 @@ fn pair_run(query: &str) -> String {
         let text = String::from_utf8_lossy(&out.stdout);
         // The run is over when a span closes carrying the totals (`ok=…`).
         if text.lines().any(|l| l.contains("span{") && l.contains("ok=")) {
-            return pair_result_json(&text, source, sink, &esc, bytes);
+            // For an L2CAP run the source's transfer span is inflated: a socket
+            // write returns once buffered, so the span covers the buffer fill
+            // and the drain-wait, not the over-air time. The sink stamps its own
+            // first-to-last received byte (served as duration_ms), which is the
+            // honest transfer time — use it when this was an L2CAP run.
+            let sink_ms = if link == "l2cap" {
+                let host = sink.split(':').next().unwrap_or(sink);
+                sink_get(host, "/stats").and_then(|b| json_number(&b, "duration_ms"))
+            } else {
+                None
+            };
+            return pair_result_json(&text, source, sink, &esc, bytes, sink_ms);
         }
     }
     serde_json::json!({
@@ -864,13 +881,21 @@ fn pair_run(query: &str) -> String {
 /// Turns the source's `span{…} closed busy_ms=…` lines into the result JSON the
 /// page charts. Each phase is a span; the final span carries `bytes` and `ok`,
 /// and throughput is the transfer span weighed against the byte count.
-fn pair_result_json(log: &str, source: &str, sink: &str, name: &str, expected: u64) -> String {
+fn pair_result_json(
+    log: &str,
+    source: &str,
+    sink: &str,
+    name: &str,
+    expected: u64,
+    sink_transfer_ms: Option<i64>,
+) -> String {
     let mut spans: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
     let mut bytes = 0i64;
     let mut ok = false;
     let mut mtu = 0i64;
     let mut txphy = 0i64;
     let mut rxphy = 0i64;
+    let mut link = "gatt".to_string();
     for line in log.lines().filter(|l| l.contains("span{")) {
         let Some(phase) = line.split("span{").nth(1).and_then(|r| r.split('}').next()) else {
             continue;
@@ -893,9 +918,18 @@ fn pair_result_json(log: &str, source: &str, sink: &str, name: &str, expected: u
         if let Some(p) = span_field(line, "rxphy") {
             rxphy = p;
         }
+        if let Some(l) = line
+            .split("link=")
+            .nth(1)
+            .and_then(|r| r.split_whitespace().next())
+        {
+            link = l.to_string();
+        }
     }
     let seg = |name: &str| spans.get(name).copied().unwrap_or(0);
-    let transfer = seg("transfer");
+    // The sink-measured transfer time wins when we have it (L2CAP): it is the
+    // over-air first-to-last-byte span, not the source's buffer-inflated one.
+    let transfer = sink_transfer_ms.filter(|&m| m > 0).unwrap_or_else(|| seg("transfer"));
     let kb_s = if transfer > 0 {
         (bytes as f64 / 1024.0 / (transfer as f64 / 1000.0) * 100.0).round() / 100.0
     } else {
@@ -924,6 +958,7 @@ fn pair_result_json(log: &str, source: &str, sink: &str, name: &str, expected: u
         "mtu": mtu,
         "tx_phy": phy_label(txphy),
         "rx_phy": phy_label(rxphy),
+        "link": link,
     })
     .to_string()
 }
@@ -932,6 +967,15 @@ fn pair_result_json(log: &str, source: &str, sink: &str, name: &str, expected: u
 fn span_field(line: &str, key: &str) -> Option<i64> {
     let at = line.find(&format!("{key}="))? + key.len() + 1;
     line[at..].split_whitespace().next()?.parse().ok()
+}
+
+/// One numeric field out of a flat JSON object (`"key":<number>`), without
+/// taking a JSON dependency into this binary's parse path.
+fn json_number(body: &str, key: &str) -> Option<i64> {
+    let at = body.find(&format!("\"{key}\":"))? + key.len() + 3;
+    let rest = body[at..].trim_start();
+    let end = rest.find(|c: char| !c.is_ascii_digit() && c != '-').unwrap_or(rest.len());
+    rest[..end].parse().ok()
 }
 
 /// Serves one WebSocket client end-to-end: handshake, open the dongle, then

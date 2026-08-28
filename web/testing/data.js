@@ -193,18 +193,21 @@ function saveRuns(runs) {
 
 /// What a controller is called on a chart row, and whether its numbers came
 /// off a radio.
-function provenance(controller, dongles) {
+function provenance(controller, dongles, link) {
   if (controller === "usb") {
     // A phone driving another phone — no dongle in it at all. Named both ends,
-    // source → sink, so it is its own series and reads as what it is.
+    // source → sink, so it is its own series and reads as what it is. The
+    // payload path (GATT vs L2CAP) is part of the identity: the two are
+    // different measurements and must chart as separate series.
     if (isPhone(dongles.central) && isPhone(dongles.sink)) {
       const src = phones.get(dongles.central);
       const dst = phones.get(dongles.sink);
       const from = src?.name || src?.model || "phone";
       const to = dst?.name || dst?.model || "phone";
+      const via = link === "l2cap" ? " · L2CAP" : "";
       return {
-        id: `${dongles.central}->${dongles.sink}`,
-        label: `${from} → ${to}`,
+        id: `${dongles.central}->${dongles.sink}:${link || "gatt"}`,
+        label: `${from} → ${to}${via}`,
         simulated: false,
       };
     }
@@ -372,7 +375,8 @@ async function runPairToPhone(centralValue, sinkValue, options, onStage) {
   try {
     const url = `${http}/pair-run?source=${encodeURIComponent(source)}`
       + `&sink=${encodeURIComponent(sink)}&bytes=${options.total_bytes}`
-      + `&fast=${options.fast_link === false ? 0 : 1}`;
+      + `&fast=${options.fast_link === false ? 0 : 1}`
+      + `&link=${options.link === "l2cap" ? "l2cap" : "gatt"}`;
     res = await (await fetch(url, { cache: "no-store" })).json();
   } catch (e) {
     return {
@@ -404,6 +408,7 @@ async function runPairToPhone(centralValue, sinkValue, options, onStage) {
     mtu: res.mtu || null,
     tx_phy: res.tx_phy ?? null,
     rx_phy: res.rx_phy ?? null,
+    link: res.link ?? "gatt",
     // The sink counted the bytes and reported them back over the control point;
     // the duration is the source's own transfer clock. Not stamped on our clock,
     // so: peer-reported.
@@ -911,6 +916,12 @@ export function mountData(root) {
           <option value="off">off</option>
         </select>
       </label>
+      <label>Payload path
+        <select id="bench-link">
+          <option value="gatt" selected>GATT writes</option>
+          <option value="l2cap">L2CAP socket</option>
+        </select>
+      </label>
       <p class="settings-note">
         Fast link requests 2M&nbsp;PHY, Data Length Extension, and a tight connection interval on
         connect; off leaves the 1M, 27-octet baseline — the setup cost the fast path buys down, side by
@@ -1076,6 +1087,7 @@ export function mountData(root) {
       total_bytes: Number($("bench-size").value),
       with_response: $("bench-mode").value === "req",
       fast_link: $("bench-fast").value === "on",
+      link: $("bench-link").value,
       timeout_ms: 15000,
     };
   }
@@ -1179,7 +1191,7 @@ export function mountData(root) {
     $("bench-run").disabled = true;
     const options = settings();
     const iterations = Number($("bench-runs").value);
-    const where = provenance(bar.selected, dongles);
+    const where = provenance(bar.selected, dongles, options.link);
     const lines = [];
     for (let i = 0; i < iterations; i += 1) {
       setPill(`run ${i + 1} of ${iterations}`, null);

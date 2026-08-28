@@ -14,6 +14,8 @@ import android.bluetooth.BluetoothGattServer;
 import android.bluetooth.BluetoothGattServerCallback;
 import android.bluetooth.BluetoothGattService;
 import android.bluetooth.BluetoothManager;
+import android.bluetooth.BluetoothServerSocket;
+import android.bluetooth.BluetoothSocket;
 import android.bluetooth.le.AdvertiseCallback;
 import android.bluetooth.le.AdvertiseData;
 import android.bluetooth.le.AdvertiseSettings;
@@ -32,6 +34,8 @@ import android.view.Gravity;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.UUID;
 
 /**
@@ -67,6 +71,10 @@ public class SimbleActivity extends Activity implements StatsServer.Stats {
     /** Client Characteristic Configuration, the standard 0x2902. */
     private static final UUID CCCD =
             UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
+    /** The L2CAP CoC PSM to stream payload over, read by a source that wants
+     *  the socket path instead of GATT writes. Two little-endian bytes. */
+    private static final UUID PSM =
+            UUID.fromString("f0bb0004-1234-5678-90ab-cdef01234567");
 
     // Control-point opcodes, matching `control_op` in Rust.
     private static final byte BEGIN = 0x01;
@@ -76,6 +84,14 @@ public class SimbleActivity extends Activity implements StatsServer.Stats {
     private BluetoothGattServer server;
     private BluetoothLeAdvertiser advertiser;
     private BluetoothGattCharacteristic control;
+
+    /** The L2CAP CoC server: a stream socket that bypasses GATT/ATT entirely,
+     *  so payload rides L2CAP's own credit-based flow control rather than one
+     *  metered write per connection event. Its PSM is published in the PSM
+     *  characteristic for a source to read. Null on a device too old for it. */
+    private BluetoothServerSocket l2capServer;
+    private int l2capPsm;
+    private Thread l2capThread;
 
     private long bytes;
     private long chunks;
@@ -195,10 +211,12 @@ public class SimbleActivity extends Activity implements StatsServer.Stats {
         String target = getIntent().getStringExtra("target");
         long total = getIntent().getLongExtra("bytes", getIntent().getIntExtra("bytes", 65536));
         boolean fast = getIntent().getIntExtra("fast", 1) != 0;
+        boolean l2cap = "l2cap".equals(getIntent().getStringExtra("link"));
         touch();
         showCounters();
-        say("source mode" + (target != null ? " → " + target : "") + " — " + total + " bytes");
-        BulkSource src = new BulkSource(this, adapter, target, total, fast, new BulkSource.Listener() {
+        say("source mode" + (target != null ? " → " + target : "") + " — " + total + " bytes"
+                + (l2cap ? " (L2CAP)" : ""));
+        BulkSource src = new BulkSource(this, adapter, target, total, fast, l2cap, new BulkSource.Listener() {
             @Override
             public void status(String message) {
                 say(message);
@@ -267,8 +285,19 @@ public class SimbleActivity extends Activity implements StatsServer.Stats {
                         | BluetoothGattDescriptor.PERMISSION_WRITE);
         control.addDescriptor(cccd);
 
+        // The L2CAP CoC server, and a characteristic that publishes its PSM.
+        // A source reads the PSM and streams payload over the socket, bypassing
+        // GATT. Best-effort: a device or run that cannot open one simply has no
+        // PSM to offer and the source stays on the GATT path.
+        openL2capServer(adapter);
+        BluetoothGattCharacteristic psm = new BluetoothGattCharacteristic(
+                PSM,
+                BluetoothGattCharacteristic.PROPERTY_READ,
+                BluetoothGattCharacteristic.PERMISSION_READ);
+
         service.addCharacteristic(data);
         service.addCharacteristic(control);
+        service.addCharacteristic(psm);
         server.addService(service);
 
         advertiser = adapter.getBluetoothLeAdvertiser();
@@ -291,6 +320,56 @@ public class SimbleActivity extends Activity implements StatsServer.Stats {
                 .setIncludeDeviceName(true)
                 .build();
         advertiser.startAdvertising(settings, advertisement, scanResponse, advertiseCallback);
+    }
+
+    /** Opens the L2CAP CoC server and starts accepting on it, storing the PSM
+     *  the source will read. Insecure: no pairing, matching the run's model. */
+    private void openL2capServer(BluetoothAdapter adapter) {
+        try {
+            l2capServer = adapter.listenUsingInsecureL2capChannel();
+            l2capPsm = l2capServer.getPsm();
+            Log.i(TAG, "L2CAP server on PSM " + l2capPsm);
+            l2capThread = new Thread(this::acceptL2cap, "simble-l2cap");
+            l2capThread.setDaemon(true);
+            l2capThread.start();
+        } catch (Exception e) {
+            l2capServer = null;
+            l2capPsm = 0;
+            Log.w(TAG, "no L2CAP server (source will use GATT): " + e);
+        }
+    }
+
+    /** Accepts one L2CAP connection at a time and drains its stream into the
+     *  same counters the GATT path feeds, so /stats and the control-point REPORT
+     *  describe an L2CAP run exactly as they do a GATT one. Loops for the next
+     *  run after each peer leaves. */
+    private void acceptL2cap() {
+        byte[] buf = new byte[65536];
+        while (l2capServer != null) {
+            try (BluetoothSocket socket = l2capServer.accept()) {
+                holdAndSay("L2CAP peer connected");
+                InputStream in = socket.getInputStream();
+                int n;
+                while ((n = in.read(buf)) > 0) {
+                    count(n);
+                    showCounters();
+                }
+                say("L2CAP transfer ended");
+            } catch (IOException e) {
+                // accept() throws when the server socket is closed on teardown —
+                // the loop's own exit, not an error to shout about.
+                if (l2capServer != null) {
+                    Log.w(TAG, "L2CAP accept ended: " + e);
+                }
+                return;
+            }
+        }
+    }
+
+    /** touch() + a status line, from a worker thread. */
+    private void holdAndSay(String message) {
+        runOnUiThread(this::touch);
+        say(message);
     }
 
     private final AdvertiseCallback advertiseCallback = new AdvertiseCallback() {
@@ -334,6 +413,23 @@ public class SimbleActivity extends Activity implements StatsServer.Stats {
             SimbleActivity.this.mtu = mtu;
             Log.i(TAG, "MTU " + mtu);
             say("connected, MTU " + mtu);
+        }
+
+        @Override
+        public void onCharacteristicReadRequest(
+                BluetoothDevice device,
+                int requestId,
+                int offset,
+                BluetoothGattCharacteristic characteristic) {
+            if (PSM.equals(characteristic.getUuid())) {
+                // The PSM as two little-endian bytes, or 0 (no L2CAP here) so the
+                // source falls back to GATT rather than waiting on a channel that
+                // will never open.
+                byte[] value = {(byte) (l2capPsm & 0xFF), (byte) ((l2capPsm >> 8) & 0xFF)};
+                server.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, value);
+            } else {
+                server.sendResponse(device, requestId, BluetoothGatt.GATT_FAILURE, 0, null);
+            }
         }
 
         @Override
@@ -396,6 +492,29 @@ public class SimbleActivity extends Activity implements StatsServer.Stats {
                 Log.i(TAG, "BEGIN expecting " + expected);
                 break;
             case FINISH:
+                // FINISH arrives over GATT, which can beat the last of an L2CAP
+                // stream still draining on the accept thread (a socket write
+                // returns once buffered, not once transmitted). Wait for the
+                // count to reach `expected` before reporting, so an L2CAP run is
+                // not scored short by a control-point race. Keyed on *progress*,
+                // not a fixed deadline: keep waiting while bytes climb, and give
+                // up only after ~1.5 s of no arrivals. A GATT run is already
+                // complete here, so the loop falls straight through.
+                long lastSeen = -1;
+                int idle = 0;
+                while (bytes < expected && idle < 150) {
+                    if (bytes != lastSeen) {
+                        lastSeen = bytes;
+                        idle = 0;
+                    } else {
+                        idle++;
+                    }
+                    try {
+                        Thread.sleep(10);
+                    } catch (InterruptedException ignored) {
+                        break;
+                    }
+                }
                 // Report whatever we have, so a short count is visible rather
                 // than a hang. A run that lost bytes is still a measurement.
                 byte[] report = new byte[9];
@@ -631,6 +750,14 @@ public class SimbleActivity extends Activity implements StatsServer.Stats {
         }
         if (server != null) {
             server.close();
+        }
+        BluetoothServerSocket l2 = l2capServer;
+        l2capServer = null; // signals acceptL2cap() the close is intentional
+        if (l2 != null) {
+            try {
+                l2.close();
+            } catch (IOException ignored) {
+            }
         }
         if (statsServer != null) {
             statsServer.stop();
