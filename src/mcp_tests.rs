@@ -809,13 +809,14 @@ fn test_run_on_netsim_selects_the_backend() {
             .contains("netsim")
     );
 
+    // Scanning is a real-RF operation; on netsim it is not wired yet.
     let scan = call(&mut s, "scan", json!({}));
     assert_eq!(scan["result"]["isError"], true);
     assert!(
         scan["result"]["content"][0]["text"]
             .as_str()
             .unwrap()
-            .contains("self-mode only")
+            .contains("not wired")
     );
 
     let unknown = call(&mut s, "run_on", json!({"target": "rootcanal"}));

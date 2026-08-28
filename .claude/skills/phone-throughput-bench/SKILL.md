@@ -1,6 +1,6 @@
 ---
 name: phone-throughput-bench
-description: Benchmark BLE bulk throughput against real phones running SimBLE Android, with a CSR8510 USB dongle as the central. Use when asked to run the phone speed test, measure real-radio throughput to a phone, compare phones, or drive examples/phone_bulk. Encodes the traps that make this flaky (macOS Local Network permission, wireless-adb dropping under BLE load, expiring pair codes, one-advertiser-at-a-time, off-link stats).
+description: Benchmark BLE bulk throughput against real phones running SimBLE Android — either dongle-to-phone (a CSR8510/nRF USB dongle as central) or phone-to-phone (one phone's own radio as central, no dongle). Use when asked to run the phone speed test, measure real-radio throughput to a phone, compare phones, run a phone-to-phone transfer, or drive examples/phone_bulk. Encodes the traps that make this flaky (macOS Local Network permission, wireless-adb dropping under BLE load, expiring pair codes, one-advertiser-at-a-time, off-link stats, the 512-byte attribute cap).
 ---
 
 # Phone throughput benchmark (dongle → phone, real RF)
@@ -11,18 +11,27 @@ as the GATT sink and counts what lands. This is the run that puts Android's real
 host stack and a real phone controller on the receiving end — where the bugs that
 only silicon shows have always been.
 
-## Topology — non-negotiable
+## Two topologies
 
-- **Dongle = central (does the writing). Phone = sink.** A phone can **never** be
-  simble's central: simble drives a controller over HCI, and stock Android does
-  not expose its controller as an HCI radio over adb. So there is **no
-  phone-to-phone path**. "Across N phones" means benchmark N phones **as sinks**,
-  one at a time, each driven by the dongle, then compare.
-- **Stats come back over HTTP, never over the BT link.** A `FINISH`/`REPORT` on the
-  link costs air time on the very thing being measured, and its arrival is what
-  ends the transfer — every figure would then include a round trip of the thing
-  under test, and a broken link could not deliver its result at all. The run sets
+- **Dongle → phone (real RF, simble as central).** simble drives a USB controller
+  over HCI; the phone runs SimBLE Android as the **sink**. This is the bulk of
+  this skill. simble can *only* be the central this way — stock Android does not
+  expose its controller as an HCI radio over adb, so **simble-over-HCI has no
+  phone-to-phone path**. "Across N phones" means benchmark N phones as sinks, one
+  at a time, each driven by the dongle, then compare. Stats come back **over HTTP,
+  never over the BT link**: a `REPORT` on the link costs air time on the very
+  thing being measured and its arrival ends the transfer, so every figure would
+  include a round trip of the thing under test. The run sets
   `use_control_point: false`; the link carries payload and nothing else.
+- **Phone → phone (no dongle, the app as central).** The SimBLE app itself has a
+  **source role** (`android/app/.../BulkSource.java`) that drives the transfer
+  from one phone into another using Android's own `BluetoothGatt` *client* — not
+  simble's HCI stack, which is why this is possible where simble-as-central is
+  not. No dongle, no laptop in the data path. Here the count *does* come back on
+  the link as a `REPORT` (and the sink times its own receive span), because there
+  is no laptop to read HTTP and the phone's wifi doze makes `/stats` flaky anyway.
+  See **Phone-to-phone** below. Either topology is one advertiser (the sink) and
+  one central.
 
 ## The traps (read before touching anything)
 
@@ -131,6 +140,59 @@ $ADB -s <serial> shell pm grant com.simble android.permission.BLUETOOTH_CONNECT
 ```
 
 Repeat step 4 per phone, then tabulate.
+
+## Phone-to-phone (no dongle)
+
+One phone drives the transfer into another over its own radio. The sink is the
+same app as always; the source is the app launched with a **role**:
+
+```bash
+# the whole pair, scripted: force-stops other advertisers, launches the sink,
+# drives the source, reads both phones' clocks off the REPORT (no HTTP)
+.claude/skills/phone-throughput-bench/scripts/bench-pair.sh \
+  <source-serial> <sink-serial> [bytes]
+
+# or by hand — the source is one intent (mind the quoting: the remote shell
+# re-splits on spaces, so single-quote a spaced sink name):
+adb -s <source> shell "am start -n com.simble/.SimbleActivity \
+  --es role source --es target 'Pixel 8 Pro' --ei bytes 65536"
+```
+
+Traps specific to this path:
+
+- **Cap the chunk at 512 bytes, not MTU-3.** MTU-3 works out to 514, but the max
+  BLE *attribute value* is 512; a 514-byte write is malformed and the peer drops
+  it silently — no error, no callback, just a transfer that stalls after one
+  chunk and looks like a dead stack. `BulkSource` caps at 512; if you see exactly
+  one chunk land and then nothing, this is why.
+- **Write Without Response is fine — and 3.5× faster than confirmed.** The write
+  callback *does* fire for no-response writes (once the size is valid), so the
+  pump chains one deep. Confirmed writes also work but cost a round trip per
+  chunk (~14 vs ~48 KB/s). Don't "fix" a stalled no-response pump by switching to
+  confirmed writes; check the 512 cap first — that was the actual bug.
+- **Discovery is slow: 30 s+ before the transfer starts.** The source scan can
+  take half a minute to surface one named advertiser, then the transfer itself is
+  ~1 s. `bench-pair.sh` waits up to ~50 s; if driving by hand, don't call it dead
+  early. `BulkSource`'s own run timeout is 40 s.
+- **One advertiser still applies.** The source filters on the service UUID and
+  then the name; force-stop the app on every phone except the sink so the source
+  can't grab a stray. Two same-model phones share a name — fine, because only the
+  sink advertises the service.
+- **Wireless adb wedges under BLE load here too (trap 3).** The transfer can
+  succeed while the source phone's adb link drops, so the *result read* comes back
+  empty even though the run worked — check the phone's screen or its logcat once
+  adb recovers before concluding it failed. Prefer USB for the source.
+
+Grant the source `BLUETOOTH_SCAN` (the sink never scans, so it doesn't need it);
+`build.sh install` and `bench-pair.sh` both grant it.
+
+### Known-good baseline (phone-to-phone)
+
+- Pixel 6 Pro → Pixel 8 Pro, 64 KB: **~48 KB/s** (47.4 / 47.4 / 49.1 — tight).
+- Pixel 8 Pro → Pixel 8 Pro, 64 KB: **~41–56 KB/s** (more spread, still 0 loss).
+
+Every connect succeeds and every byte lands — no `0x3E`, unlike the nRF dongle.
+Matches the patched nRF for speed and beats it for reliability, with no dongle.
 
 ## Interpreting the numbers
 
