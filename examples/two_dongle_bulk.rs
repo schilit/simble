@@ -27,8 +27,7 @@ fn main() {
 
     let mut central_usb =
         UsbTransport::open_selected(&UsbSelector::parse(central_sel).unwrap()).unwrap();
-    let mut sink_usb =
-        UsbTransport::open_selected(&UsbSelector::parse(sink_sel).unwrap()).unwrap();
+    let mut sink_usb = UsbTransport::open_selected(&UsbSelector::parse(sink_sel).unwrap()).unwrap();
     let central_ch = HciChannel::new();
     let sink_ch = HciChannel::new();
     let clock = Instant::now();
@@ -79,6 +78,9 @@ fn main() {
         println!("  {line}");
     }
     let counters = sink.counters();
-    println!("sink saw {} bytes in {} chunks", counters.bytes, counters.chunks);
+    println!(
+        "sink saw {} bytes in {} chunks",
+        counters.bytes, counters.chunks
+    );
     println!("{}", run.report_json());
 }

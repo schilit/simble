@@ -124,7 +124,8 @@ impl LiveBackend {
         match self {
             LiveBackend::Usb(scene) => scene.add_scanner(),
             LiveBackend::Netsim(_) => Err(
-                "a real-RF scan needs run_on(\"usb\") — netsim scanning is not wired yet".to_string(),
+                "a real-RF scan needs run_on(\"usb\") — netsim scanning is not wired yet"
+                    .to_string(),
             ),
         }
     }
@@ -1318,7 +1319,9 @@ impl Server {
                 live.pump();
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
-            let reports = live.scanner_reports_json().unwrap_or_else(|| "[]".to_string());
+            let reports = live
+                .scanner_reports_json()
+                .unwrap_or_else(|| "[]".to_string());
             return tool_text(id, &annotate_json(&dedupe_scan_reports(&reports)), false);
         }
         if self.scene.is_none() {

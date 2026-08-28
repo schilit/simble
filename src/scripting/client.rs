@@ -197,7 +197,13 @@ impl ScriptScanner {
 
     /// Whether `uuids` satisfies the filter the script set.
     pub fn matches(&self, uuids: &[String]) -> bool {
-        match self.inner.borrow().filter.as_ref().and_then(|f| f.service_uuid) {
+        match self
+            .inner
+            .borrow()
+            .filter
+            .as_ref()
+            .and_then(|f| f.service_uuid)
+        {
             None => true,
             Some(wanted) => {
                 let wanted = wanted.to_string();
@@ -647,11 +653,15 @@ impl ScriptedCentral {
             // any service data (service UUID + bytes). All hex, as the wire had.
             map.insert(
                 "flags".into(),
-                report.flags.map_or(Dynamic::UNIT, |f| Dynamic::from(i64::from(f))),
+                report
+                    .flags
+                    .map_or(Dynamic::UNIT, |f| Dynamic::from(i64::from(f))),
             );
             map.insert(
                 "tx_power".into(),
-                report.tx_power.map_or(Dynamic::UNIT, |p| Dynamic::from(i64::from(p))),
+                report
+                    .tx_power
+                    .map_or(Dynamic::UNIT, |p| Dynamic::from(i64::from(p))),
             );
             map.insert(
                 "manufacturer_data".into(),
@@ -703,7 +713,10 @@ impl ScriptedCentral {
             LE_SET_SCAN_PARAMETERS,
             &[0x01, 0x10, 0x00, 0x10, 0x00, 0x00, 0x00],
         ));
-        out.push(crate::device::host::command(LE_SET_SCAN_ENABLE, &[0x01, 0x00]));
+        out.push(crate::device::host::command(
+            LE_SET_SCAN_ENABLE,
+            &[0x01, 0x00],
+        ));
         out
     }
 

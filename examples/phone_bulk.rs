@@ -55,15 +55,12 @@ const SCAN_OFF: [u8; 5] = [0x0C, 0x20, 0x02, 0x00, 0x00];
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let selector = args.first().map(String::as_str).unwrap_or("02.3.1");
-    let total_bytes: usize = args
-        .get(1)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(65536);
+    let total_bytes: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(65536);
 
     // Where SimBLE Android is serving. `adb forward tcp:8099 tcp:8099` makes the
     // default work over USB or wifi adb without knowing the phone's address.
-    let stats_host = std::env::var("SIMBLE_SINK_HTTP")
-        .unwrap_or_else(|_| "127.0.0.1:8099".to_string());
+    let stats_host =
+        std::env::var("SIMBLE_SINK_HTTP").unwrap_or_else(|_| "127.0.0.1:8099".to_string());
 
     let sel = UsbSelector::parse(selector).expect("selector");
     let mut usb = UsbTransport::open_selected(&sel).expect("open dongle");
@@ -76,7 +73,8 @@ fn main() {
     queue_scanner_start(&channel).expect("scanner bring-up");
 
     let scan_began = Instant::now();
-    let Some((address, rssi, name)) = find_sink(&mut usb, &channel, &wanted, Duration::from_secs(20))
+    let Some((address, rssi, name)) =
+        find_sink(&mut usb, &channel, &wanted, Duration::from_secs(20))
     else {
         eprintln!(
             "no peer advertising the bulk service.\n\
