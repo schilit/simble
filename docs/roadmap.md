@@ -11,7 +11,7 @@
 | # | item | status | notes |
 |---|---|---|---|
 | H1 | **Android-target build break** in `src/transport/usb.rs`. | **done** (2560f4d) | Not an nusb version bump: nusb 0.2.7 cfg-gates `bus_id`/`device_address`/`port_chain`/`list_devices` off `target_os = "android"` (no USB enumeration there). Fixed by cfg-gating with android fallbacks; desktop codegen byte-identical. The "Android crate" CI check should now pass. |
-| H2 | **`cargo fmt` drift** — a rustfmt-version mismatch flags files repo-wide; the fmt CI check is red. | planned | the last CI red. Check CI's rustfmt version first (it may be newer than what last formatted the repo); then one `cargo fmt` pass. Touches many files. |
+| H2 | **CI green** — fmt drift + the lint failures it was masking. | **done** (fafdb11) | `cargo fmt -p simble` (current stable), then the clippy/doc failures each gate exposed once the prior passed: mcp.rs collapsible-if, three bridge lints, seven doc-links-to-private-items from the extraction. `main`'s CI is fully green for the first time. |
 | H3 | **Typed zerocopy host parsing.** | **partly done** (7a4fa3d) | HCI event parsing was *already* zerocopy in `packets/hci_events.rs`; converted the remaining raw reads in `scan_report.rs` `decode_ad_structures`. Follow-on (still hand-rolled): ext/periodic/BIG advertising reports, `packets/big.rs`, `ext_adv.rs`, btsnoop, SMP, L2CAP signaling, `classic_host.rs`. |
 
 ## Features
