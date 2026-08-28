@@ -604,12 +604,18 @@ fn phones_json() -> String {
 /// the SDK on PATH still has to find it, so the usual install location is
 /// tried before giving up.
 fn adb_path() -> String {
-    if std::process::Command::new("adb").arg("version").output().is_ok() {
+    if std::process::Command::new("adb")
+        .arg("version")
+        .output()
+        .is_ok()
+    {
         return "adb".to_string();
     }
     let home = std::env::var("HOME").unwrap_or_default();
     let candidates = [
-        std::env::var("ANDROID_HOME").ok().map(|h| format!("{h}/platform-tools/adb")),
+        std::env::var("ANDROID_HOME")
+            .ok()
+            .map(|h| format!("{h}/platform-tools/adb")),
         Some(format!("{home}/Library/Android/sdk/platform-tools/adb")),
         Some(format!("{home}/Android/Sdk/platform-tools/adb")),
     ];
@@ -629,7 +635,11 @@ fn output_timeout(
     timeout: std::time::Duration,
 ) -> Option<std::process::Output> {
     use std::process::Stdio;
-    let mut child = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().ok()?;
+    let mut child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
     let start = std::time::Instant::now();
     loop {
         match child.try_wait() {
@@ -663,7 +673,11 @@ fn sink_get(host: &str, path: &str) -> Option<String> {
     stream
         .set_read_timeout(Some(std::time::Duration::from_millis(1500)))
         .ok()?;
-    write!(stream, "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n").ok()?;
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+    )
+    .ok()?;
     let mut raw = String::new();
     stream.read_to_string(&mut raw).ok()?;
     // The body is what the caller wants; drop the status line and headers.
@@ -750,9 +764,16 @@ fn pair_run(query: &str) -> String {
         return serde_json::json!({"ok": false, "error": "need source and sink adb serials"})
             .to_string();
     };
-    let bytes: u64 = params.get("bytes").and_then(|b| b.parse().ok()).unwrap_or(65536);
+    let bytes: u64 = params
+        .get("bytes")
+        .and_then(|b| b.parse().ok())
+        .unwrap_or(65536);
     // Fast link on by default; `fast=0` runs the 1M baseline.
-    let fast: u8 = if params.get("fast").map(|f| f == "0").unwrap_or(false) { 0 } else { 1 };
+    let fast: u8 = if params.get("fast").map(|f| f == "0").unwrap_or(false) {
+        0
+    } else {
+        1
+    };
     // Payload path: GATT writes by default, or L2CAP CoC with `link=l2cap`.
     let link = if params.get("link").map(|l| l == "l2cap").unwrap_or(false) {
         "l2cap"
@@ -845,15 +866,24 @@ fn pair_run(query: &str) -> String {
     for _ in 0..55 {
         std::thread::sleep(Duration::from_secs(1));
         let Some(out) = output_timeout(
-            std::process::Command::new(&adb)
-                .args(["-s", source, "logcat", "-d", "-s", "SimbleSource"]),
+            std::process::Command::new(&adb).args([
+                "-s",
+                source,
+                "logcat",
+                "-d",
+                "-s",
+                "SimbleSource",
+            ]),
             Duration::from_secs(6),
         ) else {
             continue;
         };
         let text = String::from_utf8_lossy(&out.stdout);
         // The run is over when a span closes carrying the totals (`ok=…`).
-        if text.lines().any(|l| l.contains("span{") && l.contains("ok=")) {
+        if text
+            .lines()
+            .any(|l| l.contains("span{") && l.contains("ok="))
+        {
             // For an L2CAP run the source's transfer span is inflated: a socket
             // write returns once buffered, so the span covers the buffer fill
             // and the drain-wait, not the over-air time. The sink stamps its own
@@ -929,7 +959,9 @@ fn pair_result_json(
     let seg = |name: &str| spans.get(name).copied().unwrap_or(0);
     // The sink-measured transfer time wins when we have it (L2CAP): it is the
     // over-air first-to-last-byte span, not the source's buffer-inflated one.
-    let transfer = sink_transfer_ms.filter(|&m| m > 0).unwrap_or_else(|| seg("transfer"));
+    let transfer = sink_transfer_ms
+        .filter(|&m| m > 0)
+        .unwrap_or_else(|| seg("transfer"));
     let kb_s = if transfer > 0 {
         (bytes as f64 / 1024.0 / (transfer as f64 / 1000.0) * 100.0).round() / 100.0
     } else {
@@ -974,7 +1006,9 @@ fn span_field(line: &str, key: &str) -> Option<i64> {
 fn json_number(body: &str, key: &str) -> Option<i64> {
     let at = body.find(&format!("\"{key}\":"))? + key.len() + 3;
     let rest = body[at..].trim_start();
-    let end = rest.find(|c: char| !c.is_ascii_digit() && c != '-').unwrap_or(rest.len());
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit() && c != '-')
+        .unwrap_or(rest.len());
     rest[..end].parse().ok()
 }
 
@@ -1011,7 +1045,10 @@ fn serve(mut stream: TcpStream, source: &BridgeSource) -> Result<(), String> {
                 };
                 match sink_get(host, &path) {
                     Some(b) => ("200 OK", b),
-                    None => ("502 Bad Gateway", "{\"error\":\"sink unreachable\"}".to_string()),
+                    None => (
+                        "502 Bad Gateway",
+                        "{\"error\":\"sink unreachable\"}".to_string(),
+                    ),
                 }
             } else if target.starts_with("/pair-run") {
                 // A phone-to-phone run. The source phone's central role is an
