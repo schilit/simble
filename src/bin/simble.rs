@@ -736,12 +736,13 @@ fn percent_decode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 3 <= bytes.len() {
-            if let Ok(b) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                out.push(b as char);
-                i += 3;
-                continue;
-            }
+        if bytes[i] == b'%'
+            && i + 3 <= bytes.len()
+            && let Ok(b) = u8::from_str_radix(&s[i + 1..i + 3], 16)
+        {
+            out.push(b as char);
+            i += 3;
+            continue;
         }
         out.push(bytes[i] as char);
         i += 1;
@@ -812,12 +813,13 @@ fn pair_run(query: &str) -> String {
         Duration::from_secs(5),
     ) {
         for line in String::from_utf8_lossy(&out.stdout).lines().skip(1) {
-            if let Some(s) = line.split_whitespace().next() {
-                if s.contains(':') && s != sink {
-                    let (_r, n) = sink_status(&adb, s);
-                    if n.as_deref() == Some(target.as_str()) {
-                        fire(s, "am force-stop com.simble");
-                    }
+            if let Some(s) = line.split_whitespace().next()
+                && s.contains(':')
+                && s != sink
+            {
+                let (_r, n) = sink_status(&adb, s);
+                if n.as_deref() == Some(target.as_str()) {
+                    fire(s, "am force-stop com.simble");
                 }
             }
         }
@@ -1059,7 +1061,7 @@ fn serve(mut stream: TcpStream, source: &BridgeSource) -> Result<(), String> {
                 // the bridge drives it on the page's behalf. Blocks for the run
                 // (discovery can take 30 s+), which is why it is its own route
                 // rather than folded into a status probe.
-                let q = target.splitn(2, '?').nth(1).unwrap_or("");
+                let q = target.split_once('?').map(|(_, q)| q).unwrap_or("");
                 ("200 OK", pair_run(q))
             } else {
                 (
