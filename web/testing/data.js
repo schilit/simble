@@ -87,14 +87,18 @@ const PHONE_SINK = "phone";
 /// configured, and those need not be the same device.
 const phoneValue = (serial) => `${PHONE_SINK}:${serial}`;
 const isPhone = (value) => value === PHONE_SINK || value.startsWith(`${PHONE_SINK}:`);
-/// What the bridge told us about each phone, keyed by strip value.
+/// The peripheral strip's note for a sink choice. A phone the bridge sees
+/// running needs no instruction; only one that is not running does.
+const sinkWhy = (value) => {
+  if (!isPhone(value)) return "the peripheral: it counts what lands";
+  return phones.get(value)?.running
+    ? "the phone counts what lands and reports it back"
+    : "the phone counts what lands — start SimBLE Android on it first";
+};
+/// What the bridge told us about each phone, keyed by strip value. A phone's
+/// counters are read back through the bridge's `/sink/<ip>` proxy, the ip taken
+/// from here — derived from the choice, never a field to fill in.
 const phones = new Map();
-/// Where the page reads a phone's counters. Choosing a phone points this at the
-/// bridge's `/sink/<ip>` proxy, which reads the phone directly over WiFi — no
-/// adb. This default is only the placeholder before a phone is chosen; a phone
-/// the bridge cannot see can still be named here by hand.
-const PHONE_STATS_DEFAULT = "http://127.0.0.1:32323/sink/<phone-ip>";
-const PHONE_STATS_KEY = "simble.data.phoneStats";
 const CENTRAL_ADDR = "CC:1E:57:00:00:0C";
 const netsimUrl = (node, address) =>
   `ws://localhost:7681/v1/websocket/bt?name=${encodeURIComponent(node)}&address=${address}`;
@@ -191,6 +195,19 @@ function saveRuns(runs) {
 /// off a radio.
 function provenance(controller, dongles) {
   if (controller === "usb") {
+    // A phone driving another phone — no dongle in it at all. Named both ends,
+    // source → sink, so it is its own series and reads as what it is.
+    if (isPhone(dongles.central) && isPhone(dongles.sink)) {
+      const src = phones.get(dongles.central);
+      const dst = phones.get(dongles.sink);
+      const from = src?.name || src?.model || "phone";
+      const to = dst?.name || dst?.model || "phone";
+      return {
+        id: `${dongles.central}->${dongles.sink}`,
+        label: `${from} → ${to}`,
+        simulated: false,
+      };
+    }
     const which = dongles.central || "dongle";
     // The peer is the more interesting half when it is not ours: a run
     // against a phone and a run against a dongle are different measurements
@@ -337,6 +354,63 @@ async function runAgainstPhone(options, centralUrl, legacyMasks, onStage, statsB
   } finally {
     central?.free?.();
   }
+}
+
+/// A phone-to-phone run: one phone's own radio drives the transfer into
+/// another, no dongle in the path. Neither end is ours to drive from the page —
+/// the source phone's central role is an Android intent over adb, which only the
+/// bridge can fire — so the page hands the bridge both serials and the byte
+/// count, and the bridge runs it (the same sequence `bench-pair.sh` does) and
+/// returns the four-segment breakdown its source shim traced. That breakdown is
+/// the same shape a dongle run reports, so the chart draws it identically.
+async function runPairToPhone(centralValue, sinkValue, options, onStage) {
+  const source = centralValue.slice(PHONE_SINK.length + 1);
+  const sink = sinkValue.slice(PHONE_SINK.length + 1);
+  const http = usbBridgeUrl().trim().replace(/^ws/, "http").replace(/\/+$/, "");
+  onStage("phone-to-phone over adb — discovery can take ~30 s");
+  let res;
+  try {
+    const url = `${http}/pair-run?source=${encodeURIComponent(source)}`
+      + `&sink=${encodeURIComponent(sink)}&bytes=${options.total_bytes}`
+      + `&fast=${options.fast_link === false ? 0 : 1}`;
+    res = await (await fetch(url, { cache: "no-store" })).json();
+  } catch (e) {
+    return {
+      report: { phase: "failed", failure: `the bridge could not run the pair: ${e?.message ?? e}` },
+      log: [],
+    };
+  }
+  const segs = {
+    discover_ms: res.discover_ms ?? 0,
+    connect_ms: res.connect_ms ?? 0,
+    negotiate_ms: res.negotiate_ms ?? 0,
+    transfer_ms: res.transfer_ms ?? 0,
+  };
+  if (!res.ok) {
+    return {
+      report: { phase: "failed", failure: res.error || "the phone-to-phone run did not complete", ...segs },
+      log: res.error ? [res.error] : [],
+    };
+  }
+  const report = {
+    phase: "complete",
+    ...segs,
+    total_ms: segs.discover_ms + segs.connect_ms + segs.negotiate_ms + segs.transfer_ms,
+    throughput_kb_s: res.throughput_kb_s,
+    bytes_sent: res.expected,
+    bytes_received: res.bytes,
+    // The sink counted the bytes and reported them back over the control point;
+    // the duration is the source's own transfer clock. Not stamped on our clock,
+    // so: peer-reported.
+    confirmation: "peer-reported",
+  };
+  return {
+    report,
+    log: [`${res.name}: ${res.bytes} of ${res.expected} bytes — `
+      + `discover ${segs.discover_ms} ms, connect ${segs.connect_ms} ms, `
+      + `negotiate ${segs.negotiate_ms} ms, transfer ${segs.transfer_ms} ms `
+      + `(${res.throughput_kb_s} kB/s)`],
+  };
 }
 
 /// Runs the benchmark across two sockets: a sink on one controller, a
@@ -804,6 +878,8 @@ export function mountData(root) {
     <div class="settings" id="data-settings">
       <label>Transfer size
         <select id="bench-size">
+          <option value="16384">16 KB</option>
+          <option value="32768">32 KB</option>
           <option value="65536">64 KB</option>
           <option value="262144" selected>256 KB</option>
           <option value="1048576">1 MB</option>
@@ -812,6 +888,7 @@ export function mountData(root) {
       <label>Runs
         <select id="bench-runs">
           <option value="1">1</option>
+          <option value="5">5</option>
           <option value="10" selected>10</option>
           <option value="20">20</option>
           <option value="30">30</option>
@@ -823,10 +900,18 @@ export function mountData(root) {
           <option value="req">with response</option>
         </select>
       </label>
+      <label>Fast link
+        <select id="bench-fast">
+          <option value="on" selected>on</option>
+          <option value="off">off</option>
+        </select>
+      </label>
       <p class="settings-note">
-        PHY, connection interval, advertising interval, MTU target and Data Length Extension
-        are not settable yet — nothing below the bindings can carry them. What the run
-        <em>negotiated</em> is reported per run in the table.
+        Fast link requests 2M&nbsp;PHY, Data Length Extension, and a tight connection interval on
+        connect; off leaves the 1M, 27-octet baseline — the setup cost the fast path buys down, side by
+        side with it. PHY, interval and MTU are not yet settable one at a time, and advertising interval
+        belongs to the peripheral, not the central. What the run <em>negotiated</em> is reported per run
+        in the table.
       </p>
     </div>
     <div class="toolbar">
@@ -860,6 +945,9 @@ export function mountData(root) {
     value: { kind: "usb", device: "" },
     onChange: (value) => {
       dongles.central = value.device;
+      // One radio cannot be both ends of a link, so grey this choice out in the
+      // sink strip rather than let it be picked there and then refused.
+      sinkStrip.setDisabled(value.device);
       return null;
     },
     why: "the central: it does the writing",
@@ -869,49 +957,14 @@ export function mountData(root) {
     extras: [],
     onChange: (value) => {
       dongles.sink = value.device;
-      // Said at the moment of choosing, because a phone has a precondition a
-      // dongle does not: the app has to be running on it.
-      sinkStrip.setWhy(
-        isPhone(value.device)
-          ? "the phone counts what lands and serves it over HTTP — start SimBLE Android on it first"
-          : "the peripheral: it counts what lands",
-      );
-      phoneStatsRow.hidden = !isPhone(value.device);
-      // The bridge proxies the phone's counter server, so choosing one points
-      // the stats at `/sink/<ip>` on the bridge — the bridge reaches the phone
-      // directly over WiFi, no adb forward. Typing over it stays possible for a
-      // phone the bridge cannot see.
-      const chosen = phones.get(value.device);
-      if (chosen) {
-        phoneStats.value = `${usbBridgeHttp()}/sink/${chosen.host}`;
-        localStorage.setItem(PHONE_STATS_KEY, phoneStats.value);
-      }
+      centralStrip.setDisabled(value.device);
+      sinkStrip.setWhy(sinkWhy(value.device));
       return null;
     },
     why: "the peripheral: it counts what lands",
   });
-  // Only meaningful when the peripheral is a phone, so it lives with that
-  // choice rather than in the controller bar.
-  const phoneStatsRow = document.createElement("div");
-  phoneStatsRow.className = "ctl-strip";
-  phoneStatsRow.hidden = true;
-  const phoneStatsLabel = document.createElement("span");
-  phoneStatsLabel.className = "strip-label";
-  phoneStatsLabel.textContent = "sink stats";
-  const phoneStats = document.createElement("input");
-  phoneStats.type = "text";
-  phoneStats.size = 28;
-  phoneStats.value = localStorage.getItem(PHONE_STATS_KEY) || PHONE_STATS_DEFAULT;
-  phoneStats.addEventListener("change", () => {
-    localStorage.setItem(PHONE_STATS_KEY, phoneStats.value.trim());
-  });
-  const phoneStatsWhy = document.createElement("span");
-  phoneStatsWhy.className = "strip-why";
-  phoneStatsWhy.textContent =
-    "counters come back over HTTP, not over the link — the bridge reads the phone directly, no adb forward";
-  phoneStatsRow.append(phoneStatsLabel, phoneStats, phoneStatsWhy);
 
-  $("data-strips").append(centralStrip.el, sinkStrip.el, phoneStatsRow);
+  $("data-strips").append(centralStrip.el, sinkStrip.el);
 
   async function refreshStrips() {
     const usb = bar.selected === "usb";
@@ -948,6 +1001,10 @@ export function mountData(root) {
         };
       });
       sinkStrip.setExtras(extras);
+      // A phone can be the central too, now that the app has a source role: the
+      // bridge drives it over adb (a phone → phone run). So the central strip
+      // offers the same phones as the sink strip.
+      centralStrip.setExtras(extras);
       if (!dongles.central && list[0]) {
         dongles.central = list[0].selector;
         centralStrip.set({ kind: "usb", device: dongles.central });
@@ -958,11 +1015,12 @@ export function mountData(root) {
         dongles.sink = list[Math.min(1, list.length - 1)].selector;
         sinkStrip.set({ kind: "usb", device: dongles.sink });
       }
-      phoneStatsRow.hidden = !isPhone(dongles.sink);
+      // One radio cannot be both ends: disable each end's current pick in the
+      // other strip's list.
+      centralStrip.setDisabled(dongles.sink);
+      sinkStrip.setDisabled(dongles.central);
       if (isPhone(dongles.sink)) {
-        sinkStrip.setWhy(
-          "the phone counts what lands and reports it back — start SimBLE Android on it first",
-        );
+        sinkStrip.setWhy(sinkWhy(dongles.sink));
       } else if (list.length < 2) {
         sinkStrip.setWhy("the bridge sees fewer than two dongles — a real-RF run needs one for each end");
       }
@@ -1012,6 +1070,7 @@ export function mountData(root) {
     return {
       total_bytes: Number($("bench-size").value),
       with_response: $("bench-mode").value === "req",
+      fast_link: $("bench-fast").value === "on",
       timeout_ms: 15000,
     };
   }
@@ -1038,6 +1097,30 @@ export function mountData(root) {
         log: [],
       };
     }
+    // A phone as the central is a phone-to-phone run: the source phone's own
+    // radio drives the transfer, no dongle in the path. The page cannot start
+    // an Android intent over adb, so the bridge does — see runPairToPhone.
+    if (isPhone(dongles.central)) {
+      if (!isPhone(dongles.sink)) {
+        return {
+          report: {
+            phase: "failed",
+            failure: "a phone as the central needs a phone as the sink — pick a phone for the peripheral too",
+          },
+          log: [],
+        };
+      }
+      if (dongles.central === dongles.sink) {
+        return {
+          report: {
+            phase: "failed",
+            failure: "source and destination are the same phone — one radio cannot drive itself",
+          },
+          log: [],
+        };
+      }
+      return runPairToPhone(dongles.central, dongles.sink, options, onStage);
+    }
     if (isPhone(dongles.sink)) {
       const phone = phones.get(dongles.sink);
       if (phone && !phone.running) {
@@ -1057,7 +1140,9 @@ export function mountData(root) {
         `${base}/?device=${encodeURIComponent(dongles.central)}`,
         true,
         onStage,
-        phoneStats.value.trim().replace(/\/+$/, "") || PHONE_STATS_DEFAULT,
+        // Counters read back through the bridge's /sink/<ip> proxy — derived
+        // from the chosen phone, not a field to fill in.
+        `${usbBridgeHttp()}/sink/${phone?.host ?? ""}`,
         phone?.name ?? "",
       );
     }

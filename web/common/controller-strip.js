@@ -24,7 +24,7 @@ function injectStyles() {
     border:1px solid var(--border,#e3e5e8); border-radius:6px; }
   .ctl-strip .strip-label { font-weight:600; letter-spacing:0.06em;
     font-size:0.68rem; text-transform:uppercase; }
-  .ctl-strip select { font-size:0.78rem; max-width:16rem; }
+  .ctl-strip select { font-size:0.78rem; flex:1 1 auto; min-width:0; max-width:24rem; }
   .ctl-strip .strip-why { flex-basis:100%; font-style:italic; opacity:0.8; }
   /* An empty why still claimed a whole flex row, padding the strip's bottom
      with a blank line. */
@@ -41,6 +41,9 @@ const decode = (text) => ({
   device: text,
 });
 const PHONE = "phone";
+// The strip's category label. Constant: a phone and a dongle are both real
+// radio, so what is picked never changes it — set once, not per render.
+const STRIP_LABEL = "Real radio";
 
 /**
  * @param {object} options
@@ -66,6 +69,7 @@ export function createControllerStrip({
 
   const label = document.createElement("span");
   label.className = "strip-label";
+  label.textContent = STRIP_LABEL;
 
   const pick = document.createElement("select");
   pick.setAttribute("aria-label", "which dongle this device rides");
@@ -79,6 +83,10 @@ export function createControllerStrip({
   const current = { ...value };
   let known = dongles;
   let known_extras = extras;
+  // The value the partner strip has taken: one radio cannot be both ends of a
+  // link, so its option is shown disabled here rather than selectable-then-
+  // refused. Null when there is nothing to block.
+  let disabledValue = null;
 
   function renderOptions() {
     pick.innerHTML = "";
@@ -86,6 +94,7 @@ export function createControllerStrip({
       const option = document.createElement("option");
       option.value = valueText;
       option.textContent = text;
+      if (valueText && valueText === disabledValue) option.disabled = true;
       pick.append(option);
     };
     for (const d of known) add(d.selector, `${d.selector} — ${d.product}`);
@@ -100,11 +109,6 @@ export function createControllerStrip({
       add(current.device, current.device);
     }
     pick.value = encode(current);
-    renderLabel();
-  }
-
-  function renderLabel() {
-    label.textContent = current.kind === "phone" ? "phone" : "usb dongle";
   }
 
   pick.addEventListener("change", () => {
@@ -119,9 +123,6 @@ export function createControllerStrip({
       return;
     }
     Object.assign(current, next);
-    // The label names what was picked, so it has to follow a live change and
-    // not only the initial render.
-    renderLabel();
   });
 
   /** Sets the choice without firing onChange — for a partner strip's echo. */
@@ -144,6 +145,12 @@ export function createControllerStrip({
     /// ask adb what phones exist before this strip can offer them.
     setExtras: (list) => {
       known_extras = list;
+      renderOptions();
+    },
+    /// Greys out the option matching `value` — the partner strip's choice — so
+    /// one radio cannot be picked as both ends. Null/empty clears it.
+    setDisabled: (value) => {
+      disabledValue = value || null;
       renderOptions();
     },
     value: () => ({ ...current }),

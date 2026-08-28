@@ -11,6 +11,9 @@
   main { max-width: var(--page-w); margin: 0 auto; padding: 1rem 1.25rem 2.5rem; }
   #cat-asserts { max-width: var(--read-w); }
   .intro { color: var(--dim); font-size: var(--fs-lead); line-height: 1.6; margin: 0.4rem 0 1.1rem; max-width: 52rem; }
+  /* The Data intro spans the width of the panels below it, not the narrower
+     reading measure, so it does not look inset against them. */
+  #cat-data .intro { max-width: none; }
   .intro strong { color: var(--text); }
   .intro code { color: var(--good); background: var(--panel); padding: 0.05rem 0.3rem; border-radius: 4px; font-size: 0.85em; }
   .toolbar { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.7rem; }
@@ -97,6 +100,19 @@
   details.raw pre { background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
     padding: 0.5rem 0.6rem; overflow-x: auto; font-size: var(--fs-meta); max-height: 22rem; }
   .ctl-strip[hidden] { display: none; }
+  /* The central and peripheral strips sit side by side — two columns where
+     there is room, stacking on a narrow screen. The phone-stats row, when
+     shown, spans both. */
+  /* Exactly two columns — not auto-fit, which counted the full-width phone-stats
+     row as a third and shrank the two strips to a third each. */
+  #data-strips { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.3rem; align-items: stretch; }
+  @media (max-width: 40rem) { #data-strips { grid-template-columns: 1fr; } }
+  /* Equal-height boxes: one strip's why can wrap to two lines while the other's
+     is one, and start-aligned that leaves the shorter box floating. Stretch
+     lines their bottoms up; align-content keeps the contents at the top. */
+  #data-strips > .ctl-strip { margin-bottom: 0; align-content: flex-start; }
+  #data-strips > .phone-stats { grid-column: 1 / -1; }
   footer { color: var(--dim); font-size: var(--fs-meta); padding: 1.4rem 1.25rem 0; max-width: var(--read-w); margin: 0 auto; }
 </style>
 </head>
@@ -180,12 +196,12 @@
 </section>
 
 <section id="cat-data" role="tabpanel" hidden>
-  <p class="intro">An assert is true or false. A <strong>measurement</strong> is a number, and a number is
-    only meaningful with the controller that produced it attached. This category writes
-    <strong>256 KB</strong> to a peripheral over GATT and times it in four segments — discover, connect,
-    negotiate, transfer — because on BLE the setup latency is often the larger half of "how long until it
-    lands". Runs accumulate so controllers can be compared; failures are kept, because a run that never
-    connected is a measurement too.</p>
+  <p class="intro">Writes a chosen payload — <strong>16 KB to 1 MB</strong> — to a peripheral over GATT and
+    reports the transfer time in four phases: discover, connect, negotiate, transfer. On BLE, connection
+    setup often dominates total latency, so the phase breakdown is the primary result, not aggregate
+    throughput. Each measurement is scoped to the controller that produced it, and runs accumulate for
+    cross-controller comparison. Failed runs are retained: a connection that never establishes is a data
+    point.</p>
 </section>
 </main>
 

@@ -19,20 +19,22 @@ const STORE_KEY = "simble-backend";
 /// The controllers a domain may declare. Ids match the values the existing
 /// selector already writes, so a stored choice carries over.
 export const CONTROLLERS = [
-  // Id and label only. Each option used to carry a `note` rendered beside its
-  // button; the reasons moved into the one sentence under the row and the
-  // note stopped being read, but the field and the comment describing it
-  // stayed behind for long enough to look load-bearing. Whatever
-  // distinguishes the two controllers is in `why` below, said once.
-  { id: "in-page", label: "In browser" },
-  { id: "websocket", label: "netsim" },
+  // Each option carries a label and a `title` — the hover tooltip, which says
+  // *where* the controller runs. The longer reasons stay in the one `why`
+  // sentence under the row, said once.
+  //
+  // "SimBLE" rather than "In browser": the in-page controller *is* simble's own
+  // stack running in this tab, so the label names the product and the tooltip
+  // carries the "where".
+  { id: "in-page", label: "SimBLE", title: "Running in-browser" },
+  { id: "websocket", label: "netsim", title: "Running externally" },
   // Real radio, whatever holds it: a `simble --usb` bridge with a physical
   // dongle, and — where the page supports it — a phone running SimBLE Android
   // reached through that same bridge. The id stays `usb` because that is the
   // bridge it goes through; the label is the *category*, since "USB dongle"
   // named one member of it as though it were the whole. The bars already say
   // "RF", so the selector says the spelled form of the same word.
-  { id: "usb", label: "Real radio" },
+  { id: "usb", label: "Real radio", title: "Running on a real radio through the bridge" },
 ];
 
 /// What a domain that says nothing about a controller means: it has not been
@@ -163,16 +165,18 @@ export function createControllerBar({ supports, onChange }) {
       // joining netsim shares is the medium they all transmit into. "Network"
       // would be worse -- nothing here is an IP network. netsim's own word for
       // it, and the one the rest of this site already uses, is a scene.
-      : "In browser needs nothing installed; netsim needs netsimd running, "
+      : "SimBLE needs nothing installed; netsim needs netsimd running, "
         + "and puts the devices in the same scene as the Android emulator; "
-        + "Real radio is a dongle — or a phone running SimBLE Android — "
-        + "through the simble --usb bridge.";
+        + "Real radio is a dongle (simble --usb) or an hci_uart controller "
+        + "(simble --serial) — or a phone running SimBLE Android — reached "
+        + "through the simble bridge.";
     for (const c of CONTROLLERS) {
       const reason = map[c.id];
       const usable = reason === true;
 
       const wrap = document.createElement("label");
       wrap.className = "controller-choice" + (usable ? "" : " unusable");
+      if (c.title) wrap.title = c.title; // hover says where it runs
 
       const radio = document.createElement("input");
       radio.type = "radio";
