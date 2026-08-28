@@ -5,7 +5,7 @@
 # tools and a JDK -- no Gradle, no Kotlin compiler, no network.
 #
 # That is a deliberate choice for this app and not a general position. The
-# app is one Java file with no dependencies; Gradle would add a wrapper
+# app is a few Java files with no dependencies; Gradle would add a wrapper
 # download, a daemon and a dependency graph to a build that is four commands.
 # The eventual headless runner in `docs/phone-as-backend.md` needs the NDK and
 # JNI and should use Gradle. This does not.

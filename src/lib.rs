@@ -16,9 +16,9 @@
 //! emulator's network simulator, over a WebSocket, and can also reach real
 //! hardware through a USB Bluetooth dongle.
 //!
-//! # Three surfaces
+//! # Four surfaces
 //!
-//! One stack, three frontends:
+//! One stack, four frontends:
 //!
 //! - **MCP (agent-first)** — [`mcp`] serves `simble mcp` over stdio, so an AI
 //!   agent builds, runs and tests devices as tool calls without a checkout or
@@ -28,10 +28,15 @@
 //!   and no host OS, because the code runs in a browser sandbox rather than on
 //!   an operating system). See [`transport::wasm_ws`] for the bindings.
 //! - **Native** — this library API and the `simble` CLI, for tests and CI.
+//! - **Android** — a standalone app (`android/app/`, plain Java, no crate
+//!   linkage) that puts a real phone controller on either end of a bulk BLE
+//!   transfer; it talks to the rest only over BLE and HTTP. See
+//!   `docs/phone-to-phone.md`. (A future headless backend that would run the
+//!   scripting engine on-device over JNI is scaffolded in `android/rust/`.)
 //!
-//! The engine is shared, so the surfaces cannot diverge: `run_test_script` and
-//! `lint_script` back the CLI, the browser's Testing page, and the MCP
-//! `run_test`/`lint` tools alike.
+//! The first three share this crate's engine, so they cannot diverge:
+//! `run_test_script` and `lint_script` back the CLI, the browser's Testing
+//! page, and the MCP `run_test`/`lint` tools alike.
 //!
 //! # What is public, and what that means
 //!

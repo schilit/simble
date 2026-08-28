@@ -1,18 +1,28 @@
 # Simble browser demos
 
-Simble compiled to WebAssembly, running in the page, connected to a local
-`netsimd` over the browser's native WebSocket. Two demos:
+Simble compiled to WebAssembly, running in the page — its real HCI bring-up,
+GAP/GATT/L2CAP and scripting stack, in wasm. Each page picks a controller from
+the bar at the top: the in-page **SimBLE** stack (nothing installed), **netsim**
+(a local `netsimd` over the browser's native WebSocket, sharing a scene with the
+Android emulator), or **Real radio** (a dongle or a phone through a local
+`simble --usb` bridge).
 
-- **`scanner/`** — joins the netsim scene as `web-scanner` and renders live
-  decoded advertisements (Simble's real HCI bring-up and GAP parsing, in wasm).
-- **`hrm/`** — a running Simble whose peripheral is defined by an editable
-  Rhai script; edit the script, press Run, and the device on the air changes.
+There are ~19 pages under `web/`, sharing the common chrome and controller code
+in `web/common/`. Among them:
 
-The hosted pages are at <https://schilit.github.io/simble/scanner/> and
-<https://schilit.github.io/simble/hrm/> — the cloud hosts the page, netsim
-runs on **your** machine. Best demo: open both pages side by side against one
-netsimd, rename the device in the HRM's script, press Run, and watch the
-scanner pick up the new name.
+- **`scanner/`** — renders live decoded advertisements off the chosen scene.
+- **`hrm/`** — a peripheral defined by an editable Rhai script; edit, press Run,
+  and the device on the air changes.
+- **`testing/`** — asserts and throughput measurements (including phone-to-phone).
+- **`playground/`, `explorer/`, `scene/`, `devices/`** — author and inspect
+  devices and whole scenes; **`audio/`, `car/`, `hid/`, `ranging/`,
+  `broadcast/`, `speaker/`, `lightbulb/`, `dual/`, `source/`, `emulator/`,
+  `controllers/`, `shared/`** cover specific profiles and topologies.
+
+The hosted pages are at <https://schilit.github.io/simble/> — the cloud hosts
+the page, and netsim (if used) runs on **your** machine. A good first demo: open
+`scanner/` and `hrm/` side by side against one netsimd, rename the device in the
+HRM's script, press Run, and watch the scanner pick up the new name.
 
 ## Prerequisite (both hosted and local): a local netsimd
 

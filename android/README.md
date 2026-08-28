@@ -1,13 +1,19 @@
 # android/
 
-The phone as a SimBLE backend: a headless app that runs SimBLE scripts on a
-real Android device, so the same script text that defines a simulated device
-defines a real one.
+Two things live here, at different stages:
 
-**Nothing here is built yet.** This directory is scaffolding — the crate
-skeleton, and the CI job that keeps it from rotting. The design it implements
-is [`docs/phone-as-backend.md`](../docs/phone-as-backend.md); read that first,
-particularly §2, which says what a phone measurement is and is not.
+- **`app/` — a working standalone app** (`app/`), built today. Three Java files,
+  no Gradle, no Kotlin, no Rust linkage: it puts a real Android host stack and a
+  real phone controller on the receiving *or* sending end of a bulk BLE transfer
+  — the phone-throughput and phone-to-phone benchmarks. It talks to the outside
+  world only over BLE and HTTP, never by linking the crate. See
+  [`docs/phone-to-phone.md`](../docs/phone-to-phone.md).
+- **`rust/` — scaffolding for a future headless backend** that would run SimBLE
+  Rhai scripts on the device over JNI, so the same script text that defines a
+  simulated device defines a real one. **Not built yet.** Its design is
+  [`docs/phone-as-backend.md`](../docs/phone-as-backend.md); read that first,
+  particularly §2, on what a phone measurement is and is not. The rest of this
+  README is about that planned backend; `app/` is described in its own header.
 
 ## Why it is not in the workspace
 
@@ -28,14 +34,19 @@ rather than the day someone next opens this directory.
 ## Layout
 
 ```
-rust/     the Rhai runner and the real `android::` implementation over JNI
-app/      the Gradle project: manifest, the Kotlin shim, no Activity
+app/      the shipping benchmark app: SimbleActivity + BulkSource + StatsServer
+          (Java), AndroidManifest.xml, build.sh — no Gradle, no Kotlin, no NDK
+rust/     scaffolding for the planned headless backend: the Rhai runner and the
+          real `android::` implementation over JNI (not built yet)
 ```
 
-The seam between them is one trait. Rust holds the runner and the logic;
-Kotlin holds the few dozen lines that make Android's Bluetooth API idiomatic
-and forward its callbacks back through JNI. Zero-Kotlin is possible and is not
-worth it — see §5 of the design doc.
+`app/` builds with `app/build.sh` (plain `aapt2`/`javac`/`d8`/`apksigner`, no
+Gradle) — see that script. The planned backend below is a separate design.
+
+For the planned backend, the seam is one trait: Rust holds the runner and the
+logic; a thin Kotlin (or Java) shim makes Android's Bluetooth API idiomatic and
+forwards its callbacks back through JNI. Zero-shim is possible and is not worth
+it — see §5 of the design doc.
 
 ## Building (once there is something to build)
 
