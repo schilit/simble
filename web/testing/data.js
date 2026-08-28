@@ -204,7 +204,11 @@ function provenance(controller, dongles, link) {
       const dst = phones.get(dongles.sink);
       const from = src?.name || src?.model || "phone";
       const to = dst?.name || dst?.model || "phone";
-      const via = link === "l2cap" ? " · L2CAP" : "";
+      const via = {
+        "l2cap": " · L2CAP",
+        "l2cap-min": " · L2CAP min",
+        "l2cap-trim": " · L2CAP trim",
+      }[link] || "";
       return {
         id: `${dongles.central}->${dongles.sink}:${link || "gatt"}`,
         label: `${from} → ${to}${via}`,
@@ -889,6 +893,7 @@ export function mountData(root) {
       <label>Transfer size
         <select id="bench-size">
           <option value="16384">16 KB</option>
+          <option value="25600">25 KB</option>
           <option value="32768">32 KB</option>
           <option value="65536">64 KB</option>
           <option value="262144" selected>256 KB</option>
@@ -919,7 +924,9 @@ export function mountData(root) {
       <label>Payload path
         <select id="bench-link">
           <option value="gatt" selected>GATT writes</option>
-          <option value="l2cap">L2CAP socket</option>
+          <option value="l2cap-min">L2CAP (min setup)</option>
+          <option value="l2cap">L2CAP (full setup)</option>
+          <option value="l2cap-trim">L2CAP (no setup)</option>
         </select>
       </label>
       <p class="settings-note">

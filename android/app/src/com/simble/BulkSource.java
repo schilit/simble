@@ -60,6 +60,8 @@ final class BulkSource {
             UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
     private static final UUID PSM =
             UUID.fromString("f0bb0004-1234-5678-90ab-cdef01234567");
+    /** Company id the sink uses for the PSM in its scan response. */
+    private static final int PSM_COMPANY_ID = 0xFFFF;
     private static final byte BEGIN = 0x01;
     private static final byte FINISH = 0x02;
     private static final byte REPORT = 0x03;
@@ -85,9 +87,21 @@ final class BulkSource {
     private final boolean fast;
     // Stream the payload over an L2CAP CoC socket instead of GATT writes. GATT
     // is metered ~one write per connection event; L2CAP rides its own credit-
-    // based flow control, so it can pack the event. The GATT link is still set
-    // up (discovery, control point, REPORT) — only the payload changes path.
+    // based flow control, so it can pack the event.
     private final boolean l2cap;
+    // The trimmed L2CAP path: keep a GATT connection alive purely to request 2M
+    // PHY (there is no PHY control on the socket API — it must piggyback GATT on
+    // the shared ACL link), but skip service discovery, MTU, CCCD and the
+    // control point. The PSM comes from the advertisement and completion from an
+    // in-band ack, so none of the ATT chatter — the "negotiate" phase — is
+    // needed. Measures what that chatter costs.
+    private final boolean trim;
+    // The minimal-ATT variant of the trim: do exactly one ATT round trip (an
+    // MTU exchange) before streaming, on the theory that the connection-interval
+    // update settles with a little connection *activity* rather than pure time —
+    // zero-ATT trimming leaves the link at the slow default interval. Measures
+    // how little GATT it takes to keep the fast interval.
+    private final boolean minAtt;
     private final Listener listener;
     private final Handler main = new Handler(Looper.getMainLooper());
 
@@ -100,6 +114,7 @@ final class BulkSource {
 
     private int chunkSize = 20;        // MTU-3, resolved once the MTU is up
     private int psm;                   // the sink's L2CAP PSM, 0 = none (use GATT)
+    private int advertisedPsm;         // PSM read from the advertisement, if any
     private int negotiatedMtu = 23;    // the ATT default until onMtuChanged fires
     private int txPhy;                  // 0 until onPhyUpdate; 1=1M 2=2M 3=coded
     private int rxPhy;
@@ -115,8 +130,18 @@ final class BulkSource {
     private long sinkBytes = -1;       // from the REPORT notification
     private long sinkChunks = -1;
     private boolean discovering;       // service discovery has been kicked off
+    private boolean trimStarted;       // the trimmed transfer has begun
     private boolean finishing;
     private boolean done;
+
+    /** After the fast params are requested, the short beat before streaming on
+     *  the trimmed path — long enough for the connection-interval update to land
+     *  once the PHY update has confirmed the params took. */
+    private static final long PHY_SETTLE_BEAT_MS = 120L;
+    /** If onPhyUpdate never fires, stream anyway after this — the params may
+     *  already be in effect (Android does not always report a PHY that did not
+     *  change), just unobserved. */
+    private static final long PHY_SETTLE_FALLBACK_MS = 500L;
 
     /** If the MTU exchange stalls this long, discover at the default MTU anyway
      *  rather than hang the whole run on it — some stacks (a beta Android build
@@ -124,13 +149,16 @@ final class BulkSource {
     private static final long MTU_STALL_MS = 5_000L;
 
     BulkSource(Context ctx, BluetoothAdapter adapter, String targetName,
-               long total, boolean fast, boolean l2cap, Listener listener) {
+               long total, boolean fast, boolean l2cap, boolean trim, boolean minAtt,
+               Listener listener) {
         this.ctx = ctx;
         this.adapter = adapter;
         this.targetName = targetName == null ? "" : targetName.trim();
         this.total = total;
         this.fast = fast;
-        this.l2cap = l2cap;
+        this.l2cap = l2cap || trim || minAtt;
+        this.trim = trim || minAtt;
+        this.minAtt = minAtt;
         this.listener = listener;
     }
 
@@ -179,6 +207,15 @@ final class BulkSource {
             }
             BluetoothDevice device = result.getDevice();
             String shown = name != null ? name : device.getAddress();
+            // The sink advertises its L2CAP PSM as manufacturer data (company
+            // 0xFFFF). Reading it here means the trimmed path never has to
+            // discover GATT to learn it.
+            if (result.getScanRecord() != null) {
+                byte[] mfg = result.getScanRecord().getManufacturerSpecificData(PSM_COMPANY_ID);
+                if (mfg != null && mfg.length >= 2) {
+                    advertisedPsm = (mfg[0] & 0xFF) | ((mfg[1] & 0xFF) << 8);
+                }
+            }
             try {
                 scanner.stopScan(this);
             } catch (SecurityException ignored) {
@@ -208,6 +245,34 @@ final class BulkSource {
         public void onConnectionStateChange(BluetoothGatt g, int status, int state) {
             if (state == BluetoothGatt.STATE_CONNECTED) {
                 enter("negotiate");
+                if (trim) {
+                    // Keep this GATT connection only to request 2M on the shared
+                    // ACL — there is no PHY control on the socket. Skip MTU,
+                    // discovery, CCCD; the PSM came from the advertisement and
+                    // completion is the socket's own ack.
+                    if (advertisedPsm <= 0) {
+                        fail("sink did not advertise a PSM — cannot trim");
+                        return;
+                    }
+                    psm = advertisedPsm;
+                    requestFastPhy(g);
+                    if (minAtt) {
+                        // One ATT round trip (an MTU exchange) to give the
+                        // connection a little activity, then stream from
+                        // onMtuChanged — no discovery, no CCCD.
+                        say("trim+1 ATT — MTU then L2CAP PSM " + psm);
+                        safe(() -> g.requestMtu(517));
+                        main.postDelayed(BulkSource.this::startTrimTransferOnce, MTU_STALL_MS);
+                    } else {
+                        // Zero ATT: setPreferredPhy/priority are async and settle
+                        // a connection-parameter update later, so wait for the PHY
+                        // update to land (proof the fast params are live) plus a
+                        // beat, with a fallback if onPhyUpdate never fires.
+                        say("trimmed — L2CAP PSM " + psm + ", waiting for 2M to settle");
+                        main.postDelayed(BulkSource.this::startTrimTransferOnce, PHY_SETTLE_FALLBACK_MS);
+                    }
+                    return;
+                }
                 say("connected — negotiating MTU");
                 safe(() -> g.requestMtu(517));
                 // Don't hang forever on a peer that never answers requestMtu:
@@ -231,7 +296,12 @@ final class BulkSource {
             chunkSize = Math.min(Math.max(20, mtu - 3), 512);
             negotiatedMtu = mtu;
             say("MTU " + mtu);
-            beginDiscovery(g);
+            if (minAtt) {
+                // The one ATT op is done — stream now, no discovery.
+                startTrimTransferOnce();
+            } else {
+                beginDiscovery(g);
+            }
         }
 
         @Override
@@ -240,6 +310,13 @@ final class BulkSource {
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 BulkSource.this.txPhy = txPhy;
                 BulkSource.this.rxPhy = rxPhy;
+            }
+            // On the zero-ATT trim the PHY update landing is the signal the fast
+            // params have taken effect; give the interval update a short beat too,
+            // then stream. The minimal-ATT variant starts from onMtuChanged
+            // instead, so it does not trigger here.
+            if (trim && !minAtt && !trimStarted) {
+                main.postDelayed(BulkSource.this::startTrimTransferOnce, PHY_SETTLE_BEAT_MS);
             }
         }
 
@@ -375,10 +452,16 @@ final class BulkSource {
     }
 
     /**
-     * Streams the whole payload over an L2CAP CoC socket on a worker thread,
-     * then closes it and sends FINISH so the sink reports its count. The socket
-     * bypasses GATT/ATT: L2CAP's credit-based flow control packs the connection
-     * event, where a GATT write is metered roughly one per event.
+     * Streams the payload over an L2CAP CoC socket on a worker thread, then
+     * waits for the sink's one-byte ack before closing. The socket bypasses
+     * GATT/ATT: L2CAP's credit-based flow control packs the connection event,
+     * where a GATT write is metered roughly one per event.
+     *
+     * <p>Self-contained wire format — a 4-byte little-endian length, the
+     * payload, then the sink's ack — so no GATT control point is involved, which
+     * is what lets the trimmed path skip service discovery. The ack keeps the
+     * socket open until the sink has every byte: a socket write returns once
+     * buffered, so closing at the end of the write loop would truncate the tail.
      */
     private void streamL2cap() {
         Thread worker = new Thread(() -> {
@@ -386,6 +469,9 @@ final class BulkSource {
                 l2capSocket = peerDevice.createInsecureL2capChannel(psm);
                 l2capSocket.connect();
                 OutputStream out = l2capSocket.getOutputStream();
+                byte[] header = new byte[4];
+                putU32(header, 0, total);
+                out.write(header);
                 byte[] chunk = new byte[Math.min(4096, (int) Math.min(total, Integer.MAX_VALUE))];
                 for (int i = 0; i < chunk.length; i++) {
                     chunk[i] = (byte) (i & 0xFF); // a ramp; the sink counts length
@@ -402,42 +488,50 @@ final class BulkSource {
                     }
                 }
                 out.flush();
+                // Block until the sink acks that it has everything, then finish.
+                l2capSocket.getInputStream().read();
             } catch (IOException | SecurityException e) {
                 Log.w(TAG, "L2CAP stream failed: " + e);
                 main.post(() -> fail("L2CAP stream failed: " + e.getMessage()));
                 return;
             }
-            // The bytes are written, but a socket write returns once buffered,
-            // not once transmitted — closing now would discard the tail. Leave
-            // the socket open (report() closes it) and send FINISH; the sink
-            // waits for its byte count to reach `expected` before REPORTing, so
-            // the credit-controlled drain finishes first.
-            main.post(() -> {
-                if (done || gatt == null) {
-                    return;
-                }
-                finishing = true;
-                byte[] fin = {FINISH};
-                writeControl(gatt, fin);
-            });
+            main.post(() -> report(true));
         }, "simble-l2cap-tx");
         worker.setDaemon(true);
         worker.start();
     }
 
-    /** Applies the fast-link PHY/priority preferences and starts service
-     *  discovery — once, whether reached by a normal MTU change or the stall
-     *  fallback. Fast: 2M PHY + high priority; baseline: 1M + balanced. */
-    private void beginDiscovery(BluetoothGatt g) {
-        if (discovering || done) {
+    /** Starts the trimmed transfer exactly once — from the PHY-update beat or the
+     *  fallback timer, whichever comes first. */
+    private void startTrimTransferOnce() {
+        if (trimStarted || done || gatt == null) {
             return;
         }
-        discovering = true;
+        trimStarted = true;
+        enter("transfer");
+        streamL2cap();
+    }
+
+    /** Requests the fast-link PHY and priority: 2M + high, or the 1M baseline.
+     *  On the trimmed path this is the only reason the GATT connection exists —
+     *  the socket has no PHY control, so 2M must be requested here on the shared
+     *  ACL link. */
+    private void requestFastPhy(BluetoothGatt g) {
         int phyMask = fast ? BluetoothDevice.PHY_LE_2M_MASK : BluetoothDevice.PHY_LE_1M_MASK;
         safe(() -> g.setPreferredPhy(phyMask, phyMask, BluetoothDevice.PHY_OPTION_NO_PREFERRED));
         safe(() -> g.requestConnectionPriority(fast
                 ? BluetoothGatt.CONNECTION_PRIORITY_HIGH
                 : BluetoothGatt.CONNECTION_PRIORITY_BALANCED));
+    }
+
+    /** Applies the fast-link preferences and starts service discovery — once,
+     *  whether reached by a normal MTU change or the stall fallback. */
+    private void beginDiscovery(BluetoothGatt g) {
+        if (discovering || done) {
+            return;
+        }
+        discovering = true;
+        requestFastPhy(g);
         say("discovering services");
         safe(g::discoverServices);
     }
@@ -515,7 +609,9 @@ final class BulkSource {
         if (phase != null) {
             phase.close("bytes=" + acked + " ok=" + (ok ? 1 : 0)
                     + " mtu=" + negotiatedMtu + " txphy=" + txPhy + " rxphy=" + rxPhy
-                    + " link=" + (psm > 0 ? "l2cap" : "gatt"));
+                    + " link=" + (psm > 0
+                            ? (minAtt ? "l2cap-min" : trim ? "l2cap-trim" : "l2cap")
+                            : "gatt"));
             phase = null;
         }
         if (l2capSocket != null) {

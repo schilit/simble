@@ -76,6 +76,11 @@ public class SimbleActivity extends Activity implements StatsServer.Stats {
     private static final UUID PSM =
             UUID.fromString("f0bb0004-1234-5678-90ab-cdef01234567");
 
+    /** Company id for the PSM in the scan response's manufacturer data. 0xFFFF
+     *  is the SIG's reserved-for-testing id — this is a local convention, not a
+     *  real vendor. */
+    private static final int PSM_COMPANY_ID = 0xFFFF;
+
     // Control-point opcodes, matching `control_op` in Rust.
     private static final byte BEGIN = 0x01;
     private static final byte FINISH = 0x02;
@@ -211,12 +216,16 @@ public class SimbleActivity extends Activity implements StatsServer.Stats {
         String target = getIntent().getStringExtra("target");
         long total = getIntent().getLongExtra("bytes", getIntent().getIntExtra("bytes", 65536));
         boolean fast = getIntent().getIntExtra("fast", 1) != 0;
-        boolean l2cap = "l2cap".equals(getIntent().getStringExtra("link"));
+        String link = getIntent().getStringExtra("link");
+        boolean minAtt = "l2cap-min".equals(link);
+        boolean trim = "l2cap-trim".equals(link);
+        boolean l2cap = "l2cap".equals(link) || trim || minAtt;
         touch();
         showCounters();
         say("source mode" + (target != null ? " → " + target : "") + " — " + total + " bytes"
-                + (l2cap ? " (L2CAP)" : ""));
-        BulkSource src = new BulkSource(this, adapter, target, total, fast, l2cap, new BulkSource.Listener() {
+                + (minAtt ? " (L2CAP-min)" : trim ? " (L2CAP-trim)" : l2cap ? " (L2CAP)" : ""));
+        BulkSource src = new BulkSource(this, adapter, target, total, fast, l2cap, trim, minAtt,
+                new BulkSource.Listener() {
             @Override
             public void status(String message) {
                 say(message);
@@ -316,10 +325,17 @@ public class SimbleActivity extends Activity implements StatsServer.Stats {
                 .setIncludeDeviceName(false)
                 .addServiceUuid(new ParcelUuid(SERVICE))
                 .build();
-        AdvertiseData scanResponse = new AdvertiseData.Builder()
-                .setIncludeDeviceName(true)
-                .build();
-        advertiser.startAdvertising(settings, advertisement, scanResponse, advertiseCallback);
+        // The PSM rides the scan response as manufacturer data (company 0xFFFF,
+        // reserved for testing), so a source can open the L2CAP socket without
+        // first connecting and discovering GATT — the trimmed path. Two
+        // little-endian bytes, 0 when there is no L2CAP server.
+        AdvertiseData.Builder scanBuilder = new AdvertiseData.Builder()
+                .setIncludeDeviceName(true);
+        if (l2capPsm > 0) {
+            byte[] psmData = {(byte) (l2capPsm & 0xFF), (byte) ((l2capPsm >> 8) & 0xFF)};
+            scanBuilder.addManufacturerData(PSM_COMPANY_ID, psmData);
+        }
+        advertiser.startAdvertising(settings, advertisement, scanBuilder.build(), advertiseCallback);
     }
 
     /** Opens the L2CAP CoC server and starts accepting on it, storing the PSM
@@ -339,22 +355,43 @@ public class SimbleActivity extends Activity implements StatsServer.Stats {
         }
     }
 
-    /** Accepts one L2CAP connection at a time and drains its stream into the
-     *  same counters the GATT path feeds, so /stats and the control-point REPORT
-     *  describe an L2CAP run exactly as they do a GATT one. Loops for the next
-     *  run after each peer leaves. */
+    /** Accepts one L2CAP connection at a time and drains it into the same
+     *  counters the GATT path feeds, so /stats describes an L2CAP run exactly as
+     *  it does a GATT one — no GATT control point involved, which is what lets a
+     *  source skip service discovery entirely (the trimmed path).
+     *
+     *  <p>Wire format, self-contained: the source sends a 4-byte little-endian
+     *  length, then that many payload bytes; once they have all arrived the sink
+     *  writes back one ack byte. The ack both tells the source it is done and
+     *  keeps the socket open until the sink has everything, so a buffered write
+     *  cannot truncate the tail. Loops for the next run after each peer leaves. */
     private void acceptL2cap() {
         byte[] buf = new byte[65536];
         while (l2capServer != null) {
             try (BluetoothSocket socket = l2capServer.accept()) {
                 holdAndSay("L2CAP peer connected");
                 InputStream in = socket.getInputStream();
+                long want = readLength(in);
+                synchronized (this) {
+                    bytes = 0;
+                    chunks = 0;
+                    firstByteMs = 0;
+                    lastByteMs = 0;
+                    expected = want;
+                }
+                showCounters();
                 int n;
-                while ((n = in.read(buf)) > 0) {
+                while (bytes < want && (n = in.read(buf)) > 0) {
                     count(n);
                     showCounters();
                 }
-                say("L2CAP transfer ended");
+                // Confirm receipt so the source can stop and close without
+                // truncating a still-draining tail.
+                socket.getOutputStream().write(1);
+                socket.getOutputStream().flush();
+                say(bytes >= want
+                        ? "L2CAP complete — all " + bytes + " bytes"
+                        : "L2CAP short — " + bytes + " of " + want + " bytes");
             } catch (IOException e) {
                 // accept() throws when the server socket is closed on teardown —
                 // the loop's own exit, not an error to shout about.
@@ -364,6 +401,23 @@ public class SimbleActivity extends Activity implements StatsServer.Stats {
                 return;
             }
         }
+    }
+
+    /** Reads a 4-byte little-endian length off the stream. */
+    private static long readLength(InputStream in) throws IOException {
+        byte[] head = new byte[4];
+        int got = 0;
+        while (got < 4) {
+            int n = in.read(head, got, 4 - got);
+            if (n < 0) {
+                throw new IOException("stream closed before length header");
+            }
+            got += n;
+        }
+        return (head[0] & 0xFFL)
+                | ((head[1] & 0xFFL) << 8)
+                | ((head[2] & 0xFFL) << 16)
+                | ((head[3] & 0xFFL) << 24);
     }
 
     /** touch() + a status line, from a worker thread. */

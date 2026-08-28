@@ -774,11 +774,14 @@ fn pair_run(query: &str) -> String {
     } else {
         1
     };
-    // Payload path: GATT writes by default, or L2CAP CoC with `link=l2cap`.
-    let link = if params.get("link").map(|l| l == "l2cap").unwrap_or(false) {
-        "l2cap"
-    } else {
-        "gatt"
+    // Payload path: GATT writes by default, or an L2CAP CoC socket — the full
+    // hybrid (`l2cap`) or the trimmed variant that skips GATT discovery
+    // (`l2cap-trim`).
+    let link = match params.get("link").map(String::as_str) {
+        Some("l2cap") => "l2cap",
+        Some("l2cap-trim") => "l2cap-trim",
+        Some("l2cap-min") => "l2cap-min",
+        _ => "gatt",
     };
     let adb = adb_path();
 
@@ -889,7 +892,7 @@ fn pair_run(query: &str) -> String {
             // and the drain-wait, not the over-air time. The sink stamps its own
             // first-to-last received byte (served as duration_ms), which is the
             // honest transfer time — use it when this was an L2CAP run.
-            let sink_ms = if link == "l2cap" {
+            let sink_ms = if link.starts_with("l2cap") {
                 let host = sink.split(':').next().unwrap_or(sink);
                 sink_get(host, "/stats").and_then(|b| json_number(&b, "duration_ms"))
             } else {
