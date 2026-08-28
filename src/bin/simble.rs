@@ -798,13 +798,25 @@ fn pair_run(query: &str) -> String {
     // over many runs the stack accumulates zombie advertiser/server
     // registrations until the advertiser subsystem corrupts and new
     // connections' ATT stops routing (a BT toggle is then the only recovery).
-    // So a sink that is *already* running is reset over HTTP — which aborts any
-    // stale run and drops a lingering link without killing the process — and
-    // only a sink that is actually down gets launched.
-    if sink_running {
+    // So a sink that is up and reachable is reset over HTTP — which aborts any
+    // stale run and drops a lingering link without killing the process — and no
+    // churn accumulates.
+    //
+    // But `pidof` reporting the process alive is not proof its advertiser is:
+    // a stack wedged by earlier churn, or a phone idle past its wake timeout,
+    // leaves the process running yet silent, and the source would then scan
+    // forever for a sink that is not on the air. The HTTP reset is the liveness
+    // test — a healthy sink answers it even while dozing (the wake lock keeps it
+    // reachable). So a sink whose reset does not answer is (re)launched to
+    // revive the advertiser; the common, healthy case never relaunches.
+    let reset_ok = if sink_running {
         let host = sink.split(':').next().unwrap_or(sink);
-        let _ = sink_get(host, &format!("/reset?total={bytes}"));
+        sink_get(host, &format!("/reset?total={bytes}")).is_some()
     } else {
+        false
+    };
+    if !reset_ok {
+        fire(sink, "am force-stop com.simble");
         fire(sink, "am start -n com.simble/.SimbleActivity");
         std::thread::sleep(Duration::from_secs(5)); // let the advertiser come up
     }
