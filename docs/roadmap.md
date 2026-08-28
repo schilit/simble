@@ -18,7 +18,7 @@
 
 | # | item | status | notes |
 |---|---|---|---|
-| F1 | **Publisher/collector (pub-sub)** — publisher advertises `[generation][size][PSM]`; collector scans, dedupes on generation, connects + pulls only what's new; the completed pull is the delivery ack. Reuses the L2CAP-min path. | blocked | needs the **latest-generation-only vs. held-queue** decision before building |
+| F1 | **Publisher/collector (pub-sub), latest-only** — publisher advertises `[generation][size][PSM]` and serves the payload over L2CAP; collector scans, dedupes on generation (skips without connecting when not newer), else pulls; the ack is the delivery receipt. | **core done** (657c3e4, branch `pubsub`) | Verified 8-Pro to 8-Pro (pull gen 1, dedupe, bump to gen 2, pull, dedupe). Follow-on: a `bench-pubsub.sh` helper, in-place generation bump via HTTP (relaunch currently rotates the PSM), and web-UI wiring. |
 | F2 | **Granular link tunables** — per-parameter PHY / DLE / connection-interval controls, settable MTU target, phone-to-phone parity. Phase 0 (fast on/off) and L2CAP-min are done; the granular knobs are not. | planned | a plan exists (from the fast-link work); touches `BulkOptions` + wasm rebuild + the intent chain |
 | F3 | **ISO / BIS (Auracast) over real RF** | idea | mentioned early, deferred |
 | F4 | **nRF54L15 `hci_uart` + Channel Sounding** | idea | the `--serial` bridge exists; CS does not |
