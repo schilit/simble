@@ -380,9 +380,24 @@ fn bluetooth_order(infos: &[nusb::DeviceInfo], all: &[UsbDongle]) -> Vec<usize> 
 fn dongle_from_info(d: &nusb::DeviceInfo) -> UsbDongle {
     UsbDongle {
         index: 0,
+        // `bus_id`, `device_address`, and `port_chain` are the sysfs-derived
+        // location fields. nusb exposes their accessors only on desktop
+        // targets (linux/macos/windows); on Android it offers no device
+        // enumeration at all, so these fall back to empty. This branch is
+        // never reached on Android — `list_usb_devices` errors out first —
+        // but it must still compile there.
+        #[cfg(not(target_os = "android"))]
         bus_id: d.bus_id().to_string(),
+        #[cfg(target_os = "android")]
+        bus_id: String::new(),
+        #[cfg(not(target_os = "android"))]
         device_address: d.device_address(),
+        #[cfg(target_os = "android")]
+        device_address: 0,
+        #[cfg(not(target_os = "android"))]
         port_chain: d.port_chain().to_vec(),
+        #[cfg(target_os = "android")]
+        port_chain: Vec::new(),
         vendor_id: d.vendor_id(),
         product_id: d.product_id(),
         manufacturer: d.manufacturer_string().map(str::to_string),
@@ -1241,11 +1256,23 @@ impl UsbScene {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 fn list_usb_devices() -> Result<Vec<nusb::DeviceInfo>, SimbleError> {
     Ok(nusb::list_devices()
         .wait()
         .map_err(|e| SimbleError::Transport(format!("USB device enumeration failed: {e}")))?
         .collect())
+}
+
+// nusb has no `list_devices()` on Android: USB devices arrive as a file
+// descriptor handed over by the Java framework, not by enumeration. Real-radio
+// USB scanning is therefore unavailable on-device, and this reports that rather
+// than silently returning an empty list.
+#[cfg(target_os = "android")]
+fn list_usb_devices() -> Result<Vec<nusb::DeviceInfo>, SimbleError> {
+    Err(SimbleError::Transport(
+        "USB device enumeration is not supported on Android".to_string(),
+    ))
 }
 
 #[cfg(test)]
