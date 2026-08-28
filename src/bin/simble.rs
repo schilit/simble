@@ -514,23 +514,20 @@ fn devices_json() -> String {
     out
 }
 
-/// The phones adb can see, each with a local port forwarded to SimBLE Android.
+/// The phones adb can see, each tagged with whether the SimBLE sink is running
+/// on it and the name it advertises as.
 ///
-/// The page cannot run adb and cannot reach a phone directly — an access
-/// point that isolates clients refuses new connections while adb's own
-/// established one survives — so the bridge sets up a forward per phone and
-/// hands back the ports. That is the same reason it serves `/devices`: a page
-/// cannot discover a port, but it can read a list.
-///
-/// Probing each forward is what separates "a phone is plugged in" from "a
-/// phone is running the sink", and only the second is selectable.
+/// The page cannot run adb, so the bridge enumerates the phones and their status
+/// on its behalf — the same reason it serves `/devices`: a page cannot run a
+/// command, but it can read a list. Detection is over adb (see `sink_status`),
+/// not the phone's WiFi, so it holds up when the phone is dozing with its stats
+/// server dark; a data run's BLE connect wakes it to read stats later. Only a
+/// phone whose sink is actually running is selectable.
 fn phones_json() -> String {
     let adb = adb_path();
-    // adb is used to *list* phones and nothing else — no `adb shell`, no
-    // `adb forward`. A wireless phone's adb serial already *is* its `ip:port`,
-    // so the bridge reaches the phone's HTTP counter server directly over WiFi
-    // (see `sink_get`); adb routes no data. The one call is bounded so a hung
-    // adb server cannot stall the listing.
+    // The list itself is one bounded `adb devices` call. A wireless phone's adb
+    // serial already *is* its `ip:port`, so its host (for the later stats read
+    // over WiFi, see `sink_get`) is right there in the serial with no lookup.
     let listed = output_timeout(
         std::process::Command::new(&adb).args(["devices", "-l"]),
         std::time::Duration::from_secs(5),
@@ -541,8 +538,8 @@ fn phones_json() -> String {
     };
     let text = String::from_utf8_lossy(&listed.stdout);
 
-    let mut out = String::from("{\"phones\":[");
-    let mut first = true;
+    // Collect the wifi phones first — serial, host, model — deduped by host.
+    let mut found: Vec<(String, String, String)> = Vec::new();
     let mut seen: Vec<String> = Vec::new();
     for line in text
         .lines()
@@ -554,8 +551,7 @@ fn phones_json() -> String {
         };
         // Only an `ip:port` wifi transport is reachable HTTP-direct — and the ip
         // is right there in the serial. This same test drops the duplicate mdns
-        // transport (`adb-…._tcp`) for one phone, which carries no ip, so a radio
-        // is listed once with no `adb shell` round-trip needed to dedup it.
+        // transport (`adb-…._tcp`) for one phone, which carries no ip.
         let host = match serial.split(':').next() {
             Some(h) if h.parse::<std::net::Ipv4Addr>().is_ok() => h,
             _ => continue,
@@ -564,22 +560,40 @@ fn phones_json() -> String {
             continue;
         }
         seen.push(host.to_string());
-
-        // The one network touch, straight to the phone over WiFi, bounded so a
-        // phone whose wifi has wedged fails fast rather than stalling the list.
-        let probe = probe_sink(host);
-        if !first {
-            out.push(',');
-        }
-        first = false;
         let model = line
             .split_whitespace()
             .find_map(|f| f.strip_prefix("model:"))
             .unwrap_or("phone");
+        found.push((serial.to_string(), host.to_string(), model.to_string()));
+    }
+
+    // Probe each phone's sink status *in parallel*. `pidof` over adb sees the
+    // sink even when it is frozen (screen off, HTTP dark), because adbd is never
+    // frozen by Android's app freezer — but the per-phone shell is ~a second, so
+    // running them one after another made the whole list wait on their sum, and
+    // the page showed no phones until the last answered. A thread each keeps
+    // /phones as fast as its slowest phone, not their total.
+    let statuses: Vec<_> = found
+        .iter()
+        .map(|(serial, _, _)| {
+            let adb = adb.clone();
+            let serial = serial.clone();
+            std::thread::spawn(move || sink_status(&adb, &serial))
+        })
+        .collect();
+
+    let mut out = String::from("{\"phones\":[");
+    let mut first = true;
+    for ((serial, host, model), status) in found.iter().zip(statuses) {
+        let (running, name) = status.join().unwrap_or((false, None));
+        if !first {
+            out.push(',');
+        }
+        first = false;
         out.push_str(&format!(
             "{{\"serial\":\"{serial}\",\"model\":\"{model}\",\"host\":\"{host}\",\"name\":\"{}\",\"running\":{}}}",
-            probe.as_deref().unwrap_or(""),
-            probe.is_some()
+            name.as_deref().unwrap_or(""),
+            running
         ));
     }
     out.push_str("]}");
@@ -657,15 +671,232 @@ fn sink_get(host: &str, path: &str) -> Option<String> {
     Some(raw[at..].to_string())
 }
 
-/// Asks the sink at `host` what it advertises as. `None` if nothing answers.
-fn probe_sink(host: &str) -> Option<String> {
-    let body = sink_get(host, "/stats")?;
-    // One field out of a flat object, without taking a JSON dependency into
-    // a binary that has none.
-    let at = body.find("\"name\":\"")? + 8;
-    let rest = &body[at..];
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
+/// Whether the SimBLE sink is running on the phone at `serial`, and the name it
+/// advertises as — both over adb, not HTTP. The app's process outlives Android's
+/// screen-off freeze (only its network goes dark), and adbd is never frozen, so
+/// `pidof` sees a dozing sink an over-WiFi probe of :8099 cannot reach. The
+/// device name is what the sink advertises (`BluetoothAdapter.getName()`), so it
+/// labels the phone in the picker. Bounded so a wedged adb link fails fast.
+fn sink_status(adb: &str, serial: &str) -> (bool, Option<String>) {
+    let out = output_timeout(
+        std::process::Command::new(adb).args([
+            "-s",
+            serial,
+            "shell",
+            // echo after pidof guarantees a newline even when it prints nothing,
+            // so an absent pid can't run into the N: line and read as present.
+            "printf 'P:'; pidof com.simble; echo; printf 'N:'; settings get global device_name",
+        ]),
+        std::time::Duration::from_secs(3),
+    );
+    let Some(out) = out else {
+        return (false, None);
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut running = false;
+    let mut name = None;
+    for line in text.lines() {
+        if let Some(p) = line.strip_prefix("P:") {
+            running = !p.trim().is_empty();
+        } else if let Some(n) = line.strip_prefix("N:") {
+            let n = n.trim();
+            if !n.is_empty() && n != "null" {
+                name = Some(n.to_string());
+            }
+        }
+    }
+    (running, name)
+}
+
+/// Parses a URL query string (`a=1&b=2`) into pairs, percent-decoding values —
+/// enough for the `ip:port` adb serials the page sends, where `:` arrives `%3A`.
+fn parse_query(q: &str) -> std::collections::HashMap<String, String> {
+    q.split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .map(|(k, v)| (k.to_string(), percent_decode(v)))
+        .collect()
+}
+
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 3 <= bytes.len() {
+            if let Ok(b) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(b as char);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i] as char);
+        i += 1;
+    }
+    out
+}
+
+/// Drives a phone-to-phone bulk transfer over adb and returns its result — the
+/// four-segment breakdown plus throughput — as JSON.
+///
+/// The source phone's central role is an Android intent, not anything the
+/// dongle carries, so the browser cannot start it; the bridge does, running the
+/// same sequence `bench-pair.sh` does. It quiets every other advertiser, starts
+/// the sink, starts the source aimed at the sink's advertised name, then reads
+/// the `SEGMENTS` line the source's shim logs when the run ends. Blocks for the
+/// whole run — discovery alone can take 30 s+.
+fn pair_run(query: &str) -> String {
+    let params = parse_query(query);
+    let (Some(source), Some(sink)) = (params.get("source"), params.get("sink")) else {
+        return serde_json::json!({"ok": false, "error": "need source and sink adb serials"})
+            .to_string();
+    };
+    let bytes: u64 = params.get("bytes").and_then(|b| b.parse().ok()).unwrap_or(65536);
+    // Fast link on by default; `fast=0` runs the 1M baseline.
+    let fast: u8 = if params.get("fast").map(|f| f == "0").unwrap_or(false) { 0 } else { 1 };
+    let adb = adb_path();
+
+    // The source scans for the sink by the name it advertises.
+    let (sink_running, name) = sink_status(&adb, sink);
+    let Some(target) = name.filter(|n| !n.is_empty()) else {
+        return serde_json::json!({
+            "ok": false,
+            "error": format!("sink {sink} is unreachable over adb — is it awake and running SimBLE?"),
+        })
+        .to_string();
+    };
+    let esc = target.replace('\'', "");
+
+    let fire = |serial: &str, shell: &str| {
+        let _ = output_timeout(
+            std::process::Command::new(&adb).args(["-s", serial, "shell", shell]),
+            Duration::from_secs(8),
+        );
+    };
+
+    // The source filters on the service UUID and then the name, so only another
+    // phone advertising the *same name* as the sink could be grabbed by mistake.
+    // Quiet just those — not every phone, which would knock unrelated ones off
+    // the page's list for no reason.
+    if let Some(out) = output_timeout(
+        std::process::Command::new(&adb).arg("devices"),
+        Duration::from_secs(5),
+    ) {
+        for line in String::from_utf8_lossy(&out.stdout).lines().skip(1) {
+            if let Some(s) = line.split_whitespace().next() {
+                if s.contains(':') && s != sink {
+                    let (_r, n) = sink_status(&adb, s);
+                    if n.as_deref() == Some(target.as_str()) {
+                        fire(s, "am force-stop com.simble");
+                    }
+                }
+            }
+        }
+    }
+
+    // Prepare the sink. A force-stop is a SIGKILL: the app never runs its
+    // onDestroy, so it never stopAdvertising()/close()s its GATT server, and
+    // over many runs the stack accumulates zombie advertiser/server
+    // registrations until the advertiser subsystem corrupts and new
+    // connections' ATT stops routing (a BT toggle is then the only recovery).
+    // So a sink that is *already* running is reset over HTTP — which aborts any
+    // stale run and drops a lingering link without killing the process — and
+    // only a sink that is actually down gets launched.
+    if sink_running {
+        let host = sink.split(':').next().unwrap_or(sink);
+        let _ = sink_get(host, &format!("/reset?total={bytes}"));
+    } else {
+        fire(sink, "am start -n com.simble/.SimbleActivity");
+        std::thread::sleep(Duration::from_secs(5)); // let the advertiser come up
+    }
+
+    // Clear the source's log, then start it in its source role at the sink.
+    let _ = output_timeout(
+        std::process::Command::new(&adb).args(["-s", source, "logcat", "-c"]),
+        Duration::from_secs(6),
+    );
+    fire(source, "am force-stop com.simble");
+    fire(
+        source,
+        &format!(
+            "am start -n com.simble/.SimbleActivity --es role source --es target '{esc}' --ei bytes {bytes} --ei fast {fast}"
+        ),
+    );
+
+    // Discovery can take 30 s+, then the transfer is ~1 s. Poll the source's log
+    // for the SEGMENTS line its shim emits when the run ends.
+    for _ in 0..55 {
+        std::thread::sleep(Duration::from_secs(1));
+        let Some(out) = output_timeout(
+            std::process::Command::new(&adb)
+                .args(["-s", source, "logcat", "-d", "-s", "SimbleSource"]),
+            Duration::from_secs(6),
+        ) else {
+            continue;
+        };
+        let text = String::from_utf8_lossy(&out.stdout);
+        // The run is over when a span closes carrying the totals (`ok=…`).
+        if text.lines().any(|l| l.contains("span{") && l.contains("ok=")) {
+            return pair_result_json(&text, source, sink, &esc, bytes);
+        }
+    }
+    serde_json::json!({
+        "ok": false,
+        "error": "no result after 55 s — did the source find the sink?",
+        "source": source,
+        "sink": sink,
+        "name": esc,
+    })
+    .to_string()
+}
+
+/// Turns the source's `span{…} closed busy_ms=…` lines into the result JSON the
+/// page charts. Each phase is a span; the final span carries `bytes` and `ok`,
+/// and throughput is the transfer span weighed against the byte count.
+fn pair_result_json(log: &str, source: &str, sink: &str, name: &str, expected: u64) -> String {
+    let mut spans: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    let mut bytes = 0i64;
+    let mut ok = false;
+    for line in log.lines().filter(|l| l.contains("span{")) {
+        let Some(phase) = line.split("span{").nth(1).and_then(|r| r.split('}').next()) else {
+            continue;
+        };
+        if let Some(busy) = span_field(line, "busy_ms") {
+            spans.insert(phase.to_string(), busy);
+        }
+        if let Some(b) = span_field(line, "bytes") {
+            bytes = b;
+        }
+        if let Some(o) = span_field(line, "ok") {
+            ok = o == 1;
+        }
+    }
+    let seg = |name: &str| spans.get(name).copied().unwrap_or(0);
+    let transfer = seg("transfer");
+    let kb_s = if transfer > 0 {
+        (bytes as f64 / 1024.0 / (transfer as f64 / 1000.0) * 100.0).round() / 100.0
+    } else {
+        0.0
+    };
+    serde_json::json!({
+        "ok": ok,
+        "source": source,
+        "sink": sink,
+        "name": name,
+        "expected": expected,
+        "bytes": bytes,
+        "discover_ms": seg("discover"),
+        "connect_ms": seg("connect"),
+        "negotiate_ms": seg("negotiate"),
+        "transfer_ms": transfer,
+        "throughput_kb_s": kb_s,
+    })
+    .to_string()
+}
+
+/// One `key=<int>` field out of a span line, if present.
+fn span_field(line: &str, key: &str) -> Option<i64> {
+    let at = line.find(&format!("{key}="))? + key.len() + 1;
+    line[at..].split_whitespace().next()?.parse().ok()
 }
 
 /// Serves one WebSocket client end-to-end: handshake, open the dongle, then
@@ -703,12 +934,20 @@ fn serve(mut stream: TcpStream, source: &BridgeSource) -> Result<(), String> {
                     Some(b) => ("200 OK", b),
                     None => ("502 Bad Gateway", "{\"error\":\"sink unreachable\"}".to_string()),
                 }
+            } else if target.starts_with("/pair-run") {
+                // A phone-to-phone run. The source phone's central role is an
+                // Android intent over adb, not anything the dongle carries, so
+                // the bridge drives it on the page's behalf. Blocks for the run
+                // (discovery can take 30 s+), which is why it is its own route
+                // rather than folded into a status probe.
+                let q = target.splitn(2, '?').nth(1).unwrap_or("");
+                ("200 OK", pair_run(q))
             } else {
                 (
                     "404 Not Found",
                     format!(
                         "{{\"error\":\"unknown path\",\"method\":{method:?},\"target\":{target:?},\
-                          \"try\":\"/devices, /phones, or /sink/<ip>/stats\"}}"
+                          \"try\":\"/devices, /phones, /sink/<ip>/stats, or /pair-run?source=&sink=&bytes=\"}}"
                     ),
                 )
             };
