@@ -399,6 +399,11 @@ async function runPairToPhone(centralValue, sinkValue, options, onStage) {
     throughput_kb_s: res.throughput_kb_s,
     bytes_sent: res.expected,
     bytes_received: res.bytes,
+    // The MTU the source negotiated and the PHY it settled on — so a run that
+    // silently stayed on 1M reads as such rather than "not reported".
+    mtu: res.mtu || null,
+    tx_phy: res.tx_phy ?? null,
+    rx_phy: res.rx_phy ?? null,
     // The sink counted the bytes and reported them back over the control point;
     // the duration is the source's own transfer clock. Not stamped on our clock,
     // so: peer-reported.

@@ -868,6 +868,9 @@ fn pair_result_json(log: &str, source: &str, sink: &str, name: &str, expected: u
     let mut spans: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
     let mut bytes = 0i64;
     let mut ok = false;
+    let mut mtu = 0i64;
+    let mut txphy = 0i64;
+    let mut rxphy = 0i64;
     for line in log.lines().filter(|l| l.contains("span{")) {
         let Some(phase) = line.split("span{").nth(1).and_then(|r| r.split('}').next()) else {
             continue;
@@ -881,6 +884,15 @@ fn pair_result_json(log: &str, source: &str, sink: &str, name: &str, expected: u
         if let Some(o) = span_field(line, "ok") {
             ok = o == 1;
         }
+        if let Some(m) = span_field(line, "mtu") {
+            mtu = m;
+        }
+        if let Some(p) = span_field(line, "txphy") {
+            txphy = p;
+        }
+        if let Some(p) = span_field(line, "rxphy") {
+            rxphy = p;
+        }
     }
     let seg = |name: &str| spans.get(name).copied().unwrap_or(0);
     let transfer = seg("transfer");
@@ -888,6 +900,14 @@ fn pair_result_json(log: &str, source: &str, sink: &str, name: &str, expected: u
         (bytes as f64 / 1024.0 / (transfer as f64 / 1000.0) * 100.0).round() / 100.0
     } else {
         0.0
+    };
+    // Android's PHY constants match the HCI ones (1=1M, 2=2M, 3=coded); label
+    // them the way the dongle path's report does. 0 = never updated.
+    let phy_label = |p: i64| match p {
+        1 => Some("LE 1M"),
+        2 => Some("LE 2M"),
+        3 => Some("LE Coded"),
+        _ => None,
     };
     serde_json::json!({
         "ok": ok,
@@ -901,6 +921,9 @@ fn pair_result_json(log: &str, source: &str, sink: &str, name: &str, expected: u
         "negotiate_ms": seg("negotiate"),
         "transfer_ms": transfer,
         "throughput_kb_s": kb_s,
+        "mtu": mtu,
+        "tx_phy": phy_label(txphy),
+        "rx_phy": phy_label(rxphy),
     })
     .to_string()
 }

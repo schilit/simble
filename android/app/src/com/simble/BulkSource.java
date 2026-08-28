@@ -87,6 +87,9 @@ final class BulkSource {
     private BluetoothGattCharacteristic controlCh;
 
     private int chunkSize = 20;        // MTU-3, resolved once the MTU is up
+    private int negotiatedMtu = 23;    // the ATT default until onMtuChanged fires
+    private int txPhy;                  // 0 until onPhyUpdate; 1=1M 2=2M 3=coded
+    private int rxPhy;
     private long sent;                 // bytes handed to the stack
     private long chunks;
     private long startMs;              // the first data chunk went out (transfer start)
@@ -211,6 +214,7 @@ final class BulkSource {
             // Cap at 512: the max BLE attribute value length. MTU-3 can be 514,
             // and a 514-byte write is invalid and silently dropped by the peer.
             chunkSize = Math.min(Math.max(20, mtu - 3), 512);
+            negotiatedMtu = mtu;
             say("MTU " + mtu);
             beginDiscovery(g);
         }
@@ -218,6 +222,10 @@ final class BulkSource {
         @Override
         public void onPhyUpdate(BluetoothGatt g, int txPhy, int rxPhy, int status) {
             Log.i(TAG, "PHY tx=" + txPhy + " rx=" + rxPhy + " status=" + status);
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                BulkSource.this.txPhy = txPhy;
+                BulkSource.this.rxPhy = rxPhy;
+            }
         }
 
         @Override
@@ -378,7 +386,8 @@ final class BulkSource {
         // reached, so its cost is still recorded and the bridge still gets a
         // final (ok=…) span to key on.
         if (phase != null) {
-            phase.close("bytes=" + acked + " ok=" + (ok ? 1 : 0));
+            phase.close("bytes=" + acked + " ok=" + (ok ? 1 : 0)
+                    + " mtu=" + negotiatedMtu + " txphy=" + txPhy + " rxphy=" + rxPhy);
             phase = null;
         }
         try {
