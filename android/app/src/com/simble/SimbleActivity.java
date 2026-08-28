@@ -127,6 +127,9 @@ public class SimbleActivity extends Activity implements StatsServer.Stats {
     /** Set from the launch intent: {@code --es role source} drives a transfer
      *  to another phone instead of receiving one. Default is the sink. */
     private boolean sourceMode;
+    /** The launch-intent role: source, sink (default), publish, or collect. */
+    private String role;
+    private BulkPublisher publisher;
 
     /** CPU + wifi, held while in use and for a while after, so idle phones sleep. */
     private PowerManager.WakeLock wakeLock;
@@ -174,8 +177,12 @@ public class SimbleActivity extends Activity implements StatsServer.Stats {
         //   adb shell pm grant com.simble android.permission.BLUETOOTH_ADVERTISE
         //   adb shell pm grant com.simble android.permission.BLUETOOTH_CONNECT
         // Asking here too keeps the app usable when launched by hand.
-        sourceMode = "source".equals(getIntent().getStringExtra("role"));
-        String[] needed = sourceMode
+        role = getIntent().getStringExtra("role");
+        sourceMode = "source".equals(role);
+        // A scanning role (source, collect) needs SCAN; an advertising role
+        // (sink, publish) needs ADVERTISE. Both need CONNECT.
+        boolean scans = "source".equals(role) || "collect".equals(role);
+        String[] needed = scans
                 ? new String[] {
                     Manifest.permission.BLUETOOTH_SCAN,
                     Manifest.permission.BLUETOOTH_CONNECT,
@@ -194,13 +201,70 @@ public class SimbleActivity extends Activity implements StatsServer.Stats {
         begin();
     }
 
-    /** Sink or source, whichever the launch intent asked for. */
+    /** Dispatch on the launch-intent role. */
     private void begin() {
-        if (sourceMode) {
+        if ("source".equals(role)) {
             startSource();
+        } else if ("publish".equals(role)) {
+            startPublish();
+        } else if ("collect".equals(role)) {
+            startCollect();
         } else {
-            start();
+            start(); // the sink
         }
+    }
+
+    /** Publish a payload: raise the hand (advertise generation + size), and
+     *  serve the bytes to any collector that connects. */
+    private void startPublish() {
+        BluetoothManager manager = getSystemService(BluetoothManager.class);
+        BluetoothAdapter adapter = manager != null ? manager.getAdapter() : null;
+        if (adapter == null || !adapter.isEnabled()) {
+            say("Bluetooth is off — enable it and relaunch");
+            return;
+        }
+        long gen = getIntent().getLongExtra("gen", getIntent().getIntExtra("gen", 1));
+        int size = (int) getIntent().getLongExtra("bytes", getIntent().getIntExtra("bytes", 65536));
+        touch();
+        publisher = new BulkPublisher(this, adapter, gen, size, this::say);
+        publisher.start();
+    }
+
+    /** Collect from a publisher: scan, dedupe on generation, and pull only what
+     *  is newer than `since`. */
+    private void startCollect() {
+        BluetoothManager manager = getSystemService(BluetoothManager.class);
+        BluetoothAdapter adapter = manager != null ? manager.getAdapter() : null;
+        if (adapter == null || !adapter.isEnabled()) {
+            say("Bluetooth is off — enable it and relaunch");
+            return;
+        }
+        String target = getIntent().getStringExtra("target");
+        long since = getIntent().getLongExtra("since", getIntent().getIntExtra("since", 0));
+        boolean fast = getIntent().getIntExtra("fast", 1) != 0;
+        touch();
+        showCounters();
+        say("collect mode — have generation " + since);
+        BulkCollector c = new BulkCollector(this, adapter, target, since, fast,
+                new BulkCollector.Listener() {
+                    @Override
+                    public void status(String message) {
+                        say(message);
+                    }
+
+                    @Override
+                    public void finished(long generation, long collected, long ms, boolean fresh) {
+                        bytes = collected;
+                        showCounters();
+                        double kbs = ms > 0 && collected > 0 ? collected / 1024.0 / (ms / 1000.0) : 0;
+                        say(fresh
+                                ? String.format("collected generation %d — %d bytes in %d ms (%.1f KB/s)",
+                                        generation, collected, ms, kbs)
+                                : "nothing new — publisher at generation " + generation);
+                        touch();
+                    }
+                });
+        c.start();
     }
 
     /** Drive a bulk transfer to another phone's sink over this radio. The sink
@@ -804,6 +868,9 @@ public class SimbleActivity extends Activity implements StatsServer.Stats {
         }
         if (server != null) {
             server.close();
+        }
+        if (publisher != null) {
+            publisher.stop();
         }
         BluetoothServerSocket l2 = l2capServer;
         l2capServer = null; // signals acceptL2cap() the close is intentional
