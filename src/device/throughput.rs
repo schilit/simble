@@ -166,6 +166,12 @@ pub struct BulkOptions {
     /// counters by some other path and hand them to [`BulkCentral::note_server`]
     /// — over HTTP, for a phone running SimBLE Android.
     pub use_control_point: bool,
+    /// Request the fast link on connect: LE 2M PHY, Data Length Extension, and
+    /// a tight connection interval. `true` is the default and what every run
+    /// used to do unconditionally. `false` leaves the link at its 1M, 27-octet,
+    /// default-interval baseline — which is itself a measurement: the setup
+    /// cost the fast path is buying down, side by side with it.
+    pub fast_link: bool,
 }
 
 impl Default for BulkOptions {
@@ -176,6 +182,7 @@ impl Default for BulkOptions {
             window_chunks: DEFAULT_WINDOW_CHUNKS,
             timeout_ms: DEFAULT_TIMEOUT_MS,
             use_control_point: true,
+            fast_link: true,
         }
     }
 }
@@ -776,7 +783,7 @@ impl BulkCentral {
         if self.central.phase() != CentralPhase::Ready {
             return;
         }
-        if !self.fast_requested {
+        if self.options.fast_link && !self.fast_requested {
             self.fast_requested = true;
             // The link-speed requests, sent once the GATT view is ready. Each is
             // independent: a controller that has never heard of one answers
