@@ -1307,10 +1307,10 @@ impl Server {
         // not the agent's own scene. Written when every device lived in the
         // in-process scene; a dongle-backed session wants the room, not the sim.
         if let Some(live) = self.live.as_mut() {
-            if !live.has_scanner() {
-                if let Err(e) = live.add_scanner() {
-                    return tool_text(id, &format!("cannot start a real-RF scan: {e}"), true);
-                }
+            if !live.has_scanner()
+                && let Err(e) = live.add_scanner()
+            {
+                return tool_text(id, &format!("cannot start a real-RF scan: {e}"), true);
             }
             // Advertisements arrive across seconds, so pump the dongle against
             // the wall clock rather than ticking a script forward.
