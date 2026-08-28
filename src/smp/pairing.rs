@@ -45,8 +45,8 @@ use zerocopy::IntoBytes;
 
 use crate::crypto::{P256Keypair, c1, f4, f5, f6, h6, h7, s1};
 use crate::packets::{
-    smp_auth_req as auth_req, smp_error_code as error_code,
-    smp_key_distribution as key_distribution,
+    IdentityAddressInformation, MasterIdentification, smp_auth_req as auth_req,
+    smp_error_code as error_code, smp_key_distribution as key_distribution,
 };
 use crate::smp::keystore::{PairingKey, PairingKeys};
 use crate::smp::{SmpPairingPacket, io_capability, opcode};
@@ -259,32 +259,29 @@ fn parse_public_key(pdu: &[u8]) -> Option<([u8; 32], [u8; 32])> {
 }
 
 fn build_master_id(ediv: u16, rand: &[u8; 8]) -> Vec<u8> {
-    let mut v = Vec::with_capacity(11);
-    v.push(opcode::MASTER_IDENTIFICATION);
-    v.extend_from_slice(&ediv.to_le_bytes());
-    v.extend_from_slice(rand);
-    v
+    MasterIdentification::new(ediv, *rand).as_bytes().to_vec()
 }
 
 fn parse_master_id(pdu: &[u8]) -> Option<(u16, [u8; 8])> {
-    if pdu.len() != 11 || pdu[0] != opcode::MASTER_IDENTIFICATION {
+    // A key-distribution PDU arrives as its own L2CAP SDU, so anything past
+    // the fixed struct is a malformed PDU — rejected, as the old exact-length
+    // check did. The typed view reads EDIV as a little-endian `U16`.
+    let (pkt, rest) = MasterIdentification::parse(pdu)?;
+    if !rest.is_empty() {
         return None;
     }
-    let ediv = u16::from_le_bytes(pdu[1..3].try_into().ok()?);
-    let rand = pdu[3..11].try_into().ok()?;
-    Some((ediv, rand))
+    Some((pkt.ediv.get(), pkt.rand))
 }
 
 fn build_identity_addr_info(addr_type: u8, addr: &Address) -> Vec<u8> {
-    let mut v = Vec::with_capacity(8);
-    v.push(opcode::IDENTITY_ADDR_INFO);
-    v.push(addr_type);
-    v.extend_from_slice(addr.as_slice());
-    v
+    IdentityAddressInformation::new(addr_type, addr.bytes)
+        .as_bytes()
+        .to_vec()
 }
 
 fn parse_identity_addr_info(pdu: &[u8]) -> Option<(u8, Address)> {
-    if pdu.len() != 8 || pdu[0] != opcode::IDENTITY_ADDR_INFO {
+    let (pkt, rest) = IdentityAddressInformation::parse(pdu)?;
+    if !rest.is_empty() {
         return None;
     }
     // Section 3.6.5 defines exactly two AddrType values: 0x00 for a public
@@ -292,11 +289,10 @@ fn parse_identity_addr_info(pdu: &[u8]) -> Option<(u8, Address)> {
     // parameter outside its specified range, and this is the field a bond
     // record gets keyed by — accepting a nonsense type would file the peer's
     // identity under an address type that means nothing.
-    if pdu[1] > 1 {
+    if pkt.addr_type > 1 {
         return None;
     }
-    let bytes: [u8; 6] = pdu[2..8].try_into().ok()?;
-    Some((pdu[1], Address::new(bytes)))
+    Some((pkt.addr_type, Address::new(pkt.address)))
 }
 
 /// Parses and range-checks a Pairing Request or Pairing Response (Sections

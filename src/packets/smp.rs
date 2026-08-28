@@ -3,6 +3,7 @@
 
 //! SMP (Security Manager Protocol) PDU definitions and zero-copy parsers.
 
+use zerocopy::byteorder::little_endian::U16;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Ref, Unaligned};
 
 /// SMP Opcode constants.
@@ -180,6 +181,85 @@ impl SmpPairingFailed {
     }
 }
 
+/// SMP Master Identification PDU (opcode 0x07, Core Spec Vol 3, Part H,
+/// Section 3.6.3). Carries the EDIV and Rand that, together with the LTK from
+/// the preceding Encryption Information, let the peer restart encryption for
+/// this bond later. EDIV is little-endian on the wire — the one field here
+/// whose byte order a hand-rolled parser can get wrong, which is exactly why
+/// it is a typed [`U16`] rather than two indexed bytes.
+#[repr(C)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
+)]
+pub struct MasterIdentification {
+    /// Opcode (0x07).
+    pub opcode: u8,
+    /// Encrypted Diversifier, little-endian.
+    pub ediv: U16,
+    /// 8-byte Rand.
+    pub rand: [u8; 8],
+}
+
+impl MasterIdentification {
+    /// Builds a Master Identification PDU.
+    pub fn new(ediv: u16, rand: [u8; 8]) -> Self {
+        Self {
+            opcode: opcode::MASTER_IDENTIFICATION,
+            ediv: U16::new(ediv),
+            rand,
+        }
+    }
+
+    /// Parses a Master Identification PDU, rejecting a mismatched opcode.
+    pub fn parse(bytes: &[u8]) -> Option<(Ref<&[u8], Self>, &[u8])> {
+        let (ref_val, rest) = Ref::<&[u8], Self>::from_prefix(bytes).ok()?;
+        if ref_val.opcode != opcode::MASTER_IDENTIFICATION {
+            return None;
+        }
+        Some((ref_val, rest))
+    }
+}
+
+/// SMP Identity Address Information PDU (opcode 0x09, Core Spec Vol 3, Part H,
+/// Section 3.6.5). Distributes the peer's identity address — the key a bond
+/// record is filed under, so its two fields (the address type and the six
+/// address octets) must land in exactly the right places.
+#[repr(C)]
+#[derive(
+    Copy, Clone, Debug, PartialEq, Eq, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout,
+)]
+pub struct IdentityAddressInformation {
+    /// Opcode (0x09).
+    pub opcode: u8,
+    /// Address type: 0x00 public, 0x01 static random. Section 3.6.5 defines
+    /// no other value; the parser range-checks it.
+    pub addr_type: u8,
+    /// Six-octet identity address, wire order (least-significant byte first).
+    pub address: [u8; 6],
+}
+
+impl IdentityAddressInformation {
+    /// Builds an Identity Address Information PDU.
+    pub fn new(addr_type: u8, address: [u8; 6]) -> Self {
+        Self {
+            opcode: opcode::IDENTITY_ADDR_INFO,
+            addr_type,
+            address,
+        }
+    }
+
+    /// Parses an Identity Address Information PDU, rejecting a mismatched
+    /// opcode. The address-type range check stays with the caller, which owns
+    /// the bond record the value keys.
+    pub fn parse(bytes: &[u8]) -> Option<(Ref<&[u8], Self>, &[u8])> {
+        let (ref_val, rest) = Ref::<&[u8], Self>::from_prefix(bytes).ok()?;
+        if ref_val.opcode != opcode::IDENTITY_ADDR_INFO {
+            return None;
+        }
+        Some((ref_val, rest))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,5 +345,52 @@ mod tests {
         let (parsed, _) = SmpPairingPacket::parse(&[0x02, 0x03, 0x00, 0x09, 0x10, 0x07, 0x07])
             .expect("pairing response parses too");
         assert_eq!(parsed.opcode, opcode::PAIRING_RESPONSE);
+    }
+
+    /// The key-distribution PDUs are byte-packed like the pairing PDUs, so the
+    /// same no-padding guarantee has to hold or the wire read shifts.
+    #[test]
+    fn test_key_distribution_wire_layout_has_no_padding() {
+        assert_eq!(core::mem::size_of::<MasterIdentification>(), 11);
+        assert_eq!(core::mem::align_of::<MasterIdentification>(), 1);
+        assert_eq!(core::mem::size_of::<IdentityAddressInformation>(), 8);
+        assert_eq!(core::mem::align_of::<IdentityAddressInformation>(), 1);
+    }
+
+    /// Exact on-the-wire bytes for Master Identification (Section 3.6.3): the
+    /// EDIV is little-endian, so 0x1234 is `34 12`.
+    #[test]
+    fn test_master_identification_wire_bytes() {
+        let rand = [1, 2, 3, 4, 5, 6, 7, 8];
+        let pdu = MasterIdentification::new(0x1234, rand);
+        let wire = [0x07, 0x34, 0x12, 1, 2, 3, 4, 5, 6, 7, 8];
+        assert_eq!(pdu.as_bytes(), &wire);
+
+        let (parsed, rest) = MasterIdentification::parse(&wire).expect("master id");
+        assert_eq!(parsed.ediv.get(), 0x1234);
+        assert_eq!(parsed.rand, rand);
+        assert!(rest.is_empty());
+
+        // A different opcode is refused even at the right length.
+        assert!(MasterIdentification::parse(&[opcode::ENCRYPTION_INFO; 11]).is_none());
+        // Truncated PDUs are refused.
+        assert!(MasterIdentification::parse(&wire[..10]).is_none());
+    }
+
+    /// Exact on-the-wire bytes for Identity Address Information (Section 3.6.5).
+    #[test]
+    fn test_identity_address_information_wire_bytes() {
+        let addr = [0x06, 0x05, 0x04, 0x03, 0x02, 0x01];
+        let pdu = IdentityAddressInformation::new(0x01, addr);
+        let wire = [0x09, 0x01, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01];
+        assert_eq!(pdu.as_bytes(), &wire);
+
+        let (parsed, rest) = IdentityAddressInformation::parse(&wire).expect("identity addr");
+        assert_eq!(parsed.addr_type, 0x01);
+        assert_eq!(parsed.address, addr);
+        assert!(rest.is_empty());
+
+        assert!(IdentityAddressInformation::parse(&[opcode::IDENTITY_INFO; 8]).is_none());
+        assert!(IdentityAddressInformation::parse(&wire[..7]).is_none());
     }
 }

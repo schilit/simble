@@ -57,7 +57,7 @@ pub use l2cap_signaling::{
     LeFlowControlCredit, signaling_code,
 };
 pub use smp::{
-    SmpPairingFailed, SmpPairingPacket, auth_req as smp_auth_req, error_code as smp_error_code,
-    io_capability as smp_io_capability, key_distribution as smp_key_distribution,
-    opcode as smp_opcode,
+    IdentityAddressInformation, MasterIdentification, SmpPairingFailed, SmpPairingPacket,
+    auth_req as smp_auth_req, error_code as smp_error_code, io_capability as smp_io_capability,
+    key_distribution as smp_key_distribution, opcode as smp_opcode,
 };
