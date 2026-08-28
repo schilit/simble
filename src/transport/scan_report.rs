@@ -18,6 +18,7 @@ use crate::packets::hci_events::{
 use crate::transport::hci_adapter::HciChannel;
 use crate::types::{Address, SimbleError, Uuid};
 use serde::Serialize;
+use zerocopy::{FromBytes, byteorder::little_endian::U16};
 
 /// Sends one HCI command on `channel`. The packet itself is built by the
 /// host layer (`device::host::command`) so there is a single definition of
@@ -138,10 +139,17 @@ fn decode_ad_structures(data: &[u8], report: &mut ScanReport) {
                 report.name = Some(String::from_utf8_lossy(payload).into_owned());
             }
             ad_type::INCOMPLETE_16BIT_UUIDS | ad_type::COMPLETE_16BIT_UUIDS => {
-                for pair in payload.as_chunks::<2>().0 {
-                    report
-                        .service_uuids
-                        .push(Uuid::from_u16(u16::from_le_bytes([pair[0], pair[1]])).to_string());
+                // A packed list of little-endian 16-bit UUIDs. Reinterpret the
+                // even-length prefix as `[U16]` and read each with `.get()`;
+                // a trailing odd byte (never valid here) is dropped, as the
+                // old `as_chunks::<2>()` did.
+                let even = payload.len() - payload.len() % 2;
+                if let Ok(uuids) = <[U16]>::ref_from_bytes(&payload[..even]) {
+                    for uuid in uuids {
+                        report
+                            .service_uuids
+                            .push(Uuid::from_u16(uuid.get()).to_string());
+                    }
                 }
             }
             ad_type::INCOMPLETE_128BIT_UUIDS | ad_type::COMPLETE_128BIT_UUIDS => {
@@ -155,9 +163,11 @@ fn decode_ad_structures(data: &[u8], report: &mut ScanReport) {
                 report.tx_power = Some(payload[0] as i8);
             }
             ad_type::SERVICE_DATA_16BIT if payload.len() >= 2 => {
+                // A little-endian service UUID, then the service's own data.
+                let (uuid, data) = U16::ref_from_prefix(payload).expect("length checked above");
                 report.service_data.push(TaggedBytes {
-                    tag: Uuid::from_u16(u16::from_le_bytes([payload[0], payload[1]])).to_string(),
-                    data: hex(&payload[2..]),
+                    tag: Uuid::from_u16(uuid.get()).to_string(),
+                    data: hex(data),
                 });
             }
             // Exactly six octets or it is not an RSI. A shorter or longer
@@ -167,9 +177,11 @@ fn decode_ad_structures(data: &[u8], report: &mut ScanReport) {
                 report.resolvable_set_identifier = Some(hex(payload));
             }
             ad_type::MANUFACTURER_SPECIFIC_DATA if payload.len() >= 2 => {
+                // A little-endian company identifier, then the vendor payload.
+                let (company, data) = U16::ref_from_prefix(payload).expect("length checked above");
                 report.manufacturer_data = Some(TaggedBytes {
-                    tag: format!("{:04X}", u16::from_le_bytes([payload[0], payload[1]])),
-                    data: hex(&payload[2..]),
+                    tag: format!("{:04X}", company.get()),
+                    data: hex(data),
                 });
             }
             _ => {}
