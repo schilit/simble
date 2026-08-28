@@ -1943,19 +1943,27 @@ impl CentralDevice {
     /// transmitted.
     fn produce(&mut self, channel: &HciChannel) {
         if !self.connect_requested && self.phase == CentralPhase::Connecting {
+            // A Zephyr/nRF controller has no public address in ROM; connecting
+            // as own=public from 00:00:00:00:00:00 makes the peer drop the link
+            // during negotiate (HCI status 0x3E). Set a static random address
+            // (two MSBs = 0b11) and initiate as own=random, matching LeCentral.
+            const RANDOM_ADDRESS: [u8; 6] = [0xC1, 0x00, 0x00, 0xC0, 0xDE, 0xF0];
+            let _ = queue_command(channel, [0x05, 0x20], &RANDOM_ADDRESS); // LE Set Random Address
             let mut params = Vec::with_capacity(25);
+            // Scan window == interval: initiate with a continuous scan so the
+            // peer's connectable advert is never missed.
             params.extend_from_slice(&0x0060u16.to_le_bytes()); // scan interval, 60 ms
-            params.extend_from_slice(&0x0030u16.to_le_bytes()); // scan window, 30 ms
+            params.extend_from_slice(&0x0060u16.to_le_bytes()); // scan window, 60 ms (continuous)
             params.push(0x00); // initiator filter policy: use the peer address
             params.push(0x00); // peer address type: public
             let mut peer = self.target.to_be_bytes();
             peer.reverse(); // little-endian on the wire
             params.extend_from_slice(&peer);
-            params.push(0x00); // own address type: public
+            params.push(0x01); // own address type: random (the address set above)
             params.extend_from_slice(&0x0018u16.to_le_bytes()); // min interval, 30 ms
             params.extend_from_slice(&0x0028u16.to_le_bytes()); // max interval, 50 ms
             params.extend_from_slice(&0x0000u16.to_le_bytes()); // max latency
-            params.extend_from_slice(&0x00C8u16.to_le_bytes()); // supervision timeout, 2 s
+            params.extend_from_slice(&0x0190u16.to_le_bytes()); // supervision timeout, 4 s
             params.extend_from_slice(&0x0000u16.to_le_bytes()); // min CE length
             params.extend_from_slice(&0x0000u16.to_le_bytes()); // max CE length
             debug_assert_eq!(params.len(), 25, "LE Create Connection is 25 bytes");
@@ -6137,8 +6145,7 @@ mod web {
                 // invented number: a caller who widens the timeout
                 // because the air is busy means it for the scan too.
                 let patience =
-                    crate::device::throughput::BulkOptions::from_json(&d.options_json)
-                        .timeout_ms;
+                    crate::device::throughput::BulkOptions::from_json(&d.options_json).timeout_ms;
                 d.give_up_at_ms = Some(now + patience);
                 self.log.push(if d.name.is_empty() {
                     "scanning for a bulk sink".to_string()
@@ -6169,8 +6176,7 @@ mod web {
                 // Stop scanning before connecting: a controller still in scan
                 // mode has not freed what the connection needs.
                 self.channel.send_command(&SCAN_OFF).map_err(js_error)?;
-                let options =
-                    crate::device::throughput::BulkOptions::from_json(&d.options_json);
+                let options = crate::device::throughput::BulkOptions::from_json(&d.options_json);
                 let mut runner = crate::device::throughput::BulkCentral::new(target, options);
                 if d.legacy_masks {
                     runner.set_le_event_mask(crate::device::host::LE_EVENT_MASK_CORE_4_0);

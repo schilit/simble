@@ -887,8 +887,11 @@ impl LeCentral {
     /// and the central then sits in "connecting" having never transmitted.
     fn create_connection_params(&self) -> Vec<u8> {
         let mut params = Vec::with_capacity(25);
+        // Scan window == interval: scan continuously while initiating, so the
+        // peer's connectable advert is never missed. A 50% duty cycle let the
+        // nRF's link-layer intermittently fail to establish (status 0x3E).
         params.extend_from_slice(&0x0060u16.to_le_bytes()); // scan interval, 60 ms
-        params.extend_from_slice(&0x0030u16.to_le_bytes()); // scan window, 30 ms
+        params.extend_from_slice(&0x0060u16.to_le_bytes()); // scan window, 60 ms (continuous)
         params.push(0x00); // initiator filter policy: use the peer address
         // Peer address type, as heard on the air (or as the caller stated).
         params.push(self.peer_address_type.unwrap_or(0x00));
@@ -899,7 +902,7 @@ impl LeCentral {
         params.extend_from_slice(&0x0018u16.to_le_bytes()); // min interval, 30 ms
         params.extend_from_slice(&0x0028u16.to_le_bytes()); // max interval, 50 ms
         params.extend_from_slice(&0x0000u16.to_le_bytes()); // max latency
-        params.extend_from_slice(&0x00C8u16.to_le_bytes()); // supervision timeout, 2 s
+        params.extend_from_slice(&0x0190u16.to_le_bytes()); // supervision timeout, 4 s
         params.extend_from_slice(&0x0000u16.to_le_bytes()); // min CE length
         params.extend_from_slice(&0x0000u16.to_le_bytes()); // max CE length
         debug_assert_eq!(params.len(), 25, "LE Create Connection is 25 bytes");

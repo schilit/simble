@@ -92,7 +92,7 @@
     <strong>controller</strong>. SimBLE ships just one controller of its own, and it is deliberately
     tiny: it runs in-process — natively, and inside the browser tab showing this page — and needs no
     install, no daemon, and no radio. Every heavier
-    rung is a controller you plug in underneath — from a software controller to a real USB radio —
+    rung is a controller you plug in underneath — from a software controller to a real radio —
     forming a <strong>ladder</strong> that trades weight for fidelity. Pick the lowest rung that
     still answers your question.
   </p>
@@ -106,7 +106,8 @@
       in both worlds — natively under <code class="inl">cargo test</code> and the
       <code class="inl">simble</code> CLI, and in-process in a browser tab. The heavier rungs are
       external processes a browser reaches over WebSocket (<code class="inl">rootcanal-ws</code>,
-      <code class="inl">netsim</code>) — and a USB dongle joins the same way through SimBLE's own USB
+      <code class="inl">netsim</code>) — and a real radio, whether a USB dongle or a phone running
+      SimBLE Android, joins the same way through SimBLE's own USB
       bridge, <code class="inl">simble --usb</code>. The <em>Native</em> and <em>Browser</em> columns
       below capture this per rung.
     </p>
@@ -148,12 +149,12 @@
             <td>Movement, distance/ranging (Channel Sounding), or a real Android app in the emulator</td>
           </tr>
           <tr>
-            <th>USB dongle<br><code class="inl">UsbTransport</code></th>
+            <th>Real radio<br><code class="inl">UsbTransport</code></th>
             <td><strong>Real</strong> — an actual Bluetooth controller and radio; no model at all</td>
             <td><span class="yes">Yes</span></td>
             <td><span class="part">Via bridge</span> — <code class="inl">simble --usb</code></td>
-            <td><span class="part">Hardware</span> — a physical dongle</td>
-            <td>Final interop against real phones/laptops over the air</td>
+            <td><span class="part">Hardware</span> — a dongle, or a phone running SimBLE Android</td>
+            <td>Final interop over the air; phone-throughput and phone-to-phone runs</td>
           </tr>
         </tbody>
       </table>
@@ -267,8 +268,8 @@
 
   <!-- Tier 4 -->
   <section class="tier">
-    <h2>4 · USB dongle <span class="tag">real hardware</span></h2>
-    <p class="tier-sub">simble::transport::UsbTransport · a physical Bluetooth controller</p>
+    <h2>4 · Real radio <span class="tag">real hardware</span></h2>
+    <p class="tier-sub">simble::transport::UsbTransport · a physical dongle, or a phone running SimBLE Android</p>
     <div class="panel">
       <span class="lbl">What it is</span>
       <p>
@@ -279,18 +280,38 @@
         is discoverable and connectable by real phones and laptops <strong>over the air</strong> — the
         top of the ladder, with nothing modeled.
       </p>
+      <p>
+        A dongle is not the only real radio, which is why this rung is
+        <strong>Real radio</strong> and not "USB dongle": a <strong>phone running the SimBLE
+        Android app</strong> is one too, reached through the same
+        <code class="inl">simble --usb</code> bridge. A phone can play the
+        <strong>peripheral</strong> — it advertises the bulk service and counts the bytes that
+        land, reporting them back; that is the phone-throughput measurement. It can now also
+        play the <strong>central</strong>: with the app's "source" role, one phone drives a bulk
+        transfer into another phone over its own radio — a <strong>phone-to-phone</strong> run
+        with no dongle in the path at all.
+      </p>
+      <p class="callout">
+        The bridge finds phones over <code>adb</code>: it lists them and checks whether the
+        SimBLE app is running with <code>adb shell pidof</code>, which works even when the
+        phone's screen is off. This page reads a phone's counters back through the bridge's
+        <code>/sink/&lt;ip&gt;</code> proxy.
+      </p>
 
       <span class="lbl">Choose it when</span>
       <ul class="reasons">
         <li>You are doing final interop against real phones, laptops, or accessories.</li>
         <li>You need real RF behavior — timing, encryption, coexistence — not a model of it.</li>
         <li>You want to demonstrate a scripted SimBLE device to a physical scanner across the room.</li>
+        <li>You want a phone's real throughput — a phone advertising the bulk service and counting what lands.</li>
+        <li>You want a phone-to-phone run: one phone as source driving another over the air, no dongle in the path.</li>
       </ul>
 
       <span class="lbl">Limits</span>
       <ul class="reasons limits">
-        <li>Needs a physical USB Bluetooth dongle whose interface SimBLE can claim.</li>
+        <li>The dongle path needs a physical USB Bluetooth dongle whose interface SimBLE can claim.</li>
         <li>A browser can't open the dongle directly (WebUSB can't claim it) — run <code class="inl">simble --usb</code> to bridge it over WebSocket, the same pattern as <code class="inl">rootcanal-ws</code>.</li>
+        <li>A browser can't start a phone's central role directly — it's an Android intent over adb — so the bridge orchestrates a phone-to-phone run on the page's behalf.</li>
         <li>Real RF is non-deterministic: great for interop, wrong for CI — use <code class="inl">sim::Link</code> there.</li>
       </ul>
 
@@ -308,6 +329,10 @@ curl 127.0.0.1:32323/devices              # what is plugged in
         ambiguous — <code class="inl">02.3.2</code> names the physical socket and is the only
         selector that survives a re-plug. <code class="inl">cargo run --example usb_list</code>
         prints every name each dongle answers to.</p>
+
+      <p>Phones ride the same bridge. On the <a href="../testing/">Testing → Data</a> page you
+        select a phone for each end — a sink phone alone for phone-throughput, or a source phone
+        and a sink phone for a phone-to-phone run.</p>
 
       <span class="lbl">Which dongle you own decides what you can test</span>
       <p>A Bluetooth 4.0 dongle gives you real RF and real timing, but cannot do extended

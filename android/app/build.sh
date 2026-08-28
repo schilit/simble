@@ -107,6 +107,7 @@ if [ "${1:-}" = "install" ]; then
     # the app launches and immediately reports that it cannot advertise.
     "$ADB" shell pm grant $pkg android.permission.BLUETOOTH_ADVERTISE
     "$ADB" shell pm grant $pkg android.permission.BLUETOOTH_CONNECT
+    "$ADB" shell pm grant $pkg android.permission.BLUETOOTH_SCAN
     echo "==> launching"
     "$ADB" shell am start -n "$pkg/.SimbleActivity"
 fi

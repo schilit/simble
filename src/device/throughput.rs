@@ -166,6 +166,12 @@ pub struct BulkOptions {
     /// counters by some other path and hand them to [`BulkCentral::note_server`]
     /// — over HTTP, for a phone running SimBLE Android.
     pub use_control_point: bool,
+    /// Request the fast link on connect: LE 2M PHY, Data Length Extension, and
+    /// a tight connection interval. `true` is the default and what every run
+    /// used to do unconditionally. `false` leaves the link at its 1M, 27-octet,
+    /// default-interval baseline — which is itself a measurement: the setup
+    /// cost the fast path is buying down, side by side with it.
+    pub fast_link: bool,
 }
 
 impl Default for BulkOptions {
@@ -176,6 +182,7 @@ impl Default for BulkOptions {
             window_chunks: DEFAULT_WINDOW_CHUNKS,
             timeout_ms: DEFAULT_TIMEOUT_MS,
             use_control_point: true,
+            fast_link: true,
         }
     }
 }
@@ -776,7 +783,7 @@ impl BulkCentral {
         if self.central.phase() != CentralPhase::Ready {
             return;
         }
-        if !self.fast_requested {
+        if self.options.fast_link && !self.fast_requested {
             self.fast_requested = true;
             // The link-speed requests, sent once the GATT view is ready. Each is
             // independent: a controller that has never heard of one answers
@@ -798,7 +805,10 @@ impl BulkCentral {
 
             // LE Set Data Length: max TX octets 251 (0x00FB), max TX time
             // 2120 us (0x0848) — one large LL PDU instead of nine fragments.
-            out.push(command(LE_SET_DATA_LENGTH, &[h[0], h[1], 0xFB, 0x00, 0x48, 0x08]));
+            out.push(command(
+                LE_SET_DATA_LENGTH,
+                &[h[0], h[1], 0xFB, 0x00, 0x48, 0x08],
+            ));
 
             // LE Connection Update: interval 7.5–15 ms (0x0006–0x000C), no
             // latency, 4 s supervision timeout (0x0190), CE length unconstrained.
@@ -830,8 +840,8 @@ impl BulkCentral {
         }
         self.mtu = self.central.mtu();
         self.chunk_bytes = self.writable_chunk();
-        if self.options.use_control_point
-            && self.central.value_handle(bulk_uuid::CONTROL).is_some() {
+        if self.options.use_control_point && self.central.value_handle(bulk_uuid::CONTROL).is_some()
+        {
             self.has_control = true;
             self.central.queue_subscribe(bulk_uuid::CONTROL, true);
             self.step = Step::Beginning;
@@ -842,7 +852,8 @@ impl BulkCentral {
         // the link clean. The bytes still go; what differs is who is expected
         // to produce the arrival count.
         self.log.push(if self.options.use_control_point {
-            "the peer has no control point — this run measures bytes SENT, not delivered".to_string()
+            "the peer has no control point — this run measures bytes SENT, not delivered"
+                .to_string()
         } else {
             "control point off — the link carries payload only; the count must come from elsewhere"
                 .to_string()
@@ -994,8 +1005,9 @@ impl BulkCentral {
 
     /// What one ACL packet carries: the controller's answer, or the floor.
     fn acl_data_len(&self) -> usize {
-        self.acl_size
-            .map_or(LE_ACL_DATA_LEN, |size| usize::from(size).max(LE_ACL_DATA_LEN))
+        self.acl_size.map_or(LE_ACL_DATA_LEN, |size| {
+            usize::from(size).max(LE_ACL_DATA_LEN)
+        })
     }
 
     /// Counts outgoing ACL packets against the controller's buffers.
