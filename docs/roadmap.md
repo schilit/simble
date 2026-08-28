@@ -18,7 +18,7 @@
 
 | # | item | status | notes |
 |---|---|---|---|
-| F1 | **Publisher/collector (pub-sub), latest-only** — publisher advertises `[generation][size][PSM]` and serves the payload over L2CAP; collector scans, dedupes on generation (skips without connecting when not newer), else pulls; the ack is the delivery receipt. | **done** (branch `pubsub`) | Core + all three follow-ons: `bench-pubsub.sh`, in-place generation bump over HTTP (`/publish?gen=N`, PSM kept), and a web publish/collect panel on Testing → Data (bridge `/publish` + `/collect`). Verified through the browser end to end. |
+| F1 | **Publisher/collector (pub-sub), latest-only** — publisher advertises `[generation][size][PSM]` and serves the payload over L2CAP; collector scans, dedupes on generation (skips without connecting when not newer), else pulls; the ack is the delivery receipt. | **done** (657c3e4…1aefa2c, on `main`) | Core + all three follow-ons: `bench-pubsub.sh`, in-place generation bump over HTTP (`/publish?gen=N`, PSM kept), and a web publish/collect panel on Testing → Data (bridge `/publish` + `/collect`). Verified through the browser end to end. |
 | F2 | **Granular link tunables** — per-parameter PHY / DLE / connection-interval controls, settable MTU target, phone-to-phone parity. Phase 0 (fast on/off) and L2CAP-min are done; the granular knobs are not. | planned | a plan exists (from the fast-link work); touches `BulkOptions` + wasm rebuild + the intent chain |
 | F3 | **ISO / BIS (Auracast) over real RF** | idea | mentioned early, deferred |
 | F4 | **nRF54L15 `hci_uart` + Channel Sounding** | idea | the `--serial` bridge exists; CS does not |
