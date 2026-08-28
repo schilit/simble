@@ -6,13 +6,13 @@
 > **blocked** (needs a decision or hardware), **planned** (specified, not
 > started), **idea** (not yet specified).
 
-## Repo health (CI on `main` is red on the first two)
+## Repo health
 
 | # | item | status | notes |
 |---|---|---|---|
-| H1 | **Android-target build break** in `src/transport/usb.rs` — `DeviceInfo` API mismatch (`bus_id()`/`device_address()`/`port_chain()`), likely an `nusb`/`rusb` version bump. Fails the "Android crate" CI check. | in progress | isolated to `usb.rs` (+ maybe `Cargo.toml`) |
-| H2 | **`cargo fmt` drift** — a rustfmt-version mismatch flags files repo-wide; the fmt CI check is red. | planned | must match CI's rustfmt version; touches many files, so do it *after* H1/typed-parsing land to avoid merge churn |
-| H3 | **Typed zerocopy host parsing** — pull raw-byte HCI-host work (`pkt[8]` index math, byte-order slips) into typed zerocopy views. Unblocked by the wasm_ws extraction. See the `zerocopy-packet-structs` + `lehost` notes. | in progress | start with the moved `scan_report.rs` + HCI event parsing; behavior-preserving |
+| H1 | **Android-target build break** in `src/transport/usb.rs`. | **done** (2560f4d) | Not an nusb version bump: nusb 0.2.7 cfg-gates `bus_id`/`device_address`/`port_chain`/`list_devices` off `target_os = "android"` (no USB enumeration there). Fixed by cfg-gating with android fallbacks; desktop codegen byte-identical. The "Android crate" CI check should now pass. |
+| H2 | **`cargo fmt` drift** — a rustfmt-version mismatch flags files repo-wide; the fmt CI check is red. | planned | the last CI red. Check CI's rustfmt version first (it may be newer than what last formatted the repo); then one `cargo fmt` pass. Touches many files. |
+| H3 | **Typed zerocopy host parsing.** | **partly done** (7a4fa3d) | HCI event parsing was *already* zerocopy in `packets/hci_events.rs`; converted the remaining raw reads in `scan_report.rs` `decode_ad_structures`. Follow-on (still hand-rolled): ext/periodic/BIG advertising reports, `packets/big.rs`, `ext_adv.rs`, btsnoop, SMP, L2CAP signaling, `classic_host.rs`. |
 
 ## Features
 
