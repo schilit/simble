@@ -34,8 +34,11 @@ what the environment as a whole is capable of:
   a simulated ether or a real dongle, by serving netsim's `PacketStreamer`.
 - **Switch a running device's controller live** — sim↔real — without migrating
   state (a reset event re-homes the host).
-- **Speak one ws:// v2 protocol** for all of it (`list` / `run` / `attach` /
-  `route` / …), driven from the CLI, an MCP agent, or a browser.
+- **Speak one ws:// protocol — SimBLE v1** — for all of it (`list` / `run` /
+  `attach` / `route` / …), driven from the CLI, an MCP agent, or a browser. It is
+  SimBLE's *own first* protocol; separately it can **serve** the netsim protocol
+  for compatibility, so real netsim clients and the Android emulator interoperate
+  — but that protocol is netsim's, not an earlier version of this one.
 
 ## The model: four types
 
@@ -65,10 +68,10 @@ The relationships, stated once:
 
 ## Operations
 
-**Four lists (observability):** `/v2/controllers` (attach points, each with its
-`network` + `api_class` + availability), `/v2/networks` (worlds + members, incl.
-the `real` singleton), `/v2/devices` (running instances + their controller/route),
-`/v2/nodes` (participants).
+**Four lists (observability):** `/v1/controllers` (attach points, each with its
+`network` + `api_class` + availability), `/v1/networks` (worlds + members, incl.
+the `real` singleton), `/v1/devices` (running instances + their controller/route),
+`/v1/nodes` (participants).
 
 **The verbs:**
 
@@ -110,8 +113,10 @@ catalog, over the wire safe where native code would not be.
 
 The sections below are the reasoning that produced the model above, dated in the
 order it was worked out. Terminology evolved as it went — "backend" became
-**`controller`**, "backing" became **`network`** — so where the record and the
-reference above differ in a word, **the reference is authoritative**.
+**`controller`**, "backing" became **`network`**, and the protocol is **SimBLE
+v1** (what these sections call "v2" — the netsim protocol they call "v1" was
+never a SimBLE version, just netsim's, spoken for compatibility). So where the
+record and the reference above differ in a word, **the reference is authoritative**.
 
 ## The question
 
