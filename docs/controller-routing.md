@@ -1,14 +1,117 @@
 # Controller routing
 
 **Status: a specification, not a description.** None of this is built. It
-records a design and the constraints measured against the tree on
-2026-08-25, and is superseded rather than edited.
+records a design and the constraints measured against the tree from 2026-08-25
+onward. The **reference below** (capabilities, types, operations) is the clear
+summary; the dated sections after it are the design record — the reasoning,
+the corrections, and the one thing actually proven, in the order they happened.
 
-It also rests on **one unverified premise**: that Bluetooth works in the
-Android emulator on the system image to hand (API 34 here). That was
-deliberately not tested — emulators are a later thread — and it is the first
-thing to check before any of this is worth building, because if it is false
-the whole substrate argument changes.
+The premise the whole idea once rested on — that Bluetooth works in the Android
+emulator (API 34) — has since been **verified** (2026-08-29 note below): the
+emulator's Android stack comes up `ON` over a netsim controller. The substrate
+holds; what remains is build work, not a gating check.
+
+---
+
+# The SimBLE environment
+
+## What it can do
+
+SimBLE is a pure-Rust Bluetooth Low-Energy and Classic host stack whose devices
+are Rhai scripts (hand-written or AI-authored). This document specifies how one
+SimBLE environment **routes** those devices onto controllers — and, from that,
+what the environment as a whole is capable of:
+
+- **Run scripted devices deterministically, in-process, with no hardware** — the
+  `Link` ether, `tick()`-driven and reproducible.
+- **Put the same script on real radio with one field change** — target a USB
+  dongle instead of `Link`; the device is now physically discoverable.
+- **Host many isolated private networks** — parallel tenants (agents, CI jobs)
+  each in their own world, with no cross-talk.
+- **Drive devices on real phones** — Android and iOS, each through its platform
+  API, as first-class nodes.
+- **Back the Android emulator's Bluetooth with a controller of your choosing** —
+  a simulated ether or a real dongle, by serving netsim's `PacketStreamer`.
+- **Switch a running device's controller live** — sim↔real — without migrating
+  state (a reset event re-homes the host).
+- **Speak one ws:// v2 protocol** for all of it (`list` / `run` / `attach` /
+  `route` / …), driven from the CLI, an MCP agent, or a browser.
+
+## The model: four types
+
+| type | is | created or registered | key fields |
+|---|---|---|---|
+| **node** | a participant that **owns controllers and executes runs** | **registered** (external, already exists) | `name`, `kind` (router/browser/android/iphone), its controllers |
+| **controller** | what a device's host **attaches to** (below HCI, or a phone's platform API) — an *attach point* | comes with its node | `name`, `kind`, **`api_class`** (`hci`/`android`/`coreBluetooth`), **`network`**, `real`/`deterministic`/`attachable`/`runnable`/`available`/`in_use_by` |
+| **network** | a **world / ether** — who-hears-whom | sim ethers **created**; `real` is a fixed singleton | `name`, `kind` (`link`/`rootcanal`/`rf`/`netsim`), `devices` (members), `deterministic`/`real`/`shared`/`leaf` |
+| **device** | a **running** scripted instance | started by `run`/`spawn` | handle, **`controller`** (its route), `address`, connection state |
+
+The relationships, stated once:
+
+- **A node owns controllers; a `run` executes on the node that owns the named
+  controller** (the router for a dongle/sim; the phone for a phone radio →
+  delegated). You cannot drive a controller you do not own.
+- **A controller has one `network`** (the world it drops a device into) and one
+  **`api_class`** (the platform interface, which *gates* what a `run` can do:
+  only `hci` allows attach and low-level control; `android`/`coreBluetooth` are
+  high-level GATT/advertise only, iOS tightest). `real` controllers (dongles,
+  phone radios) are static; sim controllers are minted per device.
+- **A network holds many controllers/devices that hear each other.** A device is
+  in **exactly one** network (this is not a bridge — crossing needs an explicit
+  bridge *device*). Isolation is a **simulated-only** guarantee: `real` is the
+  one shared physical world.
+- **A device is owned by the connection that started it**; `stop`/close releases
+  its controller (which is what frees an exclusive dongle when a client dies).
+
+## Operations
+
+**Four lists (observability):** `/v2/controllers` (attach points, each with its
+`network` + `api_class` + availability), `/v2/networks` (worlds + members, incl.
+the `real` singleton), `/v2/devices` (running instances + their controller/route),
+`/v2/nodes` (participants).
+
+**The verbs:**
+
+| op | does | notes |
+|---|---|---|
+| `run {script\|device, controller?}` | run a script **server-side** on a controller → `result` | default controller = the local node's `Link`; host colocated with the controller, no HCI on the wire |
+| `spawn {…}` | like `run`, but persistent → a `device` handle | lives until `stop`/close |
+| `attach ?controller=` | a **client-side** host — raw H4 HCI stream | the only per-packet-on-the-wire mode; for external stacks (the emulator, via gRPC) |
+| `route {device, controller}` | rebind a device's controller | **drops, never migrates** (`0x10` reset); may change the *world*; guarded by availability + `api_class`; same-node only (cross-node = re-host) |
+| `stop {device}` / close | teardown | releases the controller; close releases all a connection owns |
+| `tick {seconds}` | advance **simulation** time | sim-only |
+| `send {device, message}` | mutate/trigger a running device | needs the script to expose the input |
+| `create` / `destroy {network}` | mint / remove a private sim ether | an **internal resource** |
+| `register` / admit `{node}` | admit an **external** node (a phone) | discovery via adb today, dial-in in the fabric |
+
+**Two verbs, deliberately distinct:** **networks are `create`d** (internal ethers
+the environment mints); **nodes are `register`ed** (external devices — a phone, a
+browser — that already exist, admitted into the fabric). You never `create` a
+phone, and you never `register` an ether.
+
+**How to know availability:** the lists *hint* (`available`/`in_use_by`), but they
+race — the authoritative answer is the **atomic claim**: `run`/`spawn`/`route`
+returns a `device` handle or `controller busy`. Never check-then-claim; an
+unavailable controller must error, never silently fall back to simulation.
+
+**Wire encoding:** one ws:// server per node; **URL carries connect-time routing**
+(a short op path + the `attach` stream's `controller`, since a WebSocket upgrade
+has no body), **JSON messages carry everything else** (request data, commands,
+events). **Scripts are always a JSON body** — URLs are too small. Control is JSON,
+raw HCI is binary H4.
+
+**Safety:** every `run`/`spawn` is Rhai, and Rhai is sandboxed (no I/O,
+deterministic) — which is what makes accepting a device definition, custom or
+catalog, over the wire safe where native code would not be.
+
+---
+
+# Design record
+
+The sections below are the reasoning that produced the model above, dated in the
+order it was worked out. Terminology evolved as it went — "backend" became
+**`controller`**, "backing" became **`network`** — so where the record and the
+reference above differ in a word, **the reference is authoritative**.
 
 ## The question
 
