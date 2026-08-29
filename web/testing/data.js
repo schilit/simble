@@ -929,12 +929,42 @@ export function mountData(root) {
           <option value="l2cap-trim">L2CAP (no setup)</option>
         </select>
       </label>
+      <details class="raw" id="bench-tuning">
+        <summary>Link tuning (advanced)</summary>
+        <p class="settings-note">What the fast link requests, one knob at a time. These apply on the
+          in-page and dongle paths when fast link is on; the phone-to-phone path uses the phone's own
+          on/off lever. Each knob can be switched off to isolate the others.</p>
+        <div class="settings">
+          <label>PHY
+            <select id="bench-phy">
+              <option value="7" selected>fastest (1M/2M/Coded)</option>
+              <option value="2">2M only</option>
+              <option value="1">1M only</option>
+              <option value="0">don't set (1M)</option>
+            </select>
+          </label>
+          <label>Data length
+            <select id="bench-dle">
+              <option value="251" selected>251 octets (DLE)</option>
+              <option value="100">100 octets</option>
+              <option value="0">don't set (27)</option>
+            </select>
+          </label>
+          <label>Connection interval
+            <select id="bench-interval">
+              <option value="6:12" selected>7.5–15 ms (tight)</option>
+              <option value="24:40">30–50 ms</option>
+              <option value="0:0">don't set (default)</option>
+            </select>
+          </label>
+        </div>
+      </details>
       <p class="settings-note">
         Fast link requests 2M&nbsp;PHY, Data Length Extension, and a tight connection interval on
         connect; off leaves the 1M, 27-octet baseline — the setup cost the fast path buys down, side by
-        side with it. PHY, interval and MTU are not yet settable one at a time, and advertising interval
-        belongs to the peripheral, not the central. What the run <em>negotiated</em> is reported per run
-        in the table.
+        side with it. Each of PHY, data length and interval is settable one at a time under
+        <em>Link tuning</em>; advertising interval belongs to the peripheral, not the central. What the
+        run <em>negotiated</em> is reported per run in the table.
       </p>
     </div>
     <details class="raw" id="pubsub-panel" hidden>
@@ -1119,12 +1149,20 @@ export function mountData(root) {
   }
 
   function settings() {
+    const [intMin, intMax] = $("bench-interval").value.split(":").map(Number);
     return {
       total_bytes: Number($("bench-size").value),
       with_response: $("bench-mode").value === "req",
       fast_link: $("bench-fast").value === "on",
       link: $("bench-link").value,
       timeout_ms: 15000,
+      // The granular link knobs (F2). Defaults match the fast bundle, so
+      // leaving them alone reproduces "fast on" exactly. Consulted by the
+      // in-page/dongle path; the phone path carries only the fast flag.
+      phy_mask: Number($("bench-phy").value),
+      tx_octets: Number($("bench-dle").value),
+      conn_interval_min: intMin,
+      conn_interval_max: intMax,
     };
   }
 
