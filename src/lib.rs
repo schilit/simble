@@ -1,7 +1,7 @@
 // Copyright 2026 Bill Schilit
 // SPDX-License-Identifier: Apache-2.0
 
-//! # SimBLE: a native, zero-copy virtual Bluetooth host stack
+//! # SimBLE: a pure-Rust Bluetooth Low-Energy and Classic host stack
 //!
 //! > **Preview.** An early preview release; the public API is unstable and may
 //! > change between preview versions. On crates.io the crate is published as
