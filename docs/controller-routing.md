@@ -379,6 +379,21 @@ streams availability changes instead of polling.
 - `send {device, message}` — mutate/trigger a running device (the pub-sub
   `setGeneration` precedent); needs the **script to expose the input**.
 
+**Where `run` executes: the node that owns the controller.** `run` has no fixed
+locus — it *follows the controller*, colocated, which is the whole low-latency
+point. A controller the router owns (dongle, `rootcanal`, `Link`) → the script
+runs **in the router process**, the host stack driving HCI in-process; a browser's
+sim/netsim controller → **in the browser** (wasm); a **phone's** Android radio →
+**on the phone** (the `android/rust` JNI engine), because only Android can drive a
+phone's radio — so a `run` targeting a phone is **delegated** to the phone-node and
+executes on-device. The rule: a node runs scripts only on controllers **it owns**;
+you cannot drive a controller you do not own. Two caveats: the *runtime* differs
+even though the Rhai definition is portable (host-stack → GATT/HCI on a
+router/browser node; → Android's `BluetoothGattServer`/advertising/L2CAP on a
+phone, which has no HCI); and on-device Rhai is **scaffolded** (`android/rust`), so
+today a phone runs its fixed Java behaviours while the router-process `run`
+(dongle/sim) works via MCP's `LiveBackend`.
+
 **Two script inputs, by field, never guessed.**
 - `script` — inline Rhai **source text**. A filename is a *client-side* concept
   (the server cannot read the client's disk), so the client reads its own file
