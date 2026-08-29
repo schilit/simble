@@ -333,8 +333,14 @@ one real air); a private network is an ether that *mints* a controller per devic
 **Three lists — capacity, ethers, state.**
 - `/v2/controllers` — the attach points: `usb` dongles and the sim/`rootcanal`
   controllers, each with `real`/`deterministic` flags.
-- `/v2/networks` — the ethers you `create`/`destroy`: `link` (default) and
-  `rootcanal` private networks, plus the `netsim` forward (marked `leaf`).
+- `/v2/networks` — the worlds and their members (who-hears-whom): the created,
+  isolated sim ethers `link` (default) and `rootcanal` private networks; the
+  singleton **`real`** RF world (`kind:"rf"`, `shared:true`) — *not*
+  creatable/isolatable, entered through a dongle, and its `devices` list only our
+  own dongle-backed ones (external real peers are on that air but unlisted); and
+  the `netsim` forward (`leaf`). Every device is on *some* network; `real` is the
+  one shared, non-isolated world, which is why isolation is a simulated-only
+  guarantee.
 - `/v2/devices` — what *is* running: each device's handle, **its controller (its
   route)**, address, connection state. A route is a device's controller binding,
   so this lists routes; it is what `route` needs (handles) and the observability
