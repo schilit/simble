@@ -311,27 +311,45 @@ changes") is retired: it holds.
 
 ## 2026-08-29 — the v2 API surface and device lifecycle
 
-One ws:// endpoint per node; **JSON for control, binary H4 for HCI**, URL- or
-op-disambiguated. Additive over v1 (v1 = "attach to netsim").
+One ws:// endpoint per node; **JSON for control, binary H4 for HCI**. Additive
+over v1 (v1 = "attach to netsim").
 
-**Two lists — capacity vs state.**
-- `/v2/backends` — what *can* back a device: `link` (default), `rootcanal`
-  copies, `usb` dongles, a `netsim` forward (marked `leaf`). Each with
-  `real`/`deterministic` flags.
-- `/v2/devices` — what *is* running: each device's handle, **its backend (its
-  route)**, address, connection state. A route is a device's backend binding, so
-  this lists routes; it is what `route` needs (handles) and the observability
+**Wire encoding: URL for connect-time routing, JSON for everything else.** A
+WebSocket upgrade is an HTTP GET with *no body*, so whatever the server needs to
+establish the connection must be in the **URL** — a short op path, and the attach
+stream's `controller` (it binds at upgrade, having no request-message phase).
+Everything after the socket opens rides as **JSON messages**: request data,
+commands, events. Scripts are *always* a JSON message body, never a URL param —
+URLs cap around 2–8 KB and a real Rhai device blows past that. Don't split one
+request's data across URL and body; control ops carry it all in one JSON message.
+
+**The term is `controller`, and `network` for the shared medium.** What a
+device's host attaches to below HCI *is* a controller (a dongle; a rootcanal/sim
+controller) — not a generic "backend". Controllers that share a medium form an
+**ether**, i.e. a **network**: a `Link` or `rootcanal` *instance* hosts many
+controllers that hear each other. So a dongle is one controller (its ether is the
+one real air); a private network is an ether that *mints* a controller per device.
+
+**Three lists — capacity, ethers, state.**
+- `/v2/controllers` — the attach points: `usb` dongles and the sim/`rootcanal`
+  controllers, each with `real`/`deterministic` flags.
+- `/v2/networks` — the ethers you `create`/`destroy`: `link` (default) and
+  `rootcanal` private networks, plus the `netsim` forward (marked `leaf`).
+- `/v2/devices` — what *is* running: each device's handle, **its controller (its
+  route)**, address, connection state. A route is a device's controller binding,
+  so this lists routes; it is what `route` needs (handles) and the observability
   window.
 
 **The ops.**
-- `run` / `spawn` — run a script **server-side** on a backend (`run` one-shot →
-  `result`; `spawn` persistent → a `device` handle). The host runs *next to* the
+- `run` / `spawn` — run a script **server-side** on a controller (`run` one-shot
+  → `result`; `spawn` persistent → a `device` handle). The host runs *next to* the
   controller, so HCI never crosses the wire — the low-latency, quotable path, and
-  the preferred one for SimBLE-native devices.
-- `attach ?backend=` — **client-side** host, a raw H4 HCI stream. The only mode
+  the preferred one for SimBLE-native devices. (Join a `network` and a controller
+  is minted for you; name a dongle to use that one.)
+- `attach ?controller=` — **client-side** host, a raw H4 HCI stream. The only mode
   with per-packet HCI on the wire; for external stacks that cannot move
   server-side — the emulator, whose edge is gRPC `PacketStreamer`, not this ws://.
-- `route {device, backend}` — switch a device's backend. **Drops, never
+- `route {device, controller}` — switch a device's controller. **Drops, never
   migrates:** a live connection is controller-resident link-layer state, so the
   op injects an **HCI Hardware Error (0x10)**, the host resets, drops every
   connection, and re-inits on the new controller (which has a **different
@@ -341,7 +359,7 @@ op-disambiguated. Additive over v1 (v1 = "attach to netsim").
 - `stop {device}` / connection close — teardown. Devices are **owned by the
   connection that started them**: `stop` releases one (graceful — clean peer
   disconnect), closing releases all (best-effort). Teardown *always releases the
-  backend* — which is what frees an exclusive dongle when a client dies, rather
+  controller* — which is what frees an exclusive dongle when a client dies, rather
   than leaking it as "device busy".
 - `tick {seconds}` — advance **simulation** time (sim-only; a real-radio device
   runs on real time). A host→scene command for what BLE cannot express.
