@@ -289,3 +289,22 @@ netsim will not forward to the dongle). Forwarding is a v2/router-only
 capability; the routing intelligence is always the node we add **in front** of
 netsim, never something netsim provides — which is the same limitation as "no
 phy port" / "cannot be built inside netsim," seen from the routing side.
+
+## 2026-08-29 — premise verified: Bluetooth works in the emulator
+
+The one unverified premise from the top — "does Bluetooth work in the Android
+emulator on the image to hand (API 34)" — is now **checked, and true**.
+
+Booted `Pixel_7_API_34` headless (API 34, `sdk_gphone64_arm64`). `svc bluetooth
+enable` returned `enable: Success`; `dumpsys bluetooth_manager` reports
+`state: ON`, `enabled: true`, `address: 01:00:00:BB:BB:BB` (a netsim-assigned
+BD_ADDR — the `BB:BB:BB` is netsim's signature), and `netsimd` is running as the
+backing controller. So the Android host stack comes up on a functional
+netsim/rootcanal controller and reaches a working `ON` state.
+
+That is the *substrate* confirmed, not the whole idea: it proves the emulator
+has real Bluetooth over a virtual controller. The next thing to prove is the
+*routing* payoff — that the emulator can be pointed at **us** instead of netsimd
+(the gRPC `PacketStreamer` hook) and then reach a dongle. But the gating premise
+that could have sunk the effort ("if it is false the whole substrate argument
+changes") is retired: it holds.
