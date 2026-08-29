@@ -199,13 +199,26 @@ stack is already a driveable state machine (`handle_packet` / `poll` / `tick`)
 that any loop can own. "Make it an actor" never meant "depend on an actor
 framework."
 
-**Default backends are built in; external netsim is optional.** USB (`nusb`) and
-an in-process `rootcanal-rs` handle are the default — the router is
-self-contained, its own ether plus real radios. ws:// forwarding to an external
-netsim is feature-gated. Viable only because the router is a separate crate: a
-default `rootcanal-rs` *path* dependency fails `cargo package`, so that crate is
-unpublished (or waits for `rootcanal-rs` on crates.io); the published
-`simble-stack` never carries it.
+**Backends are Cargo features; the default is the in-process `Link`.** The
+default backend is the deterministic, dependency-free in-process `Link`
+(tick-driven, tier 1) — so the router builds, packages, and runs everywhere with
+nothing to install and nothing that can break `cargo package`. Real radio is default too:
+**`usb`** (`nusb`) is a *default-enabled* feature — on by default on native
+(cfg-gated off wasm, like `simble-stack`), so real dongles work out of the box,
+but a pure-simulation consumer can drop it with `default-features = false`. The
+dividing line is *cost*: `Link` and `usb` are free (no packaging or dep burden —
+`nusb` is pure-Rust, on crates.io), so they default on; the ones with a cost are
+opt-in — a **`rootcanal`** feature adds an in-process `rootcanal-rs` ether (a path
+dep) and a **`netsim`** feature adds ws:// forwarding to an external netsim (the
+async/tokio-tungstenite deps). Private networks follow the same axis — multiple
+`Link` ethers by default, `rootcanal` copies when that feature is on. The feature
+split fixes the *build*
+default (nobody compiles `rootcanal-rs` unless they ask); it does not by itself
+fix *publishing* — a `rootcanal-rs` *path* dep blocks `cargo package` even as an
+optional feature-dep, so publishing the router crate still waits on `rootcanal-rs`
+reaching crates.io (or the cfg-gated-dev-dep trick). The win is that the
+constraint is isolated to the opt-in feature; the default (`Link`, `usb`) is
+clean and publishable.
 
 **Switching a backend injects an HCI Hardware Error (0x10).** Rather than migrate
 live controller state, a switch injects a Hardware Error Event upward so the host
