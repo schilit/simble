@@ -308,3 +308,59 @@ has real Bluetooth over a virtual controller. The next thing to prove is the
 (the gRPC `PacketStreamer` hook) and then reach a dongle. But the gating premise
 that could have sunk the effort ("if it is false the whole substrate argument
 changes") is retired: it holds.
+
+## 2026-08-29 — the v2 API surface and device lifecycle
+
+One ws:// endpoint per node; **JSON for control, binary H4 for HCI**, URL- or
+op-disambiguated. Additive over v1 (v1 = "attach to netsim").
+
+**Two lists — capacity vs state.**
+- `/v2/backends` — what *can* back a device: `link` (default), `rootcanal`
+  copies, `usb` dongles, a `netsim` forward (marked `leaf`). Each with
+  `real`/`deterministic` flags.
+- `/v2/devices` — what *is* running: each device's handle, **its backend (its
+  route)**, address, connection state. A route is a device's backend binding, so
+  this lists routes; it is what `route` needs (handles) and the observability
+  window.
+
+**The ops.**
+- `run` / `spawn` — run a script **server-side** on a backend (`run` one-shot →
+  `result`; `spawn` persistent → a `device` handle). The host runs *next to* the
+  controller, so HCI never crosses the wire — the low-latency, quotable path, and
+  the preferred one for SimBLE-native devices.
+- `attach ?backend=` — **client-side** host, a raw H4 HCI stream. The only mode
+  with per-packet HCI on the wire; for external stacks that cannot move
+  server-side — the emulator, whose edge is gRPC `PacketStreamer`, not this ws://.
+- `route {device, backend}` — switch a device's backend. **Drops, never
+  migrates:** a live connection is controller-resident link-layer state, so the
+  op injects an **HCI Hardware Error (0x10)**, the host resets, drops every
+  connection, and re-inits on the new controller (which has a **different
+  address**; for sim↔real it is a **different world** entirely — the host leaves
+  the old ether). Any reconnect is a **new** connection, never the old one moved.
+- `create` / `destroy` network — the private-ether namespace.
+- `stop {device}` / connection close — teardown. Devices are **owned by the
+  connection that started them**: `stop` releases one (graceful — clean peer
+  disconnect), closing releases all (best-effort). Teardown *always releases the
+  backend* — which is what frees an exclusive dongle when a client dies, rather
+  than leaking it as "device busy".
+- `tick {seconds}` — advance **simulation** time (sim-only; a real-radio device
+  runs on real time). A host→scene command for what BLE cannot express.
+- `send {device, message}` — mutate/trigger a running device (the pub-sub
+  `setGeneration` precedent); needs the **script to expose the input**.
+
+**Two script inputs, by field, never guessed.**
+- `script` — inline Rhai **source text**. A filename is a *client-side* concept
+  (the server cannot read the client's disk), so the client reads its own file
+  and sends the text; the field's name is the type, no path/source sniffing.
+- `device` — a catalog **name the server resolves**. Never a client-supplied
+  server path (path-traversal). The catalog is a shorthand; `script` is general.
+
+**Interaction model.** The primary way to interact with a running device is *as a
+Bluetooth peer* — connect / read / write / subscribe over BLE; the device just
+does its job, no side channel. Host→script commands (`tick`, `send`) are the
+out-of-band control BLE cannot carry (time, test-only mutations/misbehavior).
+Events flow out (`stage`/`log`/`result`); commands flow in.
+
+**Safety.** Every `run`/`spawn` is Rhai, and Rhai is sandboxed (no I/O,
+deterministic), which is what makes accepting a device definition — custom or
+catalog — over the wire safe where native code would not be.
