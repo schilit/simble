@@ -1442,3 +1442,96 @@ fn test_a_frame_within_the_mtu_is_not_fragmented() {
     let frame = [0x03, 0x00, 0x40, 0x00, 0xFF, 0x00, 0x00];
     assert_eq!(acl_packets(0x0048, &frame, usize::MAX).len(), 1);
 }
+
+/// The three inquiry-result forms place Class of Device at different offsets,
+/// and reading one form with another's offset silently mislabels the device
+/// (the bug the typed [`InquiryResponse`] / [`InquiryResponseRssi`] records
+/// exist to prevent). Each form is built with a distinctive 0xAA in the octet
+/// the *other* form would mistake for Class of Device, so a byte-shift would
+/// surface as 0xAA rather than the real 0x04.
+const COD: [u8; 3] = [0x04, 0x04, 0x24];
+const INQ_ADDR: [u8; 6] = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66];
+
+fn hci_event(code: u8, params: &[u8]) -> Vec<u8> {
+    let mut packet = vec![0x04, code, params.len() as u8];
+    packet.extend_from_slice(params);
+    packet
+}
+
+#[test]
+fn test_standard_inquiry_result_reads_class_of_device_at_offset_nine() {
+    // 7.7.2: BD_ADDR(6), PSRM(1), Reserved(2), CoD(3), Clock_Offset(2).
+    let mut params = vec![0x01]; // Num_Responses
+    params.extend_from_slice(&INQ_ADDR);
+    params.push(0x01); // PSRM
+    params.extend_from_slice(&[0xAA, 0xAA]); // two reserved octets
+    params.extend_from_slice(&COD);
+    params.extend_from_slice(&[0x00, 0x00]); // clock offset
+
+    let mut host = host();
+    host.handle_packet(&hci_event(event_code::INQUIRY_RESULT, &params))
+        .unwrap();
+    let found = host.discovered();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].address, Address::new(INQ_ADDR));
+    assert_eq!(
+        found[0].class_of_device, COD,
+        "CoD is the two-reserved offset"
+    );
+}
+
+#[test]
+fn test_rssi_inquiry_result_reads_class_of_device_at_offset_eight() {
+    // 7.7.33: BD_ADDR(6), PSRM(1), Reserved(1), CoD(3), Clock_Offset(2), RSSI(1).
+    let mut params = vec![0x01];
+    params.extend_from_slice(&INQ_ADDR);
+    params.push(0x01); // PSRM
+    params.push(0xAA); // one reserved octet
+    params.extend_from_slice(&COD);
+    params.extend_from_slice(&[0x00, 0x00]); // clock offset
+    params.push(0xC0); // RSSI
+
+    let mut host = host();
+    host.handle_packet(&hci_event(event_code::INQUIRY_RESULT_WITH_RSSI, &params))
+        .unwrap();
+    let found = host.discovered();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].address, Address::new(INQ_ADDR));
+    assert_eq!(
+        found[0].class_of_device, COD,
+        "CoD is the one-reserved offset"
+    );
+}
+
+#[test]
+fn test_extended_inquiry_result_reads_class_of_device_and_eir_name() {
+    // 7.7.38: the RSSI record's 14-octet head, then 240 octets of EIR.
+    let mut params = vec![0x01];
+    params.extend_from_slice(&INQ_ADDR);
+    params.push(0x01); // PSRM
+    params.push(0xAA); // one reserved octet
+    params.extend_from_slice(&COD);
+    params.extend_from_slice(&[0x00, 0x00]); // clock offset
+    params.push(0xC0); // RSSI
+    // EIR: a Complete Local Name AD structure, NUL-padded to 240 octets.
+    let name = b"Pixel Buds";
+    let mut eir = vec![
+        (name.len() + 1) as u8,
+        crate::gap::ad_type::COMPLETE_LOCAL_NAME,
+    ];
+    eir.extend_from_slice(name);
+    eir.resize(240, 0);
+    params.extend_from_slice(&eir);
+
+    let mut host = host();
+    host.handle_packet(&hci_event(event_code::EXTENDED_INQUIRY_RESULT, &params))
+        .unwrap();
+    let found = host.discovered();
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].class_of_device, COD);
+    assert_eq!(
+        found[0].name.as_deref(),
+        Some("Pixel Buds"),
+        "name read from the EIR"
+    );
+}

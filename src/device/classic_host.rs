@@ -29,7 +29,8 @@ use crate::packets::{
     ConnectionResponseHeader, HciEvent, L2capSignalingHeader, signaling_code,
 };
 use crate::types::{Address, SimbleError};
-use zerocopy::{FromBytes, IntoBytes};
+use zerocopy::byteorder::little_endian::U16;
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
 
 /// HCI command opcodes this host issues (Vol 4, Part E, Section 7.3).
 mod opcode {
@@ -293,6 +294,63 @@ pub struct DiscoveredDevice {
     /// alone never carries a name — that is why phones show "unknown device"
     /// while they are still resolving one.
     pub name: Option<String>,
+}
+
+/// The per-response record of a standard Inquiry Result (Vol 4, Part E,
+/// Section 7.7.2): **two** reserved octets after the page-scan mode, which is
+/// what puts Class of Device three bytes further along than the RSSI form.
+#[repr(C)]
+#[derive(Copy, Clone, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout)]
+struct InquiryResponse {
+    bd_addr: [u8; 6],
+    page_scan_repetition_mode: u8,
+    reserved: [u8; 2],
+    class_of_device: [u8; 3],
+    clock_offset: U16,
+}
+
+/// The per-response record of an Inquiry Result with RSSI (Section 7.7.33) and
+/// the fixed head of an Extended Inquiry Result (Section 7.7.38): **one**
+/// reserved octet and a trailing RSSI, so Class of Device sits one byte
+/// earlier than in [`InquiryResponse`]. The Extended form carries 240 octets
+/// of EIR after this fixed part.
+#[repr(C)]
+#[derive(Copy, Clone, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout)]
+struct InquiryResponseRssi {
+    bd_addr: [u8; 6],
+    page_scan_repetition_mode: u8,
+    reserved: u8,
+    class_of_device: [u8; 3],
+    clock_offset: U16,
+    rssi: u8,
+}
+
+/// The fixed part shared by the inquiry-result forms — enough to place a
+/// discovered device. Each form's typed layout carries Class of Device at its
+/// own offset, so the byte-shift the old hand-passed `cod_offset` risked (an
+/// RSSI result read as a standard one turns a headset into whatever the clock
+/// offset's low byte says) can no longer be expressed.
+trait InquiryRecord: FromBytes + KnownLayout + Immutable {
+    fn address(&self) -> Address;
+    fn class_of_device(&self) -> [u8; 3];
+}
+
+impl InquiryRecord for InquiryResponse {
+    fn address(&self) -> Address {
+        Address::new(self.bd_addr)
+    }
+    fn class_of_device(&self) -> [u8; 3] {
+        self.class_of_device
+    }
+}
+
+impl InquiryRecord for InquiryResponseRssi {
+    fn address(&self) -> Address {
+        Address::new(self.bd_addr)
+    }
+    fn class_of_device(&self) -> [u8; 3] {
+        self.class_of_device
+    }
 }
 
 /// Scan Enable values (Vol 4, Part E, Section 7.3.18). Inquiry scan makes a
@@ -2252,24 +2310,22 @@ impl ClassicHost {
     fn handle_discovery_event(&mut self, code: u8, parameters: &[u8]) {
         match code {
             event_code::INQUIRY_COMPLETE => self.inquiry_finished = true,
-            // The three forms differ only in the fixed part's length and in
-            // where Class_of_Device sits — the standard form has *two*
-            // reserved octets after Page_Scan_Repetition_Mode, the other two
-            // have one. Reading the standard offset out of an RSSI result
-            // shifts the Class of Device by a byte, which turns a headset
-            // into whatever the clock offset's low byte says it is.
-            event_code::INQUIRY_RESULT => self.record_inquiry_results(parameters, 14, 9, false),
+            // The three forms differ in where Class_of_Device sits — the
+            // standard form has *two* reserved octets after
+            // Page_Scan_Repetition_Mode, the other two have one — so each is
+            // read through its own typed record rather than a hand-passed
+            // offset (see [`InquiryResponse`] / [`InquiryResponseRssi`]).
+            event_code::INQUIRY_RESULT => {
+                self.record_inquiry_results::<InquiryResponse>(parameters, 0)
+            }
             event_code::INQUIRY_RESULT_WITH_RSSI => {
-                // BD_ADDR(6), PSRM(1), Reserved(1), CoD(3), Clock_Offset(2),
-                // RSSI(1) — the same 14 octets as the standard form, with
-                // one reserved octet traded for the RSSI.
-                self.record_inquiry_results(parameters, 14, 8, false);
+                self.record_inquiry_results::<InquiryResponseRssi>(parameters, 0);
             }
             event_code::EXTENDED_INQUIRY_RESULT => {
                 // Num_Responses is always 1 here, and the response carries
                 // 240 octets of EIR after the RSSI — which is how a phone
-                // shows a name it never asked for. 14 + 240 = 254.
-                self.record_inquiry_results(parameters, 254, 8, true);
+                // shows a name it never asked for.
+                self.record_inquiry_results::<InquiryResponseRssi>(parameters, 240);
             }
             event_code::REMOTE_NAME_REQUEST_COMPLETE => {
                 // Status(1), BD_ADDR(6), Remote_Name(248, NUL-padded).
@@ -2302,44 +2358,31 @@ impl ClassicHost {
         }
     }
 
-    /// The body all three inquiry-result forms share: `Num_Responses`, then
-    /// that many fixed-size responses, each starting with a BD_ADDR and
-    /// carrying its Class of Device at `cod_offset`.
+    /// The body all inquiry-result forms share: `Num_Responses`, then that
+    /// many fixed-size records of type `R`, each read as a typed
+    /// [`InquiryRecord`] so its Class of Device lands at that form's offset
+    /// with no hand arithmetic.
     ///
-    /// `response_len` is the whole per-response record — for an Extended
-    /// Inquiry Result that includes the 240 EIR octets, and `has_eir` says
-    /// to read a name out of them.
-    fn record_inquiry_results(
-        &mut self,
-        parameters: &[u8],
-        response_len: usize,
-        cod_offset: usize,
-        has_eir: bool,
-    ) {
+    /// `eir_len` is the extra octets that trail each record — 240 for an
+    /// Extended Inquiry Result, whose EIR carries a name, and 0 otherwise.
+    fn record_inquiry_results<R: InquiryRecord>(&mut self, parameters: &[u8], eir_len: usize) {
         let Some((&count, rest)) = parameters.split_first() else {
             return;
         };
+        let stride = size_of::<R>() + eir_len;
         for index in 0..usize::from(count) {
-            let Some(response) = rest.get(index * response_len..(index + 1) * response_len) else {
+            let Some(record) = rest.get(index * stride..(index + 1) * stride) else {
                 return; // truncated: stop rather than misread past it
             };
-            let address = Address::new([
-                response[0],
-                response[1],
-                response[2],
-                response[3],
-                response[4],
-                response[5],
-            ]);
-            let class_of_device = [
-                response[cod_offset],
-                response[cod_offset + 1],
-                response[cod_offset + 2],
-            ];
-            // The EIR sits after the RSSI octet: BD_ADDR(6) + PSRM(1) +
-            // Reserved(1) + CoD(3) + Clock_Offset(2) + RSSI(1) = 14.
-            let eir_name = if has_eir {
-                response.get(14..).and_then(name_from_eir)
+            let Ok((response, eir)) = R::ref_from_prefix(record) else {
+                return;
+            };
+            let address = response.address();
+            let class_of_device = response.class_of_device();
+            // For an Extended Inquiry Result `eir` is the 240 octets after the
+            // fixed record; for the other forms it is empty.
+            let eir_name = if eir_len > 0 {
+                name_from_eir(eir)
             } else {
                 None
             };
