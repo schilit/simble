@@ -2,11 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [package]
-name = "simble"
-version = "0.1.0"
+# The crate is published as `simble-stack` because the bare `simble` was taken
+# on crates.io in 2019 by an unrelated crate. The library itself keeps the name
+# `simble` (see `[lib] name` below), so a consumer writes
+# `simble-stack = "…"` but still `use simble::…` — and the `simble` binary and
+# the `simble.wasm` browser module are unchanged.
+name = "simble-stack"
+version = "0.1.0-preview.1"
 edition = "2024"
 license = "Apache-2.0"
-description = "Native Zero-Copy Virtual Bluetooth Host Stack & Device Simulation Engine in Rust"
+description = "A pure-Rust Bluetooth host stack whose devices are short Rhai scripts — BLE & Classic test scenes running on virtual controllers and real radios."
 authors = ["Bill Schilit <schilit@gmail.com>"]
 repository = "https://github.com/schilit/simble"
 readme = "README.md"
@@ -16,7 +21,18 @@ categories = ["emulators", "network-programming", "embedded"]
 # `cdylib` is what wasm-bindgen links the browser module from; `rlib` keeps
 # the crate usable as a normal Rust library (examples, tests, downstream).
 [lib]
+# The library keeps the short name even though the package is `simble-stack`:
+# consumers `use simble::…`, and the wasm artifact stays `simble.wasm` (which
+# `web/README.md`'s wasm-bindgen step and the deployed pages both expect).
+name = "simble"
 crate-type = ["cdylib", "rlib"]
+
+# docs.rs shows the closed public surface a consumer actually gets: not the
+# `testing` feature (which exposes internal wire-format modules) and not the
+# wasm bindings. The default no-feature build on this Linux target is exactly
+# that — pinned so a future default feature cannot silently widen the docs.
+[package.metadata.docs.rs]
+default-target = "x86_64-unknown-linux-gnu"
 
 [dev-dependencies]
 # Used by the in_process_scene example to parse HCI events zero-copy.
@@ -38,7 +54,7 @@ zerocopy = { version = "0.8", features = ["derive"] }
 # checked by unpacking the .crate and reading the generated manifest, which
 # lists only zerocopy under [dev-dependencies]. `cargo package` including its
 # verification build still succeeds at 5.6 MiB / 1.4 MiB compressed.
-simble = { path = ".", features = ["testing"] }
+simble-stack = { path = ".", features = ["testing"] }
 
 [dependencies]
 # Optional: see the `lc3` feature. Its own tests assert against golden

@@ -3,6 +3,10 @@
 
 //! # SimBLE: a native, zero-copy virtual Bluetooth host stack
 //!
+//! > **Preview.** An early preview release; the public API is unstable and may
+//! > change between preview versions. On crates.io the crate is published as
+//! > `simble-stack`, and imported as `simble`.
+//!
 //! SimBLE creates virtual Bluetooth devices for testing — a simulated
 //! heart-rate monitor, keyboard, LE Audio earbud, hands-free car kit, and more
 //! — that other software can scan, connect to, and pair with. It implements the

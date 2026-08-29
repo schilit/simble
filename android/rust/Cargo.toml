@@ -6,11 +6,12 @@ publish = false
 description = "SimBLE's Rhai runner on a real Android device"
 license = "Apache-2.0"
 
-# Deliberately not a workspace member: see android/README.md. `simble` comes
+# Deliberately not a workspace member: see android/README.md. The stack comes
 # in by path so a breaking change here is caught by CI rather than by whoever
-# next opens this directory.
+# next opens this directory. Its package is `simble-stack`; its library is
+# `simble`, which is the name the code below imports.
 [dependencies]
-simble = { path = "../.." }
+simble-stack = { path = "../.." }
 
 # The JNI boundary. Every Android Bluetooth call crosses it, because there is
 # no NDK Bluetooth API — the framework classes are Java-only.

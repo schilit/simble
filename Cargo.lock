@@ -816,8 +816,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "simble"
-version = "0.1.0"
+name = "simble-stack"
+version = "0.1.0-preview.1"
 dependencies = [
  "bytes",
  "getrandom 0.2.17",
@@ -830,7 +830,7 @@ dependencies = [
  "rootcanal-rs",
  "serde",
  "serde_json",
- "simble",
+ "simble-stack",
  "thiserror",
  "wasm-bindgen",
  "web-sys",

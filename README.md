@@ -3,6 +3,17 @@
 [![CI](https://github.com/schilit/simble/actions/workflows/ci.yml/badge.svg)](https://github.com/schilit/simble/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
+> **Preview.** An early preview release — the public API is unstable and may
+> change between preview versions. On crates.io the crate is **`simble-stack`**
+> (the bare `simble` name was taken in 2019 by an unrelated crate); the library
+> itself keeps the name `simble`, so you depend on `simble-stack` but write
+> `use simble::…`.
+>
+> ```toml
+> [dependencies]
+> simble-stack = "0.1.0-preview.1"
+> ```
+
 **SimBLE creates simulated Bluetooth scenes for testing scenarios.** A scene can contain *one device* or
 *several interacting devices*. No hardware to charge, pair, or lose: every device is defined in
 code, behaves the same way every run, and can misbehave on command when that's what your test

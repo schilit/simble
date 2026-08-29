@@ -29,7 +29,7 @@ jobs:
           components: clippy, rustfmt
 
       - name: Check Formatting
-        run: cargo fmt -p simble -- --check
+        run: cargo fmt -p simble-stack -- --check
 
       # The gate that makes the API boundary real, and it has to run BEFORE
       # anything with --all-features.
