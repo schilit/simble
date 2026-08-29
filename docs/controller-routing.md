@@ -340,6 +340,19 @@ one real air); a private network is an ether that *mints* a controller per devic
   so this lists routes; it is what `route` needs (handles) and the observability
   window.
 
+**Controller availability: the list hints, the claim decides.**
+`/v2/controllers` reports `available` per entry (and `in_use_by` for an exclusive
+one) — good for a UI or for picking, but *advisory*: between listing a dongle free
+and claiming it, another client can take it (a TOCTOU race), so do not gate on it.
+The authoritative answer is the claim itself: `run`/`spawn`/`route` on a controller
+either succeeds (returning a `device` handle) or returns `controller busy`,
+**atomically** — the router is the single owner and serialises claims, so the
+error cannot race. Dongles are the case that matters (exclusive); sim networks are
+effectively always available (mint-on-demand). An unavailable controller must be a
+clear error, **never a silent fallback to simulation**. Optional: a `wait:true`
+that queues the claim until one frees, and a subscribable `/v2/controllers` that
+streams availability changes instead of polling.
+
 **The ops.**
 - `run` / `spawn` — run a script **server-side** on a controller (`run` one-shot
   → `result`; `spawn` persistent → a `device` handle). The host runs *next to* the
