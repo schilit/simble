@@ -63,14 +63,15 @@ simble mcp                         # serve SimBLE to an AI agent over stdio
 
 ## The bigger picture
 
-This crate is the Rust core. The full project — a **web** playground and device
-showcase that runs the same stack in the browser (wasm), an **MCP** agent
-interface, and a **SimBLE Android** app that puts a real phone radio in a scene
-— lives on GitHub:
+This crate is **all the Rust**: the library, the CLI, the `simble mcp` agent
+server, and the browser-bindings source (build the `cdylib` for `wasm32`
+yourself). What lives on GitHub instead is the non-Rust half — the **web**
+playground and device showcase that runs this same stack in the browser, and
+the **SimBLE Android** app that puts a real phone radio in a scene:
 
 **→ [github.com/schilit/simble](https://github.com/schilit/simble)** · **[live web demos](https://schilit.github.io/simble/)**
 
-One stack, four front-ends (MCP, Web, Native, Android); the first three share
+One stack, four front-ends — MCP, Web, Native, Android; the first three share
 this crate's engine, so they cannot diverge.
 
 ## License
