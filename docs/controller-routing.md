@@ -332,7 +332,12 @@ one real air); a private network is an ether that *mints* a controller per devic
 
 **Three lists — capacity, ethers, state.**
 - `/v2/controllers` — the attach points: `usb` dongles and the sim/`rootcanal`
-  controllers, each with `real`/`deterministic` flags.
+  controllers, each tagged with its **`network`** (the world it drops a device
+  into — dongles and phone radios are `real`, a rootcanal controller is its net),
+  plus `real`/`deterministic`/`available` flags. Grouping by `network` is the
+  who-hears-whom view from the attach-point side; it cross-references
+  `/v2/networks` (controller → world → members). `real` controllers are static;
+  sim controllers are minted per device, so they come and go with running devices.
 - `/v2/networks` — the worlds and their members (who-hears-whom): the created,
   isolated sim ethers `link` (default) and `rootcanal` private networks; the
   singleton **`real`** RF world (`kind:"rf"`, `shared:true`) — *not*
@@ -453,7 +458,7 @@ sample entry:
 
 ```
 {"name":"phone-0","kind":"iphone","node":"phone-0","api_class":"coreBluetooth",
- "real":true,"runnable":true,"attachable":false}
+ "network":"real","real":true,"runnable":true,"attachable":false}
 ```
 
 **Registration.** A phone joins *as a node* — today by **adb** (the bridge
