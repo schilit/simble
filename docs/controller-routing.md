@@ -410,3 +410,57 @@ Events flow out (`stage`/`log`/`result`); commands flow in.
 **Safety.** Every `run`/`spawn` is Rhai, and Rhai is sandboxed (no I/O,
 deterministic), which is what makes accepting a device definition — custom or
 catalog — over the wire safe where native code would not be.
+
+## 2026-08-29 — the node model (controllers, API classes, delegation)
+
+The entity that was implicit until now: a **node** is a v2 participant that
+**owns controllers and executes runs**. Controllers belong to nodes, and a `run`
+executes on the node that owns the named controller.
+
+**The local `simble` node is the default.** The `simble` process you launch is a
+node — the "full" one: it owns the default **`Link`** controller (plus
+`usb`/`rootcanal` by feature, a `netsim` forward by config), runs scripts on them,
+and — when it opens a server socket — is the **router** other nodes attach to. Its
+modes are faces of one node: `simble mcp` is it in MCP mode, `simble --usb` in
+bridge mode; netsim is a controller/medium *under* it, never a node. A `run` with
+**no `controller`** targets this node's `Link`, so "default node + default
+controller" is the local process on its deterministic ether. "Router" is a *role*
+it plays while serving a socket, not a separate thing.
+
+**A controller carries an `api_class`, and it gates the run.** The class is the
+platform interface used to drive that radio; the capability flags derive from it.
+
+| `api_class` | driven via | envelope |
+|---|---|---|
+| `hci` | raw HCI, the full host stack | full — attachable, precise timing, arbitrary/malformed PDUs, deliberate misbehaviour |
+| `android` | `BluetoothGattServer` / advertise / L2CAP sockets | high-level GATT/advertise/L2CAP; no HCI, no raw interval/DLE |
+| `coreBluetooth` | `CBPeripheralManager` / `CBCentralManager` | most restrictive — no MAC address, constrained advertising/background |
+
+An iPhone cannot run the Android API — it is `coreBluetooth`, a different and
+tighter class. The Rhai definition is portable, but its *realisation* maps onto
+the target's class, and the class is a **gate**: a well-behaved GATT device runs
+on any class, but a script needing HCI-level control (a malformed advertisement, a
+precise connection interval, an injected PDU) runs only on `hci`. So `run` checks
+the script against the controller's `api_class` and rejects cleanly ("needs `hci`;
+`phone-0` is `coreBluetooth`") rather than silently doing something lesser. A
+sample entry:
+
+```
+{"name":"phone-0","kind":"iphone","node":"phone-0","api_class":"coreBluetooth",
+ "real":true,"runnable":true,"attachable":false}
+```
+
+**Registration.** A phone joins *as a node* — today by **adb** (the bridge
+enumerates adb-visible phones, controls them with `am start` + the phone's HTTP
+`StatsServer`); in the fabric, a phone-node **dials in** over ws://, announces
+itself and its controller, and appears in `/v2/nodes` (phone-initiated, which
+handles NAT/wifi). Browsers are nodes too (an `hci` node over a wasm sim/netsim
+controller).
+
+**Delegation.** A `run` whose controller is owned by *another* node is **forwarded
+to that node**, not executed locally: the router relays the same `run`/events
+messages over the owning node's channel, the node runs the script on-device using
+its own `api_class`, and streams events back — self-similar, so a run looks
+identical wherever it lands. Today a phone's delegation carries fixed Java roles
+(`am start` + HTTP); arbitrary-Rhai delegation needs the scaffolded `android/rust`
+engine.
