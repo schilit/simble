@@ -24,6 +24,8 @@ use crate::gap::AdvertisingData;
 use crate::gatt::database::AttributeHandler;
 use crate::gatt::{AttributePermissions, CharacteristicProperties, GattDatabase};
 use std::sync::{Arc, Mutex};
+use zerocopy::byteorder::little_endian::U16;
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout, Unaligned};
 
 /// ASHA service UUID (16-bit, Google-registered) and characteristic UUIDs (128-bit
 /// vendor UUIDs from the ASHA specification), stored little-endian per
@@ -153,31 +155,51 @@ pub struct ReadOnlyProperties {
     pub supported_codecs: u16,
 }
 
+/// The 17-byte on-air layout of [`ReadOnlyProperties`], read and written as a
+/// typed view so the field offsets — including the two reserved bytes that sit
+/// between the render delay and the supported-codecs word — are fixed by the
+/// struct rather than by hand-counted slice ranges. The two 16-bit words are
+/// little-endian.
+#[repr(C)]
+#[derive(Copy, Clone, FromBytes, IntoBytes, Unaligned, Immutable, KnownLayout)]
+struct ReadOnlyPropertiesWire {
+    protocol_version: u8,
+    capabilities: u8,
+    hi_sync_id: [u8; 8],
+    feature_map: u8,
+    render_delay: U16,
+    /// Reserved for future use; transmitted as zero, ignored on parse.
+    reserved: [u8; 2],
+    supported_codecs: U16,
+}
+
 impl ReadOnlyProperties {
     /// Serializes to the characteristic wire format.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut buf = Vec::with_capacity(17);
-        buf.push(self.protocol_version);
-        buf.push(self.capabilities);
-        buf.extend_from_slice(&self.hi_sync_id);
-        buf.push(self.feature_map);
-        buf.extend_from_slice(&self.render_delay_milliseconds.to_le_bytes());
-        // Reserved for future use; transmitted as zero.
-        buf.extend_from_slice(&[0, 0]);
-        buf.extend_from_slice(&self.supported_codecs.to_le_bytes());
-        buf
+        ReadOnlyPropertiesWire {
+            protocol_version: self.protocol_version,
+            capabilities: self.capabilities,
+            hi_sync_id: self.hi_sync_id,
+            feature_map: self.feature_map,
+            render_delay: U16::new(self.render_delay_milliseconds),
+            reserved: [0, 0],
+            supported_codecs: U16::new(self.supported_codecs),
+        }
+        .as_bytes()
+        .to_vec()
     }
 
-    /// Parses a value from its wire bytes.
+    /// Parses a value from its wire bytes (a shorter buffer is rejected; any
+    /// bytes past the fixed 17 are ignored).
     pub fn parse(data: &[u8]) -> Option<Self> {
+        let (wire, _) = ReadOnlyPropertiesWire::ref_from_prefix(data).ok()?;
         Some(Self {
-            protocol_version: *data.first()?,
-            capabilities: *data.get(1)?,
-            hi_sync_id: data.get(2..10)?.try_into().ok()?,
-            feature_map: *data.get(10)?,
-            render_delay_milliseconds: u16::from_le_bytes(data.get(11..13)?.try_into().ok()?),
-            // Bytes 13..15 are reserved and ignored on parse.
-            supported_codecs: u16::from_le_bytes(data.get(15..17)?.try_into().ok()?),
+            protocol_version: wire.protocol_version,
+            capabilities: wire.capabilities,
+            hi_sync_id: wire.hi_sync_id,
+            feature_map: wire.feature_map,
+            render_delay_milliseconds: wire.render_delay.get(),
+            supported_codecs: wire.supported_codecs.get(),
         })
     }
 }
@@ -423,5 +445,46 @@ impl AshaService {
             .lock()
             .expect("ASHA state lock poisoned")
             .last_peripheral_status
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The ReadOnlyProperties wire layout is fixed at 17 bytes with two
+    /// reserved octets between render delay and supported codecs. A round trip
+    /// through the typed view must land every field at its spec offset — the
+    /// reserved gap is exactly where a hand-counted parser drifts by a byte.
+    #[test]
+    fn test_read_only_properties_wire_round_trip() {
+        let props = ReadOnlyProperties {
+            protocol_version: 0x01,
+            capabilities: 0x03,
+            hi_sync_id: [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88],
+            feature_map: 0x01,
+            render_delay_milliseconds: 0x0104, // 260 ms -> LE 04 01
+            supported_codecs: 0x0002,          // G.722 @ 16 kHz -> LE 02 00
+        };
+        let wire = props.to_bytes();
+        assert_eq!(
+            wire,
+            [
+                0x01, 0x03, // version, capabilities
+                0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, // hi_sync_id
+                0x01, // feature_map
+                0x04, 0x01, // render_delay LE
+                0x00, 0x00, // reserved
+                0x02, 0x00, // supported_codecs LE
+            ]
+        );
+        assert_eq!(wire.len(), 17);
+        assert_eq!(ReadOnlyProperties::parse(&wire), Some(props));
+
+        // A truncated value is rejected; trailing bytes past 17 are ignored.
+        assert_eq!(ReadOnlyProperties::parse(&wire[..16]), None);
+        let mut padded = wire.clone();
+        padded.push(0xFF);
+        assert_eq!(ReadOnlyProperties::parse(&padded), Some(props));
     }
 }
