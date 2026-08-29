@@ -233,3 +233,59 @@ simble-as-device speaks netsim over **ws://** (`NetsimTransport`), but the
 simble's *own* devices needs no gRPC; *backing the emulator* does. An earlier
 claim that a ws:// proxy "sidesteps the gRPC blocker" holds only for the first
 case — gRPC lives at the emulator-facing edge, and nowhere else.
+
+**A v2 wire protocol: list, then attach.** The current netsim protocol is one
+fixed verb — "connect to the ether" (`?address=…` and you are on netsim). v2 is
+an *additive superset*: a control op **`.list`** enumerates the backends the
+router offers (Link ethers, rootcanal ethers, dongles, an external-netsim
+forward), and **`?backend=foo`** attaches the stream to a *named* backend rather
+than only netsim. Serve both — v1 clients (and real netsim) keep working; v2 is
+the drop-in-in-front upgrade. Keep two query axes distinct: *which backend*
+(`?backend=…`) is separate from *which device* (`?address=…`, which v1 already
+uses). And a `?backend=` is a **request, not a grab**: the router owns the
+hardware and *routes* the client there or refuses if it is exclusively held —
+clients never open a dongle themselves, so v2 does not reintroduce
+two-processes-fighting-over-a-dongle.
+
+**One ws:// transport carries both.** `.list` is request/response and
+`?backend=` is a stream, but both ride ws://: a stream is the main path, and a
+single-shot (open, one request, one response, close) is also fine — RPC over
+WebSocket is well-trodden, and ws:// is the browser-friendly transport (no CORS
+preflight). So the URL disambiguates control-vs-stream and one ws:// server
+serves both — which is where **F5 (control) and F6 (data) collapse into a single
+server**. Request/response is *semantics*, not transport, so the same `.list`
+handler can also answer plain HTTP for `curl`/tooling if wanted; that is cheap
+optionality, not a second server you must build.
+
+**Router-node startup: an optional server socket plus backend wiring.** A node
+comes up wired on two sides — an optional **server socket** (the downstream v2
+endpoint others attach to) and its **backends** (default `Link`; `usb`,
+`rootcanal`, or a **netsim forward** by feature/config). Both sides speak the
+same v2 protocol, so the node is just a link in a chain (`clients → [node] →
+netsim`) and could itself be someone's backend. Both are *optional*: a bare
+`simble mcp` session driving its own built-in backends needs neither socket. The
+single-owner rule holds — **one** router-owning process owns the metal, and
+everyone else (browser, a second tool, a chained node) attaches to its server
+socket rather than co-owning; the socket is how others *share*, not a second
+grab.
+
+**Private networks: a namespace of ethers.** The router is not "the ether" but a
+*named set* of them — `net-a`, `net-b`, … each its own `Link` (default) or
+`rootcanal` copy (with that feature), alongside the dongles and any external
+forward. A device attaches to one by name; `.list` enumerates them; the router
+creates and destroys them on demand, each just another in-process loop it owns.
+This is what makes the multiple customers safe: every client / agent / CI job
+gets an **isolated world** with no cross-talk — real multi-tenancy. Two hard
+edges: a device lives in **exactly one** ether (this is not a bridge — crossing
+needs an explicit bridge *device*, never a router toggle), and isolation is a
+**simulated-only** guarantee — you can spin up N private rootcanal/Link ethers,
+but real dongles all transmit into the one physical air, so a test that needs
+isolation must be sim-backed.
+
+**netsim is a leaf, not a relay.** The v1 netsim protocol has no forwarding
+verb, so netsim can only *terminate* a chain: you forward **to** it, never
+**through** it (`mcp → router → netsim` works; `mcp → netsim → dongle` cannot —
+netsim will not forward to the dongle). Forwarding is a v2/router-only
+capability; the routing intelligence is always the node we add **in front** of
+netsim, never something netsim provides — which is the same limitation as "no
+phy port" / "cannot be built inside netsim," seen from the routing side.
