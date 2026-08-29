@@ -160,3 +160,63 @@ credit behaviour. Today those need a phone.
   Per `measurement-regions.md` the host stack is real but the timing includes
   the emulator's scheduling, so it is neither the simulated case nor the phone
   case and probably needs its own confirmation level.
+
+## 2026-08-28 — the hci-router refinement, and a single-client cut
+
+A design pass named the router and, more usefully, shrank it.
+
+**One client means no server.** The picture above — a router that owns the
+controller and *serves* many clients over an interface — is the netsim model,
+and netsim already is that. simble has a single client: its own actor and the
+scripted devices it loads. So it does not reimplement a multi-tenant server. The
+actor holds a `rootcanal-rs` handle and pumps its main loop **directly,
+in-process**; per-device routing (simulated ether vs real radio) stays internal
+to that one actor. The multi-tenant path — serving the interface to many clients
+— is only for backing the Android emulator or other external clients, which is
+the ambition above, not this.
+
+**A main loop has one owner.** `rootcanal-rs` runs a scheduler loop and cannot be
+driven by two things. That is the concrete reason "a shared router called by two
+actors" is wrong: it splits ownership of that loop. Single-client, the owner is
+the actor itself; if a multi-client server is ever built, the loop is owned by
+*that* actor and clients attach — never shared.
+
+**The backend interface is a `Controller` trait; the router implements it too.**
+Formalise the shape the transports already share (`new` / `add_peripheral` /
+`pump` / `tick`) as a trait, expressed as a `Sink<HciPacket>` +
+`Stream<HciPacket>` pair. `rootcanal-rs`, a USB dongle, and an external netsim
+each implement it; the router implements it as a **composite** — a backend made
+of backends, so it substitutes and nests. The `futures` / tokio /
+tokio-tungstenite this needs lives in the router crate, never `simble-core`,
+which stays no-async-runtime.
+
+**Framework-agnostic — bring your own actor.** Which actor framework wraps this
+(actix, ractor, a hand-rolled tokio task) is the consumer's opinion and it
+differs, so the library depends on none. It exposes the router as a *driveable*
+thing — the `Controller` trait, the `Sink`+`Stream` pair, a runtime-neutral pump
+— and the actor is a thin wrapper the consumer writes, exactly as simble's host
+stack is already a driveable state machine (`handle_packet` / `poll` / `tick`)
+that any loop can own. "Make it an actor" never meant "depend on an actor
+framework."
+
+**Default backends are built in; external netsim is optional.** USB (`nusb`) and
+an in-process `rootcanal-rs` handle are the default — the router is
+self-contained, its own ether plus real radios. ws:// forwarding to an external
+netsim is feature-gated. Viable only because the router is a separate crate: a
+default `rootcanal-rs` *path* dependency fails `cargo package`, so that crate is
+unpublished (or waits for `rootcanal-rs` on crates.io); the published
+`simble-stack` never carries it.
+
+**Switching a backend injects an HCI Hardware Error (0x10).** Rather than migrate
+live controller state, a switch injects a Hardware Error Event upward so the host
+re-initialises against the new backend — the host's re-init sequence
+(`init_commands`) already exists. Active connections drop, as they would on a
+real controller failure; the new work is recognising 0x10 and rebuilding
+advertising/GATT state.
+
+**Correction to "serve the interface ourselves."** Two protocols, not one:
+simble-as-device speaks netsim over **ws://** (`NetsimTransport`), but the
+**emulator** speaks its controller over **gRPC `PacketStreamer`**. So routing
+simble's *own* devices needs no gRPC; *backing the emulator* does. An earlier
+claim that a ws:// proxy "sidesteps the gRPC blocker" holds only for the first
+case — gRPC lives at the emulator-facing edge, and nowhere else.
