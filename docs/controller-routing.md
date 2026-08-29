@@ -373,12 +373,24 @@ streams availability changes instead of polling.
 - `attach ?controller=` — **client-side** host, a raw H4 HCI stream. The only mode
   with per-packet HCI on the wire; for external stacks that cannot move
   server-side — the emulator, whose edge is gRPC `PacketStreamer`, not this ws://.
-- `route {device, controller}` — switch a device's controller. **Drops, never
-  migrates:** a live connection is controller-resident link-layer state, so the
-  op injects an **HCI Hardware Error (0x10)**, the host resets, drops every
-  connection, and re-inits on the new controller (which has a **different
-  address**; for sim↔real it is a **different world** entirely — the host leaves
-  the old ether). Any reconnect is a **new** connection, never the old one moved.
+- `route {device, controller}` — rebind a device to a different controller
+  (swap the controller *under* its host). **Drops, never migrates:** a live
+  connection is controller-resident link-layer state, so the op injects an **HCI
+  Hardware Error (0x10)**, the host resets, drops every connection, and re-inits
+  on the new controller (which has a **different address**). Any reconnect is a
+  **new** connection, never the old one moved. Because a controller carries a
+  `network`, routing to a controller on a *different* network **changes the
+  world** — the device leaves its ether (sim↔real, or between private nets) and
+  its peer set changes; a same-network swap (e.g. `dongle-0`→`dongle-1`) keeps
+  the world. Guarded by the same rules as a claim: the target must be
+  **available** (else `busy`) and its **`api_class`** must support the device
+  (an HCI-level device cannot route onto a `coreBluetooth` phone controller).
+  Scope: `route` swaps the controller under a host that **stays put** — an
+  attached host (the emulator, whose controllers the router mediates) or a
+  server-side device on the **same node**. Moving the host *across nodes* (a
+  server-side device onto a phone) is not a route — it is a **re-host** (`stop`
+  then `run`/`spawn` on the new node), since a run executes on the controller's
+  owning node.
 - `create` / `destroy` network — the private-ether namespace.
 - `stop {device}` / connection close — teardown. Devices are **owned by the
   connection that started them**: `stop` releases one (graceful — clean peer
