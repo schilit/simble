@@ -53,7 +53,7 @@ zerocopy = { version = "0.8", features = ["derive"] }
 # published manifest, so a consumer never sees the cycle. Not assumed --
 # checked by unpacking the .crate and reading the generated manifest, which
 # lists only zerocopy under [dev-dependencies]. `cargo package` including its
-# verification build still succeeds at 5.6 MiB / 1.4 MiB compressed.
+# verification build still succeeds at 6.6 MiB / 1.7 MiB compressed.
 simble-stack = { path = ".", features = ["testing"] }
 
 [dependencies]

@@ -31,6 +31,12 @@
 | M1 | **Re-benchmark with `.90` on stable Android** — the 8-Pro→8-Pro pair was flaky on the beta build; clean numbers are now possible. | **blocked (hardware)** | Needs the physical phones + adb; nothing to code. Next action: run `bench-pubsub.sh` / the pair-run bench with `.90` on stable Android and record the clean numbers. |
 | M2 | **Harden L2CAP-min's occasional interval-miss** — one run cratered to ~12.6 KB/s; the single MTU op usually but not always settles the fast interval. | **blocked (verification)** | The change is concrete — in `BulkSource`, key the stream start off the actual connection-parameter update (`onConnectionUpdated`, where available) instead of the fixed 120 ms `PHY_SETTLE_BEAT_MS` delay — but its whole value is empirical and unverifiable without phones, and a blind edit risks regressing the working l2cap-min path. Next action: write it behind a flag and A/B it on the phones against the current fixed-delay path. |
 
+## Release
+
+| # | item | status | notes |
+|---|---|---|---|
+| R1 | **crates.io preview** — publish `simble-stack` `0.1.0-preview.1`. | **prepped, awaiting publish** | Package renamed `simble-stack` with `[lib] name = "simble"` (import path + `simble.wasm` unchanged); version is a pre-release; docs.rs metadata + preview banners in place; description settled. `cargo publish --dry-run` is green (verify build compiles, packaged manifest clean of path deps). The actual `cargo publish` is a human step (crates.io token, irreversible) → then tag `v0.1.0-preview.1`. **Open tidy-ups before/after publish:** (1) keyword swap `bluetooth, ble, gatt, l2cap, channel-sounding` → `bluetooth, ble, simulation, testing, mcp` for discovery; (2) align the README lead and `lib.rs` doc with the settled one-line framing; (3) optional slimming `exclude` (android/web/docs) for a library-focused crate — needs care so the verify build keeps files an example `include_str!`s. |
+
 ## Done this arc (for context)
 
 - Phone-to-phone bulk transfer (source role, GATT + L2CAP paths), fast-link
