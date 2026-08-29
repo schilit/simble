@@ -313,6 +313,85 @@ fn options_come_from_json_and_are_clamped() {
 }
 
 #[test]
+fn the_granular_link_knobs_default_to_the_old_fast_bundle() {
+    // The defaults must reproduce, byte for byte, the three commands the fast
+    // path used to send unconditionally — a change here would silently move
+    // every existing benchmark's baseline.
+    let o = BulkOptions::default();
+    let cmds = fast_link_commands(0x0040, &o);
+    assert_eq!(cmds.len(), 3, "PHY, then DLE, then connection update");
+    // command() prefixes H4 type 0x01 and a 1-byte param length; assert on the
+    // opcode + parameters that follow.
+    assert_eq!(&cmds[0][1..3], &LE_SET_PHY);
+    assert_eq!(&cmds[0][4..], &[0x40, 0x00, 0x00, 0x07, 0x07, 0x00, 0x00]);
+    assert_eq!(&cmds[1][1..3], &LE_SET_DATA_LENGTH);
+    assert_eq!(&cmds[1][4..], &[0x40, 0x00, 0xFB, 0x00, 0x48, 0x08]);
+    assert_eq!(&cmds[2][1..3], &LE_CONNECTION_UPDATE);
+    assert_eq!(
+        &cmds[2][4..],
+        &[
+            0x40, 0x00, 0x06, 0x00, 0x0C, 0x00, 0x00, 0x00, 0x90, 0x01, 0x00, 0x00, 0x00, 0x00
+        ]
+    );
+}
+
+#[test]
+fn each_granular_knob_can_be_set_or_switched_off_independently() {
+    // 2M-only PHY, no DLE, a custom 30–40 ms interval: exactly one PHY command
+    // and one connection update, no data-length command.
+    let o = BulkOptions {
+        phy_mask: 0x02,
+        tx_octets: 0,
+        conn_interval_min: 24,
+        conn_interval_max: 32,
+        ..BulkOptions::default()
+    }
+    .sane();
+    let cmds = fast_link_commands(0x0040, &o);
+    assert_eq!(cmds.len(), 2, "PHY and interval only — DLE is off");
+    assert_eq!(&cmds[0][1..3], &LE_SET_PHY);
+    assert_eq!(&cmds[0][4..], &[0x40, 0x00, 0x00, 0x02, 0x02, 0x00, 0x00]);
+    assert_eq!(&cmds[1][1..3], &LE_CONNECTION_UPDATE);
+    assert_eq!(&cmds[1][4..8], &[0x40, 0x00, 0x18, 0x00]); // min 24 = 0x0018
+    assert_eq!(&cmds[1][8..10], &[0x20, 0x00]); // max 32 = 0x0020
+
+    // Everything off: the fast path sends nothing, same as a bare link.
+    let none = BulkOptions {
+        phy_mask: 0,
+        tx_octets: 0,
+        conn_interval_max: 0,
+        ..BulkOptions::default()
+    }
+    .sane();
+    assert!(fast_link_commands(0x0040, &none).is_empty());
+}
+
+#[test]
+fn the_granular_knobs_come_from_json_and_are_range_checked() {
+    let parsed = BulkOptions::from_json(
+        r#"{"phy_mask":2,"tx_octets":100,"conn_interval_min":10,"conn_interval_max":20}"#,
+    );
+    assert_eq!(parsed.phy_mask, 0x02);
+    assert_eq!(parsed.tx_octets, 100);
+    assert_eq!(parsed.conn_interval_max, 20);
+
+    // A stray PHY bit is masked off; an out-of-range octet count and interval
+    // are clamped; a min above the max is pulled down to it.
+    let clamped = BulkOptions {
+        phy_mask: 0xF2,
+        tx_octets: 9000,
+        conn_interval_min: 5000,
+        conn_interval_max: 40,
+        ..BulkOptions::default()
+    }
+    .sane();
+    assert_eq!(clamped.phy_mask, 0x02, "only the three PHY bits survive");
+    assert_eq!(clamped.tx_octets, 251, "octets clamped to the DLE ceiling");
+    assert_eq!(clamped.conn_interval_max, 40);
+    assert_eq!(clamped.conn_interval_min, 40, "min pulled down to the max");
+}
+
+#[test]
 fn the_report_serialises_with_every_field_a_page_renders() {
     let mut scene = scene(4 * 1024);
     assert!(scene.run(20_000, clock));

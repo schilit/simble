@@ -171,7 +171,30 @@ pub struct BulkOptions {
     /// used to do unconditionally. `false` leaves the link at its 1M, 27-octet,
     /// default-interval baseline — which is itself a measurement: the setup
     /// cost the fast path is buying down, side by side with it.
+    ///
+    /// The three knobs below shape *what* the fast path requests, each
+    /// independently and each able to be switched off, so a run can isolate one
+    /// enhancement — 2M without DLE, a custom interval, and so on — instead of
+    /// only the all-or-nothing lever. They are consulted only when `fast_link`
+    /// is on; with it off the link is left untouched.
     pub fast_link: bool,
+    /// The PHY set to ask for with LE Set PHY, as a tx/rx mask: bit 0 = LE 1M,
+    /// bit 1 = LE 2M, bit 2 = LE Coded. The default `0x07` lets the controller
+    /// pick the fastest PHY it and the peer share (2M in practice). `0` skips
+    /// LE Set PHY, leaving the link on 1M.
+    pub phy_mask: u8,
+    /// Data Length Extension target: the max TX octets to request with LE Set
+    /// Data Length (Section 7.8.33). The default `251` is one full LL PDU
+    /// instead of nine 27-octet fragments; `0` skips the command, keeping the
+    /// 27-octet default.
+    pub tx_octets: u16,
+    /// Connection interval to request with LE Connection Update, low end, in
+    /// 1.25 ms units. The default `6` is 7.5 ms, the spec's floor.
+    pub conn_interval_min: u16,
+    /// Connection interval to request with LE Connection Update, high end, in
+    /// 1.25 ms units. The default `12` is 15 ms. A value of `0` skips the
+    /// update, keeping the peer's default interval.
+    pub conn_interval_max: u16,
 }
 
 impl Default for BulkOptions {
@@ -183,6 +206,10 @@ impl Default for BulkOptions {
             timeout_ms: DEFAULT_TIMEOUT_MS,
             use_control_point: true,
             fast_link: true,
+            phy_mask: 0x07,
+            tx_octets: 251,
+            conn_interval_min: 6,
+            conn_interval_max: 12,
         }
     }
 }
@@ -200,6 +227,20 @@ impl BulkOptions {
         self.total_bytes = self.total_bytes.clamp(1, 64 * 1024 * 1024);
         self.window_chunks = self.window_chunks.max(1);
         self.timeout_ms = self.timeout_ms.max(100.0);
+        // Only the three PHY bits are meaningful; a stray high bit would ask
+        // the controller for a PHY that does not exist.
+        self.phy_mask &= 0x07;
+        // 0 means "skip DLE"; anything else is clamped to the spec's octet
+        // range (Section 7.8.33: 0x001B..=0x00FB) so the command is always valid.
+        if self.tx_octets != 0 {
+            self.tx_octets = self.tx_octets.clamp(27, 251);
+        }
+        // 0 for the max means "skip the update". Otherwise clamp both ends to
+        // the valid interval range (0x0006..=0x0C80) and keep min <= max.
+        if self.conn_interval_max != 0 {
+            self.conn_interval_max = self.conn_interval_max.clamp(6, 3200);
+            self.conn_interval_min = self.conn_interval_min.clamp(6, self.conn_interval_max);
+        }
         self
     }
 }
@@ -240,6 +281,60 @@ fn phy_label(value: u8) -> Option<&'static str> {
         0x03 => Some("LE Coded"),
         _ => None,
     }
+}
+
+/// The link-speed HCI commands the fast path requests on `handle`, built from
+/// the granular knobs in `o`. Each is independent and any can be switched off
+/// (a zeroed knob omits its command), so a run can isolate one enhancement.
+///
+/// A controller that has never heard of one of these answers Unknown HCI
+/// Command, and the report simply says that enhancement was not negotiated —
+/// the honest outcome on a 4.0 dongle, which refuses all three and leaves the
+/// link at 1M / 27 octets. Callers must have already normalised `o` through
+/// [`BulkOptions::sane`], which is where the values are range-checked.
+fn fast_link_commands(handle: u16, o: &BulkOptions) -> Vec<Vec<u8>> {
+    let h = handle.to_le_bytes();
+    let mut out = Vec::with_capacity(3);
+
+    // LE Set PHY: the mask is used for both TX and RX, so the controller picks
+    // the fastest PHY it and the peer share within it (LE 2M where possible).
+    if o.phy_mask != 0 {
+        let mut phy = Vec::with_capacity(7);
+        phy.extend_from_slice(&h);
+        phy.push(0x00); // all_phys: both TX and RX are specified below
+        phy.push(o.phy_mask); // tx_phys
+        phy.push(o.phy_mask); // rx_phys
+        phy.extend_from_slice(&0u16.to_le_bytes()); // phy_options
+        out.push(command(LE_SET_PHY, &phy));
+    }
+
+    // LE Set Data Length: max TX octets from the knob, max TX time held at the
+    // 1M ceiling for a full PDU (2120 us, 0x0848) — an upper bound the
+    // controller reconciles with the octet count, so a smaller octet request
+    // is still valid.
+    if o.tx_octets != 0 {
+        let octets = o.tx_octets.to_le_bytes();
+        out.push(command(
+            LE_SET_DATA_LENGTH,
+            &[h[0], h[1], octets[0], octets[1], 0x48, 0x08],
+        ));
+    }
+
+    // LE Connection Update: the requested interval, no latency, 4 s
+    // supervision timeout (0x0190), CE length unconstrained.
+    if o.conn_interval_max != 0 {
+        let mn = o.conn_interval_min.to_le_bytes();
+        let mx = o.conn_interval_max.to_le_bytes();
+        out.push(command(
+            LE_CONNECTION_UPDATE,
+            &[
+                h[0], h[1], mn[0], mn[1], mx[0], mx[1], 0x00, 0x00, 0x90, 0x01, 0x00, 0x00, 0x00,
+                0x00,
+            ],
+        ));
+    }
+
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -785,39 +880,9 @@ impl BulkCentral {
         }
         if self.options.fast_link && !self.fast_requested {
             self.fast_requested = true;
-            // The link-speed requests, sent once the GATT view is ready. Each is
-            // independent: a controller that has never heard of one answers
-            // Unknown HCI Command, and the report simply says that enhancement
-            // was not negotiated — the honest outcome on a 4.0 dongle, which
-            // refuses all three and leaves the link at 1M / 27 octets.
-            let handle = self.central.connection_handle();
-            let h = handle.to_le_bytes();
-
-            // LE Set PHY: all PHYs allowed both ways, so the controller picks
-            // the fastest it and the peer share (LE 2M where possible).
-            let mut phy = Vec::with_capacity(7);
-            phy.extend_from_slice(&h);
-            phy.push(0x00); // all_phys: both TX and RX are specified below
-            phy.push(0x07); // tx_phys: 1M | 2M | Coded
-            phy.push(0x07); // rx_phys: 1M | 2M | Coded
-            phy.extend_from_slice(&0u16.to_le_bytes()); // phy_options
-            out.push(command(LE_SET_PHY, &phy));
-
-            // LE Set Data Length: max TX octets 251 (0x00FB), max TX time
-            // 2120 us (0x0848) — one large LL PDU instead of nine fragments.
-            out.push(command(
-                LE_SET_DATA_LENGTH,
-                &[h[0], h[1], 0xFB, 0x00, 0x48, 0x08],
-            ));
-
-            // LE Connection Update: interval 7.5–15 ms (0x0006–0x000C), no
-            // latency, 4 s supervision timeout (0x0190), CE length unconstrained.
-            out.push(command(
-                LE_CONNECTION_UPDATE,
-                &[
-                    h[0], h[1], 0x06, 0x00, 0x0C, 0x00, 0x00, 0x00, 0x90, 0x01, 0x00, 0x00, 0x00,
-                    0x00,
-                ],
+            out.extend(fast_link_commands(
+                self.central.connection_handle(),
+                &self.options,
             ));
         }
         match self.step {
