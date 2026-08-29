@@ -33,8 +33,11 @@ Bluetooth radio simulator.
 | **Web** | You want no-install interactive examples and device showcases | **[Start with the web demos](https://schilit.github.io/simble/)** |
 | **MCP** | An AI agent is creating, running, and testing devices | [Quick start 1](#quick-start-1-drive-it-from-an-ai-agent-mcp) |
 | **Native** | You need Rust integration, CI fixtures, netsim, or a USB dongle | [Quick start 4](#quick-start-4-use-it-as-a-library) |
+| **Android** | You want a real phone's radio in a scene — e.g. phone-to-phone BLE | [Phone-to-phone](docs/phone-to-phone.md) |
 
-All three use the same host stack with different transports.
+The first three are the same host stack reached through different transports, so
+they cannot diverge; **Android** is a standalone app that puts a real phone's
+radio into a scene.
 
 ---
 
@@ -49,6 +52,9 @@ inspect it, and try it in a browser.
 
 **Native** — run reproducible device tests locally or in CI, integrate SimBLE into Rust tests,
 or connect a scene to netsim or a USB dongle.
+
+**Android** — run [SimBLE Android](docs/phone-to-phone.md) to put a real phone's radio into a
+scene: a bulk BLE transfer between two phones, or a phone on one end and a scripted device on the other.
 
 Whichever surface you choose, you can also:
 
