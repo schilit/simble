@@ -11,8 +11,9 @@
 //! It is SimBLE's *own* first protocol; the netsim ws:// protocol it can also
 //! speak for compatibility is netsim's, not an earlier version of this one.
 //!
-//! Only `list_controllers` is implemented so far — the foundational
-//! observability op. `run` / `spawn` / `route` / the other verbs follow.
+//! Implemented so far: the four observability lists (`list_controllers` /
+//! `list_networks` / `list_devices` / `list_nodes`) and `run` (over a `Node`
+//! execution core). `spawn` / `route` / `stop` / the other verbs follow.
 
 use serde::{Deserialize, Serialize};
 
@@ -54,12 +55,52 @@ pub struct Device {
     pub status: Option<serde_json::Value>,
 }
 
+/// A world in the `/v1/networks` list: an ether, i.e. who-hears-whom. Sim ethers
+/// (`link`, `rootcanal`) are created/isolated; `real` is the one shared physical
+/// world; `netsim` is a leaf forward. Membership is read off `/v1/devices` (each
+/// device's controller carries its `network`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Network {
+    /// `link` | `real` | a `rootcanal` net name | `netsim`.
+    pub name: String,
+    /// `link` | `rf` | `rootcanal` | `netsim`.
+    pub kind: String,
+    /// True when the medium is deterministic (`tick()`-driven), i.e. `link`.
+    pub deterministic: bool,
+    /// True for the physical air, false for a simulated ether.
+    pub real: bool,
+    /// True for `real`: not creatable/isolatable, shared with all real radios.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub shared: bool,
+    /// True for `netsim`: forward to it, never through it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub leaf: bool,
+}
+
+/// A participant in the `/v1/nodes` list: something that owns controllers and
+/// executes runs (the local `simble` node, a phone, a browser).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeInfo {
+    /// `local` for the process serving this list; a phone/browser otherwise.
+    pub name: String,
+    /// `router` | `android` | `iphone` | `browser`.
+    pub kind: String,
+    /// The names of the controllers this node owns.
+    pub controllers: Vec<String>,
+}
+
 /// A v1 control request. Tagged by `op` on the wire: `{"op":"list_controllers"}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request {
     /// Enumerate the controllers this node offers.
     ListControllers,
+    /// Enumerate the worlds (ethers) this node offers.
+    ListNetworks,
+    /// Enumerate the devices currently running on this node.
+    ListDevices,
+    /// Enumerate the participants (nodes).
+    ListNodes,
     /// Run `script` as a device on `controller`. `address` is optional — a
     /// deterministic one is allocated when absent. Persistent until stopped.
     Run {
@@ -74,13 +115,28 @@ pub enum Request {
 }
 
 /// A v1 control response. Tagged by `type` on the wire.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
     /// The answer to `list_controllers`.
     Controllers {
         /// The controllers this node offers, in a stable order.
         controllers: Vec<Controller>,
+    },
+    /// The answer to `list_networks`.
+    Networks {
+        /// The worlds this node offers.
+        networks: Vec<Network>,
+    },
+    /// The answer to `list_devices`.
+    Devices {
+        /// The devices currently running.
+        devices: Vec<Device>,
+    },
+    /// The answer to `list_nodes`.
+    Nodes {
+        /// The participants.
+        nodes: Vec<NodeInfo>,
     },
     /// The answer to `run`: the device is running.
     Ran {
@@ -138,6 +194,46 @@ pub fn list_controllers() -> Vec<Controller> {
         controllers.extend(dongles.iter().map(usb_controller));
     }
     controllers
+}
+
+/// The worlds this node offers: the deterministic `link` always, and the shared
+/// `real` air when any dongle is present (real membership is only meaningful
+/// with a real controller to enter it through).
+pub fn list_networks() -> Vec<Network> {
+    let mut networks = vec![Network {
+        name: "link".to_string(),
+        kind: "link".to_string(),
+        deterministic: true,
+        real: false,
+        shared: false,
+        leaf: false,
+    }];
+    #[cfg(not(target_arch = "wasm32"))]
+    if crate::transport::usb::list_bluetooth_dongles()
+        .map(|d| !d.is_empty())
+        .unwrap_or(false)
+    {
+        networks.push(Network {
+            name: "real".to_string(),
+            kind: "rf".to_string(),
+            deterministic: false,
+            real: true,
+            shared: true,
+            leaf: false,
+        });
+    }
+    networks
+}
+
+/// The participants. Only the local `simble` node so far — it owns the
+/// controllers `list_controllers` reports. Registered phones/browsers will add
+/// entries here.
+pub fn list_nodes() -> Vec<NodeInfo> {
+    vec![NodeInfo {
+        name: "local".to_string(),
+        kind: "router".to_string(),
+        controllers: list_controllers().into_iter().map(|c| c.name).collect(),
+    }]
 }
 
 /// A v1 node's execution state: the controller it runs on and the devices on
@@ -238,6 +334,15 @@ pub fn dispatch(request: Request, node: &mut Option<Node>) -> Response {
         Request::ListControllers => Response::Controllers {
             controllers: list_controllers(),
         },
+        Request::ListNetworks => Response::Networks {
+            networks: list_networks(),
+        },
+        Request::ListDevices => Response::Devices {
+            devices: node.as_ref().map(Node::list_devices).unwrap_or_default(),
+        },
+        Request::ListNodes => Response::Nodes {
+            nodes: list_nodes(),
+        },
         Request::Run {
             controller,
             script,
@@ -329,6 +434,9 @@ pub fn handle_json(node: &mut Option<Node>, request_json: &str) -> String {
 pub fn handle_http(node: &mut Option<Node>, method: &str, path: &str, body: &str) -> HttpResponse {
     let request = match (method, path) {
         ("GET", "/v1/controllers") => Request::ListControllers,
+        ("GET", "/v1/networks") => Request::ListNetworks,
+        ("GET", "/v1/devices") => Request::ListDevices,
+        ("GET", "/v1/nodes") => Request::ListNodes,
         ("POST", "/v1/run") => match serde_json::from_str::<RunBody>(body) {
             Ok(b) => Request::Run {
                 controller: b.controller,
@@ -518,5 +626,32 @@ mod tests {
         // Malformed JSON is an Error response, not a panic.
         let out = handle_json(&mut node, "}{");
         assert!(out.contains("\"type\":\"error\""), "{out}");
+    }
+
+    #[test]
+    fn the_other_lists_are_present_and_routed() {
+        // link is always a network; the local node owns it.
+        let networks = list_networks();
+        assert!(networks.iter().any(|n| n.name == "link" && n.deterministic));
+        let nodes = list_nodes();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].name, "local");
+        assert!(nodes[0].controllers.iter().any(|c| c == "link"));
+
+        // All three GET routes answer 200 with their tagged body.
+        let mut node = None;
+        for (path, tag) in [
+            ("/v1/networks", "networks"),
+            ("/v1/devices", "devices"),
+            ("/v1/nodes", "nodes"),
+        ] {
+            let r = handle_http(&mut node, "GET", path, "");
+            assert_eq!(r.status, 200, "{path}");
+            assert!(
+                r.body.contains(&format!("\"type\":\"{tag}\"")),
+                "{}",
+                r.body
+            );
+        }
     }
 }
