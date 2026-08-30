@@ -12,10 +12,10 @@
 //! speak for compatibility is netsim's, not an earlier version of this one.
 //!
 //! Implemented so far: the four observability lists (`list_controllers` /
-//! `list_networks` / `list_devices` / `list_nodes`), `run`, `stop`, `tick`, and
-//! `get_clock` (over a `Node` execution core, runnable on the deterministic
-//! `link` controller with no hardware). `spawn` / `attach` / `route` / `send`
-//! and `create` / `register` follow.
+//! `list_networks` / `list_devices` / `list_nodes`), `run`, `stop`, `send`,
+//! `tick`, and `get_clock` (over a `Node` execution core, runnable on the
+//! deterministic `link` controller with no hardware). `spawn` / `attach` /
+//! `route` and `create` / `register` follow.
 
 use serde::{Deserialize, Serialize};
 
@@ -130,6 +130,18 @@ pub enum Request {
         /// The device index to stop (from `run` / `list_devices`).
         device: usize,
     },
+    /// Deliver an input `event` to the running device at `device` — its script
+    /// handles it in `fn on_event(server, event)` on the next tick. This is how a
+    /// caller triggers or mutates a device the script chose to expose.
+    Send {
+        /// The target device index.
+        device: usize,
+        /// The event name the script matches on (`event.event == …`).
+        event: String,
+        /// An optional JSON payload, merged into the event the script sees.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        data: Option<serde_json::Value>,
+    },
 }
 
 /// A v1 control response. Tagged by `type` on the wire.
@@ -166,6 +178,11 @@ pub enum Response {
     /// The answer to `stop`: the device was torn down.
     Stopped {
         /// The stopped device's index (still a valid handle, now inert).
+        device: usize,
+    },
+    /// The answer to `send`: the event was queued for the device's script.
+    Sent {
+        /// The device the event was delivered to.
         device: usize,
     },
     /// The answer to `tick`: the node's clock after advancing, and the absolute
@@ -368,6 +385,20 @@ impl Node {
     pub fn stop(&mut self, index: usize) -> Result<(), String> {
         self.scene.stop(index)
     }
+
+    /// Delivers an input `event` (with an optional JSON `data` payload) to the
+    /// device at `index` — its script sees it in `fn on_event` on the next tick.
+    pub fn send(
+        &mut self,
+        index: usize,
+        event: &str,
+        data: Option<&serde_json::Value>,
+    ) -> Result<(), String> {
+        let data_json = data
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "{}".to_string());
+        self.scene.send(index, event, &data_json)
+    }
 }
 
 /// Builds the scene for a named controller: `netsim` is the shared ether, a
@@ -464,6 +495,19 @@ pub fn dispatch(request: Request, node: &mut Option<Node>) -> Response {
                 message: "no device running — run something first".to_string(),
             },
         },
+        Request::Send {
+            device,
+            event,
+            data,
+        } => match node.as_mut() {
+            Some(node) => match node.send(device, &event, data.as_ref()) {
+                Ok(()) => Response::Sent { device },
+                Err(message) => Response::Error { message },
+            },
+            None => Response::Error {
+                message: "no device running — run something first".to_string(),
+            },
+        },
     }
 }
 
@@ -513,6 +557,16 @@ struct TickBody {
 #[derive(Deserialize)]
 struct StopBody {
     device: usize,
+}
+
+/// The body of `POST /v1/send`.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Deserialize)]
+struct SendBody {
+    device: usize,
+    event: String,
+    #[serde(default)]
+    data: Option<serde_json::Value>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -579,6 +633,21 @@ pub fn handle_http(node: &mut Option<Node>, method: &str, path: &str, body: &str
                     status: 400,
                     body: json_or_empty(&Response::Error {
                         message: format!("bad stop body: {e}"),
+                    }),
+                };
+            }
+        },
+        ("POST", "/v1/send") => match serde_json::from_str::<SendBody>(body) {
+            Ok(b) => Request::Send {
+                device: b.device,
+                event: b.event,
+                data: b.data,
+            },
+            Err(e) => {
+                return HttpResponse {
+                    status: 400,
+                    body: json_or_empty(&Response::Error {
+                        message: format!("bad send body: {e}"),
                     }),
                 };
             }
@@ -979,6 +1048,85 @@ mod tests {
         // Stopping an out-of-range index is an error, not a panic.
         assert!(matches!(
             dispatch(Request::Stop { device: 99 }, &mut node),
+            Response::Error { .. }
+        ));
+    }
+
+    // `send` delivers an input event the script handles in `fn on_event`, driving
+    // a real change a later `list_devices` observes.
+    #[test]
+    fn send_delivers_an_input_event_the_script_acts_on() {
+        // A button device: on the "press" event it writes 0x0063 to its
+        // characteristic; the value shows up in the device's status.
+        let script = r#"
+            let server = android::BluetoothGattServer("button");
+            let svc = android::BluetoothGattService(uuid::HEART_RATE_SERVICE, android::SERVICE_TYPE_PRIMARY);
+            let chr = android::BluetoothGattCharacteristic(
+                uuid::HEART_RATE_MEASUREMENT,
+                android::PROPERTY_READ | android::PROPERTY_NOTIFY,
+                android::PERMISSION_READ,
+            );
+            chr.set_value([0x00, 0x00]);
+            svc.add_characteristic(chr);
+            server.add_service(svc);
+            fn on_event(server, event) {
+                if event.event == "press" {
+                    server.update_value(uuid::HEART_RATE_MEASUREMENT, [0x00, 0x63]);
+                }
+            }
+        "#;
+        let mut node = None;
+        assert!(matches!(
+            dispatch(
+                Request::Run {
+                    controller: "link".to_string(),
+                    script: script.to_string(),
+                    address: None,
+                },
+                &mut node,
+            ),
+            Response::Ran { device: 0, .. }
+        ));
+
+        let value_of = |node: &mut Option<Node>| -> String {
+            let Response::Devices { devices } = dispatch(Request::ListDevices, node) else {
+                panic!("list");
+            };
+            devices[0].status.as_ref().unwrap()["services"][0]["characteristics"][0]["value"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+
+        // Before the event the characteristic is still zero.
+        dispatch(Request::Tick { advance_us: 1_000 }, &mut node);
+        assert_eq!(value_of(&mut node), "0000");
+
+        // Send the input; on the next tick the script handles it and the value changes.
+        assert_eq!(
+            dispatch(
+                Request::Send {
+                    device: 0,
+                    event: "press".to_string(),
+                    data: None,
+                },
+                &mut node,
+            ),
+            Response::Sent { device: 0 }
+        );
+        dispatch(Request::Tick { advance_us: 1_000 }, &mut node);
+        assert_eq!(value_of(&mut node), "0063");
+
+        // Sending to an unknown device is an error, not a panic.
+        assert!(matches!(
+            dispatch(
+                Request::Send {
+                    device: 99,
+                    event: "press".to_string(),
+                    data: None,
+                },
+                &mut node,
+            ),
             Response::Error { .. }
         ));
     }

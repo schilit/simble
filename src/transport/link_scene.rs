@@ -74,4 +74,7 @@ impl Scene for LinkScene {
     fn device_stopped(&self, index: usize) -> bool {
         self.engine.device_stopped(index)
     }
+    fn send(&mut self, index: usize, event: &str, data_json: &str) -> Result<(), String> {
+        self.engine.send(index, event, data_json)
+    }
 }

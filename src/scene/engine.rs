@@ -237,6 +237,27 @@ impl SceneEngine {
         self.devices.get(index).is_some_and(|d| d.stopped)
     }
 
+    /// Delivers an input event to the peripheral at `index`: its script sees it
+    /// in `fn on_event(server, event)` on the next tick, where `event.event` is
+    /// `event` and the `data_json` payload is merged in alongside. Errors if the
+    /// index is unknown or stopped, or the device is not a scriptable peripheral.
+    pub fn send(&mut self, index: usize, event: &str, data_json: &str) -> Result<(), String> {
+        let device = self
+            .devices
+            .get_mut(index)
+            .ok_or_else(|| format!("no device at index {index}"))?;
+        if device.stopped {
+            return Err(format!("device {index} is stopped"));
+        }
+        match &mut device.role {
+            SceneRole::Peripheral(p) => {
+                p.push_event(event, data_json);
+                Ok(())
+            }
+            _ => Err(format!("device {index} does not take input events")),
+        }
+    }
+
     /// Advances the whole scene one step at simulated time `t_seconds`: queues
     /// each device's bring-up on its first tick, lets peripherals run their
     /// scripts and emit notifications, routes advertising and data across the

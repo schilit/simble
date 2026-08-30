@@ -121,6 +121,14 @@ pub trait Scene {
         let _ = index;
         false
     }
+    /// Delivers an input event to the device at `index` — its script handles it
+    /// in `fn on_event(server, event)`, where `event.event` is `event` and
+    /// `data_json` (a JSON string) is merged in. Default: unsupported — only a
+    /// controller running scriptable devices overrides this.
+    fn send(&mut self, index: usize, event: &str, data_json: &str) -> Result<(), String> {
+        let (_, _, _) = (index, event, data_json);
+        Err("send is not supported on this controller".to_string())
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

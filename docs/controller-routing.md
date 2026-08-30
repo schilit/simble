@@ -691,8 +691,12 @@ completing the HTTP reader: `accept_inbound`/`Inbound::Request` now carries the
 `Content-Length` body (`read_http_body`), which the netsim-style bridge had never
 needed. Verified end to end with `curl`: `run` on `link` → `tick` (real
 `deadline_us`) → `clock` → `devices` → `stop`.
-Remaining: `spawn`/`attach`/`route`/`send` (each needs a new subsystem — the
-router, HCI streams, or script inputs) and `create`/`register`.
+**`send` is wired:** `send {device, event, data?}` delivers an input to a running
+device — it reuses the existing `push_event` → `fn on_event(server, event)` path
+(the same channel the UI/tests already push through), so a script exposes exactly
+the inputs it chooses. Supported on `link`; live backends default to unsupported.
+Remaining: `spawn`/`attach`/`route` (each needs a new subsystem — the router or
+HCI streams) and `create`/`register`.
 
 **Not built (the architecture proper):** the `hci-router`; the rest of the v1
 verbs and lists over HTTP REST / ws://; the formal node/network entities, the
