@@ -1272,12 +1272,13 @@ impl super::Scene for UsbScene {
     fn pump(&mut self) {
         self.pump()
     }
-    fn tick(&mut self, seconds: f64) -> Option<f64> {
-        UsbScene::tick(self, seconds);
-        self.next_timeout()
+    fn tick(&mut self, millis: f64) -> Option<f64> {
+        // The trait speaks milliseconds; the inherent clock is seconds.
+        UsbScene::tick(self, millis / 1000.0);
+        self.next_timeout_ms()
     }
-    fn now(&self) -> f64 {
-        UsbScene::now(self)
+    fn now_ms(&self) -> f64 {
+        UsbScene::now(self) * 1000.0
     }
     fn device_count(&self) -> usize {
         UsbScene::device_count(self)

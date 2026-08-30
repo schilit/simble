@@ -1136,12 +1136,13 @@ impl Server {
 
     fn tool_tick(&mut self, id: Option<Value>, seconds: f64) -> Value {
         if let Some(live) = self.live.as_mut() {
-            live.tick(seconds);
+            // The MCP tick tool is seconds-facing; the Scene trait is milliseconds.
+            live.tick(seconds * 1000.0);
             return tool_text(
                 id,
                 &format!(
                     "advanced to t={:.3}s ({} device(s) on {})",
-                    live.now(),
+                    live.now_ms() / 1000.0,
                     live.device_count(),
                     live.name()
                 ),

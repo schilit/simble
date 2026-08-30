@@ -67,14 +67,17 @@ pub trait Scene {
     ) -> Result<usize, String>;
     /// Moves packets both ways for every device on this controller.
     fn pump(&mut self);
-    /// Advances the scene's simulated clock by `seconds` and returns the sans-io
-    /// timeout — seconds until the next scheduled event — so a host can wait on a
-    /// timer instead of spinning `tick`. `None` means nothing is scheduled: wait
-    /// for a packet, or poll. The value comes from [`next_timeout`](Self::next_timeout),
-    /// which is `None` until devices report deadlines.
-    fn tick(&mut self, seconds: f64) -> Option<f64>;
-    /// The scene's current simulated time, in seconds.
-    fn now(&self) -> f64;
+    /// Advances the scene's simulated clock by `millis` and returns the sans-io
+    /// timeout — milliseconds until the next scheduled event — so a host can wait
+    /// on a timer instead of spinning `tick`. `None` means nothing is scheduled:
+    /// wait for a packet, or poll. The value comes from
+    /// [`next_timeout_ms`](Self::next_timeout_ms), which is `None` until devices
+    /// report deadlines. Milliseconds is the unit throughout: BLE/HCI timing is
+    /// milliseconds by convention (7.5 ms intervals, 0.625 ms slots), and it
+    /// matches the device model's internal `now_ms` clock.
+    fn tick(&mut self, millis: f64) -> Option<f64>;
+    /// The scene's current simulated time, in milliseconds.
+    fn now_ms(&self) -> f64;
     /// How many devices are on this controller.
     fn device_count(&self) -> usize;
     /// A device's render-ready status JSON, if the index is in range.
@@ -92,13 +95,13 @@ pub trait Scene {
     fn scanner_reports_json(&self) -> Option<String> {
         None
     }
-    /// Seconds until this scene's next scheduled event — the sans-io hook that
-    /// lets a host wait on a timer instead of spinning `tick`/`pump`. `None`
+    /// Milliseconds until this scene's next scheduled event — the sans-io hook
+    /// that lets a host wait on a timer instead of spinning `tick`/`pump`. `None`
     /// means nothing is scheduled, so the host should wait for a packet (or poll
     /// at its own cadence). Default `None`: the device model is tick-polled today
     /// and reports no deadlines; a real value awaits devices exposing their next
     /// fire time (see `docs/controller-routing.md`).
-    fn next_timeout(&self) -> Option<f64> {
+    fn next_timeout_ms(&self) -> Option<f64> {
         None
     }
 }

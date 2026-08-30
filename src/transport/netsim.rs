@@ -479,12 +479,13 @@ impl super::Scene for NetsimScene {
     fn pump(&mut self) {
         self.pump()
     }
-    fn tick(&mut self, seconds: f64) -> Option<f64> {
-        NetsimScene::tick(self, seconds);
-        self.next_timeout()
+    fn tick(&mut self, millis: f64) -> Option<f64> {
+        // The trait speaks milliseconds; the inherent clock is seconds.
+        NetsimScene::tick(self, millis / 1000.0);
+        self.next_timeout_ms()
     }
-    fn now(&self) -> f64 {
-        NetsimScene::now(self)
+    fn now_ms(&self) -> f64 {
+        NetsimScene::now(self) * 1000.0
     }
     fn device_count(&self) -> usize {
         NetsimScene::device_count(self)
