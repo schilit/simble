@@ -270,6 +270,101 @@ pub fn dispatch(request: Request, node: &mut Option<Node>) -> Response {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The request-handling API.
+//
+// v1 does not ship a server: a host that runs it — netsim, a CLI, a browser —
+// already has an http/ws server, and bundling a second one would be wrong. So
+// these are the entry points a host's server calls, at three levels: typed
+// (`dispatch`), a JSON string in/out (`handle_json`, for a ws or any JSON
+// transport), and an HTTP method+path+body → status+body (`handle_http`, for a
+// REST server). Any *default* standalone server we add later is a feature on
+// top of these; the API itself has no server dependency.
+// ---------------------------------------------------------------------------
+
+/// A minimal HTTP result: a status code and a JSON body. The caller writes it
+/// onto its own socket (and sets `Content-Type: application/json`).
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpResponse {
+    /// HTTP status code (200 on success, 400 on an error, 404 for an unknown
+    /// route).
+    pub status: u16,
+    /// The JSON body — a serialized [`Response`].
+    pub body: String,
+}
+
+/// The body of `POST /v1/run` (the op is the path, so it is not in the body).
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Deserialize)]
+struct RunBody {
+    controller: String,
+    script: String,
+    #[serde(default)]
+    address: Option<String>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn json_or_empty<T: Serialize>(value: &T) -> String {
+    serde_json::to_string(value).unwrap_or_default()
+}
+
+/// Handles a JSON request string and returns a JSON response string — the entry
+/// point a ws:// (or any JSON) transport calls. Malformed JSON is an `Error`
+/// response, not a panic.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn handle_json(node: &mut Option<Node>, request_json: &str) -> String {
+    match serde_json::from_str::<Request>(request_json) {
+        Ok(request) => json_or_empty(&dispatch(request, node)),
+        Err(e) => json_or_empty(&Response::Error {
+            message: format!("bad request: {e}"),
+        }),
+    }
+}
+
+/// Routes an HTTP request (method + path + body) to a v1 op and returns the
+/// status and JSON body — the entry point a REST server calls. The op is the
+/// route; the body carries its parameters.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn handle_http(node: &mut Option<Node>, method: &str, path: &str, body: &str) -> HttpResponse {
+    let request = match (method, path) {
+        ("GET", "/v1/controllers") => Request::ListControllers,
+        ("POST", "/v1/run") => match serde_json::from_str::<RunBody>(body) {
+            Ok(b) => Request::Run {
+                controller: b.controller,
+                script: b.script,
+                address: b.address,
+            },
+            Err(e) => {
+                return HttpResponse {
+                    status: 400,
+                    body: json_or_empty(&Response::Error {
+                        message: format!("bad run body: {e}"),
+                    }),
+                };
+            }
+        },
+        _ => {
+            return HttpResponse {
+                status: 404,
+                body: json_or_empty(&Response::Error {
+                    message: format!("no v1 route for {method} {path}"),
+                }),
+            };
+        }
+    };
+    let response = dispatch(request, node);
+    let status = if matches!(response, Response::Error { .. }) {
+        400
+    } else {
+        200
+    };
+    HttpResponse {
+        status,
+        body: json_or_empty(&response),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,5 +484,39 @@ mod tests {
             panic!("an unknown controller must error");
         };
         assert!(message.contains("unknown controller"), "{message}");
+    }
+
+    #[test]
+    fn handle_http_routes_and_status_codes() {
+        let mut node = None;
+        // GET /v1/controllers → 200 with the controller list.
+        let r = handle_http(&mut node, "GET", "/v1/controllers", "");
+        assert_eq!(r.status, 200);
+        assert!(r.body.contains("\"link\""), "{}", r.body);
+        // POST /v1/run with a malformed body → 400.
+        let r = handle_http(&mut node, "POST", "/v1/run", "not json");
+        assert_eq!(r.status, 400);
+        // POST /v1/run onto an unwired controller → 400 (the dispatch error).
+        let r = handle_http(
+            &mut node,
+            "POST",
+            "/v1/run",
+            r#"{"controller":"link","script":"x"}"#,
+        );
+        assert_eq!(r.status, 400);
+        assert!(r.body.contains("link"), "{}", r.body);
+        // An unknown route → 404.
+        let r = handle_http(&mut node, "DELETE", "/v1/nope", "");
+        assert_eq!(r.status, 404);
+    }
+
+    #[test]
+    fn handle_json_dispatches_and_survives_garbage() {
+        let mut node = None;
+        let out = handle_json(&mut node, r#"{"op":"list_controllers"}"#);
+        assert!(out.contains("\"type\":\"controllers\""), "{out}");
+        // Malformed JSON is an Error response, not a panic.
+        let out = handle_json(&mut node, "}{");
+        assert!(out.contains("\"type\":\"error\""), "{out}");
     }
 }
