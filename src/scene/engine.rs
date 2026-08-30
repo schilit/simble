@@ -185,6 +185,19 @@ impl SceneEngine {
         self.devices.len()
     }
 
+    /// The earliest absolute wake time (script-clock seconds) any peripheral has
+    /// declared with the `wake_at` binding, or `None` — the deterministic scene's
+    /// sans-io deadline, folded across devices.
+    pub fn next_deadline(&self) -> Option<f64> {
+        self.devices
+            .iter()
+            .filter_map(|d| match &d.role {
+                SceneRole::Peripheral(p) => p.next_wake(),
+                _ => None,
+            })
+            .reduce(f64::min)
+    }
+
     /// Advances the whole scene one step at simulated time `t_seconds`: queues
     /// each device's bring-up on its first tick, lets peripherals run their
     /// scripts and emit notifications, routes advertising and data across the

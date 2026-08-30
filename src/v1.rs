@@ -367,7 +367,7 @@ pub fn scene_for_controller(name: &str) -> Result<Box<dyn crate::transport::Scen
         return Ok(Box::new(UsbScene::new(UsbSelector::Index(index))));
     }
     if name == "link" {
-        return Err("`link` is the deterministic self path — not wired for v1 run yet".to_string());
+        return Ok(Box::new(crate::transport::link_scene::LinkScene::new()));
     }
     Err(format!("unknown controller {name:?}"))
 }
@@ -656,28 +656,33 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_run_rejects_unwired_and_unknown_controllers() {
-        // Neither of these needs hardware: `scene_for_controller` refuses them
-        // before any scene is built.
+    fn dispatch_run_rejects_unknown_controller_and_bad_script() {
+        // An unknown controller is refused before any scene is built — no hardware.
         let mut node = None;
-        let mut bad = |controller: &str| {
-            dispatch(
-                Request::Run {
-                    controller: controller.to_string(),
-                    script: "x".to_string(),
-                    address: None,
-                },
-                &mut node,
-            )
-        };
-        let Response::Error { message } = bad("link") else {
-            panic!("link run is not wired yet");
-        };
-        assert!(message.contains("link"), "{message}");
-        let Response::Error { message } = bad("bogus") else {
+        let Response::Error { message } = dispatch(
+            Request::Run {
+                controller: "bogus".to_string(),
+                script: "x".to_string(),
+                address: None,
+            },
+            &mut node,
+        ) else {
             panic!("an unknown controller must error");
         };
         assert!(message.contains("unknown controller"), "{message}");
+
+        // `link` is wired (the deterministic self path), so it builds a scene —
+        // but a broken script is still rejected rather than run.
+        let Response::Error { .. } = dispatch(
+            Request::Run {
+                controller: "link".to_string(),
+                script: "let x = ;".to_string(),
+                address: None,
+            },
+            &mut node,
+        ) else {
+            panic!("a broken script must error");
+        };
     }
 
     #[test]
@@ -690,15 +695,15 @@ mod tests {
         // POST /v1/run with a malformed body → 400.
         let r = handle_http(&mut node, "POST", "/v1/run", "not json");
         assert_eq!(r.status, 400);
-        // POST /v1/run onto an unwired controller → 400 (the dispatch error).
+        // POST /v1/run onto an unknown controller → 400 (the dispatch error).
         let r = handle_http(
             &mut node,
             "POST",
             "/v1/run",
-            r#"{"controller":"link","script":"x"}"#,
+            r#"{"controller":"bogus","script":"x"}"#,
         );
         assert_eq!(r.status, 400);
-        assert!(r.body.contains("link"), "{}", r.body);
+        assert!(r.body.contains("unknown controller"), "{}", r.body);
         // An unknown route → 404.
         let r = handle_http(&mut node, "DELETE", "/v1/nope", "");
         assert_eq!(r.status, 404);
@@ -796,5 +801,56 @@ mod tests {
         let r = handle_http(&mut None, "GET", "/v1/clock", "");
         assert_eq!(r.status, 200);
         assert!(r.body.contains("\"type\":\"clock\""), "{}", r.body);
+    }
+
+    // The `link` controller runs the deterministic in-process scene, so the whole
+    // v1 loop — run → tick → clock, with a real device-declared deadline — works
+    // with no netsim or USB hardware.
+    #[test]
+    fn run_on_link_ticks_and_reports_a_real_deadline() {
+        let script = r#"
+            let server = android::BluetoothGattServer("waker");
+            fn tick(server, t) { server.wake_at(t + 0.05); }
+        "#;
+        let mut node = None;
+        let Response::Ran { controller, .. } = dispatch(
+            Request::Run {
+                controller: "link".to_string(),
+                script: script.to_string(),
+                address: None,
+            },
+            &mut node,
+        ) else {
+            panic!("run on link must succeed");
+        };
+        assert_eq!(controller, "link");
+
+        // Advance 1 s (1_000_000 µs). The device asked to wake 50 ms later, so the
+        // absolute deadline is the µs clock at 1.05 s.
+        let Response::Ticked {
+            now_us,
+            deadline_us,
+        } = dispatch(
+            Request::Tick {
+                advance_us: 1_000_000,
+            },
+            &mut node,
+        )
+        else {
+            panic!("tick must answer Ticked");
+        };
+        assert_eq!(now_us, 1_000_000);
+        assert_eq!(deadline_us, Some(1_050_000));
+
+        // get_clock peeks the same clock and deadline without advancing.
+        let Response::Clock {
+            now_us,
+            deadline_us,
+        } = dispatch(Request::GetClock, &mut node)
+        else {
+            panic!("get_clock must answer Clock");
+        };
+        assert_eq!(now_us, 1_000_000);
+        assert_eq!(deadline_us, Some(1_050_000));
     }
 }

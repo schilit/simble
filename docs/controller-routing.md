@@ -674,9 +674,14 @@ advances by `advance_us` and returns the absolute clock of the next event,
 `LiveScene::next_deadline` folds the earliest across devices into the µs clock —
 so a host waits *until* the deadline instead of spinning. A device that declares
 nothing reports `None` (wait for a packet, or poll).
+The **`link` (self) run path is wired**: `scene_for_controller("link")` builds a
+`LinkScene` over the in-process `SceneEngine` (the deterministic shared-`Link`
+medium mcp's self mode uses), so the whole loop — `run` → `tick` → `get_clock`
+with a real device deadline — runs with no netsim or USB hardware, exercised in a
+plain unit test.
 Remaining: `spawn`/`attach`/`route`/`stop`/`send` (each needs a new subsystem —
 device removal, the router, HCI streams, or script inputs), `create`/`register`,
-the `link` (self) run path, and an optional default server.
+and an optional default server.
 
 **Not built (the architecture proper):** the `hci-router`; the rest of the v1
 verbs and lists over HTTP REST / ws://; the formal node/network entities, the

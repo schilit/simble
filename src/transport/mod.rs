@@ -13,6 +13,8 @@ pub mod scan_report;
 // `wasm_ws` instead, whose JS-binding half is gated inside the module so its
 // pure-Rust demo engines stay natively compiled and natively tested.
 #[cfg(not(target_arch = "wasm32"))]
+pub(crate) mod link_scene;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod live;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) mod live_scene;
