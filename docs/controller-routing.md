@@ -662,10 +662,15 @@ execution core: a `Box<dyn Scene>` + address allocator, `run`/`list_devices`/
 deferred) — MCP keeps its `Server`, both on the same `Scene` trait. The **request-handling
 API** (c032e96) is done — `dispatch` (typed), `handle_json` (ws), `handle_http`
 (REST routing) — server-agnostic, so a host's own server calls it (no bundled
-server; a default one would be a feature). Remaining:
-`spawn`/`attach`/`route`/`stop`/`tick`/`send`, the `/v1/{networks,devices,nodes}`
-lists, `create`/`register`, the `link` (self) run path, and an optional default
-server.
+server; a default one would be a feature). The **four lists** are complete
+(ac9066f: `/v1/{controllers,networks,devices,nodes}` + the `Network`/`NodeInfo`
+entities), and **`tick`** (00440b7) and a sans-io **`get_timer`** (c02adc6:
+`Scene::next_timeout`, `None` until devices report deadlines) are wired.
+Remaining: `spawn`/`attach`/`route`/`stop`/`send` (each needs a new subsystem —
+device removal, the router, HCI streams, or script inputs), `create`/`register`,
+the `link` (self) run path, an optional default server, and — for a *real*
+timer — device-model deadline reporting (the tick-polled devices expose no next
+fire time yet, which is why `next_timeout` is `None`).
 
 **Not built (the architecture proper):** the `hci-router`; the rest of the v1
 verbs and lists over HTTP REST / ws://; the formal node/network entities, the
