@@ -341,6 +341,82 @@ pub fn list_nodes() -> Vec<NodeInfo> {
     }]
 }
 
+/// Makes and advertises the controllers a [`Node`] can run on — the injection
+/// seam for backends. The built-in factory ([`BuiltinControllers`]) knows `link`,
+/// `usb` dongles, and `netsim`; an external crate (a `rootcanal-rs` backend, say)
+/// implements this for its own controllers, and an application composes them with
+/// [`Node::with_factory`] — so `simble-stack` never depends on the backend, only
+/// on this trait. This is where `rootcanal-rs` plugs in as a controller factory.
+#[cfg(not(target_arch = "wasm32"))]
+pub trait ControllerFactory {
+    /// Builds the controller named `name`, or an error if this factory does not
+    /// offer it.
+    fn create(&self, name: &str) -> Result<Box<dyn crate::transport::Scene>, String>;
+    /// The controllers this factory offers, for `list_controllers`. Default: none
+    /// advertised — create-by-name still works, the list just won't show them.
+    fn available(&self) -> Vec<Controller> {
+        Vec::new()
+    }
+}
+
+/// The built-in controllers a plain [`Node`] uses: `link` (deterministic
+/// in-process), `usb` dongles, and `netsim`.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct BuiltinControllers;
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ControllerFactory for BuiltinControllers {
+    fn create(&self, name: &str) -> Result<Box<dyn crate::transport::Scene>, String> {
+        scene_for_controller(name)
+    }
+    fn available(&self) -> Vec<Controller> {
+        list_controllers()
+    }
+}
+
+/// A [`ControllerFactory`] that tries several in order — how an app adds a
+/// backend factory *alongside* the built-in one (e.g.
+/// `CompositeFactory::new(vec![rootcanal_factory, Box::new(BuiltinControllers)])`).
+/// `create` returns the first factory that offers the name; `available`
+/// concatenates them, first wins on a name clash.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct CompositeFactory {
+    factories: Vec<Box<dyn ControllerFactory>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl CompositeFactory {
+    /// Composes `factories`, tried in order.
+    pub fn new(factories: Vec<Box<dyn ControllerFactory>>) -> Self {
+        Self { factories }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ControllerFactory for CompositeFactory {
+    fn create(&self, name: &str) -> Result<Box<dyn crate::transport::Scene>, String> {
+        let mut last = format!("no factory offers controller {name:?}");
+        for factory in &self.factories {
+            match factory.create(name) {
+                Ok(scene) => return Ok(scene),
+                Err(e) => last = e,
+            }
+        }
+        Err(last)
+    }
+    fn available(&self) -> Vec<Controller> {
+        let mut out: Vec<Controller> = Vec::new();
+        for factory in &self.factories {
+            for c in factory.available() {
+                if !out.iter().any(|x| x.name == c.name) {
+                    out.push(c);
+                }
+            }
+        }
+        out
+    }
+}
+
 /// A v1 node: a router that owns named controllers and the devices running on
 /// them. This is the "many controllers" node the design calls for — a device has
 /// one **stable global handle** (its `index` on the node) that survives `stop`
@@ -364,6 +440,9 @@ pub struct Node {
     /// reflects; this node does not drive them (cross-node orchestration is the
     /// client's job).
     registered: Vec<NodeInfo>,
+    /// Makes controllers by name (the injection seam). Defaults to the built-in
+    /// `link`/`usb`/`netsim` set; an app injects a backend factory to add more.
+    factory: Box<dyn ControllerFactory>,
 }
 
 /// One named controller a node owns.
@@ -393,15 +472,35 @@ impl Default for Node {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Node {
-    /// An empty node — no controllers, no devices, clock at zero.
+    /// An empty node using the built-in controllers (`link`/`usb`/`netsim`).
     pub fn new() -> Self {
+        Self::with_factory(Box::new(BuiltinControllers))
+    }
+
+    /// An empty node whose controllers come from `factory` — the injection point
+    /// for a backend (e.g. an app composing a `rootcanal-rs` factory with the
+    /// built-in one). This is "create simble with a controller factory".
+    pub fn with_factory(factory: Box<dyn ControllerFactory>) -> Self {
         Self {
             controllers: Vec::new(),
             devices: Vec::new(),
             clock_us: 0,
             next_addr: 1,
             registered: Vec::new(),
+            factory,
         }
+    }
+
+    /// The controllers this node offers: what its factory advertises, plus any it
+    /// has `create`d that the factory did not already list.
+    pub fn available_controllers(&self) -> Vec<Controller> {
+        let mut controllers = self.factory.available();
+        for name in self.controller_names() {
+            if !controllers.iter().any(|c| c.name == name) {
+                controllers.push(created_controller(&name));
+            }
+        }
+        controllers
     }
 
     /// The names of the controllers this node owns (built-in or `create`d).
@@ -421,7 +520,7 @@ impl Node {
         if let Some(i) = self.controllers.iter().position(|c| c.name == name) {
             return Ok(i);
         }
-        let mut scene = scene_for_controller(name)?;
+        let mut scene = self.factory.create(name)?;
         if self.clock_us > 0 {
             scene.tick(self.clock_us);
         }
@@ -749,18 +848,14 @@ fn created_controller(name: &str) -> Controller {
     }
 }
 
-/// The built-in controllers plus any the node has `create`d.
+/// The controllers on offer — from the node's factory (plus what it `create`d)
+/// once a node exists, or the built-in set before one does.
 #[cfg(not(target_arch = "wasm32"))]
 fn merged_controllers(node: &Option<Node>) -> Vec<Controller> {
-    let mut controllers = list_controllers();
-    if let Some(node) = node {
-        for name in node.controller_names() {
-            if !controllers.iter().any(|c| c.name == name) {
-                controllers.push(created_controller(&name));
-            }
-        }
+    match node {
+        Some(node) => node.available_controllers(),
+        None => list_controllers(),
     }
-    controllers
 }
 
 /// The built-in networks plus a private ether for each `create`d controller.
@@ -788,7 +883,14 @@ fn merged_networks(node: &Option<Node>) -> Vec<Network> {
 /// nodes `register`ed with it.
 #[cfg(not(target_arch = "wasm32"))]
 fn merged_nodes(node: &Option<Node>) -> Vec<NodeInfo> {
-    let mut controllers: Vec<String> = list_controllers().into_iter().map(|c| c.name).collect();
+    let mut controllers: Vec<String> = match node {
+        Some(node) => node
+            .available_controllers()
+            .into_iter()
+            .map(|c| c.name)
+            .collect(),
+        None => list_controllers().into_iter().map(|c| c.name).collect(),
+    };
     let mut nodes = Vec::new();
     if let Some(node) = node {
         for name in node.controller_names() {
@@ -1575,5 +1677,78 @@ mod tests {
             script: script.to_string(),
             address: None,
         }
+    }
+
+    // The factory seam: an external backend injects its own controllers without
+    // `simble-stack` knowing them — the pattern a `rootcanal-rs` backend uses.
+    #[test]
+    fn a_custom_controller_factory_injects_new_controllers() {
+        // An external backend's factory offers one controller, "backend-0",
+        // built from a LinkScene here (a rootcanal-rs actor in the real thing).
+        struct BackendFactory;
+        impl ControllerFactory for BackendFactory {
+            fn create(&self, name: &str) -> Result<Box<dyn crate::transport::Scene>, String> {
+                if name == "backend-0" {
+                    Ok(Box::new(crate::transport::link_scene::LinkScene::new()))
+                } else {
+                    Err(format!("BackendFactory does not offer {name:?}"))
+                }
+            }
+            fn available(&self) -> Vec<Controller> {
+                vec![Controller {
+                    name: "backend-0".to_string(),
+                    kind: "rootcanal".to_string(),
+                    api_class: "hci".to_string(),
+                    network: "backend-net".to_string(),
+                    real: false,
+                    deterministic: false,
+                    attachable: true,
+                    product: Some("injected backend".to_string()),
+                }]
+            }
+        }
+
+        // The app composes the backend with the built-in controllers.
+        let factory =
+            CompositeFactory::new(vec![Box::new(BackendFactory), Box::new(BuiltinControllers)]);
+        let mut node = Some(Node::with_factory(Box::new(factory)));
+
+        // The list shows the injected controller alongside the built-in `link`.
+        let Response::Controllers { controllers } = dispatch(Request::ListControllers, &mut node)
+        else {
+            panic!("controllers");
+        };
+        assert!(
+            controllers
+                .iter()
+                .any(|c| c.name == "backend-0" && c.kind == "rootcanal"),
+            "the injected controller must be listed"
+        );
+        assert!(controllers.iter().any(|c| c.name == "link"));
+
+        // A device runs on the injected controller (its factory built the scene)…
+        assert!(matches!(
+            dispatch(run_req("backend-0", BARE_DEVICE), &mut node),
+            Response::Ran { device: 0, .. }
+        ));
+        // …and on the built-in one too, through the same composed factory.
+        assert!(matches!(
+            dispatch(run_req("link", BARE_DEVICE), &mut node),
+            Response::Ran { device: 1, .. }
+        ));
+        // A device can then route from the built-in world onto the injected one.
+        assert_eq!(
+            dispatch(
+                Request::Route {
+                    device: 1,
+                    controller: "backend-0".to_string(),
+                },
+                &mut node,
+            ),
+            Response::Routed {
+                device: 1,
+                controller: "backend-0".to_string(),
+            }
+        );
     }
 }

@@ -788,6 +788,19 @@ its shape:
   `simble-stack`**. simble only keeps `HciTransport`, the HCI packet types, and the
   H4 codec public — which it already does.
 
+- **The injection seam is a `ControllerFactory` (built, in `simble-stack`).** A
+  `Node` no longer hard-codes `scene_for_controller`; it holds a
+  `Box<dyn ControllerFactory>` — `create(name) -> Box<dyn Scene>` plus
+  `available() -> Vec<Controller>` for the lists. `BuiltinControllers` is the
+  default (`link`/`usb`/`netsim`); `CompositeFactory` tries several in order. So an
+  app builds `Node::with_factory(CompositeFactory::new(vec![rootcanal_factory,
+  Box::new(BuiltinControllers)]))`, where the `rootcanal-rs` crate supplies
+  `rootcanal_factory: impl ControllerFactory` (its `create` builds the actor +
+  `HciTransport` bridge + `LiveScene`). `simble-stack` depends only on the trait —
+  this is precisely "create simble with a `rootcanal-rs` factory for creating
+  controllers". A unit test injects a custom factory, lists its controller, runs a
+  device on it, and routes onto it, all with no backend crate present.
+
 - **Backends are Cargo features on the backend crate** (default `Link` + `usb`;
   opt-in `rootcanal`, `netsim`), and switching one injects an HCI Hardware Error
   (`0x10`) upward so the host re-inits — the same drop-and-re-run the device
