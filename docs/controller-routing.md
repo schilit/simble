@@ -612,3 +612,36 @@ So MCP exposes both to the agent: run on the local node's controllers (node), an
 list/connect/run across other nodes (client). Today reaching a phone is adb + HTTP
 with fixed Java roles; a phone speaking the v1 ws:// protocol and arbitrary-Rhai
 on-device both need the scaffolded `android/rust` engine.
+
+## 2026-08-29 — current state vs. the design
+
+Where the code actually is, measured against the model above. The design ran
+ahead of the code (it is a spec), but the foundation is real and one core path
+already works.
+
+**Built, and the closest thing to the whole idea:** MCP's `LiveBackend::{Netsim,
+Usb}` — `add_peripheral(address, script)` + `pump`/`tick`. An agent can `run` a
+scripted device on netsim **or** a dongle today. Also built: the individual
+backends (`Link` in `controller/sim.rs`, `NetsimScene`, `UsbScene`,
+`RootcanalTransport`, `LiveTransport`), the transport-agnostic stack, MCP over
+stdio and ws:// (`simble mcp --ws-server`), and the phone/browser surfaces.
+
+**Converged but not formalised:** the scenes share `new`/`add_peripheral`/`pump`/
+`tick` as *separate* methods; there is an `HciTransport` trait but **no unified
+`Controller` trait**. `LiveBackend` (a 2-variant `Netsim|Usb`) is the embryo of
+"which controller".
+
+**Not built (the architecture proper):** the `Controller` trait; the `hci-router`;
+the v1 ws:// protocol (`list`/`run`/`attach`/`route`/`networks`/`nodes` + the four
+lists); the formal node/network/device entities, `api_class` gate, and `register`;
+`route` (the `0x10` live switch); the private-network create/destroy namespace;
+**gRPC `PacketStreamer`** to serve the emulator (confirmed absent — `mcp.rs` says
+"no tonic"); `rootcanal-rs` at runtime (`cfg`-dev-dep only); on-device Rhai
+(`android/rust` is scaffolded, phones run fixed Java roles).
+
+**Distance:** *small* — the `Controller` trait (formalise the shared shape, no new
+deps; sequencing step 2, and it shrinks the rest). *Medium* — the v1 protocol as a
+thin server over `LiveBackend`-style dispatch (MCP-over-ws is a frame), `route`/
+`0x10`, the network namespace. *Large* — gRPC `PacketStreamer` + emulator serving
+(a new dependency class), the full node/registration model, on-device Rhai. None
+of it is blocked now that the emulator premise holds; it is unwritten, not gated.
