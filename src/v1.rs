@@ -118,6 +118,9 @@ pub enum Request {
         /// How far to advance, in seconds.
         seconds: f64,
     },
+    /// Ask when this node next needs attention, so the caller can wait on a
+    /// timer instead of spinning `tick`.
+    GetTimer,
 }
 
 /// A v1 control response. Tagged by `type` on the wire.
@@ -155,6 +158,12 @@ pub enum Response {
     Ticked {
         /// The node's simulated time now, in seconds.
         now: f64,
+    },
+    /// The answer to `get_timer`: seconds until the next scheduled event, or
+    /// `null` when nothing is scheduled (wait for a packet, or poll).
+    Timer {
+        /// Seconds until the next event, or `None`.
+        seconds: Option<f64>,
     },
     /// A request that could not be served.
     Error {
@@ -305,6 +314,14 @@ impl Node {
         self.scene.now()
     }
 
+    /// Seconds until this node's next scheduled event, so a host can wait on a
+    /// timer instead of spinning. `None` means nothing is scheduled — wait for a
+    /// packet or poll. (Real deadlines await device-model support; the scene
+    /// returns `None` for now.)
+    pub fn next_timeout(&self) -> Option<f64> {
+        self.scene.next_timeout()
+    }
+
     /// The devices running on this node.
     pub fn list_devices(&self) -> Vec<Device> {
         (0..self.scene.device_count())
@@ -398,6 +415,9 @@ pub fn dispatch(request: Request, node: &mut Option<Node>) -> Response {
                 message: "no device running — run something first".to_string(),
             },
         },
+        Request::GetTimer => Response::Timer {
+            seconds: node.as_ref().and_then(Node::next_timeout),
+        },
     }
 }
 
@@ -470,6 +490,7 @@ pub fn handle_http(node: &mut Option<Node>, method: &str, path: &str, body: &str
         ("GET", "/v1/networks") => Request::ListNetworks,
         ("GET", "/v1/devices") => Request::ListDevices,
         ("GET", "/v1/nodes") => Request::ListNodes,
+        ("GET", "/v1/timer") => Request::GetTimer,
         ("POST", "/v1/run") => match serde_json::from_str::<RunBody>(body) {
             Ok(b) => Request::Run {
                 controller: b.controller,
@@ -715,5 +736,28 @@ mod tests {
         // A malformed tick body is a 400, not a panic.
         let r = handle_http(&mut None, "POST", "/v1/tick", "not json");
         assert_eq!(r.status, 400);
+    }
+
+    #[test]
+    fn get_timer_reports_the_next_deadline_or_none() {
+        // No node, and the tick-polled model reports no deadline yet, so the
+        // timer is `null` — the host waits for a packet or polls. The op and the
+        // route exist so a host can write the wait-on-timer loop today; a real
+        // value lands when devices expose their next fire time.
+        let mut node = None;
+        let Response::Timer { seconds } = dispatch(Request::GetTimer, &mut node) else {
+            panic!("get_timer must answer Timer");
+        };
+        assert_eq!(seconds, None);
+
+        let mut node = Some(Node::new(Box::new(MockScene { added: Vec::new() })));
+        let Response::Timer { seconds } = dispatch(Request::GetTimer, &mut node) else {
+            panic!("get_timer must answer Timer");
+        };
+        assert_eq!(seconds, None);
+
+        let r = handle_http(&mut None, "GET", "/v1/timer", "");
+        assert_eq!(r.status, 200);
+        assert!(r.body.contains("\"type\":\"timer\""), "{}", r.body);
     }
 }

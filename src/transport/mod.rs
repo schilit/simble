@@ -88,6 +88,15 @@ pub trait Scene {
     fn scanner_reports_json(&self) -> Option<String> {
         None
     }
+    /// Seconds until this scene's next scheduled event — the sans-io hook that
+    /// lets a host wait on a timer instead of spinning `tick`/`pump`. `None`
+    /// means nothing is scheduled, so the host should wait for a packet (or poll
+    /// at its own cadence). Default `None`: the device model is tick-polled today
+    /// and reports no deadlines; a real value awaits devices exposing their next
+    /// fire time (see `docs/controller-routing.md`).
+    fn next_timeout(&self) -> Option<f64> {
+        None
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
