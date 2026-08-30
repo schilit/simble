@@ -41,12 +41,36 @@ pub struct Controller {
     pub product: Option<String>,
 }
 
+/// A running device in the `/v1/devices` list: an instance of a script on a
+/// controller.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Device {
+    /// The device's index on its controller.
+    pub index: usize,
+    /// The controller (its route) this device runs on.
+    pub controller: String,
+    /// Render-ready status, if the controller reports it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<serde_json::Value>,
+}
+
 /// A v1 control request. Tagged by `op` on the wire: `{"op":"list_controllers"}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request {
     /// Enumerate the controllers this node offers.
     ListControllers,
+    /// Run `script` as a device on `controller`. `address` is optional — a
+    /// deterministic one is allocated when absent. Persistent until stopped.
+    Run {
+        /// The controller to run on (`netsim`, `dongle-0`, …).
+        controller: String,
+        /// The Rhai device source.
+        script: String,
+        /// An optional BD_ADDR, e.g. `CC:1E:57:00:00:06`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        address: Option<String>,
+    },
 }
 
 /// A v1 control response. Tagged by `type` on the wire.
@@ -57,6 +81,13 @@ pub enum Response {
     Controllers {
         /// The controllers this node offers, in a stable order.
         controllers: Vec<Controller>,
+    },
+    /// The answer to `run`: the device is running.
+    Ran {
+        /// The new device's index on its controller.
+        device: usize,
+        /// The controller it runs on.
+        controller: String,
     },
     /// A request that could not be served.
     Error {
@@ -109,12 +140,133 @@ pub fn list_controllers() -> Vec<Controller> {
     controllers
 }
 
-/// Handles one v1 request and produces its response.
-pub fn dispatch(request: Request) -> Response {
+/// A v1 node's execution state: the controller it runs on and the devices on
+/// it. One controller per node for now (many controllers is the router). MCP
+/// keeps its own `Server`; this is the v1 interface's node, and both sit on the
+/// same `transport::Scene` trait underneath.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct Node {
+    scene: Box<dyn crate::transport::Scene>,
+    next_addr: u16,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Node {
+    /// A node running on `scene`.
+    pub fn new(scene: Box<dyn crate::transport::Scene>) -> Self {
+        Self {
+            scene,
+            next_addr: 1,
+        }
+    }
+
+    /// The controller this node runs on.
+    pub fn controller(&self) -> &'static str {
+        self.scene.name()
+    }
+
+    /// Runs `script` as a device on this node's controller; returns its index.
+    /// A deterministic address is allocated when `address` is `None`.
+    pub fn run(
+        &mut self,
+        script: &str,
+        address: Option<crate::types::Address>,
+    ) -> Result<usize, String> {
+        let address = address.unwrap_or_else(|| self.next_address());
+        self.scene.add_peripheral(address, script)
+    }
+
+    fn next_address(&mut self) -> crate::types::Address {
+        let n = self.next_addr;
+        self.next_addr = self.next_addr.wrapping_add(1);
+        // Stable and obviously simulated, in the CC:1E:57 space simble uses.
+        crate::types::Address::new([(n & 0xff) as u8, (n >> 8) as u8, 0x00, 0x57, 0x1e, 0xcc])
+    }
+
+    /// Moves packets both ways for every device on this node.
+    pub fn pump(&mut self) {
+        self.scene.pump();
+    }
+
+    /// Advances this node's simulated clock by `seconds`.
+    pub fn tick(&mut self, seconds: f64) {
+        self.scene.tick(seconds);
+    }
+
+    /// The devices running on this node.
+    pub fn list_devices(&self) -> Vec<Device> {
+        (0..self.scene.device_count())
+            .map(|index| Device {
+                index,
+                controller: self.scene.name().to_string(),
+                status: self
+                    .scene
+                    .peripheral_status_json(index)
+                    .and_then(|s| serde_json::from_str(&s).ok()),
+            })
+            .collect()
+    }
+}
+
+/// Builds the scene for a named controller: `netsim` is the shared ether, a
+/// dongle is `dongle-<index>`. `link` (the deterministic in-process path) is
+/// MCP's `self` mode and not wired for v1 `run` yet.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn scene_for_controller(name: &str) -> Result<Box<dyn crate::transport::Scene>, String> {
+    use crate::transport::netsim::{self, NetsimScene};
+    use crate::transport::usb::{UsbScene, UsbSelector};
+    if name == "netsim" {
+        return Ok(Box::new(NetsimScene::new(netsim::DEFAULT_WS_URL)));
+    }
+    if let Some(rest) = name.strip_prefix("dongle-") {
+        let index: usize = rest
+            .parse()
+            .map_err(|_| format!("bad dongle name {name:?} — expected dongle-<index>"))?;
+        return Ok(Box::new(UsbScene::new(UsbSelector::Index(index))));
+    }
+    if name == "link" {
+        return Err("`link` is the deterministic self path — not wired for v1 run yet".to_string());
+    }
+    Err(format!("unknown controller {name:?}"))
+}
+
+/// Handles one v1 request against `node` — the live execution state, `None`
+/// until the first `run` selects a controller.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn dispatch(request: Request, node: &mut Option<Node>) -> Response {
     match request {
         Request::ListControllers => Response::Controllers {
             controllers: list_controllers(),
         },
+        Request::Run {
+            controller,
+            script,
+            address,
+        } => {
+            // Select the controller (build its scene) if not already on it.
+            if node.as_ref().map(Node::controller) != Some(controller.as_str()) {
+                match scene_for_controller(&controller) {
+                    Ok(scene) => *node = Some(Node::new(scene)),
+                    Err(message) => return Response::Error { message },
+                }
+            }
+            let address = match address {
+                Some(s) => match s.parse::<crate::types::Address>() {
+                    Ok(a) => Some(a),
+                    Err(_) => {
+                        return Response::Error {
+                            message: format!("bad address {s:?}"),
+                        };
+                    }
+                },
+                None => None,
+            };
+            let node = node.as_mut().expect("just selected");
+            match node.run(&script, address) {
+                Ok(device) => Response::Ran { device, controller },
+                Err(message) => Response::Error { message },
+            }
+        }
     }
 }
 
@@ -141,7 +293,8 @@ mod tests {
 
     #[test]
     fn dispatch_list_controllers_answers_with_the_controllers() {
-        let Response::Controllers { controllers } = dispatch(Request::ListControllers) else {
+        let Response::Controllers { controllers } = dispatch(Request::ListControllers, &mut None)
+        else {
             panic!("list_controllers must answer with Controllers");
         };
         assert!(controllers.iter().any(|c| c.name == "link"));
@@ -166,5 +319,75 @@ mod tests {
         assert!(!json.contains("product"), "empty product should be omitted");
         let back: Response = serde_json::from_str(&json).unwrap();
         assert_eq!(back, resp);
+    }
+
+    /// A `Scene` that records what it is told to run — enough to exercise `Node`
+    /// and the `run` op without netsim or a dongle in the loop.
+    struct MockScene {
+        added: Vec<(crate::types::Address, String)>,
+    }
+
+    impl crate::transport::Scene for MockScene {
+        fn name(&self) -> &'static str {
+            "mock"
+        }
+        fn add_peripheral(
+            &mut self,
+            address: crate::types::Address,
+            script: &str,
+        ) -> Result<usize, String> {
+            self.added.push((address, script.to_string()));
+            Ok(self.added.len() - 1)
+        }
+        fn pump(&mut self) {}
+        fn tick(&mut self, _seconds: f64) {}
+        fn now(&self) -> f64 {
+            0.0
+        }
+        fn device_count(&self) -> usize {
+            self.added.len()
+        }
+        fn peripheral_status_json(&self, index: usize) -> Option<String> {
+            (index < self.added.len()).then(|| format!(r#"{{"index":{index}}}"#))
+        }
+    }
+
+    #[test]
+    fn node_run_adds_a_device_and_lists_it() {
+        let mut node = Node::new(Box::new(MockScene { added: Vec::new() }));
+        assert_eq!(node.controller(), "mock");
+        let index = node.run("peripheral(\"x\") {}", None).unwrap();
+        assert_eq!(index, 0);
+
+        let devices = node.list_devices();
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].index, 0);
+        assert_eq!(devices[0].controller, "mock");
+        assert_eq!(devices[0].status, Some(serde_json::json!({"index": 0})));
+    }
+
+    #[test]
+    fn dispatch_run_rejects_unwired_and_unknown_controllers() {
+        // Neither of these needs hardware: `scene_for_controller` refuses them
+        // before any scene is built.
+        let mut node = None;
+        let mut bad = |controller: &str| {
+            dispatch(
+                Request::Run {
+                    controller: controller.to_string(),
+                    script: "x".to_string(),
+                    address: None,
+                },
+                &mut node,
+            )
+        };
+        let Response::Error { message } = bad("link") else {
+            panic!("link run is not wired yet");
+        };
+        assert!(message.contains("link"), "{message}");
+        let Response::Error { message } = bad("bogus") else {
+            panic!("an unknown controller must error");
+        };
+        assert!(message.contains("unknown controller"), "{message}");
     }
 }
