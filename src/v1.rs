@@ -154,10 +154,15 @@ pub enum Response {
         /// The controller it runs on.
         controller: String,
     },
-    /// The answer to `tick`: the node's clock after advancing.
+    /// The answer to `tick`: the node's clock after advancing, and the sans-io
+    /// `timeout` (seconds until the next event) to wait on instead of spinning.
     Ticked {
         /// The node's simulated time now, in seconds.
         now: f64,
+        /// Seconds until the next scheduled event, or `null` if nothing is
+        /// scheduled (wait for a packet, or poll).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timeout: Option<f64>,
     },
     /// The answer to `get_timer`: seconds until the next scheduled event, or
     /// `null` when nothing is scheduled (wait for a packet, or poll).
@@ -304,9 +309,11 @@ impl Node {
         self.scene.pump();
     }
 
-    /// Advances this node's simulated clock by `seconds`.
-    pub fn tick(&mut self, seconds: f64) {
-        self.scene.tick(seconds);
+    /// Advances this node's simulated clock by `seconds` and returns the sans-io
+    /// timeout — seconds until the next scheduled event, `None` if nothing is
+    /// scheduled — so the caller waits on a timer instead of spinning.
+    pub fn tick(&mut self, seconds: f64) -> Option<f64> {
+        self.scene.tick(seconds)
     }
 
     /// This node's current simulated time, in seconds.
@@ -407,9 +414,12 @@ pub fn dispatch(request: Request, node: &mut Option<Node>) -> Response {
         }
         Request::Tick { seconds } => match node.as_mut() {
             Some(node) => {
-                node.tick(seconds);
+                let timeout = node.tick(seconds);
                 node.pump();
-                Response::Ticked { now: node.now() }
+                Response::Ticked {
+                    now: node.now(),
+                    timeout,
+                }
             }
             None => Response::Error {
                 message: "no device running — run something first".to_string(),
@@ -608,7 +618,9 @@ mod tests {
             Ok(self.added.len() - 1)
         }
         fn pump(&mut self) {}
-        fn tick(&mut self, _seconds: f64) {}
+        fn tick(&mut self, _seconds: f64) -> Option<f64> {
+            None
+        }
         fn now(&self) -> f64 {
             0.0
         }
@@ -729,10 +741,13 @@ mod tests {
         };
         // With a node, tick answers Ticked with the clock (fixed at 0 in the mock).
         let mut node = Some(Node::new(Box::new(MockScene { added: Vec::new() })));
-        let Response::Ticked { now } = dispatch(Request::Tick { seconds: 1.5 }, &mut node) else {
+        let Response::Ticked { now, timeout } = dispatch(Request::Tick { seconds: 1.5 }, &mut node)
+        else {
             panic!("tick must answer Ticked");
         };
         assert_eq!(now, 0.0);
+        // tick returns the sans-io timeout — None until devices report deadlines.
+        assert_eq!(timeout, None);
         // A malformed tick body is a 400, not a panic.
         let r = handle_http(&mut None, "POST", "/v1/tick", "not json");
         assert_eq!(r.status, 400);

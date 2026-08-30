@@ -67,8 +67,12 @@ pub trait Scene {
     ) -> Result<usize, String>;
     /// Moves packets both ways for every device on this controller.
     fn pump(&mut self);
-    /// Advances the scene's simulated clock by `seconds`.
-    fn tick(&mut self, seconds: f64);
+    /// Advances the scene's simulated clock by `seconds` and returns the sans-io
+    /// timeout — seconds until the next scheduled event — so a host can wait on a
+    /// timer instead of spinning `tick`. `None` means nothing is scheduled: wait
+    /// for a packet, or poll. The value comes from [`next_timeout`](Self::next_timeout),
+    /// which is `None` until devices report deadlines.
+    fn tick(&mut self, seconds: f64) -> Option<f64>;
     /// The scene's current simulated time, in seconds.
     fn now(&self) -> f64;
     /// How many devices are on this controller.

@@ -479,8 +479,9 @@ impl super::Scene for NetsimScene {
     fn pump(&mut self) {
         self.pump()
     }
-    fn tick(&mut self, seconds: f64) {
-        NetsimScene::tick(self, seconds)
+    fn tick(&mut self, seconds: f64) -> Option<f64> {
+        NetsimScene::tick(self, seconds);
+        self.next_timeout()
     }
     fn now(&self) -> f64 {
         NetsimScene::now(self)

@@ -1272,8 +1272,9 @@ impl super::Scene for UsbScene {
     fn pump(&mut self) {
         self.pump()
     }
-    fn tick(&mut self, seconds: f64) {
-        UsbScene::tick(self, seconds)
+    fn tick(&mut self, seconds: f64) -> Option<f64> {
+        UsbScene::tick(self, seconds);
+        self.next_timeout()
     }
     fn now(&self) -> f64 {
         UsbScene::now(self)
