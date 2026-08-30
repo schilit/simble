@@ -695,8 +695,19 @@ needed. Verified end to end with `curl`: `run` on `link` → `tick` (real
 device — it reuses the existing `push_event` → `fn on_event(server, event)` path
 (the same channel the UI/tests already push through), so a script exposes exactly
 the inputs it chooses. Supported on `link`; live backends default to unsupported.
-Remaining: `spawn`/`attach`/`route` (each needs a new subsystem — the router or
-HCI streams) and `create`/`register`.
+**`spawn` is subsumed by `run`:** `run` is already persistent and returns a
+device handle (lives until `stop`), which is what `spawn` was for — so there is
+no separate verb, only clearer docs.
+
+**What remains all converges on the `hci-router`.** `route` (rebind a device's
+controller) and `attach` (raw H4 HCI stream) need the router and its binary
+streaming; `create`/`register` (mint an ether / admit an external node) need the
+router's multi-world model — until a node can hold more than one network, they
+are bookkeeping that does not drive execution. So the next real step is the
+router itself (the 2026-08-28 section): a separate crate with async deps and an
+optional `rootcanal-rs` backend, the composite `Controller` (`Sink`+`Stream`)
+trait, and the `0x10`-hardware-error backend switch — a focused subsystem, not
+another verb. Everything cleanly doable without it is now done.
 
 **Not built (the architecture proper):** the `hci-router`; the rest of the v1
 verbs and lists over HTTP REST / ws://; the formal node/network entities, the

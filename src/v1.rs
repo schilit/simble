@@ -14,8 +14,10 @@
 //! Implemented so far: the four observability lists (`list_controllers` /
 //! `list_networks` / `list_devices` / `list_nodes`), `run`, `stop`, `send`,
 //! `tick`, and `get_clock` (over a `Node` execution core, runnable on the
-//! deterministic `link` controller with no hardware). `spawn` / `attach` /
-//! `route` and `create` / `register` follow.
+//! deterministic `link` controller with no hardware). `run` is persistent and
+//! returns a device handle, so it already is what the design's `spawn` was for —
+//! there is no separate `spawn`. `attach` / `route` and `create` / `register`
+//! follow, and belong with the `hci-router` (they need its multi-world model).
 
 use serde::{Deserialize, Serialize};
 
