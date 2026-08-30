@@ -30,8 +30,11 @@ what the environment as a whole is capable of:
   each in their own world, with no cross-talk.
 - **Drive devices on real phones** — Android and iOS, each through its platform
   API, as first-class nodes.
-- **Back the Android emulator's Bluetooth with a controller of your choosing** —
-  a simulated ether or a real dongle, by serving netsim's `PacketStreamer`.
+- *(optional, off by default)* **Back the Android emulator's Bluetooth with a
+  controller of your choosing** — a simulated ether or a real dongle. This is the
+  *only* piece that needs gRPC (the emulator speaks netsim's `PacketStreamer`,
+  Google's protocol), so it is an isolated, feature-gated adapter, never in the
+  core — everything else is HTTP REST + ws://.
 - **Switch a running device's controller live** — sim↔real — without migrating
   state (a reset event re-homes the host).
 - **Speak one ws:// protocol — SimBLE v1** — for all of it (`list` / `run` /
@@ -107,11 +110,20 @@ race — the authoritative answer is the **atomic claim**: `run`/`spawn`/`route`
 returns a `device` handle or `controller busy`. Never check-then-claim; an
 unavailable controller must error, never silently fall back to simulation.
 
-**Wire encoding:** one ws:// server per node; **URL carries connect-time routing**
-(a short op path + the `attach` stream's `controller`, since a WebSocket upgrade
-has no body), **JSON messages carry everything else** (request data, commands,
-events). **Scripts are always a JSON body** — URLs are too small. Control is JSON,
-raw HCI is binary H4.
+**Wire encoding:** **control is HTTP REST** (each op an endpoint —
+`GET /v1/controllers`, `POST /v1/run`, …; JSON in, JSON out; `curl`-able); the
+**one streaming case, `attach` (raw HCI), is a ws:// stream** (H4 frames both
+ways). `dispatch` is transport-neutral, so the same handler serves either. Scripts
+are always a JSON body — never a URL param.
+
+**No gRPC.** The whole architecture is HTTP REST + the one ws:// stream — no new
+dependency class. gRPC arises in *exactly one* place and it is not our choice:
+the Android **emulator** speaks netsim's `PacketStreamer` gRPC to its controller
+(Google's protocol, baked into the emulator), so serving the emulator would mean
+speaking gRPC. That edge — "back the emulator with a real dongle," controller-
+routing's original motivation but not its spine — is therefore **dropped from the
+core**; if ever wanted it is an isolated, feature-gated `PacketStreamer` adapter,
+never in the default build. Everything else needs none of it.
 
 **Safety:** every `run`/`spawn` is Rhai, and Rhai is sandboxed (no I/O,
 deterministic) — which is what makes accepting a device definition, custom or
