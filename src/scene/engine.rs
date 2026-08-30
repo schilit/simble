@@ -41,6 +41,11 @@ struct SceneDevice {
     channel: std::sync::Arc<HciChannel>,
     role: SceneRole,
     started: bool,
+    /// The medium address, kept so `stop` can release it from the [`Link`].
+    address: Address,
+    /// Set by `stop`: a tombstone. The slot stays (so device indices remain
+    /// stable handles), but the device no longer ticks, routes, or lists.
+    stopped: bool,
 }
 
 /// An in-process scene of Rhai devices sharing one [`Link`] — the browser's
@@ -80,6 +85,8 @@ impl SceneEngine {
             channel,
             role: SceneRole::Peripheral(Box::new(peripheral)),
             started: false,
+            address,
+            stopped: false,
         });
         Ok(index)
     }
@@ -92,6 +99,8 @@ impl SceneEngine {
             channel,
             role: SceneRole::Scanner(Vec::new()),
             started: false,
+            address,
+            stopped: false,
         });
         index
     }
@@ -105,6 +114,8 @@ impl SceneEngine {
             channel,
             role: SceneRole::Central(Box::new(CentralDevice::new(target))),
             started: false,
+            address,
+            stopped: false,
         });
         index
     }
@@ -128,6 +139,8 @@ impl SceneEngine {
             channel,
             role: SceneRole::ScriptedCentral(Box::new(central)),
             started: false,
+            address,
+            stopped: false,
         });
         Ok(index)
     }
@@ -150,6 +163,8 @@ impl SceneEngine {
             channel,
             role: SceneRole::Classic(Box::new(device)),
             started: false,
+            address,
+            stopped: false,
         });
         index
     }
@@ -185,17 +200,41 @@ impl SceneEngine {
         self.devices.len()
     }
 
-    /// The earliest absolute wake time (script-clock seconds) any peripheral has
-    /// declared with the `wake_at` binding, or `None` — the deterministic scene's
-    /// sans-io deadline, folded across devices.
+    /// The earliest absolute wake time (script-clock seconds) any live peripheral
+    /// has declared with the `wake_at` binding, or `None` — the deterministic
+    /// scene's sans-io deadline, folded across devices.
     pub fn next_deadline(&self) -> Option<f64> {
         self.devices
             .iter()
             .filter_map(|d| match &d.role {
-                SceneRole::Peripheral(p) => p.next_wake(),
+                SceneRole::Peripheral(p) if !d.stopped => p.next_wake(),
                 _ => None,
             })
             .reduce(f64::min)
+    }
+
+    /// Stops the device at `index`: a tombstone. Its slot stays — so device
+    /// indices remain stable handles and are never reused — but it no longer
+    /// ticks, routes, or lists, and its address is released from the medium (free
+    /// to reuse). Idempotent; errors only on an out-of-range index.
+    pub fn stop(&mut self, index: usize) -> Result<(), String> {
+        let device = self
+            .devices
+            .get_mut(index)
+            .ok_or_else(|| format!("no device at index {index}"))?;
+        if device.stopped {
+            return Ok(());
+        }
+        device.stopped = true;
+        let address = device.address;
+        self.link.remove_device(address);
+        Ok(())
+    }
+
+    /// Whether the device at `index` is a stopped tombstone — false for a live
+    /// device or an unknown index.
+    pub fn device_stopped(&self, index: usize) -> bool {
+        self.devices.get(index).is_some_and(|d| d.stopped)
     }
 
     /// Advances the whole scene one step at simulated time `t_seconds`: queues
@@ -204,6 +243,9 @@ impl SceneEngine {
     /// shared [`Link`], then delivers the results back to each device.
     pub fn tick(&mut self, t_seconds: f64) {
         for device in &mut self.devices {
+            if device.stopped {
+                continue;
+            }
             if !device.started {
                 let _ = match &mut device.role {
                     SceneRole::Peripheral(p) => p.queue_start(&device.channel),
@@ -223,6 +265,9 @@ impl SceneEngine {
         // Devices produce (peripherals: script tick + notifications; centrals:
         // the connection request and discovery flow).
         for device in &mut self.devices {
+            if device.stopped {
+                continue;
+            }
             match &mut device.role {
                 SceneRole::Peripheral(p) => {
                     if let Err(e) = p.tick(&device.channel, t_seconds) {
@@ -243,6 +288,9 @@ impl SceneEngine {
         self.link.tick();
         // Consume the delivered events.
         for device in &mut self.devices {
+            if device.stopped {
+                continue;
+            }
             match &mut device.role {
                 SceneRole::Peripheral(p) => {
                     while let Some(pkt) = device.channel.poll_controller_packet() {
@@ -297,9 +345,14 @@ impl SceneEngine {
     }
 
     /// The GATT status JSON of peripheral `index` (see
-    /// `ScriptedPeripheral::status_json`), or `None` if it isn't a peripheral.
+    /// `ScriptedPeripheral::status_json`), or `None` if it isn't a peripheral or
+    /// has been stopped.
     pub fn peripheral_status_json(&self, index: usize) -> Option<String> {
-        match self.devices.get(index)?.role {
+        let device = self.devices.get(index)?;
+        if device.stopped {
+            return None;
+        }
+        match device.role {
             SceneRole::Peripheral(ref p) => Some(p.status_json()),
             SceneRole::Scanner(_)
             | SceneRole::Central(_)

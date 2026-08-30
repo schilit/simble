@@ -12,8 +12,10 @@
 //! speak for compatibility is netsim's, not an earlier version of this one.
 //!
 //! Implemented so far: the four observability lists (`list_controllers` /
-//! `list_networks` / `list_devices` / `list_nodes`) and `run` (over a `Node`
-//! execution core). `spawn` / `route` / `stop` / the other verbs follow.
+//! `list_networks` / `list_devices` / `list_nodes`), `run`, `stop`, `tick`, and
+//! `get_clock` (over a `Node` execution core, runnable on the deterministic
+//! `link` controller with no hardware). `spawn` / `attach` / `route` / `send`
+//! and `create` / `register` follow.
 
 use serde::{Deserialize, Serialize};
 
@@ -122,6 +124,12 @@ pub enum Request {
     /// Read this node's clock: the time now and when it next needs attention, so
     /// the caller can wait *until* the deadline instead of spinning `tick`.
     GetClock,
+    /// Stop (tear down) the running device at `device`, releasing its place on
+    /// the controller. Its index stays a valid handle but the device goes inert.
+    Stop {
+        /// The device index to stop (from `run` / `list_devices`).
+        device: usize,
+    },
 }
 
 /// A v1 control response. Tagged by `type` on the wire.
@@ -154,6 +162,11 @@ pub enum Response {
         device: usize,
         /// The controller it runs on.
         controller: String,
+    },
+    /// The answer to `stop`: the device was torn down.
+    Stopped {
+        /// The stopped device's index (still a valid handle, now inert).
+        device: usize,
     },
     /// The answer to `tick`: the node's clock after advancing, and the absolute
     /// clock of the next scheduled event — a deadline to wait *until* instead of
@@ -335,9 +348,11 @@ impl Node {
         self.scene.next_deadline_us()
     }
 
-    /// The devices running on this node.
+    /// The devices running on this node — stopped tombstones are skipped, so a
+    /// device's index stays a stable handle across other devices' teardowns.
     pub fn list_devices(&self) -> Vec<Device> {
         (0..self.scene.device_count())
+            .filter(|&index| !self.scene.device_stopped(index))
             .map(|index| Device {
                 index,
                 controller: self.scene.name().to_string(),
@@ -348,11 +363,16 @@ impl Node {
             })
             .collect()
     }
+
+    /// Stops (tears down) the device at `index` on this node.
+    pub fn stop(&mut self, index: usize) -> Result<(), String> {
+        self.scene.stop(index)
+    }
 }
 
 /// Builds the scene for a named controller: `netsim` is the shared ether, a
-/// dongle is `dongle-<index>`. `link` (the deterministic in-process path) is
-/// MCP's `self` mode and not wired for v1 `run` yet.
+/// dongle is `dongle-<index>`, and `link` is the deterministic in-process path
+/// (MCP's `self` mode) — a hardware-free scene for `run`/`tick`/`get_clock`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn scene_for_controller(name: &str) -> Result<Box<dyn crate::transport::Scene>, String> {
     use crate::transport::netsim::{self, NetsimScene};
@@ -435,6 +455,15 @@ pub fn dispatch(request: Request, node: &mut Option<Node>) -> Response {
             now_us: node.as_ref().map(Node::now_us).unwrap_or(0),
             deadline_us: node.as_ref().and_then(Node::next_deadline_us),
         },
+        Request::Stop { device } => match node.as_mut() {
+            Some(node) => match node.stop(device) {
+                Ok(()) => Response::Stopped { device },
+                Err(message) => Response::Error { message },
+            },
+            None => Response::Error {
+                message: "no device running — run something first".to_string(),
+            },
+        },
     }
 }
 
@@ -477,6 +506,13 @@ struct RunBody {
 #[derive(Deserialize)]
 struct TickBody {
     advance_us: u64,
+}
+
+/// The body of `POST /v1/stop`.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Deserialize)]
+struct StopBody {
+    device: usize,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -532,6 +568,17 @@ pub fn handle_http(node: &mut Option<Node>, method: &str, path: &str, body: &str
                     status: 400,
                     body: json_or_empty(&Response::Error {
                         message: format!("bad tick body: {e}"),
+                    }),
+                };
+            }
+        },
+        ("POST", "/v1/stop") => match serde_json::from_str::<StopBody>(body) {
+            Ok(b) => Request::Stop { device: b.device },
+            Err(e) => {
+                return HttpResponse {
+                    status: 400,
+                    body: json_or_empty(&Response::Error {
+                        message: format!("bad stop body: {e}"),
                     }),
                 };
             }
@@ -852,5 +899,87 @@ mod tests {
         };
         assert_eq!(now_us, 1_000_000);
         assert_eq!(deadline_us, Some(1_050_000));
+    }
+
+    // `stop` tears a device down: it leaves the device list, stops contributing a
+    // deadline, and its index stays a stable handle — a later run takes a new one.
+    #[test]
+    fn stop_tears_down_a_device_and_keeps_indices_stable() {
+        let waker = r#"
+            let server = android::BluetoothGattServer("waker");
+            fn tick(server, t) { server.wake_at(t + 0.05); }
+        "#;
+        let run = |node: &mut Option<Node>, script: &str| {
+            dispatch(
+                Request::Run {
+                    controller: "link".to_string(),
+                    script: script.to_string(),
+                    address: None,
+                },
+                node,
+            )
+        };
+
+        let mut node = None;
+        assert!(matches!(
+            run(&mut node, waker),
+            Response::Ran { device: 0, .. }
+        ));
+        dispatch(
+            Request::Tick {
+                advance_us: 1_000_000,
+            },
+            &mut node,
+        );
+        // The waker is listed and drives the deadline.
+        let Response::Devices { devices } = dispatch(Request::ListDevices, &mut node) else {
+            panic!("list");
+        };
+        assert_eq!(devices.len(), 1);
+        assert!(matches!(
+            dispatch(Request::GetClock, &mut node),
+            Response::Clock {
+                deadline_us: Some(_),
+                ..
+            }
+        ));
+
+        // Stop it: gone from the list, and no device declares a deadline anymore.
+        assert_eq!(
+            dispatch(Request::Stop { device: 0 }, &mut node),
+            Response::Stopped { device: 0 }
+        );
+        let Response::Devices { devices } = dispatch(Request::ListDevices, &mut node) else {
+            panic!("list");
+        };
+        assert!(
+            devices.is_empty(),
+            "stopped device must not list: {devices:?}"
+        );
+        dispatch(
+            Request::Tick {
+                advance_us: 1_000_000,
+            },
+            &mut node,
+        );
+        assert!(matches!(
+            dispatch(Request::GetClock, &mut node),
+            Response::Clock {
+                deadline_us: None,
+                ..
+            }
+        ));
+
+        // A new run takes index 1 — the stopped slot 0 is a tombstone, never reused.
+        assert!(matches!(
+            run(&mut node, waker),
+            Response::Ran { device: 1, .. }
+        ));
+
+        // Stopping an out-of-range index is an error, not a panic.
+        assert!(matches!(
+            dispatch(Request::Stop { device: 99 }, &mut node),
+            Response::Error { .. }
+        ));
     }
 }

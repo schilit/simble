@@ -1814,6 +1814,14 @@ impl Link {
         channel
     }
 
+    /// Removes the device at `address` from the medium, so it is no longer heard
+    /// and its address is free to reuse. Returns false if no such device is on it.
+    pub fn remove_device(&mut self, address: Address) -> bool {
+        let before = self.controllers.len();
+        self.controllers.retain(|c| c.address != address);
+        self.controllers.len() != before
+    }
+
     /// The number of devices on the medium.
     pub fn device_count(&self) -> usize {
         self.controllers.len()

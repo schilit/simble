@@ -68,4 +68,10 @@ impl Scene for LinkScene {
             .next_deadline()
             .map(|s| (s * 1_000_000.0).round() as u64)
     }
+    fn stop(&mut self, index: usize) -> Result<(), String> {
+        self.engine.stop(index)
+    }
+    fn device_stopped(&self, index: usize) -> bool {
+        self.engine.device_stopped(index)
+    }
 }

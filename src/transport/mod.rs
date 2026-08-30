@@ -107,6 +107,20 @@ pub trait Scene {
     fn next_deadline_us(&self) -> Option<u64> {
         None
     }
+    /// Stops (tears down) the device at `index`, releasing its place on the
+    /// controller. Default: unsupported — only a controller that can remove a
+    /// running device overrides this. Idempotent where supported; an
+    /// out-of-range index is an error.
+    fn stop(&mut self, index: usize) -> Result<(), String> {
+        let _ = index;
+        Err("stop is not supported on this controller".to_string())
+    }
+    /// Whether the device at `index` is a stopped tombstone — so a lister can
+    /// skip it while indices stay stable handles. Default: never stopped.
+    fn device_stopped(&self, index: usize) -> bool {
+        let _ = index;
+        false
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

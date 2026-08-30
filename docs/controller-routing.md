@@ -679,9 +679,14 @@ The **`link` (self) run path is wired**: `scene_for_controller("link")` builds a
 medium mcp's self mode uses), so the whole loop — `run` → `tick` → `get_clock`
 with a real device deadline — runs with no netsim or USB hardware, exercised in a
 plain unit test.
-Remaining: `spawn`/`attach`/`route`/`stop`/`send` (each needs a new subsystem —
-device removal, the router, HCI streams, or script inputs), `create`/`register`,
-and an optional default server.
+**`stop` is wired:** `stop {device}` tombstones the device — the slot stays so
+indices remain stable handles (never reused), but it no longer ticks, routes,
+lists, or contributes a deadline, and its address is released from the medium
+(`Link::remove_device`). Supported on `link` (via `SceneEngine`); the live
+backends default to unsupported for now.
+Remaining: `spawn`/`attach`/`route`/`send` (each needs a new subsystem — the
+router, HCI streams, or script inputs), `create`/`register`, and an optional
+default server.
 
 **Not built (the architecture proper):** the `hci-router`; the rest of the v1
 verbs and lists over HTTP REST / ws://; the formal node/network entities, the
