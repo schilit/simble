@@ -1256,6 +1256,45 @@ impl UsbScene {
     }
 }
 
+/// The shared [`Scene`](super::Scene) shape, forwarding to the inherent methods
+/// above. A dongle is real radio, so it implements scanning too.
+impl super::Scene for UsbScene {
+    fn name(&self) -> &'static str {
+        "usb"
+    }
+    fn add_peripheral(
+        &mut self,
+        address: crate::types::Address,
+        script: &str,
+    ) -> Result<usize, String> {
+        UsbScene::add_peripheral(self, address, script)
+    }
+    fn pump(&mut self) {
+        self.pump()
+    }
+    fn tick(&mut self, seconds: f64) {
+        UsbScene::tick(self, seconds)
+    }
+    fn now(&self) -> f64 {
+        UsbScene::now(self)
+    }
+    fn device_count(&self) -> usize {
+        UsbScene::device_count(self)
+    }
+    fn peripheral_status_json(&self, index: usize) -> Option<String> {
+        UsbScene::peripheral_status_json(self, index)
+    }
+    fn add_scanner(&mut self) -> Result<(), String> {
+        UsbScene::add_scanner(self)
+    }
+    fn has_scanner(&self) -> bool {
+        UsbScene::has_scanner(self)
+    }
+    fn scanner_reports_json(&self) -> Option<String> {
+        UsbScene::scanner_reports_json(self)
+    }
+}
+
 #[cfg(not(target_os = "android"))]
 fn list_usb_devices() -> Result<Vec<nusb::DeviceInfo>, SimbleError> {
     Ok(nusb::list_devices()

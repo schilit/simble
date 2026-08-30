@@ -41,6 +41,7 @@ use crate::devices::catalog::{self, EXAMPLES};
 use crate::gatt::sig_names;
 use crate::scene::SceneEngine;
 use crate::scripting::test_script::{lint_script, run_test_script};
+use crate::transport::Scene;
 use crate::transport::netsim::{self, NetsimScene};
 use crate::transport::usb::{UsbScene, UsbSelector, list_bluetooth_dongles};
 use crate::types::Address;
@@ -61,89 +62,7 @@ const IDLE_INTERVAL: Duration = Duration::from_millis(5);
 /// of these is **peripheral-only** — the central is the Android emulator, a
 /// phone, a laptop — and they are mutually exclusive with each other and with
 /// the in-process `self` scene, because `run_on` resets the server.
-enum LiveBackend {
-    Netsim(NetsimScene),
-    Usb(UsbScene),
-}
-
-impl LiveBackend {
-    /// What `status` calls this controller.
-    fn name(&self) -> &'static str {
-        match self {
-            LiveBackend::Netsim(_) => "netsim",
-            LiveBackend::Usb(_) => "usb",
-        }
-    }
-
-    fn add_peripheral(&mut self, address: Address, script: &str) -> Result<usize, String> {
-        match self {
-            LiveBackend::Netsim(scene) => scene.add_peripheral(address, script),
-            LiveBackend::Usb(scene) => scene.add_peripheral(address, script),
-        }
-    }
-
-    fn pump(&mut self) {
-        match self {
-            LiveBackend::Netsim(scene) => scene.pump(),
-            LiveBackend::Usb(scene) => scene.pump(),
-        }
-    }
-
-    fn tick(&mut self, seconds: f64) {
-        match self {
-            LiveBackend::Netsim(scene) => scene.tick(seconds),
-            LiveBackend::Usb(scene) => scene.tick(seconds),
-        }
-    }
-
-    fn now(&self) -> f64 {
-        match self {
-            LiveBackend::Netsim(scene) => scene.now(),
-            LiveBackend::Usb(scene) => scene.now(),
-        }
-    }
-
-    fn device_count(&self) -> usize {
-        match self {
-            LiveBackend::Netsim(scene) => scene.device_count(),
-            LiveBackend::Usb(scene) => scene.device_count(),
-        }
-    }
-
-    fn peripheral_status_json(&self, index: usize) -> Option<String> {
-        match self {
-            LiveBackend::Netsim(scene) => scene.peripheral_status_json(index),
-            LiveBackend::Usb(scene) => scene.peripheral_status_json(index),
-        }
-    }
-
-    /// Adds a scanner on this backend's medium so `scan` hears real advertisers.
-    /// Only the USB backend does real RF today; netsim would need a scan role on
-    /// its ether, which is not wired yet, so it says so rather than pretending.
-    fn add_scanner(&mut self) -> Result<(), String> {
-        match self {
-            LiveBackend::Usb(scene) => scene.add_scanner(),
-            LiveBackend::Netsim(_) => Err(
-                "a real-RF scan needs run_on(\"usb\") — netsim scanning is not wired yet"
-                    .to_string(),
-            ),
-        }
-    }
-
-    fn has_scanner(&self) -> bool {
-        match self {
-            LiveBackend::Usb(scene) => scene.has_scanner(),
-            LiveBackend::Netsim(_) => false,
-        }
-    }
-
-    fn scanner_reports_json(&self) -> Option<String> {
-        match self {
-            LiveBackend::Usb(scene) => scene.scanner_reports_json(),
-            LiveBackend::Netsim(_) => None,
-        }
-    }
-}
+type LiveBackend = Box<dyn Scene>;
 
 /// An armed watch: the condition a `subscribe` call asked to be told about.
 /// It is the *safety* condition, so the interesting event is it **breaking** —
@@ -438,9 +357,9 @@ impl Server {
                     | "add_central"
             )
         {
-            let far_side = match live {
-                LiveBackend::Netsim(_) => "the Android emulator (or another netsim client)",
-                LiveBackend::Usb(_) => "a real phone or laptop over real RF",
+            let far_side = match live.name() {
+                "usb" => "a real phone or laptop over real RF",
+                _ => "the Android emulator (or another netsim client)",
             };
             return tool_text(
                 id,
@@ -588,9 +507,7 @@ impl Server {
             }
             "netsim" => {
                 *self = Server {
-                    live: Some(LiveBackend::Netsim(NetsimScene::new(
-                        netsim::DEFAULT_WS_URL,
-                    ))),
+                    live: Some(Box::new(NetsimScene::new(netsim::DEFAULT_WS_URL)) as LiveBackend),
                     ..Server::default()
                 };
                 tool_text(
@@ -637,7 +554,7 @@ impl Server {
                 let scene = UsbScene::new(selected);
                 let selector = scene.selector();
                 *self = Server {
-                    live: Some(LiveBackend::Usb(scene)),
+                    live: Some(Box::new(scene) as LiveBackend),
                     ..Server::default()
                 };
                 tool_text(

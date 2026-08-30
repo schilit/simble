@@ -462,6 +462,40 @@ impl NetsimScene {
     }
 }
 
+/// The shared [`Scene`](super::Scene) shape, forwarding to the inherent methods
+/// above. Netsim scanning is not wired (a scan needs a role on netsim's ether),
+/// so `add_scanner` says so and the scanner defaults (`false`/`None`) hold.
+impl super::Scene for NetsimScene {
+    fn name(&self) -> &'static str {
+        "netsim"
+    }
+    fn add_peripheral(
+        &mut self,
+        address: crate::types::Address,
+        script: &str,
+    ) -> Result<usize, String> {
+        NetsimScene::add_peripheral(self, address, script)
+    }
+    fn pump(&mut self) {
+        self.pump()
+    }
+    fn tick(&mut self, seconds: f64) {
+        NetsimScene::tick(self, seconds)
+    }
+    fn now(&self) -> f64 {
+        NetsimScene::now(self)
+    }
+    fn device_count(&self) -> usize {
+        NetsimScene::device_count(self)
+    }
+    fn peripheral_status_json(&self, index: usize) -> Option<String> {
+        NetsimScene::peripheral_status_json(self, index)
+    }
+    fn add_scanner(&mut self) -> Result<(), String> {
+        Err("a real-RF scan needs run_on(\"usb\") — netsim scanning is not wired yet".to_string())
+    }
+}
+
 #[cfg(test)]
 #[path = "netsim_tests.rs"]
 mod tests;

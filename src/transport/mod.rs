@@ -48,6 +48,48 @@ pub trait HciTransport {
     fn pump(&mut self, channel: &HciChannel) -> Result<(), crate::types::SimbleError>;
 }
 
+/// A live scene on one controller: run scripted devices on it, drive them, and
+/// read their state. `NetsimScene`, `UsbScene`, and any future backend meet the
+/// same shape — each is a thin wrapper over `live_scene::LiveScene<T>` — so a
+/// caller (today [`crate::mcp`]'s live server) holds a `Box<dyn Scene>` instead
+/// of matching a hand-written enum, and a new controller is one `impl` away
+/// rather than another arm in ten methods. This is the "formalise the backend
+/// interface" step of `docs/controller-routing.md`.
+#[cfg(not(target_arch = "wasm32"))]
+pub trait Scene {
+    /// What `status` calls this controller ("netsim", "usb", …).
+    fn name(&self) -> &'static str;
+    /// Runs `script` and registers the device at `address`; returns its index.
+    fn add_peripheral(
+        &mut self,
+        address: crate::types::Address,
+        script: &str,
+    ) -> Result<usize, String>;
+    /// Moves packets both ways for every device on this controller.
+    fn pump(&mut self);
+    /// Advances the scene's simulated clock by `seconds`.
+    fn tick(&mut self, seconds: f64);
+    /// The scene's current simulated time, in seconds.
+    fn now(&self) -> f64;
+    /// How many devices are on this controller.
+    fn device_count(&self) -> usize;
+    /// A device's render-ready status JSON, if the index is in range.
+    fn peripheral_status_json(&self, index: usize) -> Option<String>;
+    /// Adds a scanner on this controller's medium. Default: unsupported — only a
+    /// controller that can hear real advertisers overrides this.
+    fn add_scanner(&mut self) -> Result<(), String> {
+        Err("scanning is not supported on this controller".to_string())
+    }
+    /// Whether a scanner has been added (default: none).
+    fn has_scanner(&self) -> bool {
+        false
+    }
+    /// The scanner's reports as JSON, if one is running (default: none).
+    fn scanner_reports_json(&self) -> Option<String> {
+        None
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 impl<S: std::io::Read + std::io::Write> HciTransport for netsim::NetsimTransport<S> {
     fn pump(&mut self, channel: &HciChannel) -> Result<(), crate::types::SimbleError> {
