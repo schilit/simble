@@ -125,6 +125,14 @@ routing's original motivation but not its spine — is therefore **dropped from 
 core**; if ever wanted it is an isolated, feature-gated `PacketStreamer` adapter,
 never in the default build. Everything else needs none of it.
 
+**Bring your own server.** v1 does not bundle an http/ws server — a host that
+runs it (netsim, a CLI, a browser) already has one, and a second would be wrong.
+It exposes the entry points a host's server *calls*, server-agnostic: `dispatch`
+(typed), `handle_json` (a JSON string in/out, for ws://), and `handle_http`
+(method+path+body → status+body, for REST). Any *default* standalone server is a
+feature on top of these; the API owns no socket. Same sans-io stance as the rest
+of the stack.
+
 **Safety:** every `run`/`spawn` is Rhai, and Rhai is sandboxed (no I/O,
 deterministic) — which is what makes accepting a device definition, custom or
 catalog, over the wire safe where native code would not be.
@@ -651,9 +659,13 @@ the rest smaller.
 enumerates the `link` + dongles. **`run`** (6b20e45) is wired over a `Node`
 execution core: a `Box<dyn Scene>` + address allocator, `run`/`list_devices`/
 `pump`/`tick`, and `scene_for_controller` (netsim / `dongle-N`; `link`
-deferred) — MCP keeps its `Server`, both on the same `Scene` trait. Remaining:
+deferred) — MCP keeps its `Server`, both on the same `Scene` trait. The **request-handling
+API** (c032e96) is done — `dispatch` (typed), `handle_json` (ws), `handle_http`
+(REST routing) — server-agnostic, so a host's own server calls it (no bundled
+server; a default one would be a feature). Remaining:
 `spawn`/`attach`/`route`/`stop`/`tick`/`send`, the `/v1/{networks,devices,nodes}`
-lists, `create`/`register`, and the HTTP-REST + ws:// serving over `dispatch`.
+lists, `create`/`register`, the `link` (self) run path, and an optional default
+server.
 
 **Not built (the architecture proper):** the `hci-router`; the rest of the v1
 verbs and lists over HTTP REST / ws://; the formal node/network entities, the
