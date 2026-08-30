@@ -51,8 +51,13 @@ what the environment as a whole is capable of:
 
 The relationships, stated once:
 
+- **A node is exactly what can execute a `run`.** The local `simble` process and
+  a phone are both nodes; both allow `run`. **MCP, the CLI, and the v1 ws:// socket
+  are *interfaces to* a node, not nodes** — one `simble` process is one node
+  reached many ways, which is what keeps a **single owner** of its hardware (two
+  interfaces are not two owners; that would be the dongle-contention bug).
 - **A node owns controllers; a `run` executes on the node that owns the named
-  controller** (the router for a dongle/sim; the phone for a phone radio →
+  controller** (the local node for a dongle/sim; the phone for a phone radio →
   delegated). You cannot drive a controller you do not own.
 - **A controller has one `network`** (the world it drops a device into) and one
   **`api_class`** (the platform interface, which *gates* what a `run` can do:
