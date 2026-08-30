@@ -1,10 +1,14 @@
 # Controller routing
 
-**Status: a specification, not a description.** None of this is built. It
-records a design and the constraints measured against the tree from 2026-08-25
-onward. The **reference below** (capabilities, types, operations) is the clear
-summary; the dated sections after it are the design record — the reasoning,
-the corrections, and the one thing actually proven, in the order they happened.
+**Status: substantially built (2026-08-29).** The **device router** — the v1
+protocol over a multi-controller `Node`: the four lists and `run` / `stop` /
+`send` / `route` / `create` / `register` / `tick` / `get_clock`, runnable on the
+deterministic `link` controller and served by the `simble v1` CLI — is done. What
+remains is the async **backend router** (a separate crate routing raw HCI to
+`rootcanal-rs` / real radios / netsim) and the `attach` verb that belongs with it.
+The **reference below** (capabilities, types, operations) is the design summary;
+the dated sections after it are the record — reasoning and corrections in the
+order they happened, ending with the current state and the backend-crate shape.
 
 The premise the whole idea once rested on — that Bluetooth works in the Android
 emulator (API 34) — has since been **verified** (2026-08-29 note below): the
@@ -699,15 +703,31 @@ the inputs it chooses. Supported on `link`; live backends default to unsupported
 device handle (lives until `stop`), which is what `spawn` was for — so there is
 no separate verb, only clearer docs.
 
-**What remains all converges on the `hci-router`.** `route` (rebind a device's
-controller) and `attach` (raw H4 HCI stream) need the router and its binary
-streaming; `create`/`register` (mint an ether / admit an external node) need the
-router's multi-world model — until a node can hold more than one network, they
-are bookkeeping that does not drive execution. So the next real step is the
-router itself (the 2026-08-28 section): a separate crate with async deps and an
-optional `rootcanal-rs` backend, the composite `Controller` (`Sink`+`Stream`)
-trait, and the `0x10`-hardware-error backend switch — a focused subsystem, not
-another verb. Everything cleanly doable without it is now done.
+**The `Node` is now a multi-controller *device* router**, and `route` / `create`
+/ `register` are wired (2026-08-29). A `Node` owns named controllers and a device
+has one **stable global handle** that survives `stop` and `route`; the node maps
+it to (controller, local index). Every controller shares the node's clock, so one
+`tick` advances the whole node and one deadline (the min) covers it.
+- **`route {device, controller}`** rebinds a running device onto another
+  controller (built-in or `create`d), keeping its handle and address. It **drops
+  and re-runs** rather than migrating live state — the deterministic analog of a
+  controller switch injecting an HCI Hardware Error (`0x10`) so the host
+  re-initialises on the new world.
+- **`create {network}`** mints a private `link` ether (a fresh isolated world)
+  that `run`/`route` can target; it appears in `list_controllers` and
+  `list_networks`. Multiple `link` ethers by default, per the design.
+- **`register {node}`** admits an external node (a phone, a browser) into
+  `list_nodes` — bookkeeping only; this node does not drive it (cross-node
+  orchestration is the client's job).
+All verified over real HTTP through the CLI server (`create` → `run` → `route` →
+`register`), and in unit tests on `link`. The live backends (`netsim`/`usb`)
+default `route`/`stop`/`send` to unsupported for now.
+
+**What remains is the async *backend* router, a separate crate** — not another
+verb. It routes raw HCI (not scripted devices) to `rootcanal-rs` / real radios /
+netsim, and backs external stacks. It is the one thing that needs async, so it is
+its own crate; the `attach` verb (a raw H4 HCI stream for an external stack)
+belongs with it. Its shape is fixed below.
 
 **Not built (the architecture proper):** the `hci-router`; the rest of the v1
 verbs and lists over HTTP REST / ws://; the formal node/network entities, the
@@ -723,3 +743,58 @@ thin server over `LiveBackend`-style dispatch (MCP-over-ws is a frame), `route`/
 `0x10`, the network namespace. *Large* — gRPC `PacketStreamer` + emulator serving
 (a new dependency class), the full node/registration model, on-device Rhai. None
 of it is blocked now that the emulator premise holds; it is unwritten, not gated.
+
+## 2026-08-29 — the device router landed; the backend router is a separate injected crate
+
+Two halves, now clearly separated.
+
+**The *device* router is done, in `simble-stack`.** The v1 `Node` owns many
+controllers and routes *scripted devices* between them (`run`/`route`/`create`/
+`register`/`stop`/`send`, over the synchronous `transport::Scene` trait). It needs
+no async and no new deps — `link` + `usb` are enough — so it lives in the crate.
+This is everything above.
+
+**The *backend* router is a separate crate, and `simble-stack` never depends on
+it.** It routes *raw HCI* to `rootcanal-rs`, real radios, and external netsim, and
+backs external stacks (the emulator). It is the async half, and the design fixes
+its shape:
+
+- **Dependency direction: the backend crate depends on `simble-stack`, never the
+  reverse.** That is what keeps `simble-stack` async-free and publishable. The
+  concrete forcing reason: `rootcanal-rs` is a **path dep**, and a path dep blocks
+  `cargo package` on whatever crate holds it — so isolating it in a separate crate
+  is what keeps `simble-stack` shippable to crates.io.
+
+- **The `rootcanal-rs` backend is an actor that hands off a `Sink`/`Stream`
+  pair** — `Sink<HciPacket>` for host→controller, `Stream<HciPacket>` for
+  controller→host. The actor owns the `rootcanal-rs` scheduler main loop (one loop,
+  one owner) in its own task; the Sink/Stream are the channel endpoints it exposes.
+
+- **The actor's *client* trait can be owned by `rootcanal-rs` upstream**, so the
+  actor wrapper and its clients share one definition rather than each inventing it.
+
+- **The actor wrapper is defined *outside* `simble-stack`; simble is just a
+  client.** simble holds a client handle and *sends messages to* the wrapper — it
+  does not own the actor, the loop, or the async runtime. The application wires the
+  concrete wrapper in (dependency injection); which actor framework it uses is the
+  app's opinion, not simble's.
+
+- **So simble uses `rootcanal-rs` as a *factory / network*.** Through the injected
+  client handle, a `rootcanal` ether is just another v1 **network** devices
+  `run`/`route` onto — it slots into the same node/network model the device router
+  already has. The bridge into `simble-stack` is the existing **`HciTransport`**
+  trait: a thin `impl HciTransport` drains/fills the actor's Sink/Stream, and
+  `LiveScene<T: HciTransport>` runs scripted devices on it with **zero async in
+  `simble-stack`**. simble only keeps `HciTransport`, the HCI packet types, and the
+  H4 codec public — which it already does.
+
+- **Backends are Cargo features on the backend crate** (default `Link` + `usb`;
+  opt-in `rootcanal`, `netsim`), and switching one injects an HCI Hardware Error
+  (`0x10`) upward so the host re-inits — the same drop-and-re-run the device
+  router's `route` already does deterministically. The **`attach`** verb (a raw H4
+  HCI stream for an external stack) belongs to this crate, not the device router.
+
+This supersedes the "Not built" list above: the `Scene`/`Controller` trait, the
+node/network entities, `route`, `register`, and the create/destroy namespace are
+built; what is genuinely unwritten is this backend crate, the emulator-facing gRPC
+`PacketStreamer`, and on-device Rhai.

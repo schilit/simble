@@ -11,13 +11,15 @@
 //! It is SimBLE's *own* first protocol; the netsim ws:// protocol it can also
 //! speak for compatibility is netsim's, not an earlier version of this one.
 //!
-//! Implemented so far: the four observability lists (`list_controllers` /
-//! `list_networks` / `list_devices` / `list_nodes`), `run`, `stop`, `send`,
-//! `tick`, and `get_clock` (over a `Node` execution core, runnable on the
-//! deterministic `link` controller with no hardware). `run` is persistent and
-//! returns a device handle, so it already is what the design's `spawn` was for —
-//! there is no separate `spawn`. `attach` / `route` and `create` / `register`
-//! follow, and belong with the `hci-router` (they need its multi-world model).
+//! Implemented: the four observability lists (`list_controllers` /
+//! `list_networks` / `list_devices` / `list_nodes`) and the verbs `run`, `stop`,
+//! `send`, `route`, `create`, `register`, `tick`, and `get_clock` — over a
+//! multi-controller `Node` (the *device* router), runnable on the deterministic
+//! `link` controller with no hardware. `run` is persistent and returns a stable
+//! device handle, so it already is what the design's `spawn` was for — there is
+//! no separate `spawn`. The one remaining verb, `attach` (a raw H4 HCI stream for
+//! an external stack), and the async *backend* router (routing raw HCI to
+//! `rootcanal-rs`/netsim) are the separate crate in `docs/controller-routing.md`.
 
 use serde::{Deserialize, Serialize};
 
@@ -144,6 +146,30 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         data: Option<serde_json::Value>,
     },
+    /// Rebind the running device `device` onto a different `controller`, keeping
+    /// its handle. Drops and re-runs (never migrates live state) — the
+    /// deterministic analog of a controller switch injecting an HCI Hardware
+    /// Error, so the device re-initialises on the new controller/world.
+    Route {
+        /// The device to move (from `run` / `list_devices`).
+        device: usize,
+        /// The controller to move it to (built-in or `create`d).
+        controller: String,
+    },
+    /// Mint a private sim ether named `network` — a fresh, isolated `link` world
+    /// that `run`/`route` can target. Networks are *created* (internal), while
+    /// nodes are *registered*.
+    Create {
+        /// A name for the new ether, unique among this node's controllers.
+        network: String,
+    },
+    /// Admit an external `node` (a phone, a browser) into this node's view, so
+    /// `list_nodes` reflects it. Bookkeeping only — this node does not drive it;
+    /// cross-node orchestration is the client's job.
+    Register {
+        /// The participant to admit.
+        node: NodeInfo,
+    },
 }
 
 /// A v1 control response. Tagged by `type` on the wire.
@@ -186,6 +212,23 @@ pub enum Response {
     Sent {
         /// The device the event was delivered to.
         device: usize,
+    },
+    /// The answer to `route`: the device now runs on `controller`.
+    Routed {
+        /// The routed device (its handle is unchanged).
+        device: usize,
+        /// The controller it now runs on.
+        controller: String,
+    },
+    /// The answer to `create`: the private ether now exists.
+    Created {
+        /// The new network's name.
+        network: String,
+    },
+    /// The answer to `register`: the external node was admitted.
+    Registered {
+        /// The registered node's name.
+        node: String,
     },
     /// The answer to `tick`: the node's clock after advancing, and the absolute
     /// clock of the next scheduled event — a deadline to wait *until* instead of
@@ -298,40 +341,145 @@ pub fn list_nodes() -> Vec<NodeInfo> {
     }]
 }
 
-/// A v1 node's execution state: the controller it runs on and the devices on
-/// it. One controller per node for now (many controllers is the router). MCP
-/// keeps its own `Server`; this is the v1 interface's node, and both sit on the
-/// same `transport::Scene` trait underneath.
+/// A v1 node: a router that owns named controllers and the devices running on
+/// them. This is the "many controllers" node the design calls for — a device has
+/// one **stable global handle** (its `index` on the node) that survives `stop`
+/// and `route`, while the node maps it internally to a controller and that
+/// controller's local index. Every controller shares the node's clock, so one
+/// `tick` advances the whole node and one deadline covers it.
+///
+/// This is the *device* router (scripted devices over the synchronous
+/// `transport::Scene` trait, `link` + `usb`, no async). The lower *backend*
+/// router — routing raw HCI to `rootcanal-rs`/netsim with the `0x10` switch — is
+/// the separate async crate described in `docs/controller-routing.md`.
 #[cfg(not(target_arch = "wasm32"))]
 pub struct Node {
-    scene: Box<dyn crate::transport::Scene>,
+    controllers: Vec<NodeController>,
+    devices: Vec<DeviceRecord>,
+    /// The node's simulated clock (µs); every controller is advanced in lockstep
+    /// with it, and a late-added controller is caught up to it.
+    clock_us: u64,
     next_addr: u16,
+    /// External nodes admitted with `register` — bookkeeping the `list_nodes` op
+    /// reflects; this node does not drive them (cross-node orchestration is the
+    /// client's job).
+    registered: Vec<NodeInfo>,
+}
+
+/// One named controller a node owns.
+#[cfg(not(target_arch = "wasm32"))]
+struct NodeController {
+    name: String,
+    scene: Box<dyn crate::transport::Scene>,
+}
+
+/// What the node remembers about a running device so `route` can drop it and
+/// re-run it on another controller: its source and address, and where it is now.
+#[cfg(not(target_arch = "wasm32"))]
+struct DeviceRecord {
+    controller: usize,
+    local: usize,
+    script: String,
+    address: crate::types::Address,
+    stopped: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Default for Node {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Node {
-    /// A node running on `scene`.
-    pub fn new(scene: Box<dyn crate::transport::Scene>) -> Self {
+    /// An empty node — no controllers, no devices, clock at zero.
+    pub fn new() -> Self {
         Self {
-            scene,
+            controllers: Vec::new(),
+            devices: Vec::new(),
+            clock_us: 0,
             next_addr: 1,
+            registered: Vec::new(),
         }
     }
 
-    /// The controller this node runs on.
-    pub fn controller(&self) -> &'static str {
-        self.scene.name()
+    /// The names of the controllers this node owns (built-in or `create`d).
+    pub fn controller_names(&self) -> Vec<String> {
+        self.controllers.iter().map(|c| c.name.clone()).collect()
     }
 
-    /// Runs `script` as a device on this node's controller; returns its index.
-    /// A deterministic address is allocated when `address` is `None`.
-    pub fn run(
+    /// The external nodes registered with this one.
+    pub fn registered_nodes(&self) -> &[NodeInfo] {
+        &self.registered
+    }
+
+    /// Finds the controller named `name`, or builds and adds it via
+    /// [`scene_for_controller`] — caught up to the node clock so every controller
+    /// shares one time frame. Returns its slot index.
+    fn controller_index(&mut self, name: &str) -> Result<usize, String> {
+        if let Some(i) = self.controllers.iter().position(|c| c.name == name) {
+            return Ok(i);
+        }
+        let mut scene = scene_for_controller(name)?;
+        if self.clock_us > 0 {
+            scene.tick(self.clock_us);
+        }
+        self.controllers.push(NodeController {
+            name: name.to_string(),
+            scene,
+        });
+        Ok(self.controllers.len() - 1)
+    }
+
+    /// Creates a new private `link` ether named `name` (a fresh in-process world,
+    /// caught up to the node clock) that `run`/`route` can then target. Errors if
+    /// a controller by that name already exists.
+    pub fn create_network(&mut self, name: &str) -> Result<(), String> {
+        if self.controllers.iter().any(|c| c.name == name) {
+            return Err(format!("controller {name:?} already exists"));
+        }
+        let mut scene: Box<dyn crate::transport::Scene> =
+            Box::new(crate::transport::link_scene::LinkScene::new());
+        if self.clock_us > 0 {
+            scene.tick(self.clock_us);
+        }
+        self.controllers.push(NodeController {
+            name: name.to_string(),
+            scene,
+        });
+        Ok(())
+    }
+
+    /// Admits an external node (a phone, a browser) into this node's view — the
+    /// `list_nodes` op reflects it. Bookkeeping only: this node does not drive it.
+    pub fn register_node(&mut self, node: NodeInfo) {
+        match self.registered.iter_mut().find(|n| n.name == node.name) {
+            Some(existing) => *existing = node,
+            None => self.registered.push(node),
+        }
+    }
+
+    /// Runs `script` as a device on `controller` (built if new); returns the
+    /// device's stable global handle. A deterministic address is allocated when
+    /// `address` is `None`.
+    pub fn run_on(
         &mut self,
+        controller: &str,
         script: &str,
         address: Option<crate::types::Address>,
     ) -> Result<usize, String> {
         let address = address.unwrap_or_else(|| self.next_address());
-        self.scene.add_peripheral(address, script)
+        let ci = self.controller_index(controller)?;
+        let local = self.controllers[ci].scene.add_peripheral(address, script)?;
+        self.devices.push(DeviceRecord {
+            controller: ci,
+            local,
+            script: script.to_string(),
+            address,
+            stopped: false,
+        });
+        Ok(self.devices.len() - 1)
     }
 
     fn next_address(&mut self) -> crate::types::Address {
@@ -341,65 +489,122 @@ impl Node {
         crate::types::Address::new([(n & 0xff) as u8, (n >> 8) as u8, 0x00, 0x57, 0x1e, 0xcc])
     }
 
-    /// Moves packets both ways for every device on this node.
-    pub fn pump(&mut self) {
-        self.scene.pump();
+    fn live_record(&self, id: usize) -> Result<&DeviceRecord, String> {
+        match self.devices.get(id) {
+            Some(r) if !r.stopped => Ok(r),
+            Some(_) => Err(format!("device {id} is stopped")),
+            None => Err(format!("no device {id}")),
+        }
     }
 
-    /// Advances this node's simulated clock by `advance_us` microseconds and
-    /// returns the absolute clock (µs) of the next scheduled event, `None` if
-    /// nothing is scheduled — so the caller waits *until* the deadline rather than
-    /// spinning.
+    /// Moves packets both ways for every device on every controller.
+    pub fn pump(&mut self) {
+        for c in &mut self.controllers {
+            c.scene.pump();
+        }
+    }
+
+    /// Advances the whole node — every controller — by `advance_us` microseconds
+    /// and returns the earliest absolute deadline (µs) across them, `None` if none
+    /// is scheduled, so the caller waits *until* it rather than spinning.
     pub fn tick(&mut self, advance_us: u64) -> Option<u64> {
-        self.scene.tick(advance_us)
+        self.clock_us = self.clock_us.saturating_add(advance_us);
+        let mut deadline: Option<u64> = None;
+        for c in &mut self.controllers {
+            if let Some(d) = c.scene.tick(advance_us) {
+                deadline = Some(deadline.map_or(d, |cur| cur.min(d)));
+            }
+        }
+        deadline
     }
 
     /// This node's current simulated clock, in microseconds.
     pub fn now_us(&self) -> u64 {
-        self.scene.now_us()
+        self.clock_us
     }
 
-    /// The absolute clock (µs) of this node's next scheduled event, so a host can
-    /// wait until it instead of spinning. `None` means nothing is scheduled — wait
-    /// for a packet or poll. A real value appears once a device declares a wake
-    /// time with the `wake_at` script binding.
+    /// The earliest absolute deadline (µs) any controller has, or `None`. A real
+    /// value appears once a device declares a wake time with `wake_at`.
     pub fn next_deadline_us(&self) -> Option<u64> {
-        self.scene.next_deadline_us()
+        self.controllers
+            .iter()
+            .filter_map(|c| c.scene.next_deadline_us())
+            .reduce(u64::min)
     }
 
-    /// The devices running on this node — stopped tombstones are skipped, so a
-    /// device's index stays a stable handle across other devices' teardowns.
+    /// The live devices on this node, by stable global handle — stopped
+    /// tombstones are skipped, so a handle stays valid across teardowns.
     pub fn list_devices(&self) -> Vec<Device> {
-        (0..self.scene.device_count())
-            .filter(|&index| !self.scene.device_stopped(index))
-            .map(|index| Device {
-                index,
-                controller: self.scene.name().to_string(),
-                status: self
-                    .scene
-                    .peripheral_status_json(index)
-                    .and_then(|s| serde_json::from_str(&s).ok()),
+        self.devices
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| !r.stopped)
+            .map(|(id, r)| {
+                let c = &self.controllers[r.controller];
+                Device {
+                    index: id,
+                    controller: c.name.clone(),
+                    status: c
+                        .scene
+                        .peripheral_status_json(r.local)
+                        .and_then(|s| serde_json::from_str(&s).ok()),
+                }
             })
             .collect()
     }
 
-    /// Stops (tears down) the device at `index` on this node.
-    pub fn stop(&mut self, index: usize) -> Result<(), String> {
-        self.scene.stop(index)
+    /// Stops (tears down) the device `id`, releasing its controller slot. The
+    /// handle stays valid but inert.
+    pub fn stop(&mut self, id: usize) -> Result<(), String> {
+        let (ci, local) = {
+            let r = self.live_record(id)?;
+            (r.controller, r.local)
+        };
+        self.devices[id].stopped = true;
+        self.controllers[ci].scene.stop(local)
     }
 
-    /// Delivers an input `event` (with an optional JSON `data` payload) to the
-    /// device at `index` — its script sees it in `fn on_event` on the next tick.
+    /// Delivers an input `event` (with an optional JSON `data` payload) to device
+    /// `id` — its script sees it in `fn on_event` on the next tick.
     pub fn send(
         &mut self,
-        index: usize,
+        id: usize,
         event: &str,
         data: Option<&serde_json::Value>,
     ) -> Result<(), String> {
         let data_json = data
             .map(|v| v.to_string())
             .unwrap_or_else(|| "{}".to_string());
-        self.scene.send(index, event, &data_json)
+        let (ci, local) = {
+            let r = self.live_record(id)?;
+            (r.controller, r.local)
+        };
+        self.controllers[ci].scene.send(local, event, &data_json)
+    }
+
+    /// Routes device `id` onto `to_controller` (built if new), keeping the same
+    /// global handle and address. This **drops and re-runs** rather than migrating
+    /// live state — the deterministic analog of a real controller switch injecting
+    /// an HCI Hardware Error (`0x10`) so the host re-initialises. Returns the
+    /// controller the device now runs on. A no-op (same controller) is fine.
+    pub fn route(&mut self, id: usize, to_controller: &str) -> Result<String, String> {
+        let (old_ci, old_local, script, address) = {
+            let r = self.live_record(id)?;
+            (r.controller, r.local, r.script.clone(), r.address)
+        };
+        if self.controllers[old_ci].name == to_controller {
+            return Ok(to_controller.to_string());
+        }
+        // Drop on the old controller, then re-run on the new one.
+        self.controllers[old_ci].scene.stop(old_local)?;
+        let ci = self.controller_index(to_controller)?;
+        let local = self.controllers[ci]
+            .scene
+            .add_peripheral(address, &script)?;
+        let r = &mut self.devices[id];
+        r.controller = ci;
+        r.local = local;
+        Ok(to_controller.to_string())
     }
 }
 
@@ -429,31 +634,28 @@ pub fn scene_for_controller(name: &str) -> Result<Box<dyn crate::transport::Scen
 /// until the first `run` selects a controller.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn dispatch(request: Request, node: &mut Option<Node>) -> Response {
+    // The verbs that need a device on the node share this "no node yet" error.
+    let no_node = || Response::Error {
+        message: "no device running — run something first".to_string(),
+    };
     match request {
         Request::ListControllers => Response::Controllers {
-            controllers: list_controllers(),
+            controllers: merged_controllers(node),
         },
         Request::ListNetworks => Response::Networks {
-            networks: list_networks(),
+            networks: merged_networks(node),
         },
         Request::ListDevices => Response::Devices {
             devices: node.as_ref().map(Node::list_devices).unwrap_or_default(),
         },
         Request::ListNodes => Response::Nodes {
-            nodes: list_nodes(),
+            nodes: merged_nodes(node),
         },
         Request::Run {
             controller,
             script,
             address,
         } => {
-            // Select the controller (build its scene) if not already on it.
-            if node.as_ref().map(Node::controller) != Some(controller.as_str()) {
-                match scene_for_controller(&controller) {
-                    Ok(scene) => *node = Some(Node::new(scene)),
-                    Err(message) => return Response::Error { message },
-                }
-            }
             let address = match address {
                 Some(s) => match s.parse::<crate::types::Address>() {
                     Ok(a) => Some(a),
@@ -465,11 +667,30 @@ pub fn dispatch(request: Request, node: &mut Option<Node>) -> Response {
                 },
                 None => None,
             };
-            let node = node.as_mut().expect("just selected");
-            match node.run(&script, address) {
+            let node = node.get_or_insert_with(Node::new);
+            match node.run_on(&controller, &script, address) {
                 Ok(device) => Response::Ran { device, controller },
                 Err(message) => Response::Error { message },
             }
+        }
+        Request::Route { device, controller } => match node.as_mut() {
+            Some(node) => match node.route(device, &controller) {
+                Ok(controller) => Response::Routed { device, controller },
+                Err(message) => Response::Error { message },
+            },
+            None => no_node(),
+        },
+        Request::Create { network } => {
+            let node = node.get_or_insert_with(Node::new);
+            match node.create_network(&network) {
+                Ok(()) => Response::Created { network },
+                Err(message) => Response::Error { message },
+            }
+        }
+        Request::Register { node: info } => {
+            let name = info.name.clone();
+            node.get_or_insert_with(Node::new).register_node(info);
+            Response::Registered { node: name }
         }
         Request::Tick { advance_us } => match node.as_mut() {
             Some(node) => {
@@ -480,9 +701,7 @@ pub fn dispatch(request: Request, node: &mut Option<Node>) -> Response {
                     deadline_us,
                 }
             }
-            None => Response::Error {
-                message: "no device running — run something first".to_string(),
-            },
+            None => no_node(),
         },
         Request::GetClock => Response::Clock {
             now_us: node.as_ref().map(Node::now_us).unwrap_or(0),
@@ -493,9 +712,7 @@ pub fn dispatch(request: Request, node: &mut Option<Node>) -> Response {
                 Ok(()) => Response::Stopped { device },
                 Err(message) => Response::Error { message },
             },
-            None => Response::Error {
-                message: "no device running — run something first".to_string(),
-            },
+            None => no_node(),
         },
         Request::Send {
             device,
@@ -506,11 +723,90 @@ pub fn dispatch(request: Request, node: &mut Option<Node>) -> Response {
                 Ok(()) => Response::Sent { device },
                 Err(message) => Response::Error { message },
             },
-            None => Response::Error {
-                message: "no device running — run something first".to_string(),
-            },
+            None => no_node(),
         },
     }
+}
+
+/// Whether `name` is a built-in controller (as opposed to a `create`d one).
+#[cfg(not(target_arch = "wasm32"))]
+fn is_builtin_controller(name: &str) -> bool {
+    name == "link" || name == "netsim" || name.starts_with("dongle-")
+}
+
+/// A `create`d private-ether controller's list entry (a `link`-kind ether).
+#[cfg(not(target_arch = "wasm32"))]
+fn created_controller(name: &str) -> Controller {
+    Controller {
+        name: name.to_string(),
+        kind: "link".to_string(),
+        api_class: "hci".to_string(),
+        network: name.to_string(),
+        real: false,
+        deterministic: true,
+        attachable: true,
+        product: None,
+    }
+}
+
+/// The built-in controllers plus any the node has `create`d.
+#[cfg(not(target_arch = "wasm32"))]
+fn merged_controllers(node: &Option<Node>) -> Vec<Controller> {
+    let mut controllers = list_controllers();
+    if let Some(node) = node {
+        for name in node.controller_names() {
+            if !controllers.iter().any(|c| c.name == name) {
+                controllers.push(created_controller(&name));
+            }
+        }
+    }
+    controllers
+}
+
+/// The built-in networks plus a private ether for each `create`d controller.
+#[cfg(not(target_arch = "wasm32"))]
+fn merged_networks(node: &Option<Node>) -> Vec<Network> {
+    let mut networks = list_networks();
+    if let Some(node) = node {
+        for name in node.controller_names() {
+            if !is_builtin_controller(&name) && !networks.iter().any(|n| n.name == name) {
+                networks.push(Network {
+                    name: name.clone(),
+                    kind: "link".to_string(),
+                    deterministic: true,
+                    real: false,
+                    shared: false,
+                    leaf: false,
+                });
+            }
+        }
+    }
+    networks
+}
+
+/// The local node (its controllers, built-in and `create`d) plus any external
+/// nodes `register`ed with it.
+#[cfg(not(target_arch = "wasm32"))]
+fn merged_nodes(node: &Option<Node>) -> Vec<NodeInfo> {
+    let mut controllers: Vec<String> = list_controllers().into_iter().map(|c| c.name).collect();
+    let mut nodes = Vec::new();
+    if let Some(node) = node {
+        for name in node.controller_names() {
+            if !controllers.contains(&name) {
+                controllers.push(name);
+            }
+        }
+        nodes.extend(node.registered_nodes().iter().cloned());
+    }
+    nodes.insert(
+        0,
+        NodeInfo {
+            name: "local".to_string(),
+            kind: "router".to_string(),
+            controllers,
+        },
+    );
+    nodes
 }
 
 // ---------------------------------------------------------------------------
@@ -569,6 +865,21 @@ struct SendBody {
     event: String,
     #[serde(default)]
     data: Option<serde_json::Value>,
+}
+
+/// The body of `POST /v1/route`.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Deserialize)]
+struct RouteBody {
+    device: usize,
+    controller: String,
+}
+
+/// The body of `POST /v1/create`.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Deserialize)]
+struct CreateBody {
+    network: String,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -654,6 +965,42 @@ pub fn handle_http(node: &mut Option<Node>, method: &str, path: &str, body: &str
                 };
             }
         },
+        ("POST", "/v1/route") => match serde_json::from_str::<RouteBody>(body) {
+            Ok(b) => Request::Route {
+                device: b.device,
+                controller: b.controller,
+            },
+            Err(e) => {
+                return HttpResponse {
+                    status: 400,
+                    body: json_or_empty(&Response::Error {
+                        message: format!("bad route body: {e}"),
+                    }),
+                };
+            }
+        },
+        ("POST", "/v1/create") => match serde_json::from_str::<CreateBody>(body) {
+            Ok(b) => Request::Create { network: b.network },
+            Err(e) => {
+                return HttpResponse {
+                    status: 400,
+                    body: json_or_empty(&Response::Error {
+                        message: format!("bad create body: {e}"),
+                    }),
+                };
+            }
+        },
+        ("POST", "/v1/register") => match serde_json::from_str::<NodeInfo>(body) {
+            Ok(info) => Request::Register { node: info },
+            Err(e) => {
+                return HttpResponse {
+                    status: 400,
+                    body: json_or_empty(&Response::Error {
+                        message: format!("bad register body: {e}"),
+                    }),
+                };
+            }
+        },
         _ => {
             return HttpResponse {
                 status: 404,
@@ -726,51 +1073,20 @@ mod tests {
         assert_eq!(back, resp);
     }
 
-    /// A `Scene` that records what it is told to run — enough to exercise `Node`
-    /// and the `run` op without netsim or a dongle in the loop.
-    struct MockScene {
-        added: Vec<(crate::types::Address, String)>,
-    }
-
-    impl crate::transport::Scene for MockScene {
-        fn name(&self) -> &'static str {
-            "mock"
-        }
-        fn add_peripheral(
-            &mut self,
-            address: crate::types::Address,
-            script: &str,
-        ) -> Result<usize, String> {
-            self.added.push((address, script.to_string()));
-            Ok(self.added.len() - 1)
-        }
-        fn pump(&mut self) {}
-        fn tick(&mut self, _advance_us: u64) -> Option<u64> {
-            None
-        }
-        fn now_us(&self) -> u64 {
-            0
-        }
-        fn device_count(&self) -> usize {
-            self.added.len()
-        }
-        fn peripheral_status_json(&self, index: usize) -> Option<String> {
-            (index < self.added.len()).then(|| format!(r#"{{"index":{index}}}"#))
-        }
-    }
+    /// A minimal device: a GATT server with no behaviour, enough to run and list.
+    const BARE_DEVICE: &str = r#"let server = android::BluetoothGattServer("x");"#;
 
     #[test]
     fn node_run_adds_a_device_and_lists_it() {
-        let mut node = Node::new(Box::new(MockScene { added: Vec::new() }));
-        assert_eq!(node.controller(), "mock");
-        let index = node.run("peripheral(\"x\") {}", None).unwrap();
+        let mut node = Node::new();
+        let index = node.run_on("link", BARE_DEVICE, None).unwrap();
         assert_eq!(index, 0);
 
         let devices = node.list_devices();
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].index, 0);
-        assert_eq!(devices[0].controller, "mock");
-        assert_eq!(devices[0].status, Some(serde_json::json!({"index": 0})));
+        assert_eq!(devices[0].controller, "link");
+        assert!(devices[0].status.is_some());
     }
 
     #[test]
@@ -871,8 +1187,8 @@ mod tests {
         let Response::Error { .. } = dispatch(Request::Tick { advance_us: 1000 }, &mut node) else {
             panic!("tick with no node must error");
         };
-        // With a node, tick answers Ticked with the clock (fixed at 0 in the mock).
-        let mut node = Some(Node::new(Box::new(MockScene { added: Vec::new() })));
+        // With a node, tick advances the node clock and answers Ticked.
+        let mut node = Some(Node::new());
         let Response::Ticked {
             now_us,
             deadline_us,
@@ -880,7 +1196,7 @@ mod tests {
         else {
             panic!("tick must answer Ticked");
         };
-        assert_eq!(now_us, 0);
+        assert_eq!(now_us, 1500);
         // tick returns the sans-io deadline — None until a device declares a wake.
         assert_eq!(deadline_us, None);
         // A malformed tick body is a 400, not a panic.
@@ -905,7 +1221,7 @@ mod tests {
         assert_eq!(now_us, 0);
         assert_eq!(deadline_us, None);
 
-        let mut node = Some(Node::new(Box::new(MockScene { added: Vec::new() })));
+        let mut node = Some(Node::new());
         let Response::Clock {
             now_us,
             deadline_us,
@@ -1131,5 +1447,133 @@ mod tests {
             ),
             Response::Error { .. }
         ));
+    }
+
+    // A node holds many controllers at once; `route` moves a device between them
+    // keeping its handle, and `create` mints a private ether to route onto.
+    #[test]
+    fn route_and_create_move_a_device_between_controllers() {
+        let mut node = None;
+        // Two devices, one on `link`, one on a freshly-created private ether.
+        assert_eq!(
+            dispatch(
+                Request::Create {
+                    network: "arena".to_string()
+                },
+                &mut node
+            ),
+            Response::Created {
+                network: "arena".to_string()
+            }
+        );
+        assert!(matches!(
+            dispatch(run_req("link", BARE_DEVICE), &mut node),
+            Response::Ran { device: 0, .. }
+        ));
+        assert!(matches!(
+            dispatch(run_req("arena", BARE_DEVICE), &mut node),
+            Response::Ran { device: 1, .. }
+        ));
+
+        // Both list, each on its own controller — the node holds both at once.
+        let Response::Devices { devices } = dispatch(Request::ListDevices, &mut node) else {
+            panic!("list");
+        };
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].controller, "link");
+        assert_eq!(devices[1].controller, "arena");
+
+        // Route device 0 from `link` onto `arena`: same handle, new controller.
+        assert_eq!(
+            dispatch(
+                Request::Route {
+                    device: 0,
+                    controller: "arena".to_string(),
+                },
+                &mut node,
+            ),
+            Response::Routed {
+                device: 0,
+                controller: "arena".to_string(),
+            }
+        );
+        let Response::Devices { devices } = dispatch(Request::ListDevices, &mut node) else {
+            panic!("list");
+        };
+        let d0 = devices.iter().find(|d| d.index == 0).unwrap();
+        assert_eq!(d0.controller, "arena", "device 0 moved to arena");
+
+        // The created ether shows up as both a controller and a network.
+        let Response::Controllers { controllers } = dispatch(Request::ListControllers, &mut node)
+        else {
+            panic!("controllers");
+        };
+        assert!(controllers.iter().any(|c| c.name == "arena"));
+        let Response::Networks { networks } = dispatch(Request::ListNetworks, &mut node) else {
+            panic!("networks");
+        };
+        assert!(networks.iter().any(|n| n.name == "arena"));
+
+        // Routing an unknown device errors; creating a duplicate ether errors.
+        assert!(matches!(
+            dispatch(
+                Request::Route {
+                    device: 99,
+                    controller: "link".to_string(),
+                },
+                &mut node,
+            ),
+            Response::Error { .. }
+        ));
+        assert!(matches!(
+            dispatch(
+                Request::Create {
+                    network: "arena".to_string()
+                },
+                &mut node
+            ),
+            Response::Error { .. }
+        ));
+    }
+
+    // `register` admits an external node into `list_nodes` (bookkeeping only).
+    #[test]
+    fn register_admits_an_external_node() {
+        let mut node = None;
+        let phone = NodeInfo {
+            name: "pixel".to_string(),
+            kind: "android".to_string(),
+            controllers: vec!["android-0".to_string()],
+        };
+        assert_eq!(
+            dispatch(
+                Request::Register {
+                    node: phone.clone()
+                },
+                &mut node
+            ),
+            Response::Registered {
+                node: "pixel".to_string()
+            }
+        );
+        let Response::Nodes { nodes } = dispatch(Request::ListNodes, &mut node) else {
+            panic!("nodes");
+        };
+        // The local router is always first; the registered phone follows.
+        assert_eq!(nodes[0].name, "local");
+        assert!(
+            nodes
+                .iter()
+                .any(|n| n.name == "pixel" && n.kind == "android")
+        );
+    }
+
+    /// A `run` request for `controller`/`script` with an auto-allocated address.
+    fn run_req(controller: &str, script: &str) -> Request {
+        Request::Run {
+            controller: controller.to_string(),
+            script: script.to_string(),
+            address: None,
+        }
     }
 }
