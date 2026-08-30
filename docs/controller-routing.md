@@ -626,10 +626,13 @@ backends (`Link` in `controller/sim.rs`, `NetsimScene`, `UsbScene`,
 `RootcanalTransport`, `LiveTransport`), the transport-agnostic stack, MCP over
 stdio and ws:// (`simble mcp --ws-server`), and the phone/browser surfaces.
 
-**Converged but not formalised:** the scenes share `new`/`add_peripheral`/`pump`/
-`tick` as *separate* methods; there is an `HciTransport` trait but **no unified
-`Controller` trait**. `LiveBackend` (a 2-variant `Netsim|Usb`) is the embryo of
-"which controller".
+**Formalised (aa66b0f):** the shared scene shape is now the `transport::Scene`
+trait — `name`/`add_peripheral`/`pump`/`tick`/`now`/`device_count`/
+`peripheral_status_json` plus scanning (a default only real-RF overrides).
+`NetsimScene` and `UsbScene` implement it, and MCP's `LiveBackend` is now
+`Box<dyn Scene>` (the 2-variant enum and its ten match-arm methods are gone). A
+new controller is one `impl Scene` away. This was sequencing **step 2**; it makes
+the rest smaller.
 
 **Not built (the architecture proper):** the `Controller` trait; the `hci-router`;
 the v1 ws:// protocol (`list`/`run`/`attach`/`route`/`networks`/`nodes` + the four
