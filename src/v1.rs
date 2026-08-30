@@ -90,7 +90,7 @@ pub struct NodeInfo {
 }
 
 /// A v1 control request. Tagged by `op` on the wire: `{"op":"list_controllers"}`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request {
     /// Enumerate the controllers this node offers.
@@ -111,6 +111,12 @@ pub enum Request {
         /// An optional BD_ADDR, e.g. `CC:1E:57:00:00:06`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         address: Option<String>,
+    },
+    /// Advance this node's simulated clock by `seconds` and pump once, so a
+    /// deterministic scene makes progress without waiting on a wall clock.
+    Tick {
+        /// How far to advance, in seconds.
+        seconds: f64,
     },
 }
 
@@ -144,6 +150,11 @@ pub enum Response {
         device: usize,
         /// The controller it runs on.
         controller: String,
+    },
+    /// The answer to `tick`: the node's clock after advancing.
+    Ticked {
+        /// The node's simulated time now, in seconds.
+        now: f64,
     },
     /// A request that could not be served.
     Error {
@@ -289,6 +300,11 @@ impl Node {
         self.scene.tick(seconds);
     }
 
+    /// This node's current simulated time, in seconds.
+    pub fn now(&self) -> f64 {
+        self.scene.now()
+    }
+
     /// The devices running on this node.
     pub fn list_devices(&self) -> Vec<Device> {
         (0..self.scene.device_count())
@@ -372,6 +388,16 @@ pub fn dispatch(request: Request, node: &mut Option<Node>) -> Response {
                 Err(message) => Response::Error { message },
             }
         }
+        Request::Tick { seconds } => match node.as_mut() {
+            Some(node) => {
+                node.tick(seconds);
+                node.pump();
+                Response::Ticked { now: node.now() }
+            }
+            None => Response::Error {
+                message: "no device running — run something first".to_string(),
+            },
+        },
     }
 }
 
@@ -407,6 +433,13 @@ struct RunBody {
     script: String,
     #[serde(default)]
     address: Option<String>,
+}
+
+/// The body of `POST /v1/tick`.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Deserialize)]
+struct TickBody {
+    seconds: f64,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -448,6 +481,17 @@ pub fn handle_http(node: &mut Option<Node>, method: &str, path: &str, body: &str
                     status: 400,
                     body: json_or_empty(&Response::Error {
                         message: format!("bad run body: {e}"),
+                    }),
+                };
+            }
+        },
+        ("POST", "/v1/tick") => match serde_json::from_str::<TickBody>(body) {
+            Ok(b) => Request::Tick { seconds: b.seconds },
+            Err(e) => {
+                return HttpResponse {
+                    status: 400,
+                    body: json_or_empty(&Response::Error {
+                        message: format!("bad tick body: {e}"),
                     }),
                 };
             }
@@ -653,5 +697,23 @@ mod tests {
                 r.body
             );
         }
+    }
+
+    #[test]
+    fn tick_needs_a_node_and_reports_the_clock() {
+        // No node yet: tick errors rather than doing nothing silently.
+        let mut node = None;
+        let Response::Error { .. } = dispatch(Request::Tick { seconds: 1.0 }, &mut node) else {
+            panic!("tick with no node must error");
+        };
+        // With a node, tick answers Ticked with the clock (fixed at 0 in the mock).
+        let mut node = Some(Node::new(Box::new(MockScene { added: Vec::new() })));
+        let Response::Ticked { now } = dispatch(Request::Tick { seconds: 1.5 }, &mut node) else {
+            panic!("tick must answer Ticked");
+        };
+        assert_eq!(now, 0.0);
+        // A malformed tick body is a 400, not a panic.
+        let r = handle_http(&mut None, "POST", "/v1/tick", "not json");
+        assert_eq!(r.status, 400);
     }
 }
