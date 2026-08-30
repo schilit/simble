@@ -56,9 +56,14 @@ The relationships, stated once:
   are *interfaces to* a node, not nodes** — one `simble` process is one node
   reached many ways, which is what keeps a **single owner** of its hardware (two
   interfaces are not two owners; that would be the dongle-contention bug).
-- **A node owns controllers; a `run` executes on the node that owns the named
-  controller** (the local node for a dongle/sim; the phone for a phone radio →
-  delegated). You cannot drive a controller you do not own.
+- **A node owns controllers; a `run` executes on *that* node, on a controller it
+  owns.** You reach a controller by connecting to its owning node — a dongle/sim
+  on the local node, a phone's radio on the phone-node. A node does **not** reach
+  into another node; **cross-node orchestration is the client's job** — the client
+  holds a connection to each node it composes (the local node via MCP, a phone via
+  its own interface). A node's own *backends* (including a `netsim` forward) are
+  its controllers, not other nodes, so forwarding there is fine; delegating a run
+  to an independent node is not. You cannot drive a controller you do not own.
 - **A controller has one `network`** (the world it drops a device into) and one
   **`api_class`** (the platform interface, which *gates* what a `run` can do:
   only `hci` allows attach and low-level control; `android`/`coreBluetooth` are
@@ -593,10 +598,17 @@ itself and its controller, and appears in `/v2/nodes` (phone-initiated, which
 handles NAT/wifi). Browsers are nodes too (an `hci` node over a wasm sim/netsim
 controller).
 
-**Delegation.** A `run` whose controller is owned by *another* node is **forwarded
-to that node**, not executed locally: the router relays the same `run`/events
-messages over the owning node's channel, the node runs the script on-device using
-its own `api_class`, and streams events back — self-similar, so a run looks
-identical wherever it lands. Today a phone's delegation carries fixed Java roles
-(`am start` + HTTP); arbitrary-Rhai delegation needs the scaffolded `android/rust`
-engine.
+**Client orchestration, not node delegation.** A node does **not** forward runs to
+other nodes. To use another node's controller, a **client** connects to that node
+and runs there — the client holds a connection to each node it composes. For an
+**MCP agent**, whose only interface is the tool surface, the MCP server itself
+plays that client role: it connects *out* to the other nodes on the agent's behalf.
+So the local `simble` process wears two hats — a **node** (owns and serves its own
+controllers) and, when serving an agent, a **client** (reaching other nodes). The
+reaching is always the *client* role: a phone is always reached by a client — which
+may be the local process acting as one — never orchestrated by another node's
+node-role, and its own node-role (running its scripts on its radio) stays intact.
+So MCP exposes both to the agent: run on the local node's controllers (node), and
+list/connect/run across other nodes (client). Today reaching a phone is adb + HTTP
+with fixed Java roles; a phone speaking the v1 ws:// protocol and arbitrary-Rhai
+on-device both need the scaffolded `android/rust` engine.
