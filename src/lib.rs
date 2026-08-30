@@ -97,6 +97,8 @@ pub mod scripting;
 pub mod service;
 pub mod transport;
 pub mod types;
+/// The SimBLE v1 control protocol (see `docs/controller-routing.md`).
+pub mod v1;
 
 // --- Exposed for inspection, no stability promise ---------------------------
 //
