@@ -646,15 +646,18 @@ trait — `name`/`add_peripheral`/`pump`/`tick`/`now`/`device_count`/
 new controller is one `impl Scene` away. This was sequencing **step 2**; it makes
 the rest smaller.
 
-**Begun (3258019):** the v1 protocol's message layer — `Request`/`Response`
-(JSON-tagged), the `Controller` entity, `dispatch` — with **`list_controllers`**
-implemented (enumerates the `link` + USB dongles). The `src/v1.rs` module is the
-seed; `run`/`spawn`/`attach`/`route`, the other lists, and the ws:// wiring
-remain.
+**Begun (`src/v1.rs`):** the v1 protocol — `Request`/`Response` (JSON-tagged), the
+`Controller`/`Device` entities, and `dispatch`. **`list_controllers`** (3258019)
+enumerates the `link` + dongles. **`run`** (6b20e45) is wired over a `Node`
+execution core: a `Box<dyn Scene>` + address allocator, `run`/`list_devices`/
+`pump`/`tick`, and `scene_for_controller` (netsim / `dongle-N`; `link`
+deferred) — MCP keeps its `Server`, both on the same `Scene` trait. Remaining:
+`spawn`/`attach`/`route`/`stop`/`tick`/`send`, the `/v1/{networks,devices,nodes}`
+lists, `create`/`register`, and the HTTP-REST + ws:// serving over `dispatch`.
 
 **Not built (the architecture proper):** the `hci-router`; the rest of the v1
-verbs (`run`/`attach`/`route`/…) and the `/v1/{networks,devices,nodes}` lists over
-ws://; the formal node/network/device entities, `api_class` gate, and `register`;
+verbs and lists over HTTP REST / ws://; the formal node/network entities, the
+`api_class` gate, and `register`;
 `route` (the `0x10` live switch); the private-network create/destroy namespace;
 **gRPC `PacketStreamer`** to serve the emulator (confirmed absent — `mcp.rs` says
 "no tonic"); `rootcanal-rs` at runtime (`cfg`-dev-dep only); on-device Rhai
