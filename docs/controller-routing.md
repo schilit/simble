@@ -684,9 +684,15 @@ indices remain stable handles (never reused), but it no longer ticks, routes,
 lists, or contributes a deadline, and its address is released from the medium
 (`Link::remove_device`). Supported on `link` (via `SceneEngine`); the live
 backends default to unsupported for now.
+**The optional server exists** as a CLI mode, not bundled in the lib: `simble v1
+[PORT]` serves `v1::handle_http` over HTTP on loopback (default 7683), holding one
+node driven sequentially — a control plane, not a data path. It required
+completing the HTTP reader: `accept_inbound`/`Inbound::Request` now carries the
+`Content-Length` body (`read_http_body`), which the netsim-style bridge had never
+needed. Verified end to end with `curl`: `run` on `link` → `tick` (real
+`deadline_us`) → `clock` → `devices` → `stop`.
 Remaining: `spawn`/`attach`/`route`/`send` (each needs a new subsystem — the
-router, HCI streams, or script inputs), `create`/`register`, and an optional
-default server.
+router, HCI streams, or script inputs) and `create`/`register`.
 
 **Not built (the architecture proper):** the `hci-router`; the rest of the v1
 verbs and lists over HTTP REST / ws://; the formal node/network entities, the

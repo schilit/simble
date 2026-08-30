@@ -56,6 +56,7 @@ usage:
                                        (`simble --usb-list` names every dongle)
   simble mcp                           run the MCP server (stdio) for agents
   simble mcp --ws-server [PORT]        …serve MCP over WebSocket instead (7682)
+  simble v1 [PORT]                     serve the v1 control protocol (REST) on 127.0.0.1 (7683)
 
 scene options:
   --controller self|netsim|usb         override the scene file's controller
@@ -97,6 +98,9 @@ fn main() -> ExitCode {
             }
         };
     }
+    if args.first().map(String::as_str) == Some("v1") {
+        return run_v1_server(&args[1..]);
+    }
     if args.iter().any(|a| a == "--usb" || a == "--serial") {
         return run_bridge(&args);
     }
@@ -115,6 +119,91 @@ enum BridgeSource {
 /// The MCP server's default WebSocket port, one above the netsim/bridge port
 /// so `--ws-server` and `--usb` can run side by side with no flags.
 const MCP_WS_PORT: u16 = 7682;
+
+/// The v1 control server's default port, one above the MCP port so it can run
+/// alongside `mcp --ws-server` and the `--usb` bridge with no flags.
+const V1_PORT: u16 = 7683;
+
+/// `simble v1 [PORT]` — serve the v1 control protocol (REST over HTTP) on
+/// loopback. The library stays server-free by design; this is the "server is a
+/// feature" front-end, a thin blocking loop over `v1::handle_http` around one
+/// node driven sequentially (a control plane, not a data path).
+fn run_v1_server(args: &[String]) -> ExitCode {
+    let port = match args.first().map(String::as_str) {
+        None => V1_PORT,
+        Some(tok) => match tok.parse::<u16>() {
+            Ok(p) if p != 0 => p,
+            _ => {
+                eprintln!("simble v1: expected a port between 1 and 65535, got {tok:?}\n\n{USAGE}");
+                return ExitCode::from(2);
+            }
+        },
+    };
+    let listener = match TcpListener::bind(("127.0.0.1", port)) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("simble v1: cannot bind 127.0.0.1:{port}: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    eprintln!("simble v1: serving the control protocol on http://127.0.0.1:{port}/v1/…");
+    eprintln!("  try: curl -s http://127.0.0.1:{port}/v1/controllers");
+    let mut node: Option<simble::v1::Node> = None;
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                if let Err(e) = serve_v1(stream, &mut node) {
+                    eprintln!("  request failed: {e}");
+                }
+            }
+            Err(e) => eprintln!("  accept failed: {e}"),
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// Answers one v1 HTTP request against the shared `node`, then closes.
+fn serve_v1(mut stream: TcpStream, node: &mut Option<simble::v1::Node>) -> Result<(), String> {
+    let inbound = accept_inbound(stream.try_clone().map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    let (method, target, body) = match inbound {
+        Inbound::Request {
+            method,
+            target,
+            body,
+        } => (method, target, body),
+        // v1 control is HTTP; the raw-HCI ws:// `attach` stream is a later verb.
+        Inbound::WebSocket(..) => {
+            return Err("v1 takes HTTP, not WebSocket (attach is not implemented yet)".to_string());
+        }
+    };
+    // Routes are exact paths, so drop any query string.
+    let path = target.split('?').next().unwrap_or(&target);
+    let response = simble::v1::handle_http(node, &method, path, &body);
+    let http = format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\n\
+         Access-Control-Allow-Origin: *\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+        response.status,
+        v1_reason_phrase(response.status),
+        response.body.len(),
+        response.body,
+    );
+    use std::io::Write as _;
+    stream
+        .write_all(http.as_bytes())
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// The reason phrase for the handful of statuses `v1::handle_http` returns.
+fn v1_reason_phrase(status: u16) -> &'static str {
+    match status {
+        400 => "Bad Request",
+        404 => "Not Found",
+        _ => "OK",
+    }
+}
 
 /// Reads `--ws-server [PORT]` out of the `mcp` subcommand's arguments.
 /// `Ok(None)` means stdio (the flag is absent); `Ok(Some(port))` means serve
@@ -1133,7 +1222,7 @@ fn serve(mut stream: TcpStream, source: &BridgeSource) -> Result<(), String> {
         // A plain GET: the page is asking what it can connect *to*. This is
         // why the bridge serves every dongle from one port rather than one
         // port each -- a page cannot discover a port, but it can read a list.
-        Inbound::Request { method, target } => {
+        Inbound::Request { method, target, .. } => {
             let (status, body) = if target.starts_with("/devices") {
                 let body = match source {
                     BridgeSource::Serial(path) => serial_devices_json(path),

@@ -165,6 +165,32 @@ pub(crate) fn read_http_headers<R: Read>(reader: &mut R) -> Result<String, Simbl
     }
 }
 
+/// Reads the request body that follows the headers, per `Content-Length`.
+/// `read_http_headers` stops exactly at the `\r\n\r\n`, so the body is still on
+/// the stream; absent or zero `Content-Length` means no body. Capped so a bad
+/// or hostile length cannot make us allocate unbounded.
+pub(crate) fn read_http_body<R: Read>(
+    reader: &mut R,
+    headers: &str,
+) -> Result<String, SimbleError> {
+    let len: usize = header_value(headers, "Content-Length")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    if len == 0 {
+        return Ok(String::new());
+    }
+    if len > 1024 * 1024 {
+        return Err(SimbleError::Transport(format!(
+            "request body too large: {len} bytes"
+        )));
+    }
+    let mut buf = vec![0u8; len];
+    reader
+        .read_exact(&mut buf)
+        .map_err(|e| SimbleError::Transport(e.to_string()))?;
+    String::from_utf8(buf).map_err(|e| SimbleError::Transport(format!("non-UTF8 body: {e}")))
+}
+
 /// Finds a header's value in a raw `\r\n`-delimited header block,
 /// case-insensitively by name (RFC 7230 makes header names case-insensitive).
 fn header_value<'a>(headers: &'a str, name: &str) -> Option<&'a str> {
@@ -522,6 +548,9 @@ pub enum Inbound {
         method: String,
         /// The request target, query string included.
         target: String,
+        /// The request body (empty when there is none), read per `Content-Length`
+        /// — so a `POST` handler (e.g. the v1 REST server) sees its JSON.
+        body: String,
     },
 }
 
@@ -538,7 +567,12 @@ pub fn accept_inbound(mut stream: TcpStream) -> Result<Inbound, SimbleError> {
     let method = parts.next().unwrap_or("GET").to_string();
     let target = parts.next().unwrap_or("/").to_string();
     if header_value(&request, "Sec-WebSocket-Key").is_none() {
-        return Ok(Inbound::Request { method, target });
+        let body = read_http_body(&mut stream, &request)?;
+        return Ok(Inbound::Request {
+            method,
+            target,
+            body,
+        });
     }
     let query = finish_server_handshake(&mut stream, &request)?;
     // Non-blocking is not an optimisation here, it is what `poll_messages`

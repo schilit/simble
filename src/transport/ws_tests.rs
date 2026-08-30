@@ -4,6 +4,28 @@ use crate::transport::h4_type;
 use std::io::Cursor;
 
 #[test]
+fn test_read_http_body_reads_exactly_content_length() {
+    // The body follows the headers on the same stream; read_http_headers stops at
+    // the blank line, so read_http_body must pick up exactly Content-Length bytes
+    // and no more (a trailing pipelined byte stays unread).
+    let headers = "POST /v1/run HTTP/1.1\r\nContent-Length: 5\r\n\r\n";
+    let mut stream = Cursor::new(b"hello!".to_vec()); // 6 bytes; only 5 are the body
+    let body = read_http_body(&mut stream, headers).unwrap();
+    assert_eq!(body, "hello");
+
+    // No Content-Length → no body, and the stream is left untouched.
+    let mut empty = Cursor::new(Vec::new());
+    assert_eq!(
+        read_http_body(&mut empty, "GET /v1/clock HTTP/1.1\r\n\r\n").unwrap(),
+        ""
+    );
+
+    // A length longer than the stream is an error, not a hang or panic.
+    let mut short = Cursor::new(b"ab".to_vec());
+    assert!(read_http_body(&mut short, "POST / HTTP/1.1\r\nContent-Length: 9\r\n\r\n").is_err());
+}
+
+#[test]
 fn test_sha1_matches_known_vector() {
     // "abc" -> a9993e364706816aba3e25717850c26c9cd0d89d (FIPS 180-4 Appendix A.1)
     assert_eq!(
