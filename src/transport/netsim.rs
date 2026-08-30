@@ -450,6 +450,11 @@ impl NetsimScene {
         self.scene.now()
     }
 
+    /// See `LiveScene::next_deadline`.
+    pub fn next_deadline(&self) -> Option<f64> {
+        self.scene.next_deadline()
+    }
+
     /// The number of peripherals in the scene.
     pub fn device_count(&self) -> usize {
         self.scene.device_count()
@@ -479,13 +484,16 @@ impl super::Scene for NetsimScene {
     fn pump(&mut self) {
         self.pump()
     }
-    fn tick(&mut self, millis: f64) -> Option<f64> {
-        // The trait speaks milliseconds; the inherent clock is seconds.
-        NetsimScene::tick(self, millis / 1000.0);
-        self.next_timeout_ms()
+    fn tick(&mut self, advance_us: u64) -> Option<u64> {
+        // The trait clock is microseconds; the inherent clock is seconds.
+        NetsimScene::tick(self, advance_us as f64 / 1_000_000.0);
+        self.next_deadline_us()
     }
-    fn now_ms(&self) -> f64 {
-        NetsimScene::now(self) * 1000.0
+    fn now_us(&self) -> u64 {
+        (NetsimScene::now(self) * 1_000_000.0).round() as u64
+    }
+    fn next_deadline_us(&self) -> Option<u64> {
+        NetsimScene::next_deadline(self).map(|s| (s * 1_000_000.0).round() as u64)
     }
     fn device_count(&self) -> usize {
         NetsimScene::device_count(self)

@@ -63,6 +63,12 @@ pub struct VirtualDevice {
     /// must be addressed to the isochronous stream, never to the ACL
     /// connection — a real controller drops them otherwise.
     pub cis_handle: Option<u16>,
+    /// The next script-clock time (in seconds) at which this device wants to be
+    /// ticked, set by a script's `fn tick` via the `wake_at`/`wake_in` binding.
+    /// The runtime reads it after each tick to compute a real sans-io timeout,
+    /// so a host waits on a timer instead of spinning. `None` means the device
+    /// declared no deadline — it is content to be polled.
+    pub next_wake: Option<f64>,
 }
 
 /// The address a peer's bond records are keyed by: the identity address it
@@ -114,6 +120,7 @@ impl Clone for VirtualDevice {
             audio_tx_sequence: self.audio_tx_sequence,
             audio_tx_pending: self.audio_tx_pending.clone(),
             cis_handle: self.cis_handle,
+            next_wake: self.next_wake,
         }
     }
 }
@@ -138,6 +145,7 @@ impl VirtualDevice {
             audio_tx_sequence: 0,
             audio_tx_pending: Vec::new(),
             cis_handle: None,
+            next_wake: None,
         }
     }
 

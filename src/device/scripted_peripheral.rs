@@ -402,6 +402,13 @@ impl ScriptedPeripheral {
         self.last_error = Some(message);
     }
 
+    /// The absolute script-clock time (seconds) this device last asked to be
+    /// ticked at via the `wake_at` binding, or `None` if it declared none. The
+    /// runtime folds these across devices into the scene's sans-io deadline.
+    pub fn next_wake(&self) -> Option<f64> {
+        self.primary().with_server(|s| s.device.next_wake)
+    }
+
     /// Host-side write of a characteristic's value by UUID string — the same
     /// live-database path as the script's `update_value`, exposed to the page
     /// so UI (the lightbulb's colour picker) can drive a value directly. A
@@ -692,6 +699,10 @@ impl ScriptedPeripheral {
         // Events first, so a write that arrived since the last tick is
         // handled before the periodic tick sees the world.
         self.dispatch_events();
+        // Clear last tick's wake request so the script re-declares it (or lets it
+        // lapse). The runtime reads `next_wake` after this call to build a real
+        // sans-io timeout.
+        self.primary().with_server(|s| s.device.next_wake = None);
         if self.tick_defined {
             let args = (Dynamic::from(self.primary().clone()), t_seconds);
             // eval_ast(false): the script body already ran in `run_script`;

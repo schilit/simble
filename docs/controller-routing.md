@@ -664,13 +664,19 @@ API** (c032e96) is done — `dispatch` (typed), `handle_json` (ws), `handle_http
 (REST routing) — server-agnostic, so a host's own server calls it (no bundled
 server; a default one would be a feature). The **four lists** are complete
 (ac9066f: `/v1/{controllers,networks,devices,nodes}` + the `Network`/`NodeInfo`
-entities), and **`tick`** (00440b7) and a sans-io **`get_timer`** (c02adc6:
-`Scene::next_timeout`, `None` until devices report deadlines) are wired.
+entities), and **`tick`** (00440b7) and a sans-io **`get_clock`** are wired.
+The clock is an **integer-microsecond, absolute-deadline** interface (the
+serializable, deterministic analog of `std::time::Instant`): `Scene::tick`
+advances by `advance_us` and returns the absolute clock of the next event,
+`next_deadline_us` peeks it, and `get_clock` reports `{now_us, deadline_us}`.
+**Device-model deadlines are real:** a script declares its next wake with the
+`wake_at(t)` binding (script-clock seconds), the peripheral surfaces it, and
+`LiveScene::next_deadline` folds the earliest across devices into the µs clock —
+so a host waits *until* the deadline instead of spinning. A device that declares
+nothing reports `None` (wait for a packet, or poll).
 Remaining: `spawn`/`attach`/`route`/`stop`/`send` (each needs a new subsystem —
 device removal, the router, HCI streams, or script inputs), `create`/`register`,
-the `link` (self) run path, an optional default server, and — for a *real*
-timer — device-model deadline reporting (the tick-polled devices expose no next
-fire time yet, which is why `next_timeout` is `None`).
+the `link` (self) run path, and an optional default server.
 
 **Not built (the architecture proper):** the `hci-router`; the rest of the v1
 verbs and lists over HTTP REST / ws://; the formal node/network entities, the

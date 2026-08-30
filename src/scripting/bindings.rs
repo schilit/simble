@@ -716,6 +716,23 @@ fn register_types(engine: &mut Engine) {
                 server.with_server(|s| s.device.connectable = connectable);
             },
         )
+        .register_fn(
+            // Declares when this device next wants to be ticked, in script-clock
+            // seconds (the same clock `fn tick(server, t)` receives). The runtime
+            // takes the earliest wake across all devices and returns it as the
+            // sans-io timeout from `tick`, so a host waits on a timer instead of
+            // spinning. Re-declare each tick — the request is cleared before every
+            // `fn tick` runs. For a relative delay, pass `t + delay`.
+            "wake_at",
+            |server: &mut ScriptGattServer, seconds: f64| {
+                server.with_server(|s| {
+                    s.device.next_wake = Some(match s.device.next_wake {
+                        Some(existing) => existing.min(seconds),
+                        None => seconds,
+                    });
+                });
+            },
+        )
         .register_fn("take_events", |server: &mut ScriptGattServer| {
             server.take_own_events()
         })

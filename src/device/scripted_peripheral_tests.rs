@@ -443,6 +443,34 @@ fn test_script_errors_surface_as_strings() {
 }
 
 #[test]
+fn test_wake_at_surfaces_a_deadline_that_re_declares_each_tick() {
+    // A script asks to be woken 50 ms after every tick. Its request must surface
+    // as an absolute wake time and be re-declared each tick (not stick from the
+    // last one), so the runtime can build a real sans-io deadline.
+    let script = r#"
+            let server = android::BluetoothGattServer("waker");
+            fn tick(server, t) { server.wake_at(t + 0.05); }
+        "#;
+    let mut peripheral = ScriptedPeripheral::run_script(script).unwrap();
+    let channel = HciChannel::new();
+    // No tick yet: nothing declared.
+    assert_eq!(peripheral.next_wake(), None);
+    peripheral.tick(&channel, 1.0).unwrap();
+    assert_eq!(peripheral.last_error, None, "wake_at should be callable");
+    assert_eq!(peripheral.next_wake(), Some(1.05));
+    // Next tick re-declares relative to the new clock, not the stale 1.05.
+    peripheral.tick(&channel, 2.0).unwrap();
+    assert_eq!(peripheral.next_wake(), Some(2.05));
+
+    // A device with no `wake_at` never declares a deadline.
+    let mut quiet =
+        ScriptedPeripheral::run_script(r#"let server = android::BluetoothGattServer("quiet");"#)
+            .unwrap();
+    quiet.tick(&channel, 1.0).unwrap();
+    assert_eq!(quiet.next_wake(), None);
+}
+
+#[test]
 fn test_update_value_extension_writes_the_real_database() {
     let script = r#"
             let server = android::BluetoothGattServer("dev");

@@ -169,6 +169,16 @@ impl<T: HciTransport> LiveScene<T> {
         self.t
     }
 
+    /// The earliest absolute wake time (script-clock seconds) any device has
+    /// declared with the `wake_at` binding, or `None` if none has — the scene's
+    /// sans-io deadline. The backend exposes it to hosts as a microsecond clock.
+    pub fn next_deadline(&self) -> Option<f64> {
+        self.devices
+            .iter()
+            .filter_map(|d| d.peripheral.next_wake())
+            .reduce(f64::min)
+    }
+
     /// The number of peripherals in the scene.
     pub fn device_count(&self) -> usize {
         self.devices.len()

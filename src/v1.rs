@@ -112,15 +112,16 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         address: Option<String>,
     },
-    /// Advance this node's simulated clock by `millis` and pump once, so a
+    /// Advance this node's simulated clock by `advance_us` and pump once, so a
     /// deterministic scene makes progress without waiting on a wall clock.
     Tick {
-        /// How far to advance, in milliseconds (BLE/HCI timing is milliseconds).
-        millis: f64,
+        /// How far to advance, in microseconds (BLE/HCI timing is exact integers
+        /// there: 625 µs slots, 1250 µs connection-interval units).
+        advance_us: u64,
     },
-    /// Ask when this node next needs attention, so the caller can wait on a
-    /// timer instead of spinning `tick`.
-    GetTimer,
+    /// Read this node's clock: the time now and when it next needs attention, so
+    /// the caller can wait *until* the deadline instead of spinning `tick`.
+    GetClock,
 }
 
 /// A v1 control response. Tagged by `type` on the wire.
@@ -154,21 +155,25 @@ pub enum Response {
         /// The controller it runs on.
         controller: String,
     },
-    /// The answer to `tick`: the node's clock after advancing, and the sans-io
-    /// timeout (milliseconds until the next event) to wait on instead of spinning.
+    /// The answer to `tick`: the node's clock after advancing, and the absolute
+    /// clock of the next scheduled event — a deadline to wait *until* instead of
+    /// spinning. Both are microseconds.
     Ticked {
-        /// The node's simulated time now, in milliseconds.
-        now_ms: f64,
-        /// Milliseconds until the next scheduled event, or `null` if nothing is
-        /// scheduled (wait for a packet, or poll).
+        /// The node's simulated clock now, in microseconds.
+        now_us: u64,
+        /// The absolute clock (µs) of the next scheduled event, or `null` if
+        /// nothing is scheduled (wait for a packet, or poll).
         #[serde(skip_serializing_if = "Option::is_none")]
-        timeout_ms: Option<f64>,
+        deadline_us: Option<u64>,
     },
-    /// The answer to `get_timer`: milliseconds until the next scheduled event, or
-    /// `null` when nothing is scheduled (wait for a packet, or poll).
-    Timer {
-        /// Milliseconds until the next event, or `None`.
-        timeout_ms: Option<f64>,
+    /// The answer to `get_clock`: the clock now and the absolute clock of the
+    /// next scheduled event, both microseconds; `deadline_us` is `null` when
+    /// nothing is scheduled (wait for a packet, or poll).
+    Clock {
+        /// The node's simulated clock now, in microseconds.
+        now_us: u64,
+        /// The absolute clock (µs) of the next event, or `None`.
+        deadline_us: Option<u64>,
     },
     /// A request that could not be served.
     Error {
@@ -309,24 +314,25 @@ impl Node {
         self.scene.pump();
     }
 
-    /// Advances this node's simulated clock by `millis` and returns the sans-io
-    /// timeout — milliseconds until the next scheduled event, `None` if nothing is
-    /// scheduled — so the caller waits on a timer instead of spinning.
-    pub fn tick(&mut self, millis: f64) -> Option<f64> {
-        self.scene.tick(millis)
+    /// Advances this node's simulated clock by `advance_us` microseconds and
+    /// returns the absolute clock (µs) of the next scheduled event, `None` if
+    /// nothing is scheduled — so the caller waits *until* the deadline rather than
+    /// spinning.
+    pub fn tick(&mut self, advance_us: u64) -> Option<u64> {
+        self.scene.tick(advance_us)
     }
 
-    /// This node's current simulated time, in milliseconds.
-    pub fn now_ms(&self) -> f64 {
-        self.scene.now_ms()
+    /// This node's current simulated clock, in microseconds.
+    pub fn now_us(&self) -> u64 {
+        self.scene.now_us()
     }
 
-    /// Milliseconds until this node's next scheduled event, so a host can wait on
-    /// a timer instead of spinning. `None` means nothing is scheduled — wait for a
-    /// packet or poll. (Real deadlines await device-model support; the scene
-    /// returns `None` for now.)
-    pub fn next_timeout_ms(&self) -> Option<f64> {
-        self.scene.next_timeout_ms()
+    /// The absolute clock (µs) of this node's next scheduled event, so a host can
+    /// wait until it instead of spinning. `None` means nothing is scheduled — wait
+    /// for a packet or poll. A real value appears once a device declares a wake
+    /// time with the `wake_at` script binding.
+    pub fn next_deadline_us(&self) -> Option<u64> {
+        self.scene.next_deadline_us()
     }
 
     /// The devices running on this node.
@@ -412,21 +418,22 @@ pub fn dispatch(request: Request, node: &mut Option<Node>) -> Response {
                 Err(message) => Response::Error { message },
             }
         }
-        Request::Tick { millis } => match node.as_mut() {
+        Request::Tick { advance_us } => match node.as_mut() {
             Some(node) => {
-                let timeout_ms = node.tick(millis);
+                let deadline_us = node.tick(advance_us);
                 node.pump();
                 Response::Ticked {
-                    now_ms: node.now_ms(),
-                    timeout_ms,
+                    now_us: node.now_us(),
+                    deadline_us,
                 }
             }
             None => Response::Error {
                 message: "no device running — run something first".to_string(),
             },
         },
-        Request::GetTimer => Response::Timer {
-            timeout_ms: node.as_ref().and_then(Node::next_timeout_ms),
+        Request::GetClock => Response::Clock {
+            now_us: node.as_ref().map(Node::now_us).unwrap_or(0),
+            deadline_us: node.as_ref().and_then(Node::next_deadline_us),
         },
     }
 }
@@ -469,7 +476,7 @@ struct RunBody {
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Deserialize)]
 struct TickBody {
-    millis: f64,
+    advance_us: u64,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -500,7 +507,7 @@ pub fn handle_http(node: &mut Option<Node>, method: &str, path: &str, body: &str
         ("GET", "/v1/networks") => Request::ListNetworks,
         ("GET", "/v1/devices") => Request::ListDevices,
         ("GET", "/v1/nodes") => Request::ListNodes,
-        ("GET", "/v1/timer") => Request::GetTimer,
+        ("GET", "/v1/clock") => Request::GetClock,
         ("POST", "/v1/run") => match serde_json::from_str::<RunBody>(body) {
             Ok(b) => Request::Run {
                 controller: b.controller,
@@ -517,7 +524,9 @@ pub fn handle_http(node: &mut Option<Node>, method: &str, path: &str, body: &str
             }
         },
         ("POST", "/v1/tick") => match serde_json::from_str::<TickBody>(body) {
-            Ok(b) => Request::Tick { millis: b.millis },
+            Ok(b) => Request::Tick {
+                advance_us: b.advance_us,
+            },
             Err(e) => {
                 return HttpResponse {
                     status: 400,
@@ -618,11 +627,11 @@ mod tests {
             Ok(self.added.len() - 1)
         }
         fn pump(&mut self) {}
-        fn tick(&mut self, _millis: f64) -> Option<f64> {
+        fn tick(&mut self, _advance_us: u64) -> Option<u64> {
             None
         }
-        fn now_ms(&self) -> f64 {
-            0.0
+        fn now_us(&self) -> u64 {
+            0
         }
         fn device_count(&self) -> usize {
             self.added.len()
@@ -736,44 +745,56 @@ mod tests {
     fn tick_needs_a_node_and_reports_the_clock() {
         // No node yet: tick errors rather than doing nothing silently.
         let mut node = None;
-        let Response::Error { .. } = dispatch(Request::Tick { millis: 1.0 }, &mut node) else {
+        let Response::Error { .. } = dispatch(Request::Tick { advance_us: 1000 }, &mut node) else {
             panic!("tick with no node must error");
         };
         // With a node, tick answers Ticked with the clock (fixed at 0 in the mock).
         let mut node = Some(Node::new(Box::new(MockScene { added: Vec::new() })));
-        let Response::Ticked { now_ms, timeout_ms } =
-            dispatch(Request::Tick { millis: 1.5 }, &mut node)
+        let Response::Ticked {
+            now_us,
+            deadline_us,
+        } = dispatch(Request::Tick { advance_us: 1500 }, &mut node)
         else {
             panic!("tick must answer Ticked");
         };
-        assert_eq!(now_ms, 0.0);
-        // tick returns the sans-io timeout — None until devices report deadlines.
-        assert_eq!(timeout_ms, None);
+        assert_eq!(now_us, 0);
+        // tick returns the sans-io deadline — None until a device declares a wake.
+        assert_eq!(deadline_us, None);
         // A malformed tick body is a 400, not a panic.
         let r = handle_http(&mut None, "POST", "/v1/tick", "not json");
         assert_eq!(r.status, 400);
     }
 
     #[test]
-    fn get_timer_reports_the_next_deadline_or_none() {
-        // No node, and the tick-polled model reports no deadline yet, so the
-        // timer is `null` — the host waits for a packet or polls. The op and the
-        // route exist so a host can write the wait-on-timer loop today; a real
-        // value lands when devices expose their next fire time.
+    fn get_clock_reports_the_next_deadline_or_none() {
+        // No node yet: the clock reads 0 with no deadline — the host waits for a
+        // packet or polls. The op and route exist so a host can write the
+        // wait-until-deadline loop today; a real deadline lands once a device
+        // declares a wake time with `wake_at`.
         let mut node = None;
-        let Response::Timer { timeout_ms } = dispatch(Request::GetTimer, &mut node) else {
-            panic!("get_timer must answer Timer");
+        let Response::Clock {
+            now_us,
+            deadline_us,
+        } = dispatch(Request::GetClock, &mut node)
+        else {
+            panic!("get_clock must answer Clock");
         };
-        assert_eq!(timeout_ms, None);
+        assert_eq!(now_us, 0);
+        assert_eq!(deadline_us, None);
 
         let mut node = Some(Node::new(Box::new(MockScene { added: Vec::new() })));
-        let Response::Timer { timeout_ms } = dispatch(Request::GetTimer, &mut node) else {
-            panic!("get_timer must answer Timer");
+        let Response::Clock {
+            now_us,
+            deadline_us,
+        } = dispatch(Request::GetClock, &mut node)
+        else {
+            panic!("get_clock must answer Clock");
         };
-        assert_eq!(timeout_ms, None);
+        assert_eq!(now_us, 0);
+        assert_eq!(deadline_us, None);
 
-        let r = handle_http(&mut None, "GET", "/v1/timer", "");
+        let r = handle_http(&mut None, "GET", "/v1/clock", "");
         assert_eq!(r.status, 200);
-        assert!(r.body.contains("\"type\":\"timer\""), "{}", r.body);
+        assert!(r.body.contains("\"type\":\"clock\""), "{}", r.body);
     }
 }
