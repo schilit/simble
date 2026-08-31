@@ -2450,8 +2450,15 @@ let openedOnce = false;
 let startTime = performance.now();
 const prevValues = new Map();
 
-const registry = { server: [], service: [], characteristic: [], descriptor: [], device: [] };
-const counters = { server: 0, service: 0, characteristic: 0, descriptor: 0, device: 0 };
+// Every object type a member can be a receiver of, bind, or take as an objref —
+// keep in sync with the `receiver`/`binds`/`objType` values in the member data,
+// or `refreshObjrefs` reads `.length` off an undefined entry and throws.
+const OBJ_TYPES = [
+  "server", "service", "characteristic", "descriptor", "device",
+  "client", "host", "scanner", "broadcast", "assistant",
+];
+const registry = Object.fromEntries(OBJ_TYPES.map((t) => [t, []]));
+const counters = Object.fromEntries(OBJ_TYPES.map((t) => [t, 0]));
 const sessionLines = []; // successful lines, for "copy as script"
 
 const peekName = (type) => `${NAME_PREFIX[type]}${counters[type] + 1}`;
