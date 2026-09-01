@@ -20,8 +20,9 @@ model is not exposed through Rhai, MCP, or the web pages.
 unit-tested, driven Rust-to-Rust by handing byte buffers between two instances.
 Nothing on the air.
 
-The current user-facing surface is scriptable LE GATT. Classic runs natively in
-a scene, but has no scriptable surface.
+The current *scriptable* (Rhai) surface is LE GATT. Classic runs natively in a
+scene — A2DP, AVRCP and Classic HID as registered handlers, with fixed web-page
+demos — but has no Rhai/MCP scripting surface yet.
 
 ## What is actually in the tree
 
@@ -33,17 +34,19 @@ a scene, but has no scriptable surface.
 | LE device models | **Native device API** | `devices/*` models, including HOGP helpers |
 | Classic radio | **Native device API** | `controller/sim.rs` `Link` models Scan Enable, inquiry, paging, Remote Name Request, and classic ACL routing — two BR/EDR devices connect in one process, no netsim |
 | Classic host, SDP, and RFCOMM | **Native device API** | `ClassicHost` is both responder and initiator: discovery, inbound ACL, L2CAP (server and client), SDP (server and query), RFCOMM. `SceneEngine::add_classic_device` puts one in a scene; no Rhai/MCP/web surface yet |
-| Other Classic profiles | **Library-only** | `classic/*` contains A2DP, AVRCP, HFP, HID, and more, not yet registered with a scene or a transport |
+| A2DP / AVRCP / Classic HID | **Native device API** | Registered `ProtocolHandler`s with Rust scene builders (`media_scene`, `speaker_scene`, `keyboard_scene`) and scene tests (`a2dp_scene_test`, `avrcp_scene_test`); web demos on the Audio and Car pages. No Rhai/MCP binding yet |
+| HFP | **Native device API** | AT signalling over RFCOMM runs in a scene (the Car page); no SCO/eSCO, so no audio |
 | Classic link | **Native device API** | `controller/lmp.rs` `LmpLink` drives the connection handshake inside `sim.rs`; below HCI, so it emits no host-facing events |
 | OBEX / Object Push | **Library-only** | Tested OBEX client/server plus an OPP server and SDP record; not yet wired to RFCOMM or a scene |
 | LC3 codec | **Available in the web audio demo** | Optional `lc3` feature encodes and decodes mono LC3; decodes frames from Google's liblc3, but is not a conformance claim |
 | CIS establishment | **Available in the web audio demo** | The WebSocket controller establishes a CIS and carries ISO SDUs; verified with a Bumble source |
 | BIS / Auracast transport | **Scriptable** | `packets/big.rs`, `device/big_broadcaster.rs`, `device/big_receiver.rs`, and a Broadcast domain page. Verified against Bumble's `auracast` app both directions: Bumble decoded our BASE as 440 Hz left / 554 Hz right, and we decoded 23 005 of its SDUs with 0 errors. netsim only — the in-page radio's BIG modelling is sequencing-only. |
 
-Classic is not scriptable yet, but is no longer stranded: the simulated
-controller speaks BR/EDR, and two `ClassicHost`s in one scene inquire, page,
-query SDP and exchange RFCOMM data with no netsim and no radio. What it still
-needs is profile handlers and a scripting surface. See Tier 3.
+Classic is not Rhai-scriptable yet, but is well past stranded: the simulated
+controller speaks BR/EDR, two `ClassicHost`s in one scene inquire, page, query SDP
+and exchange RFCOMM data with no netsim and no radio, and A2DP/AVRCP/HID run as
+registered handlers with scene builders and web demos. What it still needs is a
+Rhai/MCP scripting surface and SCO/eSCO for HFP audio. See Tier 3.
 
 ## Feasibility tiers
 
@@ -110,11 +113,11 @@ no host-facing events and was never the missing layer. It is now used inside
 state — because a controller may not answer a page by itself; the host does, with
 Accept/Reject Connection Request.
 
-What remains before Classic is scriptable beside LE:
+What remains before Classic is Rhai-scriptable beside LE:
 
-1. **Profile adapters.** A2DP, AVRCP, HFP, and Classic HID have protocol
-   implementations but are not `ClassicHost` handlers yet. SCO/eSCO is also
-   absent, so HFP audio cannot run.
+1. **SCO/eSCO audio.** A2DP, AVRCP, and Classic HID are `ClassicHost` handlers,
+   and HFP AT signalling runs over RFCOMM — but the controller carries no SCO, so
+   HFP has no audio. (A2DP/AVRCP/HID handlers themselves are done; see the table.)
 2. **Rhai/MCP bindings.** Nothing constructs a classic device from a script yet.
    The Android names to use are tabulated in `docs/scripting-profile-apis.md`;
    discovery maps to `BluetoothAdapter.startDiscovery()`, not to a profile proxy.
@@ -125,10 +128,10 @@ What remains before Classic is scriptable beside LE:
 
 | Peripheral | Current state | Remaining |
 |---|---|---|
-| Serial / OBD-II | Runs in a scene: `ClassicDevice` acceptor + initiator, SDP-advertised RFCOMM | Scripting adapter |
-| Classic keyboards/mice/gamepads | HID protocol library | `ProtocolHandler` for Classic HID, then a scripting adapter |
-| Headphones / speakers | A2DP / AVRCP protocol libraries | `ProtocolHandler`s and media integration |
-| Hands-free / headset | HFP / HSP protocol library | `ProtocolHandler` and SCO/eSCO audio (the controller carries no SCO) |
+| Serial / OBD-II | Runs in a scene: `ClassicDevice` acceptor + initiator, SDP-advertised RFCOMM | Rhai/MCP adapter |
+| Classic keyboards/mice/gamepads | `ClassicHidDevice`/`Host` handlers in a scene (`keyboard_scene`) | Rhai/MCP adapter |
+| Headphones / speakers | `A2dpSink`/`Source` + `AvrcpTarget`/`Controller` handlers in a scene (`media_scene`, `speaker_scene`, Audio page) | Rhai/MCP adapter |
+| Hands-free / headset | HFP AT signalling over RFCOMM in a scene (Car page) | SCO/eSCO audio (the controller carries no SCO), then a Rhai/MCP adapter |
 | File push (Bluetooth share) | OBEX + OPP library and SDP record | Wiring OBEX onto the existing RFCOMM handler |
 | Phonebook / messaging | OBEX core only | PBAP/MAP profile layers and transport integration |
 | Tethering | — | BNEP and network plumbing |
@@ -145,10 +148,11 @@ Tier 1 HOGP gamepad is the LE variant, not those.
 3. ~~**BIS / Auracast**~~ **Done 2026-08-23**, verified against Bumble both
    directions. What remains is `bass.rs` (see `docs/gaps.md`), not the transport.
 4. ~~**BR/EDR scene/transport adapter**~~ **Done**: BR/EDR in `controller/sim.rs`
-   and `SceneEngine::add_classic_device`. What remains is MCP, web, and Rhai.
-5. ~~**SPP first**~~ — done as the proof of step 4; next are profile handlers for
-   A2DP/AVRCP and HFP.
+   and `SceneEngine::add_classic_device`. What remains is a Rhai/MCP surface.
+5. ~~**SPP, then A2DP/AVRCP/HFP/HID handlers**~~ **Done**: all are registered
+   `ClassicHost` handlers with scene builders, tests, and web demos. What remains
+   is SCO/eSCO for HFP audio, and a Rhai/MCP scripting surface for all of them.
 6. **OBEX over RFCOMM** — make Object Push usable, then add PBAP and MAP layers.
 
-Step 4 was the leverage point and is done: the Classic host is an in-scene
-capability. Step 5 turns it into a scriptable one.
+Step 4 (the in-scene Classic host) and step 5 (the profile handlers) are done; a
+Rhai/MCP surface is what turns them into scriptable devices.
