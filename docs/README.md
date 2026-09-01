@@ -27,7 +27,7 @@ states what it covers in its first lines.
 |---|---|
 | `controller-routing.md` | The v1 control protocol and controller routing — how a device's controller is backed (sim ether or real radio) and why that can't live in netsim. Device router built; the async backend router is a separate crate. |
 | `measurement-regions.md` | Proposed API instrumentation: paired open/close regions, the accepted-vs-completed distinction, correlation. Not implemented. |
-| `phone-as-backend.md` | The phone as a first-class backend — the script runs on the device, no network in the loop. Supersedes `android-rpc-peer.md`. |
+| `phone-as-backend.md` | The phone as a first-class backend — the script runs on the device, no network in the loop. |
 | `phone-to-phone.md` | The phone-to-phone bulk-transfer path: the phone's own GATT client as central, an optional L2CAP payload channel, and measured throughput. |
 | `sig-as-oracle.md` | What the Bluetooth SIG publishes, what a script can consume, and the licensing position. |
 | `sbc-evaluation.md` | SBC options and licensing for the A2DP media path. |
@@ -35,6 +35,6 @@ states what it covers in its first lines.
 | `bdd-evaluation.md` | Whether BDD is worth it: not as a runner; worth trying as an audited spec. |
 | `rfcomm-comparison.md` | simble vs. Bumble vs. Zephyr on RFCOMM. |
 | `controller-bridging.md` | Getting a real-radio device and a simulated one to talk (phy↔sim): why it's a hardware problem, not software (sim↔sim is just relocation). Why Bumble isn't the vehicle. |
-| `decisions-2026-08-23.md` | Two decisions: L2CAP dispatch keyed on PSM (not `(psm, cid)`), and why `tests/`' `run_until` ticks before it checks. |
-| `android-rpc-peer.md` | Superseded by `phone-as-backend.md`; kept for its Android-API boundary analysis (GATT reachable, everything below it not). |
-| `HANDOFF-2026-08-22.md` | An early session handoff. Partly stale — §3 is wrong (CIS and LC3 both exist). |
+| `l2cap-handler-dispatch.md` | Why L2CAP handler dispatch stays keyed on PSM (not `(psm, cid)`), and how channel identity reaches the handler. |
+| `run-until-semantics.md` | Why `tests/`' `run_until` ticks before it checks (and the six other copies it replaced). |
+| `plan-2026-08-22.md` | A point-in-time plan from an early session — remaining work, open bugs, and durable lessons. Mostly since executed. |

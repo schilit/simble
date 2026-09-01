@@ -135,9 +135,9 @@ rest is a fair, tight implementation of the same protocol.
 
 ## 5. Correctness gaps (ranked — these matter more than size)
 
-`docs/HANDOFF-2026-08-22.md` item 7 makes RFCOMM-on-`ClassicHost` the
-highest-value Classic item, so these are ranked by how likely they are to bite
-that work against a real peer.
+`docs/plan-2026-08-22.md` item 7 makes RFCOMM-on-`ClassicHost` the highest-value
+Classic item, so these are ranked by how likely they are to bite that work
+against a real peer.
 
 ### C1 — A bare SABM on an unknown DLCI is silently dropped, not even DM'd
 
@@ -210,8 +210,8 @@ channel (`rfcomm.py:1109–1125`). Simble has no allocator — `listen()` requir
 an explicit channel — so the constants read as a supported capability that is
 not implemented. Being `pub`, they draw no `dead_code` warning.
 
-This is exactly the failure mode HANDOFF-2026-08-22 §5 warns about: a name that
-looks like a feature. Two options, owner's call: implement `listen(0)` dynamic
+This is exactly the "filenames are not features" failure mode `plan-2026-08-22.md`
+warns about: a name that looks like a feature. Two options, owner's call: implement `listen(0)` dynamic
 allocation (~10 lines, matches Bumble and Zephyr), or delete both constants.
 Not done here because deleting `pub` items is a public-API change.
 

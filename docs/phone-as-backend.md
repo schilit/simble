@@ -1,6 +1,7 @@
 # The phone as a SimBLE backend
 
-> Supersedes `android-rpc-peer.md` (its boundary analysis still holds). Nothing
+> Supersedes an earlier remote-control ("RPC peer") design — the script runs on
+> the device, not behind a per-call RPC. Nothing
 > below is implemented; the transport half is measured and says so where it is.
 
 **Decision:** *the script runs on the device, not a remote-control client.* The

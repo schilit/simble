@@ -8,8 +8,8 @@ next. Companion to `README.md` (user-facing) — this is the builder's map.
 
 A long session moved several things from "library-only" to "runs in a scene",
 and closed the biggest structural gaps against Bumble. The detail lives in
-`docs/gaps.md` (living) and `docs/decisions-2026-08-23.md` (decisions); this is
-the orientation.
+`docs/gaps.md` (living) and the decision records in `docs/`
+(`l2cap-handler-dispatch.md`, `run-until-semantics.md`); this is the orientation.
 
 **Classic (BR/EDR) is real now.** `sim.rs` speaks inquiry, paging and ACL
 routing, so two `ClassicHost`s meet in a scene over SDP and RFCOMM.
