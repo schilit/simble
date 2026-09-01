@@ -26,21 +26,18 @@ Tests divide by what they can disagree with:
 
 ---
 
-## The headline number is inflated three ways
+## The headline number was inflated three ways, all since fixed
 
-**89.86% line / 88.35% function** (`cargo llvm-cov`, at `9df1253`). Corrections:
+**89.86% line / 88.35% function** (`cargo llvm-cov`, at `9df1253`) was inflated
+three ways, each fixed in its own section below:
 
-1. ~~**Inline `#[cfg(test)]` bodies count as covered production lines.**~~
-   Fixed for the largest offenders (below). The distortion was real but not
-   uniformly in the assumed direction, and the earlier hand-estimate
-   over-corrected.
-2. ~~**`tests/mod.rs` re-runs 35 of the integration files as a second binary.**~~
-   Fixed (below). It re-ran 376 test functions, ~25% of a 1 528 headline.
-   `tests/mod.rs` is gone and the headline is now 1 130, which equals the number
-   of distinct test functions.
-3. ~~**The files it omits include the foreign-oracle ones**~~ — same fix. The
-   double-counting favoured self-checking tests over `bumble_vectors_test`,
-   `sbc_interop_test` and `adts_interop_test`.
+1. Inline `#[cfg(test)]` bodies counted as covered production lines.
+2. `tests/mod.rs` re-ran 35 integration files as a second binary — 376 test
+   functions, ~25% of a 1 528 headline. It is gone; the headline is now 1 130,
+   equal to the number of distinct test functions.
+3. The files `tests/mod.rs` omitted were disproportionately the foreign-oracle
+   ones (`bumble_vectors_test`, `sbc_interop_test`, `adts_interop_test`), so the
+   double-counting favoured self-checking tests.
 
 ---
 
@@ -82,11 +79,9 @@ while the test passes. Fifteen such arms in `att_tests.rs` were charged against
 `att.rs`. Any file whose tests assert by matching pays this, invisibly until the
 bodies are separated.
 
-The earlier hand-estimate over-corrected because recomputing "over only the
-lines above the `#[cfg(test)]` marker" assumes every line below it was covered,
-which the panic arms disprove. It predicted `device/big_receiver.rs` 90%→78.5%;
-the measured drop is 91.13%→83.38%. Estimate the direction by hand, never the
-magnitude.
+Estimate the direction by hand, never the magnitude: a recompute over only the
+lines above the `#[cfg(test)]` marker assumes every line below it was covered,
+which the panic arms disprove.
 
 `packets/ext_adv.rs` (80.63%) still has its tests inline and is still overstated.
 

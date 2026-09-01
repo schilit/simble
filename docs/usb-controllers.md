@@ -47,19 +47,17 @@ opened on two BIS, and 240 000 SDUs per BIS streamed for forty minutes without
 an error — the whole broadcast (BASE, BIG parameters, both tones in their right
 channels) decoded by Bumble as a foreign receiver.
 
-**Nordic does not support LE Audio on the nRF52840.** Their position is that
-LE Audio is an nRF5340 feature: the LE Audio controller stack and the LC3
-codec are built for that part, and their Auracast reference designs
-(`nRF Auraconfig`, the broadcast audio samples) target the **nRF5340 Audio
-DK**. See [Auracast feature on
+**Nordic does not support LE Audio on the nRF52840.** Their position is that LE
+Audio is an nRF5340 feature — the LE Audio controller stack and LC3 codec are
+built for that part, and the Auracast reference designs target the **nRF5340
+Audio DK**. See [Auracast feature on
 nRF52840?](https://devzone.nordicsemi.com/f/nordic-q-a/96478/auracast-feature-on-nrf52840).
 
 So "the controller accepts the commands and the bytes are right" is
-established; "a commercial receiver joins the broadcast off the air" is
-**not**. A Pixel 9 with Pixel Buds Pro 2 listed the broadcast and synced to it
-but rendered silence, with no way to tell whether the fault lay in the phone,
-the buds, or an unsupported radio path. If Auracast is the goal rather than a
-bonus, buy the part the vendor supports.
+established; "a commercial receiver joins the broadcast off the air" is **not** —
+a Pixel 9 with Pixel Buds Pro 2 synced to the broadcast but rendered silence,
+with no way to isolate phone, buds, or radio path. If Auracast is the goal
+rather than a bonus, buy the part the vendor supports.
 
 **Channel Sounding cannot be checked against software at all, and BIG only
 against netsim.** Upstream rootcanal *implements* BIG (`rust/src/llcp/iso.rs`)
@@ -157,10 +155,9 @@ CONFIG_BT_CTLR_ADV_DATA_LEN_MAX=191
 CONFIG_BT_ISO_MAX_CHAN=4
 CONFIG_BT_CTLR_ADV_ISO_STREAM_MAX=2
 CONFIG_BT_CTLR_ADV_ISO_STREAM_COUNT=4
-# The quiet killer: the default ISO TX buffer is NINE bytes, which caps
-# every BIS PDU below any usable size — and it does not fail as a length
-# error; it surfaces as LE_Create_BIG refusing every parameter set with
-# Invalid Parameters, because the scheduler math is downstream of the cap.
+# The default ISO TX buffer (9 bytes) caps every BIS PDU below a usable
+# size. Too small surfaces as LE_Create_BIG returning Invalid Parameters for
+# every parameter set, not as a length error.
 CONFIG_BT_CTLR_ISO_TX_BUFFERS=8
 CONFIG_BT_CTLR_ISO_TX_BUFFER_SIZE=255
 CONFIG_BT_ISO_TX_BUF_COUNT=8

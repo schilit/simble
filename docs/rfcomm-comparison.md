@@ -93,22 +93,16 @@ comparable.
 
 ---
 
-## 2. The third reference: not NimBLE
+## 2. The third reference: Zephyr
 
-**Apache Mynewt NimBLE does not implement RFCOMM.** NimBLE is a BLE-only
-stack; there is no BR/EDR host, hence no L2CAP Classic, no SDP server, no
-RFCOMM. A 2020 feature request asking for BR/EDR host + L2CAP + SDP + RFCOMM
-was closed without implementation. There is nothing to compare against.
+**Zephyr**, `subsys/bluetooth/host/classic/rfcomm.c` — Apache-2.0 (license-
+compatible to read and describe), C, a complete production RFCOMM. **1952 lines,
+1440 code lines**, excluding its `rfcomm_internal.h` packet structs. That is
+1.61× simble's logic on the same metric, and the delta is entirely features
+simble does not have (section 3).
 
-**Substituted: Zephyr**, `subsys/bluetooth/host/classic/rfcomm.c` — Apache-2.0
-(so license-compatible to read and to describe), C, and a complete production
-RFCOMM. **1952 lines, 1440 code lines**, excluding its
-`rfcomm_internal.h` packet structs. That is 1.61× simble's logic on the same
-metric, and the delta is entirely features simble does not have (section 3).
-
-BlueZ was deliberately *not* read: it is GPL, and this repo is Apache-2.0.
-Android's Fluoride (`system/stack/rfcomm/`) is Apache-2.0 and would have been a
-valid second reference; it was not read (section 7).
+Not NimBLE: it is BLE-only, with no BR/EDR host and therefore no RFCOMM. Not
+BlueZ: GPL, incompatible with this Apache-2.0 repo.
 
 ---
 
@@ -322,24 +316,16 @@ lines. `cargo test` (1115 passing, 0 failing) and
 
 ---
 
-## 7. What was not checked
+## 7. Confidence limits on this comparison
 
-- **Android's Fluoride** (`system/stack/rfcomm/`) was not read. It is
-  Apache-2.0 and would be a legitimate second production reference; Zephyr was
-  sufficient to answer the question.
-- **BlueZ** was deliberately not read (GPL vs. this repo's Apache-2.0).
-- **Zephyr's `rfcomm.c` was read via a fetched summary**, not line by line. Its
-  1440-code-line figure is a direct count of the file; the feature claims in
-  the matrix come from that summary's identification of named handlers
-  (`rfcomm_handle_rpn`, `rfcomm_send_nsc`, `rfcomm_check_fc`, …). Each handler's
-  body was not verified.
+- **Zephyr's `rfcomm.c` was read via a fetched summary**, not line by line. The
+  1440-code-line figure is a direct count of the file; the matrix's feature
+  claims come from the summary's identification of named handlers
+  (`rfcomm_handle_rpn`, `rfcomm_send_nsc`, `rfcomm_check_fc`, …), whose bodies
+  were not verified.
 - **No interop testing was run.** Every gap in section 5 is from reading code
-  against the spec. HANDOFF-2026-08-22 §5 is explicit that unit tests do not
-  prove interop; neither does a code read. C1 and C3 in particular should be
-  confirmed against Bumble-as-oracle before fixing.
-- **`tests/rfcomm_test.rs` (229 lines) and the 10 RFCOMM tests in
-  `src/device/classic_host.rs` were read for coverage, not audited.** They are
-  excluded from every count above.
-- No performance work. `RfcommFrame::fcs()` recomputes `length_bytes()` on
-  every call and `to_bytes()` calls both — Bumble precomputes in `__init__`.
-  Irrelevant at simulator scale; noted only so it is on the record.
+  against the spec, which does not prove interop; C1 and C3 in particular should
+  be confirmed against Bumble-as-oracle before fixing.
+- **Perf, on the record only:** `RfcommFrame::fcs()` recomputes `length_bytes()`
+  on every call and `to_bytes()` calls both, where Bumble precomputes in
+  `__init__` — irrelevant at simulator scale.
