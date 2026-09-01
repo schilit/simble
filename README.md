@@ -62,12 +62,14 @@ Whichever surface you choose, you can also:
 - **Reproduce the unreproducible.** A peripheral that drops the connection mid-notification,
   sends a stale pairing value, or advertises malformed data — real accessories won't
   misbehave on cue; simulated ones will, identically, every run.
-- **Exercise LE protocol layers.** SimBLE implements HCI, L2CAP, ATT/GATT, and SMP pairing
-  (Legacy and Secure Connections). Classic (BR/EDR) has a simulated controller too — inquiry,
-  paging and ACL — so two hosts meet over SDP and RFCOMM in a scene; the profiles above that
-  (HFP, A2DP/AVDTP, AVRCP, HID) are still library-only, and there is no pairing or SCO audio
-  yet. See [what each peripheral type needs](docs/peripheral-support.md) for
-  what is *scriptable* versus *library-only*.
+- **Exercise LE and Classic protocol layers.** SimBLE implements HCI, L2CAP, ATT/GATT, and SMP
+  pairing (Legacy and Secure Connections). Classic (BR/EDR) runs in a scene too: a simulated
+  controller does inquiry, paging and ACL, two hosts meet over SDP and RFCOMM, SSP pairing
+  (link keys, encryption) works, and A2DP, AVRCP and Classic HID run as real handlers. Still
+  missing are SCO/eSCO audio (HFP has signalling but no audio) and Rhai bindings for the Classic
+  profiles — those are library-level for now. See
+  [what each peripheral type needs](docs/peripheral-support.md) for scriptable versus
+  library-only.
 - **Reach real hardware when you want it.** With a USB Bluetooth dongle, a SimBLE device
   advertises over real RF and your actual phone can scan, connect, and pair with it.
 
@@ -107,8 +109,8 @@ independently of the surface.
     </tr>
     <tr>
       <th>USB dongle</th>
-      <td>Not available yet</td>
-      <td>Not available</td>
+      <td><code>run_on("usb")</code></td>
+      <td>via <code>simble --usb</code> bridge</td>
       <td><code>usb_hrm</code> example</td>
     </tr>
   </tbody>
@@ -142,7 +144,7 @@ first time the condition breaks, rather than waiting to be asked.
 | `connect`, `read`, `write`, `assert` | Drive a central against a peripheral, one call at a time |
 | `subscribe`, `assert_over` | Monitor a value across a time window |
 
-`example` serves 26 ready-to-run device scripts, `lookup` resolves SIG assigned numbers, and
+`example` serves the ready-to-run device scripts, `lookup` resolves SIG assigned numbers, and
 `assert_over` subscribes, advances the clock, and fails on the first violating sample. Tool
 output annotates 16-bit UUIDs with their SIG names; failures use `isError` for clients to detect.
 
@@ -213,7 +215,7 @@ or over netsim against a real stack.
 
 ## What devices come built in?
 
-**Twenty-six ready-to-run device scripts** are served by the MCP `example` tool and can also be
+**Ready-to-run device scripts** are served by the MCP `example` tool and can also be
 used from the web pages or CLI. They include heart-rate, thermometer, thermostat,
 environmental, battery, HID, cycling, pulse-oximeter, weight-scale, smart-lock, fitness,
 volume-control, beacon, Fast Pair, Auracast, coordinated-set earbuds, and Channel Sounding
@@ -226,18 +228,19 @@ LE Audio (BAP, ASCS, PACS, volume/input control, broadcast scan, media control, 
 access, and the coordinator profiles), Apple ANCS/AMS, and Bluetooth 6.0 **Channel
 Sounding** distance ranging with **AoA/AoD** direction finding.
 
-Two honest caveats. **LE Audio streaming works but has only been driven from simble and
+Two caveats worth stating. **LE Audio streaming works but has only been driven from simble and
 Bumble** — the control plane (PACS, ASCS, volume control), CIS establishment and LC3 are all
-implemented, and the [Audio page](https://schilit.github.io/simble/audio/) streams a file
-over a real CIS end to end; a phone as the source is untested. **Classic (BR/EDR)** now runs in
-a scene: the simulated controller does inquiry, paging and ACL routing, two hosts find each
-other and exchange SDP and RFCOMM, and the [Car page](https://schilit.github.io/simble/car/)
-carries HFP over a real simulated link. The initiator is checked against Bumble over netsim.
-Still missing: **pairing and encryption** (no SSP, no link keys), **SCO/eSCO** — so HFP has
-signalling but no audio — and A2DP/AVRCP/HFP/HID are not yet `ClassicHost` handlers, so no
-scene can host a classic speaker or keyboard.
-[`docs/peripheral-support.md`](docs/peripheral-support.md) tracks exactly what is
-scriptable versus library-only.
+implemented, and the [Audio page](https://schilit.github.io/simble/audio/) streams a file over
+a real CIS end to end; a phone as the source is untested. **Classic (BR/EDR)** runs in a scene:
+the simulated controller does inquiry, paging and ACL routing, two hosts exchange SDP and
+RFCOMM, SSP pairing with link keys and encryption works, A2DP/AVRCP/HID run as real handlers
+(so a scene can host a classic speaker, keyboard or remote), and the
+[Car page](https://schilit.github.io/simble/car/) carries HFP over a real simulated link; the
+initiator is checked against Bumble over netsim. Still missing: **SCO/eSCO audio** (HFP signals
+but carries no audio), cross-transport key derivation (CTKD), and Rhai script bindings for the
+Classic profiles — they are library-level for now.
+[`docs/peripheral-support.md`](docs/peripheral-support.md) tracks exactly what is scriptable
+versus library-only.
 
 ---
 
