@@ -76,7 +76,7 @@ tables — no form, uncallable from one line of Rhai) and **57 reference-only**
 nobody drains). Both are honest and correctly labelled — do not "fix" them by
 making the labels disappear.
 
-## 5. Roadmap items in `HANDOFF.md` that do not exist
+## 5. Roadmap promises vs. reality
 
 | Promised | Status |
 |---|---|
@@ -155,27 +155,8 @@ simble's value lives.
 > constant tables in supported modules, and `#[doc(hidden)]` / sealed traits,
 > still zero of each.
 
-- **~3 500 public items against 372 `pub(crate)`**: 1 527 `pub fn`, 1 578
-  `pub const`, 401 `pub struct`, 296 `pub mod`. `lib.rs` re-exports all 25
-  modules, so `packets`, `controller`, `l2cap` and `att` are public API and
-  every field offset in `df/packets.rs` is a compatibility promise.
-- **Zero `#[doc(hidden)]`, zero `#[non_exhaustive]`, no sealed traits.** The
-  three modules whose docs say "internal" are fully `pub` anyway.
-- **14 of 128 public enums carry explicit spec discriminants** — `AseState`,
-  `SamplingFrequency`, `FrameDuration`, `Mute`, `GainMode`, `MediaState`,
-  `AddressType` and the rest. Adding a spec-defined value is a breaking change
-  for every downstream `match`. `#[non_exhaustive]` on those 14 costs nothing
-  in-crate. The other 114 are our own state machines where it is ceremony.
-- **No policy for an unknown wire value; the 14 already disagree three ways.**
-  `bap.rs::from_u8` returns `Option`, so unknown becomes `None` and is
-  destroyed. `hci_types.rs` uses a newtype with a `Display` fallback
-  (`UNKNOWN (0x07)`), so it survives and can be echoed back. `ascs.rs` has a
-  bare `_ =>`. The newtype is the right answer for anything a foreign peer
-  sends, but converting `AseState` would touch the state matrix that just
-  landed. **Decide the policy first, convert second.**
-- Deciding which modules are *supported* (`device`, `devices`, `scene`,
-  `scripting`, `api`, `types`) versus *exposed for inspection* (`packets`,
-  `controller`, `l2cap`, `att`), and saying so in `lib.rs`, makes a 1.0 possible.
+The boundary, the mechanism, the `#[non_exhaustive]` set, and the open
+unknown-wire-value policy are documented in full in `docs/api-surface.md`.
 
 ## 9. Test-surface gaps opened by today's work
 

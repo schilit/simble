@@ -66,8 +66,9 @@ Whichever surface you choose, you can also:
   pairing (Legacy and Secure Connections). Classic (BR/EDR) runs in a scene too: a simulated
   controller does inquiry, paging and ACL, two hosts meet over SDP and RFCOMM, SSP pairing
   (link keys, encryption) works, and A2DP, AVRCP and Classic HID run as real handlers. Still
-  missing are SCO/eSCO audio (HFP has signalling but no audio) and Rhai bindings for the Classic
-  profiles — those are library-level for now. See
+  missing is the HFP SCO codec — the SCO/eSCO link is set up and carries payload, but CVSD/mSBC
+  air-coding is a seam, so no real speech audio yet — and Rhai bindings for the Classic profiles,
+  which are library-level for now. See
   [what each peripheral type needs](docs/peripheral-support.md) for scriptable versus
   library-only.
 - **Reach real hardware when you want it.** With a USB Bluetooth dongle, a SimBLE device
@@ -236,9 +237,10 @@ the simulated controller does inquiry, paging and ACL routing, two hosts exchang
 RFCOMM, SSP pairing with link keys and encryption works, A2DP/AVRCP/HID run as real handlers
 (so a scene can host a classic speaker, keyboard or remote), and the
 [Car page](https://schilit.github.io/simble/car/) carries HFP over a real simulated link; the
-initiator is checked against Bumble over netsim. Still missing: **SCO/eSCO audio** (HFP signals
-but carries no audio), cross-transport key derivation (CTKD), and Rhai script bindings for the
-Classic profiles — they are library-level for now.
+initiator is checked against Bumble over netsim. Still missing: an **HFP SCO codec** (the
+SCO/eSCO link is set up and carries payload, but CVSD/mSBC is a seam — no real speech audio yet),
+cross-transport key derivation (CTKD), and Rhai script bindings for the Classic profiles — they
+are library-level for now.
 [`docs/peripheral-support.md`](docs/peripheral-support.md) tracks exactly what is scriptable
 versus library-only.
 
