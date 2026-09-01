@@ -97,7 +97,7 @@ controller** — it does not join two ethers. The instant a device is
 dongle-backed, its link layer transmits over real RF: it can hear real peers and
 can no longer hear simulated ones. It has left the simulated medium, not bridged
 to it. So `route` chooses which world a device lives in, and a switch drops the
-device rather than migrating it (see `joining-controller-worlds.md`: HCI-layer
+device rather than migrating it (see `controller-bridging.md`: HCI-layer
 facilities move a host, they do not bridge).
 
 This is why routing cannot live inside netsim: netsimd is not ours, the emulator's

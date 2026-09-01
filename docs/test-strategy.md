@@ -450,7 +450,7 @@ real phone <- real RF -> dongle -> simble relay -> netsim socket <-> emulators
 
 One simble process holds both halves — a dongle facing the phone, a netsim
 socket facing the scene — and **re-originates** GATT operations between them.
-The device-level proxy from `joining-controller-worlds.md`, not a PHY bridge.
+The device-level proxy from `controller-bridging.md`, not a PHY bridge.
 
 Costs:
 

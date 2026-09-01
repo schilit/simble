@@ -34,7 +34,7 @@ states what it covers in its first lines.
 | `lc3-evaluation.md` | LC3 options for the wasm demo devices. |
 | `bdd-evaluation.md` | Whether BDD is worth it: not as a runner; worth trying as an audited spec. |
 | `rfcomm-comparison.md` | simble vs. Bumble vs. Zephyr on RFCOMM. |
-| `joining-controller-worlds.md` | Whether the in-page, netsim, and dongle controllers can be joined into one ether: sim↔sim yes (rootcanal's phy socket), sim↔physical no. Why Bumble isn't the vehicle. |
+| `controller-bridging.md` | Getting a real-radio device and a simulated one to talk (phy↔sim): why it's a hardware problem, not software (sim↔sim is just relocation). Why Bumble isn't the vehicle. |
 | `decisions-2026-08-23.md` | Two decisions: L2CAP dispatch keyed on PSM (not `(psm, cid)`), and why `tests/`' `run_until` ticks before it checks. |
 | `android-rpc-peer.md` | Superseded by `phone-as-backend.md`; kept for its Android-API boundary analysis (GATT reachable, everything below it not). |
 | `HANDOFF-2026-08-22.md` | An early session handoff. Partly stale — §3 is wrong (CIS and LC3 both exist). |
