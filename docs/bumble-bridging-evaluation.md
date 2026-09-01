@@ -1,10 +1,7 @@
 # Bumble's bridging facilities, and joining simble's three controller worlds
 
-> **Decision record, 2026-08-25.** Point-in-time by design. Records what was
-> investigated, what was measured, and what was recommended. Read it as
-> reasoning, not as a description of the present tree. Nothing here has been
-> implemented; the experiment described in §3 is a throwaway that lives only in
-> a scratch directory.
+Status: evaluation — nothing here is implemented. The experiment in §3 is a
+throwaway that lived only in a scratch directory.
 
 **The question.** simble talks to three kinds of controller, and a device on
 one cannot reach a device on another: the in-page `Link` (`src/controller/sim.rs`,
@@ -23,7 +20,7 @@ controllers."
    the `link-relay` WebSocket relay — Bumble's cross-process virtual link — were
    removed in **v0.0.213** (commit `1b44e73`, 2025-07-21). The pinned Bumble in
    this repo's `.venv` (0.0.233) does not have them. Bumble's published docs
-   still refer to them, which is the trap this document exists to disarm.
+   still refer to them.
 3. **What Bumble keeps is HCI relay**, which moves a *host* between controllers
    and never joins two ethers.
 4. **rootcanal already has exactly the facility Bumble removed**, on a TCP port,
@@ -222,9 +219,6 @@ Upstream carries one warning, and it should be quoted rather than paraphrased:
 
 ### netsimd does not expose the phy ports
 
-This is the load-bearing negative result, and it is a source-level fact rather
-than an observation.
-
 The phy servers are opened by `desktop/test_environment.cc` — the **standalone
 binary's** `main`, not the rootcanal library. netsimd does not use `desktop/`;
 it links rootcanal as a library and drives it through the FFI, adding devices
@@ -242,9 +236,8 @@ callback for its own beacon devices, but it is in-process only.
 
 ## 3. The experiment
 
-The claim in §2 is worth more if measured. Both scripts below are throwaways in
-a scratch directory; nothing was added to the tree, no hardware was touched, and
-all ports used were 16401–16404.
+Both scripts below are throwaways; nothing was added to the tree, no hardware
+was touched, and all ports used were 16401–16404.
 
 **Setup.** `scripts/fetch_rootcanal.sh`'s upstream asset,
 `rootcanal-1.12.0-macos-arm64.zip`, unpacked to a scratch directory, started as
@@ -285,14 +278,12 @@ ten data octets, `020106` flags, `060947484f5354` `Complete Local Name` =
 dependency put a device on rootcanal's ether and a real controller saw it.**
 
 The two `be:ac:01:55:00:0{1,2}` sources in step 1 are rootcanal desktop's
-default beacons (`test_environment.cc:237`), and the fact that they arrived on
-the phy socket proves the read direction independently of the write direction.
+default beacons (`test_environment.cc:237`); their arrival on the phy socket
+proves the read direction independently of the write direction.
 
-**One trap worth recording.** The first run reported *zero* HCI events and read
-as a flat failure. The cause was not the bridge: after `Reset`, the LE Meta
-Event is masked off, so no advertising report ever reaches the host. Adding
-`Set Event Mask` and `LE Set Event Mask` fixed it. A bridging experiment that
-skips the event mask will kill a working idea.
+**One trap.** After `Reset`, the LE Meta Event is masked off, so no advertising
+report reaches the host — a run without `Set Event Mask` and `LE Set Event
+Mask` reports zero HCI events and looks like a flat failure.
 
 ### 3.2 What a phy participant would have to understand
 
@@ -307,12 +298,12 @@ the phy socket carried over four seconds.
   0x0F LE_SCAN_RESPONSE                 176
 ```
 
-The full active-scan exchange is on the wire, not just advertising. Note also
-that when this script first sent a 31-octet `LE Set Advertising Data` payload
-where 32 were owed, rootcanal **dropped the socket** rather than returning an
-error status — the behaviour `tests/interop/README.md` already documents as the
-reason netsim's controller finds bugs Bumble's cannot. It is the same property
-here: a phy-level bridge would get the same unforgiving oracle.
+The full active-scan exchange is on the wire, not just advertising. Also: when
+this script sent a 31-octet `LE Set Advertising Data` payload where 32 were
+owed, rootcanal **dropped the socket** rather than returning an error status —
+the behaviour `tests/interop/README.md` documents as the reason netsim's
+controller finds bugs Bumble's cannot. A phy-level bridge gets the same
+unforgiving oracle.
 
 ---
 
@@ -377,9 +368,9 @@ on a real radio channel. Concretely:
   3. **HCI proxying**, which is what `simble --usb --ws` already is, and which
      relocates a host rather than joining ethers.
 
-There is no fourth option, and any design that assumes one is wrong. The line to
-hold in the report to the user: **simulated↔simulated is a software problem with
-a good answer; simulated↔physical is a hardware problem with only workarounds.**
+There is no fourth option, and any design that assumes one is wrong:
+**simulated↔simulated is a software problem with a good answer;
+simulated↔physical is a hardware problem with only workarounds.**
 
 ---
 

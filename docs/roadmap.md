@@ -1,10 +1,9 @@
 # Roadmap / follow-ups
 
-> Living tracker, opened 2026-08-28. Items are the outstanding work after the
-> phone-to-phone + L2CAP-min arc and the wasm_ws engine extraction landed on
-> `main`. Status is one of: **done**, **in progress** (an agent/branch is on it),
-> **blocked** (needs a decision or hardware), **planned** (specified, not
-> started), **idea** (not yet specified).
+Outstanding work after the phone-to-phone + L2CAP-min arc and the wasm_ws
+engine extraction landed on `main`. Status is one of: **done**, **in progress**
+(an agent/branch is on it), **blocked** (needs a decision or hardware),
+**planned** (specified, not started), **idea** (not yet specified).
 
 ## Repo health
 

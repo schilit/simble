@@ -1,23 +1,20 @@
 # The phone as a SimBLE backend
 
-> **Design record, 2026-08-25.** Point-in-time by design. Supersedes
-> `android-rpc-peer.md`, whose staging and recommendation this replaces —
-> that doc's boundary analysis still holds and is not repeated here. Nothing
-> below is implemented; the transport half is measured, and says so where it
-> is.
+> Supersedes `android-rpc-peer.md` (its boundary analysis still holds). Nothing
+> below is implemented; the transport half is measured and says so where it is.
 
-**The thesis.** *The script runs on the device, not a remote-control client.*
-The same script that defines a simulated device defines a real one — so a
-phone becomes a first-class SimBLE backend that measures without a network in
-the loop, and can be diffed against the simulator to test the scripting layer
+**Thesis:** *the script runs on the device, not a remote-control client.* The
+same script that defines a simulated device defines a real one — so a phone
+becomes a first-class SimBLE backend that measures without a network in the
+loop, and can be diffed against the simulator to test the scripting layer
 itself.
 
 ## 1. Why not a remote-control client
 
 The obvious design is an app exposing Android's Bluetooth API over RPC, with
 the host holding the script and calling primitives. That is what Google's
-[Mobly](https://github.com/google/mobly) does, and its architecture is worth
-knowing because ours converged on the same transport independently:
+[Mobly](https://github.com/google/mobly) does; ours converged on the same
+transport independently:
 
 | | Mobly | Here |
 |---|---|---|
@@ -25,9 +22,9 @@ knowing because ours converged on the same transport independently:
 | Device side | "snippets" — Java methods called from the host | the script itself |
 | Host side | `AndroidDevice` controller | a `run_on` backend |
 
-The transport is identical and the division of labour is not, because SimBLE's
-premise is that **a script is a device and a test**. A snippet can only ever be
-a primitive somebody else calls; it cannot host a script. Three things follow
+The transport is identical; the division of labour is not, because SimBLE's
+premise is that **a script is a device and a test**. A snippet is only ever a
+primitive somebody else calls; it cannot host a script. Three things follow
 from moving the script across:
 
 - **Timing.** No network in the measurement loop. A per-call client would time
@@ -37,10 +34,10 @@ from moving the script across:
 - **The oracle.** Running *the same script text* in the simulator and on real
   Android makes the two comparable. Had the host interpreted and sent
   primitives, the comparison would test the host's interpretation rather than
-  the device's — worthless for the purpose.
+  the device's.
 
-The third is the one that cannot be bought another way, and it is why this is
-not simply Mobly with different languages.
+The third cannot be bought another way, and is why this is not simply Mobly
+with different languages.
 
 ## 2. What a phone measurement is, and is not
 
@@ -52,9 +49,8 @@ over a simulated medium**.
 Those are two different stacks, not one stack on two media, and they are **not
 comparable as a like-for-like benchmark**. A phone number answers "how long
 does this take in the real world"; a simulator number answers "how does our
-code behave". Both are worth having and a chart that implies otherwise is
-lying. Every phone row carries that caveat, exactly as the real-RF and
-simulated rows already do in the Data category.
+code behave". Both are worth having. Every phone row carries that caveat, as
+the real-RF and simulated rows already do in the Data category.
 
 ## 3. The layers
 
@@ -68,10 +64,10 @@ Host stack        GATT/ATT/SMP - ours only; absent on the phone
 Controller        sim | netsim | dongle | the phone's own radio
 ```
 
-On the phone the bottom two layers are **Android's**, which is precisely what
-makes it a foreign implementation and therefore an oracle. The Rhai Runner is
-the only layer that must exist in both worlds; the `android::` API is the seam,
-and it is one trait rather than a boundary scattered through the bindings.
+On the phone the bottom two layers are **Android's**, which makes it a foreign
+implementation and therefore an oracle. The Rhai Runner is the only layer that
+must exist in both worlds; the `android::` API is the seam, one trait rather
+than a boundary scattered through the bindings.
 
 ## 4. Transport: measured, not assumed
 
@@ -106,14 +102,13 @@ no cable, no IP configuration, and no discovery protocol of our own.
 **Why adb rather than anything we build.** Android reshuffles the wireless
 debugging port every time the setting toggles, so an address typed once goes
 stale. adb's own mDNS daemon solves that and auto-connects paired devices by
-service name — the second `adb devices` row above is exactly that. We
-considered publishing an mDNS service and writing a browse-only client; both
-were deleted from this design because adb already does it, and the Android SDK
-is a dependency this project already has for netsim.
+service name — the second `adb devices` row above. Publishing our own mDNS
+service plus a browse-only client is redundant: adb already does it, and the
+Android SDK is a dependency this project already has for netsim.
 
 **Discovery is `adb devices`.** No registration protocol, no service
 advertisement, no stale-entry expiry. A phone is enumerated the way a dongle
-is enumerated, and feeds the same controller picker.
+is, and feeds the same controller picker.
 
 **The fallback matters.** adb's mDNS can collide with other Bonjour responders.
 Reading `ip:port` off the Wireless debugging screen and running `adb connect`
@@ -122,7 +117,7 @@ discovery as the only path.
 
 ## 5. The app
 
-Headless — no Activity. Three viable shapes, in the order they were considered:
+Headless — no Activity. Three viable shapes, in the order considered:
 
 1. **A foreground service in a minimal APK.** Standard; needs a declared
    service type and shows a notification. Runtime permissions are not the
@@ -137,9 +132,8 @@ Headless — no Activity. Three viable shapes, in the order they were considered
 **Rust side.** `cargo-ndk` builds the `.so`; the `jni` crate carries the calls;
 a thin Kotlin shim makes the Bluetooth API idiomatic and forwards callbacks
 back. Zero-Kotlin is possible (`android-activity` + `ndk-context` + hand-written
-JNI for every framework call) and is not worth it: `BluetoothGattServer` alone
-would be dozens of JNI incantations, and callbacks need a JVM-side class
-regardless.
+JNI for every framework call) but not worth it: `BluetoothGattServer` alone
+would be dozens of JNI calls, and callbacks need a JVM-side class regardless.
 
 Those crates live in a separate `simble-android` crate, so the core library
 keeps its near-zero-dependency rule.
@@ -160,41 +154,31 @@ transport rather than a new interface.
 ## 7. The first milestone: `toast`
 
 Before any radio, the first verb is `toast` — show a message on the phone's
-screen.
+screen. It has no Bluetooth in it, so it exercises the whole chain end to end —
+`adb forward` → the device-side server → JSON-RPC dispatch → JNI → the Kotlin
+shim → an Android UI call — and nothing else. A toast that appears means
+everything structural is finished; a failure is unambiguously in the transport
+or the app, not a radio. It also answers the question a shelf of identical
+phones raises: *which one is running my script?*
 
-It is the right opening move precisely because it has no Bluetooth in it. A
-toast exercises the whole chain end to end — `adb forward` → the device-side
-server → JSON-RPC dispatch → JNI → the Kotlin shim → an Android UI call — and
-nothing else. If a toast fired from this machine appears on a phone across the
-room, everything structural is finished and what remains is more verbs. If it
-does not, the failure is unambiguously in the transport or the app, not in a
-radio, which is a distinction that cost days elsewhere in this project.
+Implementation notes: `Toast` needs a `Context` and must be shown on the main
+looper, so it belongs in the Kotlin shim rather than raw JNI; Android 11+
+restricts *custom* toast views from the background, while plain text toasts
+still show — which is all this needs.
 
-It also answers a question a shelf of identical phones raises immediately:
-*which one is running my script?* A device that can say so is a device you can
-keep track of.
-
-Two implementation notes: `Toast` needs a `Context` and must be shown on the
-main looper, so it belongs in the Kotlin shim rather than raw JNI; and
-Android 11+ restricts *custom* toast views from the background, while plain
-text toasts still show — which is all this needs.
-
-**And there is a version that works today, with no app at all**, which is
-worth keeping as both a setup tool and a fallback. It runs as the `shell`
-user, so it works even when the app is wedged:
+**A version works today with no app at all**, worth keeping as a setup tool and
+fallback. It runs as the `shell` user, so it works even when the app is wedged:
 
 ```sh
 adb -s <serial> shell cmd notification post -S bigtext -t 'SimBLE' tag '<message>'
 ```
 
-Verified against the Pixel 9 Pro: the notification appears. Use it to label
-phones as they are added to the fleet, and as the smoke test that a newly
-paired device is reachable before anything else is attempted.
+Verified against the Pixel 9 Pro. Use it to label phones as they join the
+fleet, and as the smoke test that a newly paired device is reachable.
 
 ## 8. What it opens: a ladder of fidelity
 
-The phone completes something the other backends only gesture at. One
-artifact — the script — climbs every rung, and each rung costs more and
+One artifact — the script — climbs every rung, and each rung costs more and
 proves more:
 
 | Rung | Radio | Stack under test | Determinism |
@@ -208,19 +192,17 @@ An agent can write a device through MCP, `lint` it, `run_test` it
 deterministically in milliseconds, and then `run_on` the *same text* against
 netsim, a dongle, and a phone — watching what survives contact with each.
 
-That makes protocol exploration cheap in a way it has not been. A question
-like "what does a real phone do with an advertisement shaped like *this*"
-currently costs an afternoon of hand-driving; as a script it costs one
-`run_on`. And the failures are the point: a script that passes in the
-simulator and fails on a dongle has found a gap between our stack and the
-radio, and one that passes on a dongle but fails on a phone has found a gap
-between our reading of the spec and Android's. Both are findings, and both are
-invisible today.
+That makes protocol exploration cheap. "What does a real phone do with an
+advertisement shaped like *this*" currently costs an afternoon of hand-driving;
+as a script it costs one `run_on`. The failures are the point: a script that
+passes in the simulator and fails on a dongle has found a gap between our stack
+and the radio; one that passes on a dongle but fails on a phone has found a gap
+between our reading of the spec and Android's.
 
-The two bugs that cost the most time this week — a peripheral advertising from
-the wrong address, and an ISO stream with no flow control — were exactly this
-shape: correct in simulation, wrong on silicon. They took days to find by
-hand. They would each have been one rung of this ladder.
+The two bugs that cost the most time — a peripheral advertising from the wrong
+address, and an ISO stream with no flow control — were exactly this shape:
+correct in simulation, wrong on silicon, days to find by hand. Each would have
+been one rung of this ladder.
 
 ## 9. What is not settled
 
@@ -233,12 +215,12 @@ hand. They would each have been one rung of this ladder.
   much of the catalog is portable, and has not been done.
 - **One radio, one device.** A phone is one controller, so a phone backend has
   the dongle's constraint: peripheral or central, not both. Two-ended tests
-  need two backends — which a fleet of spare phones supplies naturally, and
-  more usefully than dongles do: two phones are two *independent Android
-  stacks*, where two dongles are two radios under one host stack of ours.
-- **What the fleet actually spans.** Old phones are more interesting than new
-  ones here, because a device that works across Bluetooth 4.0, 4.2, 5.0 and
-  5.3 is a compatibility claim rather than a data point. The floor is API 26
-  or so for a headless foreground service; the runtime permission model
-  changed at 12, and LE Audio needs 13+. Nobody has enumerated the versions in
-  hand, so the matrix is unwritten.
+  need two backends — which a fleet of spare phones supplies more usefully than
+  dongles do: two phones are two *independent Android stacks*, where two dongles
+  are two radios under one host stack of ours.
+- **What the fleet spans.** Old phones are more interesting than new ones: a
+  device that works across Bluetooth 4.0, 4.2, 5.0 and 5.3 is a compatibility
+  claim rather than a data point. The floor is API 26 or so for a headless
+  foreground service; the runtime permission model changed at 12, and LE Audio
+  needs 13+. The versions in hand are not yet enumerated, so the matrix is
+  unwritten.

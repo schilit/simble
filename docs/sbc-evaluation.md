@@ -1,7 +1,5 @@
 # SBC for the A2DP media path — options, licensing, and what was built
 
-> **Decision record, 2026-08-23.** Records why SBC was implemented from the specification rather than bound to a library. Point-in-time by design: read it as reasoning, not as a description of the present tree.
-
 **Scope.** SBC is the *mandatory* A2DP codec, so this is not the same kind of
 decision LC3 was (`docs/lc3-evaluation.md`, where a codec was wanted only so a
 demo page could make noise). Simble could negotiate A2DP — AVDTP signalling,
@@ -9,12 +7,11 @@ capability intersection, Set_Configuration, RTP packetization — and then had
 nothing to put in the packets. Anything that wants to *be* an A2DP endpoint
 rather than describe one needs an encoder and a decoder.
 
-**Recommendation: implement SBC from the specification.** Every SBC
-implementation in wide use is LGPL, no pure-Rust SBC *encoder* exists on
-crates.io at all, and the codec is small enough (~1,100 lines, no
-dependencies) that the dependency question mostly evaporates. **This was done** —
-`src/audio/sbc.rs`, verified against bluez's `libsbc` in both directions; the
-measurements are below.
+**SBC is implemented from the specification.** Every SBC implementation in
+wide use is LGPL, no pure-Rust SBC *encoder* exists on crates.io at all, and
+the codec is small enough (~1,100 lines, no dependencies) that the dependency
+question mostly evaporates. It lives in `src/audio/sbc.rs`, verified against
+bluez's `libsbc` in both directions; the measurements are below.
 
 ---
 
@@ -48,15 +45,14 @@ SBC codec specification), which describes the filterbanks, the bit allocation,
 the quantizer and the frame layout in full.
 
 **On the two coefficient tables.** `PROTO_4_40` and `PROTO_8_80` are the
-prototype filter coefficients the SBC specification tabulates, to the nine
-significant figures the specification prints them at. They are specification
-constants — the numbers a conforming implementation must use — not expression
-borrowed from any implementation. They were cross-checked against the
-MIT-licensed `mini_sbc` crate's copy of the same specification tables purely
-to confirm no digit had been mistyped, and then, far more convincingly,
-against libsbc's behaviour: a mistyped coefficient does not produce a
-bitstream that matches the reference to within 0.01% of bytes, and a
-deliberate 0.1% perturbation of one coefficient fails the interop tests.
+prototype filter coefficients the SBC specification tabulates, to nine
+significant figures. They are specification constants — the numbers a
+conforming implementation must use — not expression borrowed from any
+implementation. They were cross-checked against the MIT-licensed `mini_sbc`
+crate's copy of the same tables to confirm no digit was mistyped, and against
+libsbc's behaviour: a mistyped coefficient does not produce a bitstream that
+matches the reference to within 0.01% of bytes, and a deliberate 0.1%
+perturbation of one coefficient fails the interop tests.
 
 ---
 
@@ -76,23 +72,20 @@ broadcast channels). The audio codec has three entries.
 | `wasm32-unknown-unknown` | **builds** (measured) | **no** — a `-sys` crate on a target with no libc | pure Rust, so presumably; not measured |
 | Downloads (recent) | ~5,900 | ~1,200 | 18 |
 
-**There is no pure-Rust SBC encoder on crates.io.** That alone settles it: at
-best a crate could have supplied half of what was needed, leaving the encoder
-to be written from the specification anyway — and writing only half a codec is
-the worse outcome, because the encoder and decoder share the filterbank,
-allocator and frame layout.
+**There is no pure-Rust SBC encoder on crates.io.** At best a crate could
+supply half of what was needed, leaving the encoder to be written from the
+specification anyway — and half a codec is the worse outcome, because the
+encoder and decoder share the filterbank, allocator and frame layout.
 
-`mini_sbc` was read rather than assumed about. It is a real, independent
-decoder — it keeps the specification's decimal coefficient strings in the
-source next to the fixed-point tables generated from them — it is `no_std`,
-and its licence is compatible. Its
+`mini_sbc` is a real, independent decoder — it keeps the specification's
+decimal coefficient strings in the source next to the fixed-point tables
+generated from them — it is `no_std`, and its licence is compatible. Its
 weaknesses: 1,752 lines for a decoder alone against 1,090 for both halves
-here, no encoder, no activity
-since March 2023, **its two tests assert nothing** — they `println!` the
-decoded samples and pass unconditionally — and it already trips a
-future-incompatibility lint (`#[macro_export(crate)]`, "will become a hard
-error in a future release"). Depending on an unmaintained crate with no
-assertions, for half the job, was not better than writing the codec.
+here, no encoder, no activity since March 2023, **its two tests assert
+nothing** — they `println!` the decoded samples and pass unconditionally — and
+it already trips a future-incompatibility lint (`#[macro_export(crate)]`,
+"will become a hard error in a future release"). An unmaintained crate with no
+assertions, for half the job, is not better than writing the codec.
 
 `libsbc-sys` fails on `wasm32-unknown-unknown` for the same structural reason
 `lc3-sys` does (`docs/lc3-evaluation.md`): it compiles vendored C through
@@ -101,25 +94,23 @@ licence problem, which is the disqualifying one.
 
 ---
 
-## 3. The oracle — and a correction
+## 3. The oracle
 
-**Bumble does not have an SBC codec.** The task that produced this work said
-Bumble's `codecs.py` ships "a real SBC implementation". It does not.
-`bumble/codecs.py` (533 lines) is AAC LATM/ADTS bit-stream handling —
-`AudioMuxElement`, `StreamMuxConfig`, `AudioSpecificConfig` — and nothing
-else. `bumble/a2dp.py` has `SbcFrame`, `SbcParser` and `SbcPacketSource`, all
-of which parse *headers* and repacketize frames without ever touching a
-sample; Bumble's `player`/`speaker` apps read `.sbc` files and hand the frames
-to the transport. Simble's existing `SbcFrame::parse` is a faithful port of
-that header parser, which is exactly why it was as far as simble got.
+**Bumble does not have an SBC codec.** `bumble/codecs.py` (533 lines) is AAC
+LATM/ADTS bit-stream handling — `AudioMuxElement`, `StreamMuxConfig`,
+`AudioSpecificConfig` — and nothing else. `bumble/a2dp.py` has `SbcFrame`,
+`SbcParser` and `SbcPacketSource`, all of which parse *headers* and
+repacketize frames without ever touching a sample; Bumble's `player`/`speaker`
+apps read `.sbc` files and hand the frames to the transport. Simble's existing
+`SbcFrame::parse` is a faithful port of that header parser.
 
-So the oracle had to come from somewhere else. **bluez's `libsbc` was built as
-a throwaway command-line tool in the session scratchpad, outside this
-repository**, from the C vendored inside the `libsbc-sys` crate, and used to
-encode and decode files. The only thing that crossed into the repository is
-the *bytes it produced from simble's own input signal* — the golden vectors in
-`tests/sbc_interop_test.rs`. No LGPL source is vendored, linked, or depended
-on; simble does not build or run libsbc, and nothing in CI needs it.
+The oracle therefore comes from elsewhere. **bluez's `libsbc` was built as a
+throwaway command-line tool outside this repository**, from the C vendored
+inside the `libsbc-sys` crate, and used to encode and decode files. The only
+thing that crossed into the repository is the *bytes it produced from simble's
+own input signal* — the golden vectors in `tests/sbc_interop_test.rs`. No LGPL
+source is vendored, linked, or depended on; simble does not build or run
+libsbc, and nothing in CI needs it.
 
 (Building it on arm64 macOS needs `-U__ARM_NEON__`: the vendored copy is old
 enough that its `__ARM_NEON__` guard admits 32-bit ARM inline assembly that
@@ -167,8 +158,6 @@ implementation produced was accepted and fully consumed by the other — which
 also validates the header CRC independently, since simble verifies it and
 rejects a frame that fails.
 
-Two things in that table are worth pointing at:
-
 - **The "quality" columns are equal to 0.1 dB in every single row.** Simble's
   encoder makes the same scale-factor, bit-allocation and joint-stereo
   decisions libsbc does, not merely comparable ones.
@@ -185,10 +174,9 @@ Two things in that table are worth pointing at:
 ### What the CI tests actually cover
 
 `cargo test` cannot run libsbc, so `tests/sbc_interop_test.rs` embeds real
-libsbc bitstreams and libsbc's own decode of them. Three configurations, and
-they were **chosen by mutation testing, not by taste**: the codec was
-deliberately broken seventeen different ways, and this is the smallest set
-that catches sixteen of them.
+libsbc bitstreams and libsbc's own decode of them. Three configurations,
+**chosen by mutation testing**: the codec was deliberately broken seventeen
+different ways, and this is the smallest set that catches sixteen of them.
 
 | Configuration | Why it is there | simble vs libsbc, decoded | bitstream agreement |
 |---|---|---|---|
@@ -235,28 +223,27 @@ dependencies:
   the codec A2DP makes mandatory — a Bluetooth simulator that can negotiate an
   SBC stream and not produce a valid SBC frame has the same shape of hole LE
   Audio had when ASCS and PACS existed but no CIS carried LC3.
-- The cost is small and was measured, not guessed. Adding the module to the
-  wasm build costs **1,464 bytes** as-is, because the linker strips what
-  nothing calls; with a `wasm_bindgen` export that actually runs an encode and
-  a decode so nothing can be stripped, it costs **27,431 bytes** — 0.6% of the
-  4.5 MB bundle. A feature flag would buy back 27 KB in exchange for a
-  configuration where A2DP silently cannot carry audio.
+- The cost is small and was measured. Adding the module to the wasm build
+  costs **1,464 bytes** as-is, because the linker strips what nothing calls;
+  with a `wasm_bindgen` export that actually runs an encode and a decode so
+  nothing can be stripped, it costs **27,431 bytes** — 0.6% of the 4.5 MB
+  bundle. A feature flag would buy back 27 KB in exchange for a configuration
+  where A2DP silently cannot carry audio.
 
-### Two things the codec turned out to need that were not in the brief
+### Two properties worth recording
 
-- **SBC frames are *not* independent.** The task asserted they were, "unlike
-  LC3 — there is no inter-frame MDCT overlap". The MDCT part is true and the
-  conclusion is not: SBC's polyphase filterbank keeps ten blocks of past input
-  on the analysis side and twenty of past output on the synthesis side, so a
+- **SBC frames are *not* independent**, despite there being no inter-frame
+  MDCT overlap. SBC's polyphase filterbank keeps ten blocks of past input on
+  the analysis side and twenty of past output on the synthesis side, so a
   decoder handed frame *n* with a zeroed filterbank produces a wrong first
   block. `test_a_decoder_reset_between_frames_corrupts_the_stream` measures
   this rather than asserting it, so the claim cannot quietly come back.
 - **The round trip is delayed by `9 × subbands + 1` samples per channel** — 73
-  for 8 subbands, 37 for 4. This was found empirically, by scanning for the
-  lag that maximises SNR through a real round trip, after a comparison that
-  ignored it reported −3.1 dB for a codec that was actually fine. It is
-  exposed as `SbcParameters::filter_delay()`, because anything comparing input
-  PCM with output PCM needs it.
+  for 8 subbands, 37 for 4. Found empirically, by scanning for the lag that
+  maximises SNR through a real round trip; a comparison that ignored it
+  reported −3.1 dB for a codec that was actually fine. It is exposed as
+  `SbcParameters::filter_delay()`, because anything comparing input PCM with
+  output PCM needs it.
 
 ---
 
@@ -281,8 +268,7 @@ SBC's ~1,100 lines of fully specified arithmetic.
 
 ### Unlike SBC, the crate ecosystem here is *not* empty
 
-This is worth stating carefully, because the licensing argument that decides
-SBC does **not** transfer to AAC.
+The licensing argument that decides SBC does **not** transfer to AAC.
 
 | Crate | Licence | Kind | Maturity |
 |---|---|---|---|
@@ -296,8 +282,7 @@ SBC does **not** transfer to AAC.
 `symphonia-codec-aac` is real and mature, and it builds for
 `wasm32-unknown-unknown` (measured, alongside `mini_sbc`, in a scratch crate).
 MPL-2.0 is file-level copyleft and is compatible with an Apache-2.0 consumer.
-So **"we could not get an AAC decoder" would be false** — the honest reason
-not to is different.
+An AAC decoder is available; the reason not to adopt one is different.
 
 ### Why not, then
 
@@ -311,14 +296,13 @@ which is a demo feature, not a protocol one — the same category as LC3, and it
 should be handled the same way if it is ever wanted: an optional feature, a
 third-party decoder, and a doc that says plainly it is not conformance-tested.
 
-The *encoder* side is where the two new crates should be treated with real
-caution rather than adopted: both appeared in 2026 with a few thousand
-downloads, both claim a full AAC-LC encoder, and `rusty_aac`'s description
-claims it "beats FFmpeg on mono music at 128k+". None of that was verified
-here, and an unverified encoder is exactly the sort of dependency this
-codebase has learned to be careful with. `adts-reader` was not adopted either:
-it reads ADTS but does not write it, and simble's parser already lives inside
-the A2DP module where the capability structures are.
+The *encoder* side is where the two new crates should be treated with caution
+rather than adopted: both appeared in 2026 with a few thousand downloads, both
+claim a full AAC-LC encoder, and `rusty_aac`'s description claims it "beats
+FFmpeg on mono music at 128k+". None of that is verified, and an unverified
+encoder is a risky dependency. `adts-reader` was not adopted either: it reads
+ADTS but does not write it, and simble's parser already lives inside the A2DP
+module where the capability structures are.
 
 ### What was done instead
 
@@ -329,7 +313,7 @@ vectors, Bumble's `AacParser` read them back, and simble has to agree with
 both — the parse *and* the re-encode, byte for byte.
 
 Simble's parser was a port of Bumble's, so it inherited Bumble's blind spots.
-Three of them were real bugs:
+Three were real bugs:
 
 1. **`protection_absent` was ignored.** The bit is inverted: 0 means a CRC
    *is* present, and two CRC bytes then sit between the 7-byte header and the
@@ -357,26 +341,22 @@ implementation, and they say so.
 
 ---
 
-## 7. Surprises worth recording
+## 7. Notes worth recording
 
-- **The task's stated oracle did not exist.** "Bumble ships `codecs.py` with a
-  real SBC implementation" is false; it has AAC LATM parsing and SBC *header*
-  parsing. Half an hour of reading `codecs.py` and `a2dp.py` prevented an
-  afternoon of trying to call a function that is not there.
 - **`libsbc-sys`'s advertised licence describes only the binding.** A crate's
   Cargo metadata is not a licence audit of what it vendors.
-- **The ecosystem is thinner than LC3's**, which is saying something: exactly
-  one pure-Rust SBC decoder exists, it has no assertions in its tests, and no
-  pure-Rust encoder exists at all — for the *mandatory* codec of the most
-  widely deployed Bluetooth audio profile.
-- **The first golden vectors were nearly worthless and looked fine.** They
+- **The ecosystem is thinner than LC3's**: exactly one pure-Rust SBC decoder
+  exists, it has no assertions in its tests, and no pure-Rust encoder exists at
+  all — for the *mandatory* codec of the most widely deployed Bluetooth audio
+  profile.
+- **Golden vectors can look fine and cover almost nothing.** An early set
   covered the first 23 ms of a signal whose energy at that point was entirely
   in subband 0, so the bit allocator was barely exercised; a mutation that
-  collapsed a full sweep to 3 dB left them passing. Mutation testing found
-  that, not review. The test signal was redesigned to be broadband from sample
-  zero as a result.
-- **A mutation-testing harness can lie to you too.** The first run reported
-  0/17 caught: it classified `error: test failed` as a compile failure, and
-  its shell-quoted multi-line replacements silently did not match. Both bugs
-  made the suite look *worse* than it was, which is the lucky direction — the
-  same script written to grep for success would have reported 17/17.
+  collapsed a full sweep to 3 dB left them passing. Mutation testing caught
+  that, not review, and the test signal was redesigned to be broadband from
+  sample zero.
+- **A mutation-testing harness can mislead.** An early run reported 0/17
+  caught: it classified `error: test failed` as a compile failure, and its
+  shell-quoted multi-line replacements silently did not match. Both bugs made
+  the suite look *worse* than it was — a script written to grep for success
+  would instead have reported a false 17/17.

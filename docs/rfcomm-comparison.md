@@ -1,29 +1,22 @@
 # RFCOMM: simble vs. Bumble vs. Zephyr
 
-> **Status, 2026-08-22.** The five correctness gaps this document identifies
-> have since been **fixed**, and its Zephyr column has since been checked
-> against Zephyr's actual `rfcomm.c` (1952 lines) rather than a fetched
-> summary — it held up, with two nuances noted below. Read the gap sections as
-> a record of what was wrong and why, not as a description of current
-> behaviour. The fixes were verified against Bumble as a foreign oracle, and
-> each carries a test confirmed to fail before it.
->
-> Two things this document recommends remain undone: the unused
-> `DYNAMIC_CHANNEL_NUMBER_START/END` constants, and converting `MccPn` to a
-> zerocopy typed view.
+> The five correctness gaps in section 5 have since been fixed; read them as a
+> record of what was wrong and why, not current behaviour. Two recommendations
+> remain undone: the unused `DYNAMIC_CHANNEL_NUMBER_START/END` constants, and
+> converting `MccPn` to a zerocopy typed view.
 
-An audit of `src/classic/rfcomm.rs` prompted by the observation that it is
-1518 lines against Bumble's `rfcomm.py` at 1163 — a 1.31× ratio.
+An audit of `src/classic/rfcomm.rs`, prompted by its being 1518 lines against
+Bumble's `rfcomm.py` at 1163 — a 1.31× ratio.
 
-**Verdict up front: the ratio is an artifact of the measurement.** Comparing a
-Rust file *including* its inline `#[cfg(test)]` module against a Python file
-that has no tests in it is not a like-for-like comparison. On non-test,
-non-comment logic lines the two files are within 1% of each other. The extra
-size is inline tests and doc prose, not duplication, verbosity, or dead logic.
+**The ratio is an artifact of the measurement.** Comparing a Rust file
+*including* its inline `#[cfg(test)]` module against a Python file with no tests
+in it is not like-for-like. On non-test, non-comment logic lines the two files
+are within 1% of each other. The extra size is inline tests and doc prose, not
+duplication, verbosity, or dead logic.
 
-There is, however, a short list of **real correctness gaps** — several shared
-with Bumble, one specific to simble — that matter considerably more than the
-line count. Those are section 5.
+There is a short list of **real correctness gaps** — several shared with Bumble,
+one specific to simble — that matter more than the line count. Those are
+section 5.
 
 ---
 
@@ -115,7 +108,7 @@ metric, and the delta is entirely features simble does not have (section 3).
 
 BlueZ was deliberately *not* read: it is GPL, and this repo is Apache-2.0.
 Android's Fluoride (`system/stack/rfcomm/`) is Apache-2.0 and would have been a
-valid second reference; I did not read it (section 7).
+valid second reference; it was not read (section 7).
 
 ---
 
@@ -333,19 +326,17 @@ lines. `cargo test` (1115 passing, 0 failing) and
 
 - **Android's Fluoride** (`system/stack/rfcomm/`) was not read. It is
   Apache-2.0 and would be a legitimate second production reference; Zephyr was
-  sufficient to answer the question and I did not want to characterize a stack
-  I had not opened.
+  sufficient to answer the question.
 - **BlueZ** was deliberately not read (GPL vs. this repo's Apache-2.0).
 - **Zephyr's `rfcomm.c` was read via a fetched summary**, not line by line. Its
-  1440-code-line figure is a direct count of the file I downloaded; the feature
-  claims in the matrix come from that summary's identification of named
-  handlers (`rfcomm_handle_rpn`, `rfcomm_send_nsc`, `rfcomm_check_fc`, …). I
-  did not verify each handler's body.
+  1440-code-line figure is a direct count of the file; the feature claims in
+  the matrix come from that summary's identification of named handlers
+  (`rfcomm_handle_rpn`, `rfcomm_send_nsc`, `rfcomm_check_fc`, …). Each handler's
+  body was not verified.
 - **No interop testing was run.** Every gap in section 5 is from reading code
   against the spec. HANDOFF-2026-08-22 §5 is explicit that unit tests do not
-  prove interop; by the same token, neither does a code read. C1 and C3 in
-  particular should be confirmed against Bumble-as-oracle before anyone spends
-  time fixing them.
+  prove interop; neither does a code read. C1 and C3 in particular should be
+  confirmed against Bumble-as-oracle before fixing.
 - **`tests/rfcomm_test.rs` (229 lines) and the 10 RFCOMM tests in
   `src/device/classic_host.rs` were read for coverage, not audited.** They are
   excluded from every count above.

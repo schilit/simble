@@ -1,26 +1,16 @@
 # Is BDD worth it here?
 
-*Written 2026-08-23, after a week in which every serious bug found was a
-**missing scenario** rather than a wrong assertion.*
+Status: evaluation. The specification experiment (§Question 2) is proposed,
+not built.
 
-Short answer: **as a test runner, no. As a specification that a tool audits
-for gaps, probably yes — and that is a different question, which is the point
-of this document.**
-
-The two were conflated the first time round. Separating them changes the
-answer.
-
----
-
-## The two questions
+**As a test runner, no. As a specification that a tool audits for gaps,
+probably yes.** These are two questions that happen to share a file format;
+they do not share a justification.
 
 | Question | Verdict | Basis |
 |---|---|---|
 | Should `.feature` files *execute*, via cucumber or a Rhai step registry? | **No** | Measured; see below |
 | Should `.feature` files exist as a *specification*, audited for missing scenarios? | **Worth trying** | Argued; not yet tested |
-
-An execution framework and a design artifact happen to share a file format.
-They do not share a justification.
 
 ---
 
@@ -67,7 +57,7 @@ language as the devices, on the same engine, exercised by the same CLI and the
 same web Testing page, and an agent could emit scenario *and* steps together
 with no recompilation.
 
-It fails on **capability**, which is checkable rather than a matter of taste:
+It fails on **capability**:
 
 - `src/scripting/bindings.rs` registers **6 types**, all GATT/Android shapes.
 - Grepping the whole scripting module for `HciEvent`, `COMMAND_STATUS`,
@@ -107,10 +97,8 @@ not expressible.**
 
 ## Question 2: Gherkin as an audited specification — worth trying
 
-This was never evaluated the first time, and it is aimed at a problem this
-project demonstrably has.
-
-Every serious bug this week was a **missing scenario**:
+This is aimed at a problem the project demonstrably has: every serious bug in
+the week before this was written was a **missing scenario**:
 
 - Nobody wrote *"when the receiver leaves the BIG"*.
 - Nobody wrote *"when the controller refuses the command"*.
@@ -184,14 +172,13 @@ cucumber dependency, or route assertions through a step registry.
 describe **what shipped**, including the failure scenarios that were missing
 before they became bugs.
 
-The test is simple and has a losing outcome: run it through the auditor. If
-the gap analysis surfaces something real that is not already in the backlog,
-this is worth continuing. If it only restates what the feature file says, it
-is not.
+Run it through the auditor. If the gap analysis surfaces something real that is
+not already in the backlog, this is worth continuing. If it only restates what
+the feature file says, it is not.
 
 ---
 
-## For the record: what was actually recommended instead
+## What was recommended instead
 
 1. **Axis sweeps for total functions.** `tests/malformed_att_test.rs` is the
    pattern — every opcode × every truncation, rather than five hand-picked
@@ -238,19 +225,19 @@ Filling out that vocabulary is likely better value than any layer above it.
 
 ### What the filled-out vocabulary means for step registration
 
-The design discussion above wanted Gherkin-style step registration —
-`when('a %d happens', { ... })` — and the two primitives now on the script
-surface are the reason to keep not building it. A BDD layer earns its keep by
-supplying a *vocabulary* of reusable temporal steps on top of a framework that
-only knows about single moments; that is what "Then the heart rate should stay
-below 200 for 5 seconds" is buying, and it is why the step-registration
-machinery normally has to exist. Here `assert_over(hrm, uuid, "<", 200, 5.0)`
-already *is* that sentence, machine-checked, with the offending sample and its
-timestamp in the failure message — and `wait_for "..." { ... }` is already a
-When/Then pair in real syntax rather than a regex over English. Step
-registration on top would add a parser, a registry and an indirection between
-the failure and the line that caused it, in exchange for prose. The honest
-gap that remains is the Given: `catalog::device(name)` covers one device by
-name, `catalog/scenes/*.json` covers topology, and nothing yet connects the
-two from inside a script. That is a *composition* problem, not a syntax one,
-and a step registry would not touch it.
+The two primitives now on the script surface are the reason not to build
+Gherkin-style step registration (`when('a %d happens', { ... })`). A BDD layer
+earns its keep by supplying a *vocabulary* of reusable temporal steps on top of
+a framework that only knows about single moments — that is what "Then the heart
+rate should stay below 200 for 5 seconds" buys. Here
+`assert_over(hrm, uuid, "<", 200, 5.0)` already *is* that sentence,
+machine-checked, with the offending sample and its timestamp in the failure
+message, and `wait_for "..." { ... }` is already a When/Then pair in real
+syntax rather than a regex over English. Step registration on top would add a
+parser, a registry and an indirection between the failure and the line that
+caused it, in exchange for prose.
+
+The gap that remains is the Given: `catalog::device(name)` covers one device by
+name, `catalog/scenes/*.json` covers topology, and nothing yet connects the two
+from inside a script. That is a *composition* problem, not a syntax one, and a
+step registry would not touch it.

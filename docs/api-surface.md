@@ -1,73 +1,61 @@
 # The public API surface: measurement, boundary, and how it stays drawn
 
-> **Status: living for §4–§7, point-in-time for §1–§3 and §8.**
-> The module tiers (§4), the mechanism (§5) and the CI proof (§6) **must match
-> the tree** — if `lib.rs` and §4 disagree, that is a bug. The measurement
-> (§1–§3) is a dated snapshot and re-derivable: the commands are in §1. §8 is a
-> decision record for a decision **not yet made**, and stays until it is.
-
-*Written 2026-08-23 against `142035e`. Closes the measurement half of
-`gaps.md` §8.*
+Authoritative source for §4–§7: `lib.rs` — if it and this file disagree, that is
+a bug. §1–§3 are a dated measurement (re-derivable via the §1 commands); §8 is a
+decision record for a decision not yet made.
 
 `gaps.md` §8 said no boundary had ever been drawn and that the obstacle was
 `tests/`: much of the deep surface is `pub` because the integration tests need
 it, and Rust cannot spell *"visible to this crate's own tests, not to the
-world."* This document is the measurement that says where the boundary
-belongs, and the record of the mechanism that now holds it.
+world."* This document is the measurement of where the boundary belongs and the
+record of the mechanism that holds it.
 
 ---
 
 ## 1. How this was measured
 
-Two independent instruments, because the cheap one is not trustworthy on its
-own.
+Two independent instruments.
 
 **The surface itself** comes from rustdoc's JSON output
 (`cargo +nightly rustdoc --lib -- -Z unstable-options --output-format json`),
-walked from the crate root through public modules and re-exports. That is the
-set of items a downstream `use simble::…` can actually name — which is not the
-same as `grep -c '^ *pub'`, because a `pub` item inside a private module is not
-public and a re-export makes one item reachable by two paths. It counts
-**7 486 reachable items**, against §8's grep-derived ~3 500; the difference is
-that rustdoc also counts fields, variants, associated constants and trait-impl
-methods, all of which are equally part of what a `match` or a struct literal
-can break on.
+walked from the crate root through public modules and re-exports — the set a
+downstream `use simble::…` can name, which is not `grep -c '^ *pub'` (a `pub`
+item inside a private module is not public; a re-export makes one item reachable
+by two paths). It counts **7 486 reachable items**, against §8's grep-derived
+~3 500; the difference is rustdoc also counts fields, variants, associated
+constants and trait-impl methods, all equally part of what a `match` or struct
+literal can break on.
 
-**"Nothing uses this"** is not a grep result. It is rustc's own `dead_code`
-lint, run against a build with every module forced private, twice:
-`cargo check --lib` and `cargo test --lib --no-run`. An item flagged in both
-is one that neither the library nor its own unit tests reference — compiler
-ground truth, with no regex in the loop.
+**"Nothing uses this"** is rustc's own `dead_code` lint, run against a build with
+every module forced private, twice: `cargo check --lib` and `cargo test --lib
+--no-run`. An item flagged in both is referenced by neither the library nor its
+own unit tests.
 
-**Attribution to `examples/` vs `tests/` vs `src/scripting/`** is the one
-heuristic step: a per-file identifier scan of each consumer. For anything that
-hangs off a type — method, field, variant, associated const — the *owner type
-name* must appear in the same consumer file, which is what stops `new`, `read`
-and `len` matching everything. The bias is deliberately toward
-over-attribution: wrongly calling an item *used* costs nothing, wrongly calling
-it *unused* would cut something load-bearing.
+**Attribution to `examples/` vs `tests/` vs `src/scripting/`** is a per-file
+identifier scan of each consumer. For anything hanging off a type, the *owner
+type name* must appear in the same consumer file (which stops `new`, `read`,
+`len` matching everything). The bias is toward over-attribution: wrongly calling
+an item *used* costs nothing, wrongly calling it *unused* would cut something
+load-bearing.
 
 ---
 
 ## 2. The four-way inventory
 
-All 7 486 reachable items, one bucket each, first match wins in the order
-shown (an item an example touches is counted as an example's, even if tests
-touch it too).
+All 7 486 reachable items, one bucket each, first match wins in the order shown.
 
 | Bucket | Items | What it means |
 |---|---:|---|
-| used by `examples/` | 469 | the closest proxy this repo has for a real consumer |
+| used by `examples/` | 469 | the closest proxy for a real consumer |
 | used by `src/scripting/` or the `.rhai`/`web` surface | 504 | reachable from a script |
 | used by `src/bin/` (the CLI, over the external `simble::` path) | 91 | a consumer that links the crate from outside |
 | **used only by `tests/`** | **2 360** | the reason the surface was this wide |
 | used only inside `src/` | 3 364 | never named outside the crate at all |
 | **used by nothing anywhere** | **698** | dead |
 
-Two of those numbers are the whole story. **2 360 items — 32 % of the
-surface — are public for no reason other than that `tests/` is a separate
-crate.** Another 3 364 are not named outside `src/` even once. Together that is
-**76 % of the public API that no consumer, real or simulated, has ever
+**2 360 items — 32% of the surface — are public only because `tests/` is a
+separate crate.** Another 3 364 are not named outside `src/` even once. Together
+that is **76% of the public API that no consumer, real or simulated, has ever
 touched.**
 
 ### By module (before the change)
@@ -100,9 +88,9 @@ touched.**
 | service | 1 | 1 | 0 | 9 | 15 | 0 | 26 |
 | mcp | 0 | 4 | 0 | 0 | 2 | 2 | 8 |
 
-The `examples` column in this table is the token heuristic and reads high; the
-**import statements** are the hard number. Across all 15 example programs there
-are **58 distinct `use simble::…` paths, drawn from exactly 8 modules**:
+The `examples` column is the token heuristic and reads high; the **import
+statements** are the hard number. Across all 15 example programs there are **58
+distinct `use simble::…` paths, from exactly 8 modules**:
 
 | module | import paths |
 |---|---:|
@@ -115,18 +103,17 @@ are **58 distinct `use simble::…` paths, drawn from exactly 8 modules**:
 | `controller` | 1 |
 | `scripting` | 1 |
 
-`tests/` imports **516 distinct paths across 28 module-level names**. The
-modules `tests/` reaches that no example ever does are: `android`, `api`,
-`att`, `audio`, `crypto`, `df`, `gap`, `gatt`, `l2cap`, `mcp`, `obex`,
-`packets`, `profiles`, `service`, `smp`.
+`tests/` imports **516 distinct paths across 28 module-level names**. The modules
+`tests/` reaches that no example ever does: `android`, `api`, `att`, `audio`,
+`crypto`, `df`, `gap`, `gatt`, `l2cap`, `mcp`, `obex`, `packets`, `profiles`,
+`service`, `smp`.
 
 ---
 
 ## 3. The dead bucket, and why most of it should not be deleted
 
-Compiler-confirmed dead in-crate: **1 699 items**, of which **1 427 are
-publicly reachable** and 272 are already `pub(crate)`. Cross-referencing
-against every consumer:
+Compiler-confirmed dead in-crate: **1 699 items**, of which **1 427 are publicly
+reachable** and 272 are already `pub(crate)`. Cross-referencing:
 
 | | items |
 |---|---:|
@@ -136,17 +123,15 @@ against every consumer:
 | public, dead in-crate, reached from scripting / `.rhai` / `web` / docs | 156 |
 | public, dead in-crate, reached from `src/bin/` | 7 |
 
-573 is the strict floor (any name collision anywhere disqualifies an item);
-the owner-aware count in §2 puts it at 698. Call it **~600 items across 65
-files.**
+573 is the strict floor (any name collision anywhere disqualifies an item); the
+owner-aware count in §2 puts it at 698. Call it **~600 items across 65 files.**
 
 **`GapDataType` was the sample, and it is gone.** 63 lines in
-`types/hci_types.rs`: a `#[repr(transparent)]` newtype, 15 associated
-constants and a `Display` impl naming all fifteen AD types — **17 hand-written
-items, 21 counting the derives**, with zero references anywhere in the tree. It
-was a third copy of the AD-type table, and being unused it had already drifted:
-it was missing `0x2E` and `0x30` while the live table in
-`gap::advertising::ad_type` had them. Deleted.
+`types/hci_types.rs`: a `#[repr(transparent)]` newtype, 15 associated constants
+and a `Display` impl naming all fifteen AD types — 17 hand-written items, 21
+counting the derives, with zero references anywhere. A third copy of the AD-type
+table, and being unused it had drifted: missing `0x2E` and `0x30` while the live
+table in `gap::advertising::ad_type` had them.
 
 **The rest is not `GapDataType`, and the shape of the list is the argument.**
 
@@ -163,78 +148,67 @@ it was missing `0x2E` and `0x30` while the live table in
 | `src/packets/att.rs` | 9 | `INSUFFICIENT_AUTHENTICATION`, `PREPARE_QUEUE_FULL`, `ATTRIBUTE_NOT_LONG`, … |
 | …58 more files | ~200 | |
 
-**444 of the 573 are `constant`s, and almost all of those are SIG
-enumerations** — AVRCP PDU IDs, AV/C subunit types, AVDTP and ASCS and SMP and
-ATT error codes, the unimplemented half of the USB HID keycode page, LC3
-sampling frequencies. They are unreferenced because the *profile* is partly
-implemented, not because the constant is wrong. Deleting `BAD_RECOVERY_TYPE`
-buys nothing and costs the next person the table.
+**444 of the 573 are `constant`s, almost all SIG enumerations** — AVRCP PDU IDs,
+AV/C subunit types, AVDTP and ASCS and SMP and ATT error codes, the unimplemented
+half of the USB HID keycode page, LC3 sampling frequencies. Unreferenced because
+the *profile* is partly implemented, not because the constant is wrong. Deleting
+`BAD_RECOVERY_TYPE` buys nothing and costs the next person the table.
 
-So the used-by-nothing bucket was **not** bulk-deleted. What happened to it
-instead is that ~180 of those items live in the nine modules that are no longer
-public at all (§4), which removes them from the API without removing them from
-the tree — the outcome that actually matters. The remaining ~390 sit in
-supported modules and are listed here so the cut is a mechanical follow-up for
-someone who knows which profiles are being finished. Demoting them
-individually is not free: `pub(crate)` on an unreferenced item makes
-`dead_code` fire, so each one is a delete-or-`#[allow]` decision, and
-`#[allow(dead_code)]` on a spec table is worse than leaving it `pub`.
+So the bucket was **not** bulk-deleted. ~180 of those items live in the nine
+modules that are no longer public at all (§4), which removes them from the API
+without removing them from the tree. The remaining ~390 sit in supported modules,
+a mechanical follow-up for someone who knows which profiles are being finished:
+`pub(crate)` on an unreferenced item makes `dead_code` fire, so each is a
+delete-or-`#[allow]` decision, and `#[allow(dead_code)]` on a spec table is worse
+than leaving it `pub`.
 
-Two entries in that list *are* worth a look on their own terms, because they
-are behaviour rather than tables:
-`src/device/profile_scene.rs` exports a whole `ProfileScene` + `DeviceSpec`
-pair that nothing constructs, and `src/transport/wasm_ws.rs` has three
-`pub fn`s (`adv_signature`, `notify_characteristic_value`,
-`classic_status_json`) that no page calls.
+Two entries are behaviour rather than tables:
+`src/device/profile_scene.rs` exports a `ProfileScene` + `DeviceSpec` pair that
+nothing constructs, and `src/transport/wasm_ws.rs` has three `pub fn`s
+(`adv_signature`, `notify_characteristic_value`, `classic_status_json`) that no
+page calls.
 
 ---
 
-## 4. The boundary, and where the data disagreed with the proposal
+## 4. The boundary
 
-The proposal on the table was: `device`, `devices`, `scene`, `scripting`,
-`api`, `types`, `transport` supported; `classic`, `controller`, `cs`,
-`packets`, `l2cap`, `att`, `gap`, `profiles`, `df`, `smp`, `crypto`, `obex`,
-`service` demoted.
+The proposal was: `device`, `devices`, `scene`, `scripting`, `api`, `types`,
+`transport` supported; `classic`, `controller`, `cs`, `packets`, `l2cap`, `att`,
+`gap`, `profiles`, `df`, `smp`, `crypto`, `obex`, `service` demoted. The
+measurement contradicts it in four places, all where the proposal demotes things
+consumers import:
 
-**The measurement contradicts it in four places, all in the same direction —
-the proposal demotes things consumers actually import.**
-
-- **`classic` is the third-largest example consumer.** Five example programs
-  import 21 distinct paths from it: `a2dp_sink`, `avrcp_remote`, `hfp_hf_pipe`,
-  `classic_initiator`, `classic_discoverable`. Demoting it would break the
-  BR/EDR half of the examples directory.
-- **`controller` is imported by an example** — `simble::controller::sim::Link`
-  is how `in_process_scene` and `netsim_two_devices` join two devices with no
-  netsim. That is the in-process scene story, which is a headline feature.
+- **`classic` is the third-largest example consumer.** Five programs import 21
+  distinct paths: `a2dp_sink`, `avrcp_remote`, `hfp_hf_pipe`, `classic_initiator`,
+  `classic_discoverable`.
+- **`controller` is imported by an example** — `simble::controller::sim::Link` is
+  how `in_process_scene` and `netsim_two_devices` join two devices with no netsim.
 - **`cs` is imported by an example** (`compute_pbr_distance` in
-  `channel_sounding`) *and* re-exported at the crate root. Channel sounding is
-  in the crate's own `keywords`.
+  `channel_sounding`) and re-exported at the crate root.
 - **`profiles` is the single biggest scripting surface**: 199 items reachable
-  from Rhai, ten services re-exported at the crate root, and its own document
-  (`docs/scripting-profile-apis.md`). It is a supported surface by any
-  definition.
+  from Rhai, ten services re-exported at the crate root, its own document
+  (`docs/scripting-profile-apis.md`).
 
-Conversely the proposal is right about `packets`, `l2cap`, `att`, `gap`, `df`,
-`smp`, `crypto` and `obex` — no example, no binary and no script names any of
-them — and it misses `audio`, which is in exactly the same position.
+The proposal is right about `packets`, `l2cap`, `att`, `gap`, `df`, `smp`,
+`crypto` and `obex` — no example, binary or script names any — and it misses
+`audio`, in the same position.
 
-**What was actually applied:**
+**Applied:**
 
-**Supported.** `device`, `devices`, `scene`, `scripting`, `types`,
-`transport`, `api`, `service`, `client`, `gatt`, `profiles`, `android`,
-`classic`, `controller`, `cs`, `mcp`. Every one is imported by an example, by
-a `src/bin/` binary over the external `simble::` path, or is the scripting
-layer's own public API. `android` stays because `lib.rs` advertises the
-Android-shaped API as one of the three ways to build a device; `gatt` because
-`GattDatabase`, `AttributePermissions` and `CharacteristicProperties` are how
-you build one at all; `mcp` because `src/bin/simble.rs` links it externally.
+**Supported.** `device`, `devices`, `scene`, `scripting`, `types`, `transport`,
+`api`, `service`, `client`, `gatt`, `profiles`, `android`, `classic`,
+`controller`, `cs`, `mcp`. Each is imported by an example, a `src/bin/` binary
+over the external `simble::` path, or is the scripting layer's public API.
+`android` stays because `lib.rs` advertises the Android-shaped API; `gatt`
+because `GattDatabase`, `AttributePermissions` and `CharacteristicProperties` are
+how you build a device; `mcp` because `src/bin/simble.rs` links it externally.
 
-**Exposed for inspection, no stability promise** — and now `pub(crate)` unless
-the `testing` feature is on: **`packets`, `att`, `l2cap`, `gap`, `smp`,
-`crypto`, `df`, `audio`, `obex`.**
+**Exposed for inspection, no stability promise** — now `pub(crate)` unless the
+`testing` feature is on: **`packets`, `att`, `l2cap`, `gap`, `smp`, `crypto`,
+`df`, `audio`, `obex`.**
 
-The public surface goes from **7 486 reachable items to 5 636**, a **1 850-item
-(24.7 %) cut**, with every test and example compiling unchanged:
+The public surface goes from **7 486 to 5 636 reachable items**, a **1 850-item
+(24.7%) cut**, with every test and example compiling unchanged:
 
 | module | before | after |
 |---|---:|---:|
@@ -254,27 +228,25 @@ The public surface goes from **7 486 reachable items to 5 636**, a **1 850-item
 `AclReassembler`, `CoCChannel`, `CoCManager`, `KeyStore`, `PairingConfig`,
 `PairingKey`, `PairingKeys`, `PairingSession`, `SmpRole` are re-exported from
 `lib.rs` and rustdoc inlines them there. Re-exporting a public item out of a
-private module is exactly how a facade is meant to work, and the root spelling
-is now the supported one.
+private module is how a facade works, and the root spelling is now the supported
+one.
 
 ---
 
-## 5. The mechanism, and why this one
+## 5. The mechanism
 
 Rust cannot `cfg` a visibility. Two candidates:
 
-**(a) `pub(crate)` throughout plus a feature-gated
-`pub mod for_testing { pub use … }` re-export.** Rejected. It would have
-rewritten the import path in all 60 files under `tests/` — `simble::packets::…`
-becomes `simble::for_testing::packets::…` — for no gain, and it flattens the
-module structure into one bag so a reader can no longer tell which module an
-item came from. It also creates two live spellings for the same item, and
-nothing stops a downstream user typing the `for_testing` one.
+**(a) `pub(crate)` throughout plus a feature-gated `pub mod for_testing { pub use
+… }` re-export.** Rejected. It would rewrite the import path in all 60 files
+under `tests/` — `simble::packets::…` becomes `simble::for_testing::packets::…` —
+flattens the module structure into one bag, creates two live spellings for the
+same item, and nothing stops a downstream user typing the `for_testing` one.
 
-**(b) paired `#[cfg(feature)] pub` / `#[cfg(not(...))] pub(crate)`.** Chosen —
-but applied **at the module declaration in `lib.rs`, not per item.** Per item
-would mean doubling ~2 400 declarations. At the `mod` line it is nine macro
-invocations, zero edits inside any module, and zero edits in `tests/`:
+**(b) paired `#[cfg(feature)] pub` / `#[cfg(not(...))] pub(crate)`.** Chosen, at
+the module declaration in `lib.rs`, not per item (per item would double ~2 400
+declarations). At the `mod` line it is nine macro invocations, zero edits inside
+any module, zero edits in `tests/`:
 
 ```rust
 macro_rules! plumbing_mod {
@@ -288,14 +260,12 @@ macro_rules! plumbing_mod {
 }
 ```
 
-The two `allow`s on the closed arm restore the status quo rather than hiding
-anything new. While these modules were unconditionally `pub`, neither lint
-*could* fire in them — a `pub` item is reachable by definition. Making the
-module crate-private is what wakes them, and what they then report is almost
-entirely wire-format types and spec tables that `tests/` genuinely uses, from a
-crate rustc cannot see. Left as errors they would say "delete the PDU
-definitions your own test suite parses." The open arm keeps both lints, and the
-open arm is what every `cargo test` and CI's `--all-features` clippy compile.
+The two `allow`s on the closed arm restore the status quo. While these modules
+were unconditionally `pub`, neither lint could fire — a `pub` item is reachable
+by definition. Making the module crate-private wakes them, and what they report
+is almost entirely wire-format types and spec tables that `tests/` genuinely
+uses, from a crate rustc cannot see. The open arm keeps both lints, and the open
+arm is what every `cargo test` and CI's `--all-features` clippy compile.
 
 **Turning it on automatically** is the self-dev-dependency idiom:
 
@@ -304,30 +274,29 @@ open arm is what every `cargo test` and CI's `--all-features` clippy compile.
 simble = { path = ".", features = ["testing"] }
 ```
 
-Cargo unifies a path dependency's features with the package's own lib target,
-so `cargo test`, `cargo bench` and `cargo build --examples` all get `testing`
-while `cargo build` and a downstream `[dependencies] simble` do not.
+Cargo unifies a path dependency's features with the package's own lib target, so
+`cargo test`, `cargo bench` and `cargo build --examples` all get `testing` while
+`cargo build` and a downstream `[dependencies] simble` do not.
 
 ### Two lints that only exist when the door is shut
 
 Clippy suppresses `wrong_self_convention` and `enum_variant_names` on exported
 API (`avoid-breaking-exported-api`, on by default). Closing `df` and `gap` woke
-both. Neither was fixed by renaming, because both names are the
-specification's: `CteType::{AngleOfArrival, AngleOfDepartureOneUs,
-AngleOfDepartureTwoUs}` is Core Vol 4 Part E §7.8.80's own vocabulary, and
-`KeyMaterial::to_bytes(&self)` is a signature change belonging to a different
-task. Both carry a scoped `#[allow]` with the reason written down.
+both. Neither was fixed by renaming, because both names are the specification's:
+`CteType::{AngleOfArrival, AngleOfDepartureOneUs, AngleOfDepartureTwoUs}` is Core
+Vol 4 Part E §7.8.80's own vocabulary, and `KeyMaterial::to_bytes(&self)` is a
+signature change belonging to a different task. Both carry a scoped `#[allow]`
+with the reason written down.
 
 ---
 
 ## 6. Proof the closed surface is actually checked
 
-**The trap:** CI ran `--all-features` in three of its steps, and the
-self-dev-dependency puts `testing` into every test and example build. Left
-alone, *every* CI step would compile the surface wide open and not one of them
-could tell you whether the crate a downstream user gets still builds — the
-exact failure this work exists to prevent. `.github/workflows/ci.yml` therefore
-gains its own step, placed **before** anything with `--all-features`:
+CI ran `--all-features` in three of its steps, and the self-dev-dependency puts
+`testing` into every test and example build — so left alone, every CI step would
+compile the surface wide open and none could tell whether the crate a downstream
+user gets still builds. `.github/workflows/ci.yml` gains its own step, placed
+**before** anything with `--all-features`:
 
 ```yaml
 - name: Build and lint the CLOSED public surface (no features)
@@ -336,8 +305,8 @@ gains its own step, placed **before** anything with `--all-features`:
     cargo clippy --lib --no-default-features -- -D warnings
 ```
 
-**And proof the boundary is real, not just declared.** A throwaway crate with
-`[dependencies] simble = { path = "…" }` and no features:
+**Proof the boundary is real.** A throwaway crate with `[dependencies] simble =
+{ path = "…" }` and no features:
 
 ```rust
 let _ = simble::types::Address::from_be_bytes([0; 6]);   // ok
@@ -347,13 +316,10 @@ let _ = simble::packets::hci::HCI_COMMAND_PACKET;        // error[E0603]: module
                                                          //      `packets` is private
 ```
 
-Both supported spellings resolve; the plumbing path does not.
-
-**Publishability**, verified rather than assumed. `cargo package` (with the
-verification build, not `--no-verify`) succeeds: **381 files, 5.6 MiB, 1.4 MiB
-compressed** — identical to before. Unpacking the `.crate` and reading the
-generated manifest shows the self-dev-dependency is gone, because Cargo strips
-path-only dev-dependencies when publishing:
+**Publishability**, verified. `cargo package` (with the verification build)
+succeeds: **381 files, 5.6 MiB, 1.4 MiB compressed** — identical to before.
+Unpacking the `.crate` shows the self-dev-dependency is gone, because Cargo
+strips path-only dev-dependencies when publishing:
 
 ```toml
 [dev-dependencies.zerocopy]
@@ -361,22 +327,20 @@ version = "0.8"
 features = ["derive"]
 ```
 
-`[features]` keeps `lc3` and `testing`; a consumer can see the feature exists
-and has no reason to enable it.
+`[features]` keeps `lc3` and `testing`; a consumer can see the feature exists and
+has no reason to enable it.
 
 ### One thing this does not check
 
 `cargo doc --no-deps --no-default-features` reports 16 broken intra-doc links
 against the closed surface, versus 6 on `--all-features`. **The 6 are
 pre-existing on `main`** (`SdpPdu`, `SCENE_STEPS_PER_TICK`,
-`Self::want_profile_version`, `fit_within_legacy_limit`, and a redundant
-explicit link target) and this change neither added to nor fixed them. The
-other 10 are module docs in *supported* modules linking into now-private ones,
-e.g. `classic/a2dp.rs` → `crate::audio::sbc`, `controller/sim.rs` →
-`crate::packets`. CI's doc step is `--all-features`, so none of this is red
-today; making the closed doc build a gate means converting those 10 links to
-code spans first. `lib.rs`'s own tier paragraph already uses code spans rather
-than links for exactly this reason.
+`Self::want_profile_version`, `fit_within_legacy_limit`, and a redundant explicit
+link target). The other 10 are module docs in *supported* modules linking into
+now-private ones, e.g. `classic/a2dp.rs` → `crate::audio::sbc`, `controller/sim.rs`
+→ `crate::packets`. CI's doc step is `--all-features`, so none of this is red
+today; making the closed doc build a gate means converting those 10 links to code
+spans first.
 
 ---
 
@@ -393,53 +357,45 @@ Done — all 14, each with the reason inline:
 | `profiles/ascs.rs` | `AseState` |
 | `types/hci_types.rs` | `AddressType` |
 
-The unnamed one in `bass.rs` is `PeriodicAdvertisingSyncParams` — the PA_Sync
-parameter of Add/Modify Source, BASS §3.1.1.4, the third enum in that file with
-explicit discriminants. The other 114 public enums are untouched.
+`PeriodicAdvertisingSyncParams` is the PA_Sync parameter of Add/Modify Source,
+BASS §3.1.1.4. The other 114 public enums are untouched. `#[non_exhaustive]` only
+bites an *external* `match`; `tests/` and `examples/` are external crates, and
+all 1 362 tests still pass — so no test was matching these exhaustively.
 
-Nothing broke, which is itself informative: `#[non_exhaustive]` only bites an
-*external* `match`, `tests/` and `examples/` are external crates, and all 1 362
-tests still pass — so no test was matching these exhaustively to begin with.
-
-**One near-miss worth recording.** `profiles/ascs_client.rs` declares a
-*second* `AseState`, distinct from the one in `ascs.rs`: no discriminants, and
-a trailing `Unknown(u8)` variant. It is deliberately excluded — and it is also
-the best existing answer to §8, below.
+`profiles/ascs_client.rs` declares a *second* `AseState`, distinct from the one
+in `ascs.rs`: no discriminants, a trailing `Unknown(u8)` variant. Deliberately
+excluded — and the best existing answer to §8.
 
 ---
 
 ## 8. The unknown-wire-value policy — stated, not settled
 
-**Not decided here. No code changed for it.** The trade-off, for whoever does
-decide:
-
-The crate has **four** answers in the tree today, not three:
+Not decided here; no code changed for it. The crate has **four** answers in the
+tree today:
 
 | approach | where | what happens to `0x07` when the SIG defines it and we do not know it |
 |---|---|---|
 | `Option`, `None` on unknown | `bap.rs::from_u8`, `bass.rs::from_u8` | **destroyed.** The byte is gone; nothing can echo it back or log it. |
-| bare `_ =>` | `ascs.rs` | **swallowed silently,** and worse than `Option` — the caller is not even told something was unrecognised. |
+| bare `_ =>` | `ascs.rs` | **swallowed silently,** worse than `Option` — the caller is not even told something was unrecognised. |
 | newtype + `Display` fallback | `hci_types.rs` (`UNKNOWN (0x07)`) | **preserved.** Round-trips, prints usefully, costs a `match` its exhaustiveness. |
-| enum with `Unknown(u8)` | `ascs_client.rs::AseState` | **preserved,** and still an enum: `match` stays exhaustive-checked, the unknown value is carried, and a downstream `match` on it already compiles. |
+| enum with `Unknown(u8)` | `ascs_client.rs::AseState` | **preserved,** and still an enum: `match` stays exhaustive-checked, the value is carried, a downstream `match` compiles. |
 
-The case for preserving is not theoretical: the most expensive bugs in this
-project's recent history were all *"we lied about what the peer said"* — the
-CSIS RSI byte order, the `bass.rs` sync state, the four invented Ranging
-Service UUIDs. `Option` and bare `_` both make that class of bug
-unobservable by construction, because the evidence is discarded at the parse
-boundary.
+The case for preserving: the most expensive bugs in this project's history were
+all *"we lied about what the peer said"* — the CSIS RSI byte order, the `bass.rs`
+sync state, the four invented Ranging Service UUIDs. `Option` and bare `_` both
+make that class of bug unobservable by construction, discarding the evidence at
+the parse boundary.
 
 The case against converting now is `AseState` (`ascs.rs`), whose discriminants
-feed the state matrix that landed this week; changing its shape and its state
-machine in one commit is how you lose the ability to bisect.
+feed the state matrix that just landed; changing its shape and its state machine
+in one commit is how you lose the ability to bisect.
 
-The fourth row is the cheap opening move nobody has noticed: **`ascs_client.rs`
-already does this, in-tree, and it composes with `#[non_exhaustive]` in a way
-the newtype does not.** A newtype has no variants, so `#[non_exhaustive]` is
-meaningless on it; `Unknown(u8)` keeps the enum an enum. If the policy lands on
-that shape, `PeriodicAdvertisingSyncState` and `BigEncryption` are the
-lowest-risk first conversions — small, freshly written, and their `from_u8`
-callers are all in one file.
+`ascs_client.rs` already does the fourth row in-tree, and it composes with
+`#[non_exhaustive]` where the newtype does not (a newtype has no variants, so
+`#[non_exhaustive]` is meaningless on it; `Unknown(u8)` keeps the enum an enum).
+If the policy lands on that shape, `PeriodicAdvertisingSyncState` and
+`BigEncryption` are the lowest-risk first conversions — small, freshly written,
+`from_u8` callers all in one file.
 
 **Decide the policy, then convert.** Not the other way round.
 
@@ -448,18 +404,17 @@ callers are all in one file.
 ## 9. What was left alone, and why
 
 - **~390 used-by-nothing items in supported modules.** Overwhelmingly SIG
-  constant tables for partly-implemented profiles (§3). Enumerated above;
-  cutting them needs someone who knows which profiles are being finished.
+  constant tables for partly-implemented profiles (§3); cutting them needs
+  someone who knows which profiles are being finished.
 - **`classic`, `controller`, `cs`, `profiles`, `android`, `gatt`, `api`,
-  `service`, `client`** — proposed for demotion, kept, each because a
-  consumer imports it (§4).
+  `service`, `client`** — proposed for demotion, kept, each because a consumer
+  imports it (§4).
 - **The other 114 public enums** — our own state machines. `#[non_exhaustive]`
-  there is ceremony, as §8 of `gaps.md` says.
-- **`#[doc(hidden)]` and sealed traits** — still zero of each. The module tier
-  was the cheap 80 %; sealing traits is a separate, smaller job (there are only
-  7 public traits).
+  there is ceremony.
+- **`#[doc(hidden)]` and sealed traits** — still zero of each. Sealing traits is
+  a separate, smaller job (only 7 public traits).
 - **The 10 pre-existing broken intra-doc links** into now-private modules, and
-  the 6 that were already broken on `main` (§6).
+  the 6 already broken on `main` (§6).
 - **`KeyMaterial::to_bytes(&self)`** and `CteType`'s variant prefixes — scoped
   `#[allow]`s, not renames (§5).
 

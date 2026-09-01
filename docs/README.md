@@ -1,61 +1,40 @@
 # docs/
 
-What each file is, and — the part that matters — **which contract it is
-under**. A *living* document is worthless the moment it is stale. A *decision
-record* is allowed to be stale: it records what was decided and why, and is
-superseded rather than edited. Mixing the two is how a confident, dated,
-detailed document ends up believed after it stopped being true.
+Design notes, format references, and decision records for simble. Each file
+states what it covers in its first lines.
 
-Every file below carries that status in its own first lines too, so a reader
-who arrives via a link rather than this index still knows which it is.
+## Reference — a format or surface as it is
 
-## Living — must match the tree; a mismatch is a bug
-
-| File | What it is |
+| File | Covers |
 |---|---|
-| `gaps.md` | What is missing or faked, and where each gap is already declared in code or UI. Re-derivable — it carries the commands to re-derive it. |
-| `test-strategy.md` | What the tests here can and cannot prove; where the oracle gaps are. |
-| `peripheral-support.md` | What it would take to emulate each peripheral type Android supports, and what is scriptable versus library-only. |
-| `api-surface.md` | Which modules are supported API and which are only exposed for inspection, how the `testing` feature keeps `tests/` from forcing the surface open, and the measurement both came from. Its §4–§7 must match `lib.rs` and `ci.yml`; its §1–§3 are a dated, re-derivable snapshot. |
+| `scene-format.md` | The scene JSON format (authoritative source: `src/scene/`). |
+| `api-surface.md` | Which modules are supported API vs. exposed only for inspection, and how the `testing` feature keeps `tests/` from widening the surface. |
+| `usb-controllers.md` | Running on real hardware: choosing a controller, flashing an nRF52840, and the Channel Sounding situation. |
+| `scripting-profile-apis.md` | Profile APIs available to scripts (Android's shape); 17 of 20 profiles have no binding yet. |
+| `peripheral-support.md` | What it takes to emulate each Android peripheral type; scriptable vs. library-only. |
 
-## Reference — describes a format or surface as it is
+## Status — what's missing, what's proven
 
-| File | What it is |
+| File | Covers |
 |---|---|
-| `scene-format.md` | The scene JSON format. If it disagrees with `src/scene/`, the code is right. |
-| `usb-controllers.md` | Running SimBLE on real hardware: choosing a controller, what each tier can prove, flashing an nRF52840, and the Channel Sounding situation. |
+| `gaps.md` | What is missing or faked, and where each gap is declared in code or UI. Carries its re-derivation commands. |
+| `test-strategy.md` | What the tests prove and can't prove; where the oracle gaps are. |
+| `roadmap.md` | The task tracker. |
 
-## Decision records — point-in-time by design, still useful
+## Design & decisions — why a choice was made
 
-These say *why* a choice was made. That reasoning does not expire even when
-the code moves, and it is expensive to reconstruct. Read them as history.
-
-| File | Records |
+| File | Covers |
 |---|---|
-| `sig-as-oracle.md` | What the Bluetooth SIG publishes, which of it a script can consume, and the licensing position. |
-| `bdd-evaluation.md` | Whether BDD is worth it: no as a runner, worth trying as an audited specification. |
-| `scripting-profile-apis.md` | Spec: profile APIs for scripts in Android's shape. 17 of 20 profiles have no script binding. |
-| `sbc-evaluation.md` | SBC options, licensing, and what was built for the A2DP media path. |
+| `controller-routing.md` | The v1 control protocol and controller routing — how a device's controller is backed (sim ether or real radio) and why that can't live in netsim. Device router built; the async backend router is a separate crate. |
+| `measurement-regions.md` | Proposed API instrumentation: paired open/close regions, the accepted-vs-completed distinction, correlation. Not implemented. |
+| `phone-as-backend.md` | The phone as a first-class backend — the script runs on the device, no network in the loop. Supersedes `android-rpc-peer.md`. |
+| `phone-to-phone.md` | The phone-to-phone bulk-transfer path: the phone's own GATT client as central, an optional L2CAP payload channel, and measured throughput. |
+| `sig-as-oracle.md` | What the Bluetooth SIG publishes, what a script can consume, and the licensing position. |
+| `sbc-evaluation.md` | SBC options and licensing for the A2DP media path. |
 | `lc3-evaluation.md` | LC3 options for the wasm demo devices. |
-| `rfcomm-comparison.md` | simble vs Bumble vs Zephyr. Carries its own status header: the five gaps it identifies are fixed. |
-| `decisions-2026-08-23.md` | Two choices that would otherwise live only in commit messages: why L2CAP dispatch stays keyed on PSM (and why `(psm, cid)` was rejected), and why `tests/`' `run_until` ticks before it checks. |
-| `phone-as-backend.md` | The phone as a first-class backend: the script runs *on the device*, not a remote-control client, so it measures without a network in the loop and can be diffed against the simulator. Transport measured against a Pixel 9 Pro. Supersedes `android-rpc-peer.md`. |
-| `android-rpc-peer.md` | **Superseded by `phone-as-backend.md`.** Kept for its boundary analysis: what the Android API can and cannot reach — GATT yes, everything below it no — and why the script vocabulary already matches. Its v1/v2 staging and its recommendation are obsolete. |
-| `controller-routing.md` | **A specification, not yet built.** What backs a device's controller — simulated ether or real radio — and why that switch cannot live inside netsim. Routing at HCI *moves a host* rather than joining two ethers, so a dongle-backed emulator gains real controller quirks and loses every simulated peer. Records the measured blockers: no gRPC in the tree, and `rootcanal-rs` is a cfg-gated dev-dependency. |
-| `measurement-regions.md` | **A specification, not yet built.** Instrumenting the API rather than having scripts mark their own phases: paired open/close regions, why an operation has two endings (accepted versus completed) and not one, correlation as the hard part, and unclosed-region-as-diagnostic — which generalises every stall this project has lost time to. |
-| `bumble-bridging-evaluation.md` | Whether Bumble can bridge the in-page, netsim and dongle controllers into one ether. It cannot — its cross-process link was deleted upstream and its "L2CAP bridge" is a Bluetooth↔TCP gateway. Records what each layer really offers, why a physical radio cannot be joined by software, and a measured experiment showing rootcanal's phy socket is the facility that does exist. |
-
-## Stale — annotated, kept for the parts that hold
-
-| File | Caveat |
-|---|---|
-| `HANDOFF-2026-08-22.md` | **Section 3 is false** (it says CIS and LC3 do not exist; both do). Kept for Sections 1, 2 and 5 — what landed, the eight-bug Android pairing chain, and the lessons. Banner at the top of the file says the same. |
-
-## Why nothing has been deleted
-
-Every file here is either current or a record of reasoning. A stale *conclusion*
-is worth annotating; a stale *investigation* is worth keeping, because the next
-person to ask "why SBC and not something else" should find the answer rather
-than repeat the work. The failure mode to avoid is not clutter — it is a
-confident, dated, detailed document that a reader believes. That is what the
-banner on `HANDOFF-2026-08-22.md` is for.
+| `bdd-evaluation.md` | Whether BDD is worth it: not as a runner; worth trying as an audited spec. |
+| `rfcomm-comparison.md` | simble vs. Bumble vs. Zephyr on RFCOMM. |
+| `bumble-bridging-evaluation.md` | Whether Bumble can bridge the in-page, netsim, and dongle controllers into one ether — it can't, and why. |
+| `decisions-2026-08-23.md` | Two decisions: L2CAP dispatch keyed on PSM (not `(psm, cid)`), and why `tests/`' `run_until` ticks before it checks. |
+| `android-rpc-peer.md` | Superseded by `phone-as-backend.md`; kept for its Android-API boundary analysis (GATT reachable, everything below it not). |
+| `HANDOFF-2026-08-22.md` | An early session handoff. Partly stale — §3 is wrong (CIS and LC3 both exist). |

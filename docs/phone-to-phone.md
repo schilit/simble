@@ -1,9 +1,7 @@
 # Phone-to-phone bulk transfer
 
-> **Decision record, 2026-08-27.** Point-in-time by design. Records *why* the
-> phone-to-phone path is shaped the way it is and what was rejected, plus the
-> throughput it produced on the lab hardware on this date (representative, not
-> fixed). Implemented on the `phone-to-phone` branch.
+> Implemented on the `phone-to-phone` branch. Throughput figures are
+> representative of the lab hardware, not fixed.
 
 ---
 

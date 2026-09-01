@@ -1,11 +1,4 @@
-# Two decisions from 2026-08-23
-
-> **Decision record, 2026-08-23.** Point-in-time by design. These record *why*
-> a choice was made and what was rejected. Both were made inside a single
-> commit's work and would otherwise survive only in a commit message, which is
-> where re-litigated arguments go to be lost.
-
----
+# Two decisions
 
 ## 1. L2CAP handler dispatch stays keyed on PSM; channel identity is passed through
 

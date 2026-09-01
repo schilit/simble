@@ -1,7 +1,5 @@
 # LC3 codec options for the wasm demo devices
 
-> **Decision record, 2026-08-23.** Records why LC3 was built the way it was. Point-in-time by design: read it as reasoning, not as a description of the present tree.
-
 **Scope.** This evaluates LC3 *only* for the example devices simble compiles
 into wasm — the browser demo pages where a scripted LE Audio sink receives
 isochronous SDUs and the page plays them. Not a general-purpose codec for
@@ -70,9 +68,8 @@ here.
 
 **Good:**
 - **Genuinely pure Rust and `#![no_std]`.** No C, no build script, no
-  `std::time`, no threads, no filesystem or network use — checked by grep,
-  which matters because simble was bitten this session by
-  `SystemTime::now()` panicking on `wasm32-unknown-unknown`.
+  `std::time`, no threads, no filesystem or network use. This matters because
+  `SystemTime::now()` panics on `wasm32-unknown-unknown`.
 - **Light, clean dependency tree** — 9 transitive crates (`bitvec`,
   `byteorder`, `fast-math`, `heapless`, `num-traits`, `spin`, `tap`, `wyz`,
   and friends), all pure Rust and no_std-friendly.
@@ -128,8 +125,7 @@ sends LC3.
    cost measured here was ~132 KB.
 2. **Document what it is.** Wherever the demos mention LC3, say the codec is
    a community pure-Rust implementation validated against its author's
-   golden outputs, not against SIG conformance vectors. Given how much of
-   this session was spent correcting overstated capabilities, this matters.
+   golden outputs, not against SIG conformance vectors.
 3. **Keep the SDU path codec-agnostic.** Do not let LC3 leak into the ISO
    layer; it stays opaque bytes, and the codec is a demo-side concern. That
    preserves the option to swap in liblc3 later without touching the

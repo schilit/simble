@@ -1,29 +1,25 @@
 # Running SimBLE on real hardware
 
-> **Reference, kept current.** Verified 2026-08-24 against the dongles it
-> describes. If something here disagrees with `cargo run --example usb_list`,
-> the code is right and this file is a bug.
+> If something here disagrees with `cargo run --example usb_list`, the code is
+> right and this file is a bug.
 
-SimBLE's simulated controller is deliberately permissive, and real silicon is
-not. That difference is the whole reason to plug in a dongle: it is the only
-way to find a class of bug that no simulated test can reach — a controller
-that silently discards commands you sent too fast, or rejects a parameter your
-simulator waved through.
+SimBLE's simulated controller is deliberately permissive; real silicon is not.
+That is the reason to plug in a dongle: it is the only way to find a class of
+bug no simulated test can reach — a controller that silently discards commands
+sent too fast, or rejects a parameter the simulator waved through.
 
-This page is about choosing a controller, setting it up, and knowing what each
-one can actually prove.
+This page covers choosing a controller, setting it up, and knowing what each
+can prove.
 
 ## Which controller do you need?
 
-**No hardware at all** is the right answer for protocol logic and for CI: the
-built-in simulated controller is deterministic, and real RF is not. Everything
-below is for when you need a real peer, or a feature the simulator cannot
-prove by itself.
+**No hardware at all** is right for protocol logic and CI: the built-in
+simulated controller is deterministic, real RF is not. Everything below is for
+when you need a real peer, or a feature the simulator cannot prove by itself.
 
 Work down until a row covers what you want to test; each tier includes
-everything above it. **Tested** means someone has run SimBLE against that
-board and the hardware tests pass — anything else is an expectation, however
-reasonable.
+everything above it. **Tested** means someone has run SimBLE against that board
+and the hardware tests pass — anything else is an expectation.
 
 | Silicon | Boards you can buy | BT | Adds | Tested |
 |---|---|---|---|---|
@@ -46,11 +42,10 @@ macOS Gatekeeper, so the flashing route is markedly more awkward on a Mac.
 ### The nRF52840 and LE Audio: what it does, and what nobody supports
 
 Zephyr's open-source controller implements BIG for the nRF52 series, and it
-works as far as HCI can show: on a flashed dongle we created a BIG, opened
-ISO data paths on two BIS, and streamed 240 000 SDUs per BIS for forty
-minutes without an error, with the whole broadcast — BASE, BIG parameters,
-both tones in their right channels — decoded by Bumble as a foreign
-receiver.
+works as far as HCI can show: on a flashed dongle, a BIG created, ISO data paths
+opened on two BIS, and 240 000 SDUs per BIS streamed for forty minutes without
+an error — the whole broadcast (BASE, BIG parameters, both tones in their right
+channels) decoded by Bumble as a foreign receiver.
 
 **Nordic does not support LE Audio on the nRF52840.** Their position is that
 LE Audio is an nRF5340 feature: the LE Audio controller stack and the LC3
@@ -59,24 +54,22 @@ codec are built for that part, and their Auracast reference designs
 DK**. See [Auracast feature on
 nRF52840?](https://devzone.nordicsemi.com/f/nordic-q-a/96478/auracast-feature-on-nrf52840).
 
-So: "the controller accepts the commands and the bytes are right" is
-established, and "a commercial receiver joins the broadcast off the air" is
-**not**. A Pixel 9 with Pixel Buds Pro 2 listed our broadcast and synced to
-it but rendered silence, and we could not tell whether the fault lay in the
-phone, the buds, or an unsupported radio path. If Auracast is the goal
-rather than a bonus, buy the part the vendor supports.
+So "the controller accepts the commands and the bytes are right" is
+established; "a commercial receiver joins the broadcast off the air" is
+**not**. A Pixel 9 with Pixel Buds Pro 2 listed the broadcast and synced to it
+but rendered silence, with no way to tell whether the fault lay in the phone,
+the buds, or an unsupported radio path. If Auracast is the goal rather than a
+bonus, buy the part the vendor supports.
 
-One more thing to know before spending anything: **Channel Sounding cannot be
-checked against software at all, and BIG only against netsim.** For BIG the
-situation is narrower than it looks: upstream rootcanal *implements* it
-(`rust/src/llcp/iso.rs`) but ships the release binary with those commands
-left out of its supported-commands table, so it answers `LE_Create_BIG` with
-`Unknown HCI Command` — while the rootcanal built into netsim has them
-enabled, and our broadcast path is verified against Bumble's `auracast` app
-through netsim in both directions. Bumble itself models no BIG, and nothing
-in software implements the Ranging Service. So: broadcast audio has exactly
-one software oracle (netsim) and ranging has none — for ranging, hardware is
-not a nice-to-have but the only oracle that exists.
+**Channel Sounding cannot be checked against software at all, and BIG only
+against netsim.** Upstream rootcanal *implements* BIG (`rust/src/llcp/iso.rs`)
+but ships the release binary with those commands left out of its
+supported-commands table, so it answers `LE_Create_BIG` with `Unknown HCI
+Command`; the rootcanal built into netsim has them enabled, and the broadcast
+path is verified against Bumble's `auracast` app through netsim in both
+directions. Bumble itself models no BIG, and nothing in software implements the
+Ranging Service. So broadcast audio has exactly one software oracle (netsim)
+and ranging has none — for ranging, hardware is the only oracle that exists.
 
 ## Plugging in more than one
 
