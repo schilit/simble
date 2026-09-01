@@ -3,13 +3,13 @@
 [![CI](https://github.com/schilit/simble/actions/workflows/ci.yml/badge.svg)](https://github.com/schilit/simble/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-> **Preview.** An early preview release — the public API is unstable and may
-> change between preview versions. The crate is **`simble-stack`** on crates.io,
-> imported as `simble`.
+> **Pre-release — not yet published to crates.io.** The public API is unstable
+> and will change. Use it from git; when published it will be the crate
+> **`simble-stack`**, imported as `simble`.
 >
 > ```toml
 > [dependencies]
-> simble-stack = "0.1.0-preview.1"
+> simble-stack = { git = "https://github.com/schilit/simble" }
 > ```
 
 **SimBLE creates simulated Bluetooth scenes for testing scenarios.** A scene can contain *one device* or

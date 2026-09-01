@@ -5,21 +5,15 @@
 > throughput it produced on the lab hardware on this date (representative, not
 > fixed). Implemented on the `phone-to-phone` branch.
 
-A visual write-up — the throughput table, the L2CAP-vs-GATT comparison, and the
-bugs found along the way — lives as a published artifact:
-**<https://claude.ai/code/artifact/8b99a9c9-9681-4d26-ad59-d7cf8a1017ac>**
-(private by default; share it from the page's own menu to open it up).
-
 ---
 
 ## 1. The central is the phone's own GATT client, not simble-over-HCI
 
 **Context.** Every earlier simble throughput run put a USB dongle on the sending
-end, because simble drives a controller over HCI and stock Android does not
-expose its controller as an HCI radio over adb. The benchmark skill said so
-flatly: a phone can never be simble's central, so there is no phone-to-phone
-path. Measuring a transfer between two phones — the common real-world shape,
-which no published Bluetooth number covers — was therefore impossible.
+end: simble drives a controller over HCI, and stock Android does not expose its
+controller as an HCI radio over adb. So a phone cannot be simble's central over
+HCI — which appears to rule out a phone-to-phone transfer entirely, the common
+real-world shape no published Bluetooth number covers.
 
 **Decision.** Give the Android app a *source role*
 ([`BulkSource`](../android/app/src/com/simble/BulkSource.java)) that drives the

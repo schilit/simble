@@ -3,9 +3,9 @@
 
 //! # SimBLE: a pure-Rust Bluetooth Low-Energy and Classic host stack
 //!
-//! > **Preview.** An early preview release; the public API is unstable and may
-//! > change between preview versions. On crates.io the crate is published as
-//! > `simble-stack`, and imported as `simble`.
+//! > **Pre-release.** Not yet published to crates.io; the public API is unstable
+//! > and will change. When published the crate will be `simble-stack`, imported
+//! > as `simble`.
 //!
 //! SimBLE creates virtual Bluetooth devices for testing — a simulated
 //! heart-rate monitor, keyboard, LE Audio earbud, hands-free car kit, and more
