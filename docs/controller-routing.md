@@ -1,11 +1,17 @@
 # Controller routing
 
-The v1 control protocol and the model of controllers, networks, and devices
-behind it. **The device router is built** (the v1 `Node`: the four lists and
-`run`/`stop`/`send`/`route`/`create`/`register`/`tick`/`get_clock`, runnable on
-the deterministic `link` controller and served by `simble v1`). **The async
-backend router** — routing raw HCI to `rootcanal-rs`/real radios/netsim — and the
-`attach` verb are a separate crate, designed below but not built.
+The v1 control protocol, and the model of controllers, networks, and devices it
+routes.
+
+**Status:**
+
+- **Built — the device router** (the v1 `Node`): the four lists plus `run`,
+  `stop`, `send`, `route`, `create`, `register`, `tick`, and `get_clock`. Runnable
+  on the deterministic `link` controller with no hardware, and served by
+  `simble v1`.
+- **Not built — the async backend router**: routing raw HCI to
+  `rootcanal-rs` / real radios / netsim, and the `attach` verb. A separate crate,
+  designed at the end of this doc.
 
 ## What the environment can do
 

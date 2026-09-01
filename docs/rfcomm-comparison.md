@@ -5,91 +5,37 @@
 > remain undone: the unused `DYNAMIC_CHANNEL_NUMBER_START/END` constants, and
 > converting `MccPn` to a zerocopy typed view.
 
-An audit of `src/classic/rfcomm.rs`, prompted by its being 1518 lines against
-Bumble's `rfcomm.py` at 1163 — a 1.31× ratio.
+An audit of `src/classic/rfcomm.rs` against two mature RFCOMM stacks — Bumble
+(`rfcomm.py`) and Zephyr (`rfcomm.c`) — prompted by simble's file being larger
+than Bumble's (1512 vs 1164 lines, 1.30×).
 
-**The ratio is an artifact of the measurement.** Comparing a Rust file
-*including* its inline `#[cfg(test)]` module against a Python file with no tests
-in it is not like-for-like. On non-test, non-comment logic lines the two files
-are within 1% of each other. The extra size is inline tests and doc prose, not
-duplication, verbosity, or dead logic.
-
-There is a short list of **real correctness gaps** — several shared with Bumble,
-one specific to simble — that matter more than the line count. Those are
-section 5.
+**Conclusion: simble's RFCOMM is correct and appropriately sized.** On non-test,
+non-comment code lines it is within 1% of Bumble; the apparent size gap is inline
+`#[cfg(test)]` tests and doc-comment prose, not duplication or dead logic (§1).
+The real payoff of the comparison was five correctness gaps — several shared with
+Bumble, one simble-specific — since fixed (§5), plus a short list of dead code
+(§6). Against Zephyr, the only feature delta is the optional half of the MCC
+command set (§3).
 
 ---
 
-## 1. The line-count breakdown
-
-Counted mechanically: a line is *comment* if it begins with `//` (Rust) or `#`
-/ is inside a docstring (Python); *blank* if empty; *code* otherwise.
-
-### simble — `src/classic/rfcomm.rs`
-
-| Section | Lines | Code | Comment | Blank |
-|---|---|---|---|---|
-| Module doc + imports | 1–34 | 8 | 23 | 3 |
-| Constants, `frame_type`, `mcc_type` | 35–76 | 20 | 19 | 3 |
-| FCS table + `compute_fcs` | 77–126 | 42 | 5 | 3 |
-| `RfcommFrame` (encode/parse) | 127–282 | 114 | 24 | 18 |
-| MCC framing + `MccPn` + `MccMsc` | 283–422 | 104 | 26 | 10 |
-| `Dlc` (credits, tx pipeline) | 423–550 | 92 | 28 | 8 |
-| `Multiplexer` + free helpers | 551–1023 | 386 | 52 | 35 |
-| `RfcommClient` / `RfcommServer` | 1024–1086 | 37 | 18 | 8 |
-| SDP integration | 1087–1193 | 91 | 10 | 6 |
-| **`#[cfg(test)] mod tests`** | **1194–1512** | **263** | **16** | **40** |
-| **Total** | **1512** | **1157** | **221** | **134** |
-
-Figures are post-cleanup (section 6); the file was 1518/1167 before.
-
-### Bumble — `rfcomm.py`
-
-| Section | Lines | Code | Comment/doc | Blank |
-|---|---|---|---|---|
-| License, imports, logger | 1–54 | 24 | 22 | 8 |
-| Constants + FCS table | 55–119 | 53 | 3 | 9 |
-| SDP integration | 120–233 | 81 | 21 | 12 |
-| `compute_fcs` + `RFCOMM_Frame` | 234–359 | 103 | 6 | 17 |
-| `RFCOMM_MCC_PN` / `_MSC` | 360–439 | 68 | 3 | 9 |
-| `DLC` (incl. its frame handlers) | 440–754 | 252 | 21 | 42 |
-| `Multiplexer` | 755–1031 | 223 | 16 | 38 |
-| `Client` | 1032–1082 | 34 | 6 | 11 |
-| `Server` | 1083–1164 | 57 | 8 | 17 |
-| **Total** | **1164** | **895** | **106** | **163** |
-
-Bumble has no test module in-file; its RFCOMM tests live in `tests/`.
-
-### The like-for-like figure
+## 1. Size is a measurement artifact
 
 | | simble | Bumble | ratio |
 |---|---|---|---|
 | Raw file lines | 1512 | 1164 | 1.30× |
-| Lines excluding the inline test module | 1193 | 1164 | 1.02× |
-| **Non-test, non-comment, non-blank code lines** | **894** | **895** | **1.00×** |
+| Excluding the inline test module | 1193 | 1164 | 1.02× |
+| **Non-test, non-comment code lines** | **894** | **895** | **1.00×** |
 
-The 1.31× gap decomposes as:
-
-- **~320 lines (90% of the gap): the inline `#[cfg(test)]` module.** 13 tests.
-  Rust convention puts unit tests in the file; Python does not. Simble *also*
-  has 229 lines of integration tests in `tests/rfcomm_test.rs` and 10 more
-  RFCOMM tests in `src/device/classic_host.rs`, none of which counts here.
-- **~115 lines: doc comments.** 221 vs 106. This repo's `//!`/`///` prose with
-  ETSI/Core-Spec citations is a deliberate convention (AGENTS.md "Comments").
-  Bumble compensates in the other direction with 38 `logger.*` calls and three
-  `__str__` methods (~50 code lines) that simble has no equivalent of, since
-  it carries no logging dependency.
-- **−29 lines: blank lines.** Bumble is airier (163 vs 134).
-- **~1 line: actual logic difference.**
-
-Structural note on why the per-section rows don't line up: Bumble puts the
-per-DLC frame handlers (`on_sabm_frame`, `on_ua_frame`, `on_uih_frame`,
-`on_mcc_msc`) *inside* the `DLC` class, which holds a back-reference to its
-`Multiplexer`. Simble folds the same logic into `Multiplexer` (`on_dlc_frame`,
-`on_dlc_uih`) because a `Dlc` holding `&mut Multiplexer` is not expressible
-without interior mutability. That moves ~150 lines across the section boundary
-in both directions and inflates simble's `Multiplexer` row. Only the totals are
-comparable.
+The 1.30× decomposes as ~320 lines of inline `#[cfg(test)]` tests (Rust puts unit
+tests in the file; Python puts them in `tests/`, and simble has 239 more RFCOMM
+tests there and in `classic_host.rs` that don't count here either), ~115 lines of
+`//!`/`///` prose with ETSI/Core-Spec citations (an AGENTS.md convention; Bumble
+instead carries ~50 lines of logging simble has no equivalent of), Bumble's airier
+blank lines, and ~1 line of actual logic difference. Per-section counts don't line
+up because Bumble holds the per-DLC frame handlers inside its `DLC` class while
+simble folds them into `Multiplexer` (a `Dlc` holding `&mut Multiplexer` isn't
+expressible without interior mutability) — so only the totals compare.
 
 ---
 

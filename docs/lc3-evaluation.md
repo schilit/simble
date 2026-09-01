@@ -19,19 +19,10 @@ Searching crates.io for "lc3" is mostly the LC-3 *teaching CPU* (`lc3-vm`,
 
 | | `lc3-codec` | `lc3-sys` |
 |---|---|---|
-| Version | 0.2.0 | 0.1.0 |
-| Published | 2022-06-12 | 2024-01-03 |
 | Licence | Apache-2.0 | Apache-2.0 |
 | Kind | Pure Rust, `#![no_std]` | Unsafe bindings to Google's liblc3 (C) |
-| Downloads (total / recent) | 4,357 / 442 | 2,037 / 12 |
-| GitHub | 31 stars, not archived | — |
 | **wasm32-unknown-unknown** | **builds** | **fails** |
-| Size delta (decoder) | **+80,606 bytes** | n/a |
-| Size delta (decoder + encoder) | +131,540 bytes | n/a |
-
-Build sizes measured in a scratch crate (`cdylib`, `opt-level = "z"`,
-`lto = true`), calling the codec for real so nothing is stripped: baseline 379
-bytes → 80,985 with decoder → 131,919 with decoder + encoder.
+| wasm cost | ~80 KB decoder, ~132 KB with encoder | n/a |
 
 `lc3-sys` fails on wasm structurally, not by misconfiguration: it compiles
 vendored liblc3 C through `cc-rs`, and `wasm32-unknown-unknown` is a bare target
