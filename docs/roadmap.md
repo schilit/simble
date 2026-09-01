@@ -38,6 +38,21 @@ engine extraction landed on `main`. Status is one of: **done**, **in progress**
 |---|---|---|---|
 | R1 | **crates.io preview** — publish `simble-stack` `0.1.0-preview.1`. | **prepped, awaiting publish** | Package renamed `simble-stack` with `[lib] name = "simble"` (import path + `simble.wasm` unchanged); version is a pre-release; docs.rs metadata + preview banners in place; description settled. `cargo publish --dry-run` is green (verify build compiles, packaged manifest clean of path deps). The actual `cargo publish` is a human step (crates.io token, irreversible) → then tag `v0.1.0-preview.1`. **Tidy-ups:** (1) keyword swap → `bluetooth, ble, simulation, testing, mcp` — **done**; (2) **done** — `lib.rs` title de-native/de-virtual'd, and the README reconciled to four surfaces (Android added; `lib.rs`, README.md, and README-crate.md now agree); (3) **done** — `exclude` ships the Rust only (android/web/docs/scripts/interop out; `catalog/` + `third_party/waves/` kept because the crate `include_str!`s them), 339 files / 1.3 MiB, verify build green. The other surfaces (web, Android, docs) live in the GitHub repo, not the crate. Still open: a separate library-focused crate README so the crates.io page isn't the full project story. |
 
+## Agentic surface & Classic polish
+
+Still-open items carried over from the 2026-08-24 plan:
+
+- **MCP `--ws-server` host-scene** — browsers connect as devices *on* the `self`
+  `Link` (agent + browser share one scene). The protocol travels over ws:// today
+  (`simble mcp --ws-server`); hosting the shared scene is the remaining half.
+- **Agent skills** to pair with the MCP — `author-ble-device`, `write-ble-test`,
+  `reproduce-ble-bug`, `test-app-against-emulator`.
+- **Classic remaining** — CTKD, a SCO codec, AVRCP browsing (PSM `0x001B`), an
+  A2DP *source* that has met a foreign sink, and Rhai bindings for the Classic
+  profiles.
+- **Symbol lint in `--no-run`** — flag `android::BluetoothGattServ`-style typos
+  before running; needs Rhai's `metadata` feature (`gen_fn_signatures`).
+
 ## Done this arc (for context)
 
 - Phone-to-phone bulk transfer (source role, GATT + L2CAP paths), fast-link
