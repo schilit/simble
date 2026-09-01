@@ -4,10 +4,8 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 > **Preview.** An early preview release — the public API is unstable and may
-> change between preview versions. On crates.io the crate is **`simble-stack`**
-> (the bare `simble` name was taken in 2019 by an unrelated crate); the library
-> itself keeps the name `simble`, so you depend on `simble-stack` but write
-> `use simble::…`.
+> change between preview versions. The crate is **`simble-stack`** on crates.io,
+> imported as `simble`.
 >
 > ```toml
 > [dependencies]
