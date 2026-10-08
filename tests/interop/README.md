@@ -9,7 +9,7 @@ They are not run by `cargo test`. They need a Python environment with
 mode — a live `netsimd`.
 
 ```bash
-python3 -m venv .venv && .venv/bin/pip install bumble lc3py   # Python >= 3.10
+python3 -m venv .venv && .venv/bin/pip install bumble==0.0.234 lc3py   # Python >= 3.10; CI's pin
 ~/Library/Android/sdk/emulator/netsim devices                 # confirm netsimd
 ```
 

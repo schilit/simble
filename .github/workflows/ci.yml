@@ -208,8 +208,15 @@ jobs:
       # on what only rootcanal models -- `classic_peer.py` (inquiry) and the
       # `auracast_*.py` pair (BIG) -- exit 77 rather than pretend, and stay
       # manual. See `docs/test-strategy.md`.
+      #
+      # Bumble is pinned: an unpinned install let 0.0.235 break this job with
+      # no change here. Its controller started claiming LE Extended
+      # Advertising and now answers the legacy LE Set Scan Enable that
+      # simble's scripted central sends with *extended* advertising reports,
+      # so `gatt_client.py --transport bumble` never sees the peer. Bump
+      # deliberately, and re-run this job when you do.
       - name: Install Bumble
-        run: python3 -m pip install --upgrade pip bumble
+        run: python3 -m pip install --upgrade pip bumble==0.0.234
 
       - name: Build the examples the scripts drive
         run: >
@@ -274,7 +281,8 @@ jobs:
           python-version: '3.12'
 
       - name: Install Bumble
-        run: python3 -m pip install --upgrade pip bumble
+        # Pinned to match the Bumble interop job above; see the note there.
+        run: python3 -m pip install --upgrade pip bumble==0.0.234
 
       # `classic_peer.py` is the one foreign-oracle script Bumble cannot host:
       # its controller has no `HCI_Inquiry` handler at all, and the script
