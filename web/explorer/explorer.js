@@ -554,6 +554,22 @@ const METHODS = [
     src: "transport/wasm_ws.rs (web runtime)",
     build: (on, a) => `${on}.emit(${JSON.stringify(a.kind)}, ${a.payload})` },
 
+  { group: "server", kind: "method", sig: "server.wake_at(t)", ret: "()",
+    desc: "Declare when this device next wants its `fn tick` run, in script-clock seconds.",
+    prose: "The clock is the one <code>fn tick(server, t)</code> receives. The runtime takes the earliest " +
+      "wake across every device and returns it as the sans-io timeout from <code>tick</code>, so a host " +
+      "waits on a timer instead of spinning. Calling it twice keeps the earlier time.",
+    note: "The request is cleared before every <code>fn tick</code> runs, so a device re-declares it each " +
+      "tick — for a relative delay, pass <code>t + delay</code>.",
+    receiver: "server",
+    params: [
+      { key: "t", label: "t", kind: "code", type: "float", default: "1.0",
+        doc: "The absolute time to be woken at, in seconds. Registered for <code>f64</code> only, so " +
+          "write <code>1.0</code>, not <code>1</code>." },
+    ],
+    src: "scripting/bindings.rs",
+    build: (on, a) => `${on}.wake_at(${a.t})` },
+
   { group: "server", kind: "method", sig: "server.close()", ret: "()",
     desc: "Drop the server's callback, so it stops raising events.",
     prose: "Mirrors <code>BluetoothGattServer.close()</code>. The device and its database survive; only " +
